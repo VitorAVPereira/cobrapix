@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build
+dist/
+coverage/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Schema sincronizado do front (gerado pelo prisma:sync-schema)
+# Schema canônico: ../front-cobranca/prisma/schema.prisma
+prisma/schema.prisma
+
+# Logs
+*.log
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
