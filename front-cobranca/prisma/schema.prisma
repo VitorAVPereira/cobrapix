@@ -1,0 +1,143 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum InvoiceStatus {
+  PENDING
+  PAID
+  CANCELED
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  INCOMPLETE
+}
+
+enum WhatsappStatus {
+  CONNECTED
+  DISCONNECTED
+  PENDING
+}
+
+model Company {
+  id                    String         @id @default(uuid())
+  corporateName         String
+  document              String         @unique
+  email                 String         @unique
+  phoneNumber           String
+  gatewayToken          String?
+  maxDiscountsPerDebtor Int            @default(1)
+  discountTriggerDay    Int            @default(15)
+  whatsappInstanceId    String?
+  whatsappStatus        WhatsappStatus @default(DISCONNECTED)
+
+  users          User[]
+  debtors        Debtor[]
+  invoices       Invoice[]
+  collectionLogs CollectionLog[]
+  subscription   Subscription?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Debtor {
+  id          String  @id @default(uuid())
+  companyId   String
+  company     Company @relation(fields: [companyId], references: [id])
+  name        String
+  document    String?
+  phoneNumber String
+  email       String?
+
+  invoices Invoice[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, phoneNumber])
+  @@index([companyId])
+}
+
+model Invoice {
+  id        String  @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
+  debtorId  String
+  debtor    Debtor  @relation(fields: [debtorId], references: [id])
+
+  originalAmount  Decimal       @db.Decimal(10, 2)
+  dueDate         DateTime
+  status          InvoiceStatus @default(PENDING)
+  gatewayId       String?       @unique
+  pixPayload      String?       @db.Text
+  pixExpiresAt    DateTime?
+  discountApplied Decimal?      @db.Decimal(10, 2)
+
+  collectionLogs CollectionLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([debtorId])
+}
+
+model CollectionLog {
+  id          String  @id @default(uuid())
+  companyId   String
+  company     Company @relation(fields: [companyId], references: [id])
+  invoiceId   String
+  invoice     Invoice @relation(fields: [invoiceId], references: [id])
+  actionType  String
+  description String
+  status      String
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId])
+  @@index([invoiceId])
+}
+
+model User {
+  id        String  @id @default(uuid())
+  email     String  @unique
+  password  String
+  name      String?
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+}
+
+model Plan {
+  id            String         @id @default(uuid())
+  name          String
+  price         Decimal        @db.Decimal(10, 2)
+  invoiceLimit  Int
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id                    String             @id @default(uuid())
+  companyId             String             @unique
+  company               Company            @relation(fields: [companyId], references: [id])
+  planId                String
+  plan                  Plan               @relation(fields: [planId], references: [id])
+  status                SubscriptionStatus @default(INCOMPLETE)
+  currentPeriodEnd      DateTime
+  gatewaySubscriptionId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

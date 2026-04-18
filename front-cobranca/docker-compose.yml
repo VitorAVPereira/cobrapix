@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  evolution-api:
+    image: evolution/api:latest
+    container_name: evolution-whatsapp
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Configurações básicas
+      SERVER_TYPE: http
+      PORT: 8080
+      HOST: 0.0.0.0
+      
+      # API Key global para autenticação
+      API_KEY: ${EVOLUTION_API_KEY:-evolution_api_key_secret_change_in_production}
+      
+      # Configurações de banco de dados interno da Evolution API
+      # Usando SQLite para simplicidade e custo zero
+      DATABASE_TYPE: sqlite
+      DATABASE_SQLITE_PATH: /app/database/evolution.db
+      
+      # Configurações de WhatsApp
+      AUTHENTICATION_TYPE: jwt
+      JWT_SECRET: ${EVOLUTION_JWT_SECRET:-jwt_secret_change_in_production}
+      JWT_EXPIRATION_IN: 604800
+      
+      # Configurações de webhook
+      WEBHOOK_ENABLED: true
+      WEBHOOK_GLOBAL_URL: ${EVOLUTION_WEBHOOK_URL:-http://host.docker.internal:3000/api/webhooks/evolution}
+      WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: false
+      WEBHOOK_GLOBAL_BASE64: false
+      WEBHOOK_EVENTS: CONNECTION_UPDATE
+      
+      # Configurações de QR Code
+      QRCODE_LIMIT: 5
+      QRCODE_ALWAYS: true
+      
+      # Configurações de mensagem
+      MESSAGE_EXPIRED: 300
+      DELAY_SEND_MESSAGE: 1200
+      
+      # Configurações de conexão
+      RECONNECT_INTERVAL: 30000
+      MAX_RECONNECT: 100
+      
+      # Configurações de logging
+      LOG_LEVEL: INFO
+      LOG_COLOR: true
+      
+      # Configurações de segurança
+      SECURE_NOTIFICATION: false
+      CONFIG_SESSION_PHONE_CLIENT: Evolution-API
+      
+      # Configurações de Redis (opcional, desabilitado para custo zero)
+      # REDIS_ENABLED: false
+      # REDIS_HOST: localhost
+      # REDIS_PORT: 6379
+      
+      # Configurações de RabbitMQ (opcional, desabilitado para custo zero)
+      # RABBITMQ_ENABLED: false
+      # RABBITMQ_URI: amqp://localhost:5672
+      
+      # Configurações de S3 (opcional, desabilitado para custo zero)
+      # S3_ENABLED: false
+      # S3_BUCKET: evolution-api
+      
+    volumes:
+      # Persistência do banco de dados SQLite
+      - evolution_data:/app/database
+      # Persistência de arquivos de sessão do WhatsApp
+      - evolution_sessions:/app/sessions
+      # Persistência de QR codes
+      - evolution_qrcodes:/app/qrcodes
+      # Persistência de logs
+      - evolution_logs:/app/logs
+    networks:
+      - cobrapix-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  cobrapix-network:
+    driver: bridge
+    name: cobrapix-network
+
+volumes:
+  evolution_data:
+    driver: local
+    name: evolution_data
+  evolution_sessions:
+    driver: local
+    name: evolution_sessions
+  evolution_qrcodes:
+    driver: local
+    name: evolution_qrcodes
+  evolution_logs:
+    driver: local
+    name: evolution_logs
