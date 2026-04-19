@@ -12,16 +12,46 @@ interface ApiError extends Error {
   data?: any;
 }
 
+interface BillingResponse {
+  success: boolean;
+  summary: {
+    total: number;
+    sent: number;
+    failed: number;
+    skipped: number;
+  };
+  message: string;
+}
+
+interface WhatsAppInstanceResponse {
+  qrCode: string;
+  instanceName: string;
+  pairingCode?: string;
+}
+
+interface WhatsAppStatusResponse {
+  state: string;
+  dbStatus: string;
+}
+
 class ApiClient {
   private baseUrl: string;
+  private token: string | null;
 
-  constructor(baseUrl: string = API_URL) {
+  constructor(baseUrl: string = API_URL, token: string | null = null) {
     this.baseUrl = baseUrl;
+    this.token = token;
+  }
+
+  setToken(token: string | null) {
+    this.token = token;
   }
 
   private async getAuthHeader(): Promise<string | null> {
+    if (this.token) {
+      return this.token;
+    }
     const session = await auth();
-    // @ts-ignore
     return session?.access_token || null;
   }
 
@@ -102,25 +132,25 @@ class ApiClient {
   }
 
   // WhatsApp
-  async createWhatsappInstance() {
-    return this.fetch("/whatsapp/instance", {
+  async createWhatsappInstance(): Promise<WhatsAppInstanceResponse> {
+    return this.fetch<WhatsAppInstanceResponse>("/whatsapp/instance", {
       method: "POST",
     });
   }
 
-  async getWhatsappStatus() {
-    return this.fetch("/whatsapp/status");
+  async getWhatsappStatus(): Promise<WhatsAppStatusResponse> {
+    return this.fetch<WhatsAppStatusResponse>("/whatsapp/status");
   }
 
-  async disconnectWhatsapp() {
-    return this.fetch("/whatsapp/disconnect", {
+  async disconnectWhatsapp(): Promise<{ success: boolean }> {
+    return this.fetch<{ success: boolean }>("/whatsapp/disconnect", {
       method: "POST",
     });
   }
 
   // Billing
-  async runBilling() {
-    return this.fetch("/billing/run", {
+  async runBilling(): Promise<BillingResponse> {
+    return this.fetch<BillingResponse>("/billing/run", {
       method: "POST",
     });
   }
@@ -131,4 +161,5 @@ class ApiClient {
   }
 }
 
+export { ApiClient };
 export const apiClient = new ApiClient();

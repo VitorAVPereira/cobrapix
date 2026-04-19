@@ -9,6 +9,7 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { InvoicesModule } from './invoices/invoices.module';
 import { BillingModule } from './billing/billing.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
+import { PaymentModule } from './payment/payment.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     InvoicesModule,
     BillingModule,
     WebhooksModule,
+    PaymentModule,
   ],
   providers: [
     {

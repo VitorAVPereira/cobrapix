@@ -1,4 +1,12 @@
-import { Controller, Post, Get, UseGuards, Body, HttpException, HttpStatus } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  UseGuards,
+  Body,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
 import { WhatsappService } from './whatsapp.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GetUser } from '../auth/decorators/get-user.decorator';
@@ -30,7 +38,8 @@ export class WhatsappController {
       });
 
       // Obtém QR code
-      const qrResponse = await this.whatsappService.connectInstance(instanceName);
+      const qrResponse =
+        await this.whatsappService.connectInstance(instanceName);
 
       if (!qrResponse.code) {
         throw new HttpException(
@@ -46,7 +55,9 @@ export class WhatsappController {
       };
     } catch (error) {
       throw new HttpException(
-        error instanceof Error ? error.message : 'Erro ao criar instância WhatsApp',
+        error instanceof Error
+          ? error.message
+          : 'Erro ao criar instância WhatsApp',
         HttpStatus.BAD_GATEWAY,
       );
     }
@@ -61,10 +72,15 @@ export class WhatsappController {
       });
 
       if (!company?.whatsappInstanceId) {
-        return { state: 'close', dbStatus: company?.whatsappStatus || 'DISCONNECTED' };
+        return {
+          state: 'close',
+          dbStatus: company?.whatsappStatus || 'DISCONNECTED',
+        };
       }
 
-      const result = await this.whatsappService.getConnectionState(company.whatsappInstanceId);
+      const result = await this.whatsappService.getConnectionState(
+        company.whatsappInstanceId,
+      );
       const state = result.instance.state;
 
       // Sincroniza estado no banco
@@ -101,7 +117,10 @@ export class WhatsappController {
       });
 
       if (!company?.whatsappInstanceId) {
-        throw new HttpException('Nenhuma instância WhatsApp ativa.', HttpStatus.BAD_REQUEST);
+        throw new HttpException(
+          'Nenhuma instância WhatsApp ativa.',
+          HttpStatus.BAD_REQUEST,
+        );
       }
 
       await this.whatsappService.logoutInstance(company.whatsappInstanceId);

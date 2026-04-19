@@ -17,6 +17,8 @@ export const envSchema = z.object({
   EVOLUTION_API_KEY: z.string().min(1, 'EVOLUTION_API_KEY é obrigatória'),
   JWT_SECRET: z.string().min(32, 'JWT_SECRET deve ter pelo menos 32 caracteres'),
   FRONTEND_URL: z.string().url().default('http://localhost:3000'),
+  ASAAS_API_URL: z.string().url().default('https://sandbox.asaas.com/api/v3'),
+  ASAAS_API_KEY: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

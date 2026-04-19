@@ -42,12 +42,11 @@ export class BillingController {
       return {
         success: true,
         summary: {
-          total: result.sent + result.failed + result.skipped,
-          sent: result.sent,
-          failed: result.failed,
+          total: result.queued + result.skipped,
+          queued: result.queued,
           skipped: result.skipped,
         },
-        message: `Cobrança executada: ${result.sent} enviadas, ${result.failed} simuladas, ${result.skipped} já cobradas hoje.`,
+        message: `Cobrança executada: ${result.queued} mensagens enfileiradas, ${result.skipped} já cobradas hoje.`,
       };
     } catch (error) {
       if (error instanceof HttpException) throw error;

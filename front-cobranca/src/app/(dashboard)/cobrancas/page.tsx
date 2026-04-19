@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { UploadCSV, ParsedDebtor } from "@/components/features/UploadCSV";
 import { InvoiceTable } from "@/components/features/InvoiceTable";
+import { useApiClient } from "@/lib/use-api-client";
 import {
   Plus,
   RefreshCw,
@@ -17,6 +18,7 @@ import {
 } from "lucide-react";
 
 export default function CobrancasPage() {
+  const apiClient = useApiClient();
   const [devedores, setDevedores] = useState<ParsedDebtor[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
@@ -31,8 +33,7 @@ export default function CobrancasPage() {
   const fetchInvoices = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch("/api/invoices");
-      const data = await response.json();
+      const data = await apiClient.getInvoices();
       if (Array.isArray(data)) {
         setDevedores(data);
       }
@@ -81,20 +82,13 @@ export default function CobrancasPage() {
     setIsRunningBilling(true);
 
     try {
-      const res = await fetch("/api/billing/run", { method: "POST" });
-      const data = await res.json();
-
-      if (!res.ok) {
-        setBillingResult({ message: data.error, isError: true });
-        return;
-      }
-
-      setBillingResult({ message: data.message, isError: false });
-    } catch {
-      setBillingResult({
-        message: "Falha de conexao ao executar cobranca.",
-        isError: true,
-      });
+      const data = await apiClient.runBilling();
+      setBillingResult({ message: data.message || "Cobrança executada com sucesso!", isError: false });
+    } catch (error: unknown) {
+      const msg = error && typeof error === 'object' && 'message' in error
+        ? (error as { message: string }).message
+        : "Falha ao executar cobrança.";
+      setBillingResult({ message: msg, isError: true });
     } finally {
       setIsRunningBilling(false);
     }
@@ -107,7 +101,7 @@ export default function CobrancasPage() {
     }).format(value);
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 max-w-[1400px]">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-350">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
         <div>
@@ -205,11 +199,10 @@ export default function CobrancasPage() {
       {/* Billing result banner */}
       {billingResult && (
         <div
-          className={`mb-6 p-4 rounded-xl flex items-center justify-between ${
-            billingResult.isError
+          className={`mb-6 p-4 rounded-xl flex items-center justify-between ${billingResult.isError
               ? "bg-red-50 border border-red-200 text-red-700"
               : "bg-emerald-50 border border-emerald-200 text-emerald-700"
-          }`}
+            }`}
         >
           <p className="text-sm font-medium">{billingResult.message}</p>
           <button
@@ -240,24 +233,16 @@ export default function CobrancasPage() {
             onUploadSuccess={async (dados) => {
               setImportError(null);
               try {
-                const res = await fetch("/api/invoices/import", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify(dados),
-                });
-
-                if (res.ok) {
-                  setShowUpload(false);
-                  fetchInvoices();
-                } else {
-                  const body = await res.json();
-                  const msg = body.details
-                    ? body.details.join(" | ")
-                    : body.error || "Erro desconhecido ao importar.";
-                  setImportError(msg);
-                }
-              } catch {
-                setImportError("Falha de conexão ao enviar os dados.");
+                await apiClient.importInvoices(dados);
+                setShowUpload(false);
+                fetchInvoices();
+              } catch (error: unknown) {
+                const msg = error && typeof error === 'object' && 'data' in error && error.data && typeof error.data === 'object' && 'details' in error.data
+                  ? (error.data as { details: string[] }).details.join(" | ")
+                  : error && typeof error === 'object' && 'message' in error
+                    ? (error as { message: string }).message
+                    : "Erro desconhecido ao importar.";
+                setImportError(msg);
               }
             }}
           />

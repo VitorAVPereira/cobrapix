@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
-import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { MessageQueueService, SendMessageJob } from '../queue/message.queue';
+import { SpintaxService } from '../queue/services/spintax.service';
 
 @Injectable()
 export class BillingService {
@@ -10,13 +11,10 @@ export class BillingService {
 
   constructor(
     private prisma: PrismaService,
-    private whatsappService: WhatsappService,
+    private messageQueue: MessageQueueService,
+    private spintaxService: SpintaxService,
   ) {}
 
-  /**
-   * Executa cobranças automaticamente às 9h e 17h
-   * Usa lock no Postgres para evitar execuções duplicadas em múltiplas instâncias
-   */
   @Cron(CronExpression.EVERY_DAY_AT_9AM)
   @Cron(CronExpression.EVERY_DAY_AT_5PM)
   async runScheduledBilling(): Promise<void> {
@@ -29,7 +27,6 @@ export class BillingService {
     this.logger.log('Iniciando execução de cobranças automáticas...');
 
     try {
-      // Lock no Postgres usando advisory lock
       const lockResult = await this.prisma.$queryRaw<{ locked: boolean }[]>`
         SELECT pg_try_advisory_lock(1) as locked
       `;
@@ -49,22 +46,19 @@ export class BillingService {
 
         this.logger.log(`Encontradas ${companies.length} empresas com WhatsApp conectado`);
 
-        let totalSent = 0;
-        let totalFailed = 0;
+        let totalQueued = 0;
         let totalSkipped = 0;
 
         for (const company of companies) {
-          const result = await this.executeBillingForCompany(company.id);
-          totalSent += result.sent;
-          totalFailed += result.failed;
+          const result = await this.queueBillingForCompany(company.id);
+          totalQueued += result.queued;
           totalSkipped += result.skipped;
         }
 
         this.logger.log(
-          `Resumo geral: ${totalSent} enviadas, ${totalFailed} simuladas, ${totalSkipped} puladas`,
+          `Resumo geral: ${totalQueued} mensagens enfileiradas, ${totalSkipped} puladas`,
         );
       } finally {
-        // Libera o lock
         await this.prisma.$queryRaw`SELECT pg_advisory_unlock(1)`;
       }
     } catch (error) {
@@ -75,16 +69,14 @@ export class BillingService {
   }
 
   async executeBilling(companyId: string): Promise<{
-    sent: number;
-    failed: number;
+    queued: number;
     skipped: number;
   }> {
-    return this.executeBillingForCompany(companyId);
+    return this.queueBillingForCompany(companyId);
   }
 
-  private async executeBillingForCompany(companyId: string): Promise<{
-    sent: number;
-    failed: number;
+  private async queueBillingForCompany(companyId: string): Promise<{
+    queued: number;
     skipped: number;
   }> {
     try {
@@ -94,7 +86,7 @@ export class BillingService {
 
       if (!company || company.whatsappStatus !== 'CONNECTED' || !company.whatsappInstanceId) {
         this.logger.log(`Empresa ${companyId} não está pronta para cobranças`);
-        return { sent: 0, failed: 0, skipped: 0 };
+        return { queued: 0, skipped: 0 };
       }
 
       const endOfToday = new Date();
@@ -120,106 +112,52 @@ export class BillingService {
         },
       });
 
-      let sentCount = 0;
-      let failedCount = 0;
+      const jobs: SendMessageJob[] = [];
       let skippedCount = 0;
 
       for (const invoice of overdueInvoices) {
-        // Dedup: já cobrada hoje
         if (invoice.collectionLogs.length > 0) {
           skippedCount++;
           continue;
         }
-
-        const message = this.buildCollectionMessage({
-          debtorName: invoice.debtor.name,
-          originalAmount: Number(invoice.originalAmount),
-          dueDate: invoice.dueDate,
-          companyName: company.corporateName,
-        });
 
         let phone = invoice.debtor.phoneNumber;
         if (!phone.startsWith('55')) {
           phone = `55${phone}`;
         }
 
-        try {
-          await this.whatsappService.sendTextMessage(
-            company.whatsappInstanceId,
-            phone,
-            message,
-          );
+        const message = this.spintaxService.buildCollectionMessage({
+          debtorName: invoice.debtor.name,
+          originalAmount: Number(invoice.originalAmount),
+          dueDate: invoice.dueDate,
+          companyName: company.corporateName,
+        });
 
-          await this.prisma.collectionLog.create({
-            data: {
-              companyId: company.id,
-              invoiceId: invoice.id,
-              actionType: 'WHATSAPP_SENT',
-              description: `Mensagem de cobrança enviada para ${invoice.debtor.name} (${phone})`,
-              status: 'SENT',
-            },
-          });
-
-          sentCount++;
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-
-          await this.prisma.collectionLog.create({
-            data: {
-              companyId: company.id,
-              invoiceId: invoice.id,
-              actionType: 'WHATSAPP_SENT',
-              description: `SIMULADO - Falha ao enviar para ${invoice.debtor.name}: ${errorMessage}`,
-              status: 'SIMULATED',
-            },
-          });
-
-          failedCount++;
-        }
+        jobs.push({
+          invoiceId: invoice.id,
+          companyId: company.id,
+          phoneNumber: phone,
+          instanceName: company.whatsappInstanceId,
+          message,
+          debtorName: invoice.debtor.name,
+        });
       }
 
-      this.logger.log(
-        `Empresa ${company.corporateName}: ${sentCount} enviadas, ${failedCount} simuladas, ${skippedCount} puladas`,
-      );
+      if (jobs.length > 0) {
+        await this.messageQueue.addBulkSendMessageJobs(jobs);
+        this.logger.log(
+          `Empresa ${company.corporateName}: ${jobs.length} mensagens enfileiradas, ${skippedCount} puladas`,
+        );
+      } else {
+        this.logger.log(
+          `Empresa ${company.corporateName}: nenhuma mensagem para enviar, ${skippedCount} puladas`,
+        );
+      }
 
-      return { sent: sentCount, failed: failedCount, skipped: skippedCount };
+      return { queued: jobs.length, skipped: skippedCount };
     } catch (error) {
       this.logger.error(`Erro ao executar cobranças para empresa ${companyId}:`, error);
-      return { sent: 0, failed: 0, skipped: 0 };
+      return { queued: 0, skipped: 0 };
     }
-  }
-
-  private buildCollectionMessage(params: {
-    debtorName: string;
-    originalAmount: number;
-    dueDate: Date;
-    companyName: string;
-  }): string {
-    const { debtorName, originalAmount, dueDate, companyName } = params;
-
-    const valorFormatado = new Intl.NumberFormat('pt-BR', {
-      style: 'currency',
-      currency: 'BRL',
-    }).format(originalAmount);
-
-    const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      timeZone: 'America/Sao_Paulo',
-    }).format(dueDate);
-
-    return [
-      `Prezado(a) ${debtorName},`,
-      ``,
-      `Informamos que consta em nosso sistema uma fatura em seu nome no valor de ${valorFormatado}, com vencimento em ${dataFormatada}.`,
-      ``,
-      `Solicitamos a gentileza de regularizar o pagamento o mais breve possível.`,
-      ``,
-      `Em caso de dúvidas, entre em contato conosco.`,
-      ``,
-      `Atenciosamente,`,
-      `${companyName}`,
-    ].join('\n');
   }
 }

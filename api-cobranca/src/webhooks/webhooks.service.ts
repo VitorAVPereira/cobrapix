@@ -77,4 +77,64 @@ export class WebhooksService {
 
     return { updated: true, status: newStatus };
   }
+
+  async handleAsaasWebhook(payload: any): Promise<{ processed: boolean; invoiceId?: string; status?: string }> {
+    const { event, payment, status } = payload;
+
+    if (!payment) {
+      this.logger.warn('Webhook Asaas: payment não presente no payload');
+      return { processed: false };
+    }
+
+    if (!event || !event.startsWith('PAYMENT_')) {
+      this.logger.log(`Webhook Asaas: evento ignorado - ${event}`);
+      return { processed: false };
+    }
+
+    const invoice = await this.prisma.invoice.findFirst({
+      where: { gatewayId: payment },
+    });
+
+    if (!invoice) {
+      this.logger.warn(`Webhook Asaas: fatura não encontrada para gatewayId ${payment}`);
+      return { processed: false };
+    }
+
+    let newStatus: 'PENDING' | 'PAID' | 'CANCELED' | null = null;
+
+    if (status === 'CONFIRMED' || status === 'RECEIVED' || status === 'PAID') {
+      newStatus = 'PAID';
+    } else if (status === 'CANCELED' || status === 'EXPIRED' || status === 'REJECTED') {
+      newStatus = 'CANCELED';
+    }
+
+    if (!newStatus) {
+      this.logger.log(`Webhook Asaas: status ${status} não requer atualização`);
+      return { processed: false };
+    }
+
+    if (invoice.status === newStatus) {
+      this.logger.log(`Webhook Asaas: fatura ${invoice.id} já está com status ${newStatus}`);
+      return { processed: true, invoiceId: invoice.id, status: newStatus };
+    }
+
+    await this.prisma.invoice.update({
+      where: { id: invoice.id },
+      data: { status: newStatus },
+    });
+
+    await this.prisma.collectionLog.create({
+      data: {
+        companyId: invoice.companyId,
+        invoiceId: invoice.id,
+        actionType: 'PAYMENT_WEBHOOK',
+        description: `Pagamento atualizado via webhook: ${event} - ${status}`,
+        status: newStatus,
+      },
+    });
+
+    this.logger.log(`Webhook Asaas: fatura ${invoice.id} atualizada para ${newStatus} (evento: ${event})`);
+
+    return { processed: true, invoiceId: invoice.id, status: newStatus };
+  }
 }

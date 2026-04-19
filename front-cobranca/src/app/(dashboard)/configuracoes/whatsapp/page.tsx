@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useApiClient } from "@/lib/use-api-client";
 import {
   QrCode,
   CheckCircle2,
@@ -21,6 +22,7 @@ type ConnectionStatus =
   | "ERROR";
 
 export default function WhatsappConfigPage() {
+  const apiClient = useApiClient();
   const [status, setStatus] = useState<ConnectionStatus>("LOADING");
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -37,10 +39,7 @@ export default function WhatsappConfigPage() {
     stopPolling();
     pollingRef.current = setInterval(async () => {
       try {
-        const res = await fetch("/api/whatsapp/status");
-        if (!res.ok) return;
-        const data = await res.json();
-
+        const data = await apiClient.getWhatsappStatus();
         if (data.state === "open") {
           stopPolling();
           setQrCode(null);
@@ -57,12 +56,7 @@ export default function WhatsappConfigPage() {
 
     async function checkInitialStatus() {
       try {
-        const res = await fetch("/api/whatsapp/status");
-        if (!res.ok) {
-          if (!cancelled) setStatus("DISCONNECTED");
-          return;
-        }
-        const data = await res.json();
+        const data = await apiClient.getWhatsappStatus();
         if (cancelled) return;
 
         if (data.state === "open") {
@@ -90,22 +84,12 @@ export default function WhatsappConfigPage() {
     setStatus("GENERATING");
 
     try {
-      const res = await fetch("/api/whatsapp/instance", { method: "POST" });
-      const data = await res.json();
-
-      if (!res.ok) {
-        setErrorMsg(data.error || "Erro ao gerar QR code.");
-        setStatus("ERROR");
-        return;
-      }
-
+      const data = await apiClient.createWhatsappInstance();
       setQrCode(data.qrCode);
       setStatus("SCAN_READY");
       startPolling();
-    } catch {
-      setErrorMsg(
-        "Não foi possível conectar ao servidor. Verifique se o Docker está rodando."
-      );
+    } catch (error: any) {
+      setErrorMsg(error.message || "Erro ao gerar QR code.");
       setStatus("ERROR");
     }
   };
@@ -120,18 +104,12 @@ export default function WhatsappConfigPage() {
     }
 
     try {
-      const res = await fetch("/api/whatsapp/disconnect", { method: "POST" });
-      if (!res.ok) {
-        const data = await res.json();
-        setErrorMsg(data.error || "Erro ao desconectar.");
-        setStatus("ERROR");
-        return;
-      }
+      await apiClient.disconnectWhatsapp();
       stopPolling();
       setQrCode(null);
       setStatus("DISCONNECTED");
-    } catch {
-      setErrorMsg("Falha de conexão ao desconectar.");
+    } catch (error: any) {
+      setErrorMsg(error.message || "Erro ao desconectar.");
       setStatus("ERROR");
     }
   };
