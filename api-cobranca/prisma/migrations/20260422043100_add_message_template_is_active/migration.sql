@@ -1,0 +1,3 @@
+-- AddColumn
+ALTER TABLE "MessageTemplate"
+ADD COLUMN IF NOT EXISTS "isActive" BOOLEAN NOT NULL DEFAULT true;

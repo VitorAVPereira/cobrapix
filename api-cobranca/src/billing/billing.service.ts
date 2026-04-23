@@ -89,6 +89,17 @@ export class BillingService {
         return { queued: 0, skipped: 0 };
       }
 
+      const template = await this.prisma.messageTemplate.findFirst({
+        where: { companyId, slug: 'vencimento-hoje', isActive: true },
+      });
+
+      if (!template) {
+        this.logger.warn(
+          `Template "vencimento-hoje" não encontrado ou inativo para empresa ${companyId}`,
+        );
+        return { queued: 0, skipped: 0 };
+      }
+
       const endOfToday = new Date();
       endOfToday.setHours(23, 59, 59, 999);
 
@@ -126,7 +137,7 @@ export class BillingService {
           phone = `55${phone}`;
         }
 
-        const message = this.spintaxService.buildCollectionMessage({
+        const message = this.buildMessageFromTemplate(template.content, {
           debtorName: invoice.debtor.name,
           originalAmount: Number(invoice.originalAmount),
           dueDate: invoice.dueDate,
@@ -159,5 +170,35 @@ export class BillingService {
       this.logger.error(`Erro ao executar cobranças para empresa ${companyId}:`, error);
       return { queued: 0, skipped: 0 };
     }
+  }
+
+  private buildMessageFromTemplate(
+    templateContent: string,
+    params: {
+      debtorName: string;
+      originalAmount: number;
+      dueDate: Date;
+      companyName: string;
+    },
+  ): string {
+    const valorFormatado = new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(params.originalAmount);
+
+    const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      timeZone: 'America/Sao_Paulo',
+    }).format(params.dueDate);
+
+    let message = templateContent
+      .replace(/{debtorName}/g, params.debtorName)
+      .replace(/{originalAmount}/g, valorFormatado)
+      .replace(/{dueDate}/g, dataFormatada)
+      .replace(/{companyName}/g, params.companyName);
+
+    return this.spintaxService.process(message);
   }
 }

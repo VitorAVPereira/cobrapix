@@ -8,7 +8,7 @@ import {
   flexRender,
   ColumnDef,
 } from "@tanstack/react-table";
-import { ParsedDebtor } from "./UploadCSV";
+import type { ParsedDebtor } from "./UploadCSV";
 import {
   ChevronLeft,
   ChevronRight,
@@ -146,6 +146,23 @@ export function InvoiceTable({ data }: InvoiceTableProps) {
           {formatarDataBR(info.getValue() as string)}
         </span>
       ),
+    },
+    {
+      accessorKey: "billing_type",
+      header: "Pagamento",
+      cell: (info) => {
+        const billingType = info.getValue() as string | undefined;
+        const label =
+          billingType === "BOTH"
+            ? "PIX e Boleto"
+            : billingType === "BOLETO"
+              ? "Boleto"
+              : "PIX";
+
+        return (
+          <span className="text-slate-600 whitespace-nowrap">{label}</span>
+        );
+      },
     },
     {
       id: "status",

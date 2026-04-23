@@ -8,14 +8,15 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
 export function useApiClient() {
   const { data: session } = useSession();
+  const accessToken = session?.access_token ?? null;
 
   const client = useMemo(() => {
     const apiClient = new ApiClient(API_URL);
-    if (session?.access_token) {
-      apiClient.setToken(session.access_token);
+    if (accessToken) {
+      apiClient.setToken(accessToken);
     }
     return apiClient;
-  }, [session]);
+  }, [accessToken]);
 
   return client;
 }

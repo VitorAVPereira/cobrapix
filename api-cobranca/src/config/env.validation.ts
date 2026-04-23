@@ -17,8 +17,19 @@ export const envSchema = z.object({
   EVOLUTION_API_KEY: z.string().min(1, 'EVOLUTION_API_KEY é obrigatória'),
   JWT_SECRET: z.string().min(32, 'JWT_SECRET deve ter pelo menos 32 caracteres'),
   FRONTEND_URL: z.string().url().default('http://localhost:3000'),
-  ASAAS_API_URL: z.string().url().default('https://sandbox.asaas.com/api/v3'),
+  EFI_ENV: z.enum(['homologation', 'production']).default('homologation'),
+  EFI_PLATFORM_CLIENT_ID: z.string().optional(),
+  EFI_PLATFORM_CLIENT_SECRET: z.string().optional(),
+  EFI_PLATFORM_CERT_PATH: z.string().optional(),
+  EFI_PLATFORM_CERT_PASSWORD: z.string().optional(),
+  EFI_PLATFORM_PAYEE_CODE: z.string().optional(),
+  EFI_PLATFORM_ACCOUNT_NUMBER: z.string().optional(),
+  EFI_PLATFORM_SPLIT_PERCENTAGE: z.coerce.number().int().min(0).max(10000).default(0),
+  EFI_WEBHOOK_BASE_URL: z.string().url().optional(),
+  PAYMENT_SECRET_KEY: z.string().min(32).optional(),
+  ASAAS_API_URL: z.string().url().optional(),
   ASAAS_API_KEY: z.string().optional(),
+  ASAAS_MASTER_KEY: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

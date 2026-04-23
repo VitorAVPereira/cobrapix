@@ -21,12 +21,14 @@ export class WhatsappController {
   ) {}
 
   @Post('instance')
+  @Post('instance')
   async createInstance(@GetUser() user: any) {
     try {
       const instanceName = `cobrapix_${user.companyId}`;
 
-      // Cria instância na Evolution API
-      await this.whatsappService.createInstance(instanceName);
+      // 1. Dispara a ordem de criação da instância
+      const createRes: any =
+        await this.whatsappService.createInstance(instanceName);
 
       // Atualiza empresa no banco
       await this.prisma.company.update({
@@ -37,32 +39,61 @@ export class WhatsappController {
         },
       });
 
-      // Obtém QR code
-      const qrResponse =
+      // 🚨 A MÁGICA AQUI: Espera 2 segundos para o motor do WhatsApp (Baileys) dar boot
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      // 2. Pede o status da conexão e o QR Code gerado
+      const qrResponse: any =
         await this.whatsappService.connectInstance(instanceName);
 
-      if (!qrResponse.code) {
+      // 🚨 FALLBACK TRIPLO: Procura o Base64 em todas as ramificações possíveis da V2
+      const base64Code =
+        qrResponse?.qrcode?.base64 ||
+        qrResponse?.base64 ||
+        createRes?.qrcode?.base64 ||
+        createRes?.base64;
+
+      if (!base64Code) {
+        // Se a instância já estiver aberta (conectada), o QR Code vem nulo propositalmente
+        if (qrResponse?.instance?.state === 'open') {
+          throw new HttpException(
+            'WhatsApp já está conectado!',
+            HttpStatus.BAD_REQUEST,
+          );
+        }
+
+        // Log salva-vidas: Se falhar de novo, isso vai aparecer no seu terminal do NestJS
+        console.error(
+          '[Evolution API] Resposta sem QR Code:',
+          JSON.stringify(qrResponse),
+        );
+
         throw new HttpException(
-          'QR code ainda não foi gerado. Tente novamente em instantes.',
+          'O motor do WhatsApp está aquecendo. Clique em Tentar Novamente.',
           HttpStatus.ACCEPTED,
         );
       }
 
+      // Limpa o prefixo do Data URI para o React renderizar perfeito
+      const cleanQrCode = base64Code.replace(/^data:image\/[a-z]+;base64,/, '');
+
       return {
-        qrCode: qrResponse.code,
+        qrCode: cleanQrCode,
         instanceName,
-        pairingCode: qrResponse.pairingCode,
+        pairingCode: qrResponse?.pairingCode || createRes?.qrcode?.pairingCode,
       };
     } catch (error) {
       throw new HttpException(
         error instanceof Error
           ? error.message
           : 'Erro ao criar instância WhatsApp',
-        HttpStatus.BAD_GATEWAY,
+        error instanceof HttpException
+          ? error.getStatus()
+          : HttpStatus.BAD_GATEWAY,
       );
     }
   }
-
+  
   @Get('status')
   async getStatus(@GetUser() user: any) {
     try {
@@ -78,32 +109,41 @@ export class WhatsappController {
         };
       }
 
-      const result = await this.whatsappService.getConnectionState(
-        company.whatsappInstanceId,
-      );
-      const state = result.instance.state;
-
-      // Sincroniza estado no banco
-      if (state === 'open' && company.whatsappStatus !== 'CONNECTED') {
-        await this.prisma.company.update({
-          where: { id: user.companyId },
-          data: { whatsappStatus: 'CONNECTED' },
-        });
-      } else if (state === 'close' && company.whatsappStatus === 'CONNECTED') {
-        await this.prisma.company.update({
-          where: { id: user.companyId },
-          data: { whatsappStatus: 'DISCONNECTED' },
-        });
+      // 🚨 ESCUDO 1: A Fonte da Verdade! Se o nosso Webhook já atualizou o banco, libera a tela do usuário na hora.
+      if (company.whatsappStatus === 'CONNECTED') {
+        return { state: 'open', dbStatus: 'CONNECTED' };
       }
 
-      return {
-        state,
-        dbStatus: state === 'open' ? 'CONNECTED' : company.whatsappStatus,
-      };
+      try {
+        // 🚨 ESCUDO 2: Se o banco ainda não sabe, pergunta direto para a Evolution API
+        const result: any = await this.whatsappService.getConnectionState(
+          company.whatsappInstanceId,
+        );
+
+        // Extrai o status de forma robusta, suportando os vários formatos da V2
+        const rawState =
+          result?.instance?.state || result?.state || 'connecting';
+        const state = rawState.toLowerCase();
+
+        // Se a Evolution confirmar a conexão, salva no banco e avisa o React
+        if (state === 'open' || state === 'connected') {
+          await this.prisma.company.update({
+            where: { id: user.companyId },
+            data: { whatsappStatus: 'CONNECTED' },
+          });
+          return { state: 'open', dbStatus: 'CONNECTED' };
+        }
+
+        return { state, dbStatus: company.whatsappStatus };
+      } catch (evoError) {
+        // 🚨 ESCUDO 3: Se a Evolution demorar para responder (Timeout), não quebramos a API com Erro 502.
+        // Apenas mandamos a tela "esperar" até a próxima tentativa de 3 segundos.
+        return { state: 'connecting', dbStatus: company.whatsappStatus };
+      }
     } catch (error) {
       throw new HttpException(
-        error instanceof Error ? error.message : 'Erro ao consultar status',
-        HttpStatus.BAD_GATEWAY,
+        'Erro interno ao consultar status',
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }

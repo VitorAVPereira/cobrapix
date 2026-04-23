@@ -7,13 +7,29 @@ interface ImportRow {
   email?: string;
   original_amount: number;
   due_date: string;
+  billing_type: 'PIX' | 'BOLETO' | 'BOTH';
+}
+
+interface InvoiceListItem {
+  id: string;
+  name: string;
+  phone_number: string;
+  email?: string;
+  original_amount: number;
+  due_date: string;
+  status: string;
+  debtorId: string;
+  gatewayId: string | null;
+  pixPayload: string | null;
+  billing_type: string;
+  createdAt: string;
 }
 
 @Injectable()
 export class InvoicesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
-  async findAll(companyId: string) {
+  async findAll(companyId: string): Promise<InvoiceListItem[]> {
     const invoices = await this.prisma.invoice.findMany({
       where: { companyId },
       include: { debtor: true },
@@ -26,16 +42,20 @@ export class InvoicesService {
       phone_number: inv.debtor.phoneNumber,
       email: inv.debtor.email || undefined,
       original_amount: Number(inv.originalAmount),
-      due_date: inv.dueDate.toISOString().split('T')[0],
+      due_date: this.formatDateOnly(inv.dueDate),
       status: inv.status,
       debtorId: inv.debtor.id,
       gatewayId: inv.gatewayId,
       pixPayload: inv.pixPayload,
+      billing_type: inv.billingType,
       createdAt: inv.createdAt.toISOString(),
     }));
   }
 
-  async importCsv(companyId: string, rows: ImportRow[]) {
+  async importCsv(
+    companyId: string,
+    rows: ImportRow[],
+  ): Promise<{ success: boolean; count: number }> {
     const result = await this.prisma.$transaction(async (tx) => {
       let created = 0;
 
@@ -68,6 +88,7 @@ export class InvoicesService {
             debtorId: debtor.id,
             originalAmount: row.original_amount,
             dueDate,
+            billingType: row.billing_type,
           },
         });
 
@@ -98,5 +119,9 @@ export class InvoicesService {
     }
 
     return null;
+  }
+
+  private formatDateOnly(date: Date): string {
+    return date.toISOString().slice(0, 10);
   }
 }

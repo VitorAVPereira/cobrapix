@@ -70,23 +70,19 @@ Endpoints para geração de PIX e Boleto:
 
 ## Prisma Schema
 
-**Canonical schema**: `front-cobranca/prisma/schema.prisma`
+**Canonical schema**: `api-cobranca/prisma/schema.prisma`
 
-Schema is auto-synced to `api-cobranca/prisma/schema.prisma` via:
-- `postinstall` hook
-- `prebuild` hook  
-- `npm run prisma:sync-schema`
-- `npm run prisma:generate`
+Prisma belongs exclusively to the NestJS backend. The frontend must not keep a Prisma schema, migrations, seed, Prisma Client, or direct database access.
 
 To apply schema changes:
 ```bash
-cd front-cobranca && npx prisma migrate dev --name <name>
+cd api-cobranca && npm run prisma:migrate -- --name <name>
 cd api-cobranca && npm run prisma:generate
 ```
 
 ## Seed Data
 
-After `npx prisma db seed` in front-cobranca:
+After `npx prisma db seed --schema=prisma/schema.prisma` in api-cobranca:
 - Company: "Empresa Teste MVP"
 - Login: admin@cobrapix.com / senha123
 
@@ -102,7 +98,7 @@ cd api-cobranca && npm test
 
 ## Key Files
 
-- `front-cobranca/prisma/schema.prisma` - Database schema (source of truth)
+- `api-cobranca/prisma/schema.prisma` - Database schema (source of truth)
 - `api-cobranca/src/health/` - Health check endpoints
 - `api-cobranca/src/payment/` - Payment service (PIX/Boleto)
 - `api-cobranca/src/queue/` - Message queue (BullMQ)

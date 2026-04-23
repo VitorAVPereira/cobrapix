@@ -21,6 +21,10 @@ type ConnectionStatus =
   | "CONNECTED"
   | "ERROR";
 
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
 export default function WhatsappConfigPage() {
   const apiClient = useApiClient();
   const [status, setStatus] = useState<ConnectionStatus>("LOADING");
@@ -40,7 +44,8 @@ export default function WhatsappConfigPage() {
     pollingRef.current = setInterval(async () => {
       try {
         const data = await apiClient.getWhatsappStatus();
-        if (data.state === "open") {
+        // Verifica se a API ou o Banco de Dados confirmam a conexão
+        if (data.state === "open" || data.dbStatus === "CONNECTED") {
           stopPolling();
           setQrCode(null);
           setStatus("CONNECTED");
@@ -49,7 +54,7 @@ export default function WhatsappConfigPage() {
         /* silent */
       }
     }, 3000);
-  }, [stopPolling]);
+  }, [apiClient, stopPolling]);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,7 +64,7 @@ export default function WhatsappConfigPage() {
         const data = await apiClient.getWhatsappStatus();
         if (cancelled) return;
 
-        if (data.state === "open") {
+        if (data.state === "open" || data.dbStatus === "CONNECTED") {
           setStatus("CONNECTED");
         } else {
           setStatus("DISCONNECTED");
@@ -69,11 +74,11 @@ export default function WhatsappConfigPage() {
       }
     }
 
-    checkInitialStatus();
+    void checkInitialStatus();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [apiClient]);
 
   useEffect(() => {
     return () => stopPolling();
@@ -88,8 +93,8 @@ export default function WhatsappConfigPage() {
       setQrCode(data.qrCode);
       setStatus("SCAN_READY");
       startPolling();
-    } catch (error: any) {
-      setErrorMsg(error.message || "Erro ao gerar QR code.");
+    } catch (error: unknown) {
+      setErrorMsg(getErrorMessage(error, "Erro ao gerar QR code."));
       setStatus("ERROR");
     }
   };
@@ -97,7 +102,7 @@ export default function WhatsappConfigPage() {
   const handleDisconnect = async () => {
     if (
       !confirm(
-        "Deseja realmente desconectar o WhatsApp? O motor de cobrança será interrompido."
+        "Deseja realmente desconectar o WhatsApp? O motor de cobrança será interrompido.",
       )
     ) {
       return;
@@ -108,8 +113,8 @@ export default function WhatsappConfigPage() {
       stopPolling();
       setQrCode(null);
       setStatus("DISCONNECTED");
-    } catch (error: any) {
-      setErrorMsg(error.message || "Erro ao desconectar.");
+    } catch (error: unknown) {
+      setErrorMsg(getErrorMessage(error, "Erro ao desconectar."));
       setStatus("ERROR");
     }
   };
@@ -127,7 +132,7 @@ export default function WhatsappConfigPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8">
         {/* Status & QR Code */}
-        <div className="bg-white p-6 lg:p-8 rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center justify-center min-h-[320px]">
+        <div className="bg-white p-6 lg:p-8 rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center justify-center min-h-80">
           <div
             className="transition-all duration-300 ease-out flex flex-col items-center"
             key={status}
@@ -139,9 +144,7 @@ export default function WhatsappConfigPage() {
                   className="animate-spin text-slate-400 mx-auto mb-4"
                   size={36}
                 />
-                <p className="text-sm text-slate-500">
-                  Verificando conexão...
-                </p>
+                <p className="text-sm text-slate-500">Verificando conexão...</p>
               </div>
             )}
 
@@ -205,17 +208,15 @@ export default function WhatsappConfigPage() {
                 <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
                   <CheckCircle2 size={40} />
                 </div>
-                <h3 className="text-xl font-bold text-slate-900">
-                  Conectado!
-                </h3>
-                <p className="text-sm text-slate-500 mt-1.5">
-                  O motor de cobrança está ativo e monitorando.
+                <h3 className="text-xl font-bold text-slate-900">Conectado!</h3>
+                <p className="text-sm text-emerald-600 font-medium mt-1.5 bg-emerald-50 px-4 py-2 rounded-lg">
+                  Tudo pronto por aqui! Aproveite o sistema.
                 </p>
                 <button
                   onClick={handleDisconnect}
-                  className="mt-6 text-rose-600 text-sm font-semibold flex items-center gap-2 hover:underline mx-auto"
+                  className="mt-8 text-slate-400 text-xs font-semibold flex items-center gap-2 hover:text-rose-600 transition-colors mx-auto"
                 >
-                  <LogOut size={15} />
+                  <LogOut size={14} />
                   Desconectar Aparelho
                 </button>
               </div>
@@ -229,9 +230,7 @@ export default function WhatsappConfigPage() {
                 <h3 className="font-bold text-slate-900 mb-1">
                   Falha na Conexão
                 </h3>
-                <p className="text-sm text-red-600 mb-6 max-w-xs">
-                  {errorMsg}
-                </p>
+                <p className="text-sm text-red-600 mb-6 max-w-xs">{errorMsg}</p>
                 <button
                   onClick={handleConnect}
                   className="bg-slate-900 text-white px-6 py-2.5 rounded-xl font-bold hover:bg-slate-800 active:scale-[0.98] transition-all shadow-md"

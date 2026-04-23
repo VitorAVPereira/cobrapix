@@ -10,6 +10,7 @@ import { InvoicesModule } from './invoices/invoices.module';
 import { BillingModule } from './billing/billing.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { PaymentModule } from './payment/payment.module';
+import { TemplatesModule } from './templates/templates.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { PaymentModule } from './payment/payment.module';
     BillingModule,
     WebhooksModule,
     PaymentModule,
+    TemplatesModule,
   ],
   providers: [
     {

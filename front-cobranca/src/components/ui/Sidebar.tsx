@@ -1,20 +1,47 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import {
+  ChevronDown,
+  Database,
   FileText,
+  HandCoins,
   LogOut,
   MessageCircle,
+  MessageSquareText,
   Settings,
   X,
 } from "lucide-react";
 
-const navItems = [
-  { href: "/cobrancas", label: "Cobranças", icon: FileText },
+const dashboardItem = {
+  href: "/",
+  label: "Dashboard",
+  icon: FileText,
+};
+
+const mainItems = [
+  {
+    href: "/cobrancas",
+    label: "Cobranças",
+    icon: HandCoins,
+  },
+];
+
+const settingsItems = [
   { href: "/configuracoes/whatsapp", label: "WhatsApp", icon: MessageCircle },
-  { href: "/configuracoes/whatsapp", label: "Configurações", icon: Settings },
+  {
+    href: "/configuracoes/templates",
+    label: "Templates",
+    icon: MessageSquareText,
+  },
+  {
+    href: "/configuracoes/conecte-seu-banco",
+    label: "Pagamento",
+    icon: Database,
+  },
 ];
 
 interface SidebarProps {
@@ -22,13 +49,18 @@ interface SidebarProps {
   onClose: () => void;
 }
 
+function isCurrentPath(pathname: string, href: string): boolean {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
 export function Sidebar({ open, onClose }: SidebarProps) {
   const pathname = usePathname();
   const { data: session } = useSession();
+  const [settingsOpen, setSettingsOpen] = useState(true);
+  const DashboardIcon = dashboardItem.icon;
 
   return (
     <>
-      {/* Backdrop (mobile only) */}
       {open && (
         <div
           className="fixed inset-0 bg-black/40 z-40 lg:hidden"
@@ -44,7 +76,6 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           ${open ? "translate-x-0" : "-translate-x-full"}
         `}
       >
-        {/* Header */}
         <div className="h-16 flex items-center justify-between px-6 border-b border-slate-800 shrink-0">
           <span className="text-xl font-bold text-white tracking-wider">
             COBRA<span className="text-emerald-400">PIX</span>
@@ -52,37 +83,95 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           <button
             onClick={onClose}
             className="lg:hidden p-1 text-slate-400 hover:text-white transition-colors"
+            aria-label="Fechar menu"
           >
             <X size={20} />
           </button>
         </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 px-3 py-6 space-y-1 overflow-y-auto">
-          {navItems.map((item) => {
-            const isActive =
-              pathname === item.href ||
-              pathname.startsWith(item.href + "/");
-            const Icon = item.icon;
-            return (
-              <Link
-                key={item.label}
-                href={item.href}
-                onClick={onClose}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
-                  isActive
-                    ? "bg-emerald-500/15 text-emerald-400 font-semibold border-l-[3px] border-emerald-400 pl-[9px]"
-                    : "hover:bg-slate-800 hover:text-white"
+        <nav className="flex-1 px-3 py-6 overflow-y-auto">
+          <div className="space-y-1">
+            <Link
+              href={dashboardItem.href}
+              onClick={onClose}
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
+                isCurrentPath(pathname, dashboardItem.href)
+                  ? "bg-emerald-500/15 text-emerald-400 font-semibold border-l-[3px] border-emerald-400 pl-[9px]"
+                  : "hover:bg-slate-800 hover:text-white"
+              }`}
+            >
+              <DashboardIcon size={18} />
+              <span>{dashboardItem.label}</span>
+            </Link>
+
+            {mainItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = isCurrentPath(pathname, item.href);
+
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  onClick={onClose}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
+                    isActive
+                      ? "bg-emerald-500/15 text-emerald-400 font-semibold border-l-[3px] border-emerald-400 pl-[9px]"
+                      : "hover:bg-slate-800 hover:text-white"
+                  }`}
+                >
+                  <Icon size={18} />
+                  <span>{item.label}</span>
+                </Link>
+              );
+            })}
+          </div>
+
+          <div className="mt-5">
+            <button
+              type="button"
+              onClick={() => setSettingsOpen((current) => !current)}
+              aria-expanded={settingsOpen}
+              className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500 transition-colors hover:bg-slate-800 hover:text-slate-300"
+            >
+              <span className="flex items-center gap-2">
+                <Settings size={15} />
+                Configuracoes
+              </span>
+              <ChevronDown
+                size={15}
+                className={`transition-transform ${
+                  settingsOpen ? "rotate-0" : "-rotate-90"
                 }`}
-              >
-                <Icon size={18} />
-                <span>{item.label}</span>
-              </Link>
-            );
-          })}
+              />
+            </button>
+
+            {settingsOpen && (
+              <div className="mt-1 ml-4 space-y-1 border-l border-slate-800 pl-3">
+                {settingsItems.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = isCurrentPath(pathname, item.href);
+
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      onClick={onClose}
+                      className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-sm ${
+                        isActive
+                          ? "bg-emerald-500/15 text-emerald-400 font-semibold"
+                          : "hover:bg-slate-800 hover:text-white"
+                      }`}
+                    >
+                      <Icon size={17} />
+                      <span>{item.label}</span>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </nav>
 
-        {/* Footer — User context + logout */}
         <div className="p-4 border-t border-slate-800 space-y-3 shrink-0">
           {session?.user && (
             <div className="px-3 py-2">

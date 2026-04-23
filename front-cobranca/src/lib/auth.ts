@@ -4,6 +4,7 @@ import Credentials from "next-auth/providers/credentials";
 declare module "next-auth" {
   interface User {
     companyId: string;
+    access_token: string;
   }
 
   interface Session {
@@ -21,10 +22,37 @@ declare module "@auth/core/jwt" {
   interface JWT {
     companyId?: string;
     userId?: string;
+    access_token?: string;
   }
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+const AUTH_API_URL =
+  process.env.AUTH_API_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "http://localhost:3001";
+
+interface LoginResponse {
+  access_token: string;
+  user: {
+    id: string;
+    email: string;
+    name?: string | null;
+    companyId: string;
+  };
+}
+
+async function parseLoginResponse(response: Response): Promise<LoginResponse> {
+  return response.json() as Promise<LoginResponse>;
+}
+
+function logAuthFailure(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+
+  console.error(
+    `Erro ao autenticar: API NestJS inacessivel em ${AUTH_API_URL}. ` +
+      `Confirme se o api-cobranca esta rodando na porta 3001. Detalhe: ${message}`,
+  );
+}
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
@@ -41,7 +69,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         try {
           // Chama API Nest para autenticação
-          const res = await fetch(`${API_URL}/auth/login`, {
+          const res = await fetch(`${AUTH_API_URL}/auth/login`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email, password }),
@@ -51,7 +79,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             return null;
           }
 
-          const data = await res.json();
+          const data = await parseLoginResponse(res);
 
           return {
             id: data.user.id,
@@ -60,19 +88,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             companyId: data.user.companyId,
             access_token: data.access_token,
           };
-        } catch (error) {
-          console.error("Erro ao autenticar:", error);
+        } catch (error: unknown) {
+          logAuthFailure(error);
           return null;
         }
       },
     }),
   ],
   callbacks: {
-    jwt({ token, user, account }) {
+    jwt({ token, user }) {
       if (user) {
         token.companyId = user.companyId;
         token.userId = user.id;
-        // @ts-ignore
         token.access_token = user.access_token;
       }
       return token;
@@ -80,7 +107,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     session({ session, token }) {
       session.user.companyId = token.companyId as string;
       session.user.id = token.userId as string;
-      // @ts-ignore
       session.access_token = token.access_token;
       return session;
     },

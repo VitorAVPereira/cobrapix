@@ -1,30 +1,60 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useCallback, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import Papa from "papaparse";
-import { UploadCloud, FileType, AlertCircle, Download } from "lucide-react"; // Removido o import não utilizado
+import { AlertCircle, Download, FileType, UploadCloud } from "lucide-react";
+
+export type PaymentMethod = "PIX" | "BOLETO" | "BOTH";
 
 export interface ParsedDebtor {
   name: string;
+  document?: string;
   phone_number: string;
   email?: string;
   original_amount: number;
   due_date: string;
-  status?: string; // Populated when loaded from API (PENDING, PAID, CANCELED)
+  billing_type?: PaymentMethod;
+  status?: string;
 }
 
 interface UploadCSVProps {
   onUploadSuccess: (data: ParsedDebtor[]) => void;
 }
 
+function normalizePaymentMethod(value: string): PaymentMethod | null {
+  const normalized = value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toUpperCase();
+
+  if (normalized === "PIX") {
+    return "PIX";
+  }
+
+  if (normalized === "BOLETO") {
+    return "BOLETO";
+  }
+
+  if (
+    normalized === "AMBOS" ||
+    normalized === "BOTH" ||
+    normalized === "PIX E BOLETO"
+  ) {
+    return "BOTH";
+  }
+
+  return null;
+}
+
 export function UploadCSV({ onUploadSuccess }: UploadCSVProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const downloadTemplate = () => {
+  const downloadTemplate = (): void => {
     const templateContent =
-      "Nome,WhatsApp,Email,Valor,Vencimento\nJoão Silva,5511999999999,joao@email.com,150.50,2025-12-01";
+      "Nome,WhatsApp,Email,Valor,Vencimento,Forma de Pagamento\nJoao Silva,5511999999999,joao@email.com,150.50,2025-12-01,PIX";
     const blob = new Blob([templateContent], {
       type: "text/csv;charset=utf-8;",
     });
@@ -52,45 +82,57 @@ export function UploadCSV({ onUploadSuccess }: UploadCSVProps) {
         skipEmptyLines: true,
         complete: (results) => {
           try {
-            // Correção do TypeScript: Avisando que 'results.data' é um array de objetos de texto
             const rawData = results.data as Record<string, string>[];
 
             const validData: ParsedDebtor[] = rawData.map((row, index) => {
-              const nome = row["Nome"]?.trim() || row["nome"]?.trim();
+              const nome = row.Nome?.trim() || row.nome?.trim();
               let zap =
-                row["WhatsApp"]?.trim() ||
-                row["whatsapp"]?.trim() ||
-                row["telefone"]?.trim();
-              const emailRaw =
-                row["Email"]?.trim() || row["email"]?.trim() || ""; // Captura o email
-              const valorRaw = row["Valor"]?.trim() || row["valor"]?.trim();
+                row.WhatsApp?.trim() ||
+                row.whatsapp?.trim() ||
+                row.telefone?.trim();
+              const emailRaw = row.Email?.trim() || row.email?.trim() || "";
+              const valorRaw = row.Valor?.trim() || row.valor?.trim();
               const vencimento =
-                row["Vencimento"]?.trim() || row["vencimento"]?.trim();
+                row.Vencimento?.trim() || row.vencimento?.trim();
+              const formaPagamentoRaw =
+                row["Forma de Pagamento"]?.trim() ||
+                row.forma_de_pagamento?.trim() ||
+                row.formaPagamento?.trim() ||
+                row.pagamento?.trim() ||
+                row.billing_type?.trim() ||
+                "";
 
-              if (!nome || !zap || !valorRaw || !vencimento) {
+              if (!nome || !zap || !emailRaw || !valorRaw || !vencimento) {
                 throw new Error(
-                  `Linha ${index + 2}: Faltam dados obrigatórios. Verifique as colunas.`,
+                  `Linha ${index + 2}: Faltam dados obrigatorios. Verifique as colunas.`,
                 );
               }
 
-              // Validação simples de E-mail (se ele existir na planilha)
-              if (emailRaw && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw)) {
+              if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw)) {
                 throw new Error(
-                  `Linha ${index + 2}: O e-mail de ${nome} parece inválido (${emailRaw}).`,
+                  `Linha ${index + 2}: O email de ${nome} parece invalido (${emailRaw}).`,
                 );
               }
 
               zap = zap.replace(/\D/g, "");
               if (zap.length < 10) {
                 throw new Error(
-                  `Linha ${index + 2}: O WhatsApp de ${nome} parece inválido (${zap}).`,
+                  `Linha ${index + 2}: O WhatsApp de ${nome} parece invalido (${zap}).`,
                 );
               }
 
               const valorNumerico = parseFloat(valorRaw.replace(",", "."));
               if (isNaN(valorNumerico)) {
                 throw new Error(
-                  `Linha ${index + 2}: O valor de ${nome} não é um número válido.`,
+                  `Linha ${index + 2}: O valor de ${nome} nao e um numero valido.`,
+                );
+              }
+
+              const formaPagamento =
+                normalizePaymentMethod(formaPagamentoRaw);
+              if (!formaPagamento) {
+                throw new Error(
+                  `Linha ${index + 2}: Forma de pagamento invalida. Use PIX, BOLETO ou AMBOS.`,
                 );
               }
 
@@ -100,19 +142,18 @@ export function UploadCSV({ onUploadSuccess }: UploadCSVProps) {
                 email: emailRaw,
                 original_amount: valorNumerico,
                 due_date: vencimento,
+                billing_type: formaPagamento,
               };
             });
 
             onUploadSuccess(validData);
             setIsProcessing(false);
-
-            // Correção do TypeScript no Catch
           } catch (err: unknown) {
-            if (err instanceof Error) {
-              setError(err.message);
-            } else {
-              setError("Ocorreu um erro desconhecido ao processar os dados.");
-            }
+            setError(
+              err instanceof Error
+                ? err.message
+                : "Ocorreu um erro desconhecido ao processar os dados.",
+            );
             setIsProcessing(false);
           }
         },
@@ -138,43 +179,44 @@ export function UploadCSV({ onUploadSuccess }: UploadCSVProps) {
 
   return (
     <div className="w-full">
-      <div className="flex justify-end mb-4">
+      <div className="mb-4 flex justify-end">
         <button
+          type="button"
           onClick={downloadTemplate}
-          className="flex items-center gap-2 text-sm text-slate-500 hover:text-emerald-600 transition-colors"
+          className="flex items-center gap-2 text-sm text-slate-500 transition-colors hover:text-emerald-600"
         >
           <Download size={16} />
-          Baixar Planilha Padrão
+          Baixar Planilha Padrao
         </button>
       </div>
 
       <div
         {...getRootProps()}
-        className={`border-2 border-dashed rounded-xl p-12 flex flex-col items-center justify-center text-center cursor-pointer transition-colors
-          ${isDragActive ? "border-emerald-500 bg-emerald-50" : "border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300"}
+        className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-12 text-center transition-colors
+          ${isDragActive ? "border-emerald-500 bg-emerald-50" : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"}
           ${error ? "border-red-400 bg-red-50" : ""}
         `}
       >
         <input {...getInputProps()} />
 
         {isProcessing ? (
-          <div className="animate-pulse flex flex-col items-center">
-            <FileType className="text-emerald-500 w-12 h-12 mb-4 animate-bounce" />
-            <p className="text-slate-600 font-medium">
+          <div className="flex animate-pulse flex-col items-center">
+            <FileType className="mb-4 h-12 w-12 animate-bounce text-emerald-500" />
+            <p className="font-medium text-slate-600">
               Lendo e validando planilha...
             </p>
           </div>
         ) : (
           <>
             <div
-              className={`p-4 rounded-full mb-4 ${error ? "bg-red-100 text-red-500" : "bg-slate-100 text-slate-500"}`}
+              className={`mb-4 rounded-full p-4 ${error ? "bg-red-100 text-red-500" : "bg-slate-100 text-slate-500"}`}
             >
               {error ? <AlertCircle size={32} /> : <UploadCloud size={32} />}
             </div>
-            <h3 className="text-lg font-medium text-slate-900 mb-1">
+            <h3 className="mb-1 text-lg font-medium text-slate-900">
               {isDragActive ? "Pode soltar!" : "Arraste sua planilha CSV aqui"}
             </h3>
-            <p className="text-slate-500 max-w-xs mx-auto mb-6">
+            <p className="mx-auto mb-6 max-w-xs text-slate-500">
               Ou clique para procurar no seu computador. Formato aceito: .csv
             </p>
           </>
@@ -182,8 +224,8 @@ export function UploadCSV({ onUploadSuccess }: UploadCSVProps) {
       </div>
 
       {error && (
-        <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3 text-red-700 text-sm">
-          <AlertCircle size={20} className="shrink-0 mt-0.5" />
+        <div className="mt-4 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <AlertCircle size={20} className="mt-0.5 shrink-0" />
           <p>{error}</p>
         </div>
       )}

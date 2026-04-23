@@ -51,7 +51,7 @@ services:
       SERVER_TYPE: http
       PORT: 8080
       HOST: 0.0.0.0
-
+      CONFIG_SESSION_PHONE_VERSION: "2.3000.1032750324"
       AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-evolution_api_key_secret_change_in_production}
 
       # --- CONEXÃO POSTGRES ---

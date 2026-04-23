@@ -1,315 +1,460 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { UploadCSV, ParsedDebtor } from "@/components/features/UploadCSV";
-import { InvoiceTable } from "@/components/features/InvoiceTable";
-import { useApiClient } from "@/lib/use-api-client";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { FormEvent } from "react";
 import {
-  Plus,
-  RefreshCw,
-  Users,
-  DollarSign,
   AlertCircle,
-  XCircle,
-  Send,
-  X,
-  Search,
+  ArrowLeft,
   FileSpreadsheet,
+  FileUp,
+  Loader2,
+  Plus,
+  Search,
+  X,
 } from "lucide-react";
+import { InvoiceTable } from "@/components/features/InvoiceTable";
+import { UploadCSV } from "@/components/features/UploadCSV";
+import type {
+  ParsedDebtor,
+  PaymentMethod,
+} from "@/components/features/UploadCSV";
+import { useApiClient } from "@/lib/use-api-client";
+
+interface ApiErrorData {
+  details?: string[];
+  message?: string;
+}
+
+interface ManualChargeForm {
+  customerName: string;
+  email: string;
+  whatsapp: string;
+  amount: string;
+  dueDate: string;
+  billingType: PaymentMethod;
+}
+
+const initialManualChargeForm: ManualChargeForm = {
+  customerName: "",
+  email: "",
+  whatsapp: "",
+  amount: "",
+  dueDate: "",
+  billingType: "PIX",
+};
+
+function isParsedDebtorArray(data: unknown): data is ParsedDebtor[] {
+  return (
+    Array.isArray(data) &&
+    data.every((item) => {
+      if (!item || typeof item !== "object") {
+        return false;
+      }
+
+      const debtor = item as Partial<ParsedDebtor>;
+
+      return (
+        typeof debtor.name === "string" &&
+        typeof debtor.phone_number === "string" &&
+        typeof debtor.original_amount === "number" &&
+        typeof debtor.due_date === "string"
+      );
+    })
+  );
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (error && typeof error === "object" && "data" in error) {
+    const data = (error as { data?: ApiErrorData }).data;
+
+    if (data?.details?.length) {
+      return data.details.join(" | ");
+    }
+
+    if (data?.message) {
+      return data.message;
+    }
+  }
+
+  return fallback;
+}
 
 export default function CobrancasPage() {
   const apiClient = useApiClient();
-  const [devedores, setDevedores] = useState<ParsedDebtor[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [showUpload, setShowUpload] = useState(false);
-  const [importError, setImportError] = useState<string | null>(null);
-  const [isRunningBilling, setIsRunningBilling] = useState(false);
-  const [billingResult, setBillingResult] = useState<{
-    message: string;
-    isError: boolean;
-  } | null>(null);
+  const [debtors, setDebtors] = useState<ParsedDebtor[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isUploadingCSV, setIsUploadingCSV] = useState(false);
+  const [manualForm, setManualForm] = useState<ManualChargeForm>(
+    initialManualChargeForm,
+  );
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
 
-  const fetchInvoices = async () => {
+  const fetchInvoices = useCallback(async (): Promise<void> => {
     setIsLoading(true);
+    setErrorMsg(null);
+
     try {
       const data = await apiClient.getInvoices();
-      if (Array.isArray(data)) {
-        setDevedores(data);
-      }
-    } catch (error) {
-      console.error("Erro ao carregar dados:", error);
+      setDebtors(isParsedDebtorArray(data) ? data : []);
+    } catch (error: unknown) {
+      setErrorMsg(
+        getErrorMessage(error, "Nao foi possivel carregar as cobrancas."),
+      );
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [apiClient]);
 
   useEffect(() => {
-    fetchInvoices();
-  }, []);
+    void fetchInvoices();
+  }, [fetchInvoices]);
 
-  const metricas = useMemo(() => {
-    const total = devedores.length;
-    const valorSoma = devedores.reduce(
-      (acc, dev) => acc + dev.original_amount,
-      0
-    );
+  const filteredDebtors = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
 
-    const hoje = new Date();
-    hoje.setHours(0, 0, 0, 0);
-    const vencidas = devedores.filter((dev) => {
-      if (dev.status === "PAID" || dev.status === "CANCELED") return false;
-      const dataVencimento = new Date(`${dev.due_date}T12:00:00Z`);
-      return dataVencimento < hoje;
-    }).length;
+    if (!query) {
+      return debtors;
+    }
 
-    return { total, valorSoma, vencidas };
-  }, [devedores]);
+    return debtors.filter((debtor) => {
+      const searchableFields = [
+        debtor.name,
+        debtor.document || "",
+        debtor.phone_number,
+        debtor.email || "",
+      ];
 
-  const filteredData = useMemo(() => {
-    if (!searchQuery.trim()) return devedores;
-    const q = searchQuery.toLowerCase();
-    return devedores.filter(
-      (d) =>
-        d.name.toLowerCase().includes(q) ||
-        d.phone_number.includes(q) ||
-        (d.email && d.email.toLowerCase().includes(q))
-    );
-  }, [devedores, searchQuery]);
+      return searchableFields.some((field) =>
+        field.toLowerCase().includes(query),
+      );
+    });
+  }, [debtors, searchQuery]);
 
-  const handleRunBilling = async () => {
-    setBillingResult(null);
-    setIsRunningBilling(true);
+  async function handleUploadSuccess(
+    importedDebtors: ParsedDebtor[],
+  ): Promise<void> {
+    setImportError(null);
 
     try {
-      const data = await apiClient.runBilling();
-      setBillingResult({ message: data.message || "Cobrança executada com sucesso!", isError: false });
+      await apiClient.importInvoices(importedDebtors);
+      setIsUploadingCSV(false);
+      await fetchInvoices();
     } catch (error: unknown) {
-      const msg = error && typeof error === 'object' && 'message' in error
-        ? (error as { message: string }).message
-        : "Falha ao executar cobrança.";
-      setBillingResult({ message: msg, isError: true });
-    } finally {
-      setIsRunningBilling(false);
+      setImportError(
+        getErrorMessage(error, "Nao foi possivel importar a planilha."),
+      );
     }
-  };
+  }
 
-  const formatBRL = (value: number) =>
-    new Intl.NumberFormat("pt-BR", {
-      style: "currency",
-      currency: "BRL",
-    }).format(value);
+  function updateManualForm<Field extends keyof ManualChargeForm>(
+    field: Field,
+    value: ManualChargeForm[Field],
+  ): void {
+    setManualForm((currentForm) => ({ ...currentForm, [field]: value }));
+  }
+
+  function closeManualModal(): void {
+    setIsModalOpen(false);
+    setManualForm(initialManualChargeForm);
+  }
+
+  function handleManualSubmit(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    console.log("Nova cobranca manual:", manualForm);
+    closeManualModal();
+  }
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 max-w-350">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">
-            Gerenciamento de Cobranças
-          </h1>
-          <p className="text-slate-500 text-sm mt-1">
-            Visualize e gerencie as faturas ativas no seu sistema.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-2 sm:gap-3 shrink-0">
-          <button
-            onClick={fetchInvoices}
-            className="p-2.5 text-slate-500 hover:bg-slate-100 rounded-lg transition-colors border border-slate-200 bg-white"
-            title="Atualizar dados"
-          >
-            <RefreshCw
-              size={18}
-              className={isLoading ? "animate-spin" : ""}
-            />
-          </button>
-
-          <button
-            onClick={handleRunBilling}
-            disabled={isRunningBilling}
-            className="bg-emerald-600 text-white px-4 py-2.5 rounded-lg flex items-center gap-2 text-sm font-semibold hover:bg-emerald-700 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Disparar cobranças vencidas via WhatsApp"
-          >
-            <Send
-              size={16}
-              className={isRunningBilling ? "animate-pulse" : ""}
-            />
-            <span className="hidden sm:inline">
-              {isRunningBilling ? "Executando..." : "Executar Cobrança"}
-            </span>
-          </button>
-
-          <button
-            onClick={() => setShowUpload(!showUpload)}
-            className="bg-slate-900 text-white px-4 py-2.5 rounded-lg flex items-center gap-2 text-sm font-semibold hover:bg-slate-800 transition-all shadow-sm"
-          >
-            <Plus size={18} />
-            <span className="hidden sm:inline">
-              {showUpload ? "Ver Listagem" : "Nova Importação"}
-            </span>
-          </button>
-        </div>
-      </div>
-
-      {/* Summary cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 lg:gap-6 mb-8">
-        <div className="bg-white p-5 lg:p-6 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4">
-          <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
-            <Users size={22} />
-          </div>
+    <main className="min-h-full bg-slate-50">
+      <div className="mx-auto flex max-w-7xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
+        <header className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div>
-            <p className="text-sm text-slate-500">Total de Faturas</p>
-            <h3 className="text-2xl font-bold text-slate-900">
-              {metricas.total}
-            </h3>
-          </div>
-        </div>
-
-        <div className="bg-white p-5 lg:p-6 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4">
-          <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
-            <DollarSign size={22} />
-          </div>
-          <div>
-            <p className="text-sm text-slate-500">Valor em Aberto</p>
-            <h3 className="text-2xl font-bold text-slate-900">
-              {formatBRL(metricas.valorSoma)}
-            </h3>
-          </div>
-        </div>
-
-        <div className="bg-white p-5 lg:p-6 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4">
-          <div className="p-3 bg-rose-50 text-rose-600 rounded-xl">
-            <AlertCircle size={22} />
-          </div>
-          <div>
-            <p className="text-sm text-slate-500">Faturas Vencidas</p>
-            <h3 className="text-2xl font-bold text-slate-900">
-              {metricas.vencidas}
-            </h3>
-            {metricas.vencidas > 0 && (
-              <p className="text-xs text-rose-500 font-medium mt-0.5">
-                Requer atenção
-              </p>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Billing result banner */}
-      {billingResult && (
-        <div
-          className={`mb-6 p-4 rounded-xl flex items-center justify-between ${billingResult.isError
-              ? "bg-red-50 border border-red-200 text-red-700"
-              : "bg-emerald-50 border border-emerald-200 text-emerald-700"
-            }`}
-        >
-          <p className="text-sm font-medium">{billingResult.message}</p>
-          <button
-            onClick={() => setBillingResult(null)}
-            className="p-1 hover:opacity-70 transition-opacity shrink-0 ml-4"
-          >
-            <X size={16} />
-          </button>
-        </div>
-      )}
-
-      {/* Upload area */}
-      {showUpload || (devedores.length === 0 && !isLoading) ? (
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 lg:p-8 mb-8">
-          <h2 className="text-lg font-bold text-slate-900 mb-4">
-            Importar Nova Planilha
-          </h2>
-          {importError && (
-            <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-xl flex items-start gap-3 text-red-700 text-sm">
-              <XCircle size={20} className="shrink-0 mt-0.5" />
-              <div>
-                <p className="font-medium">Erro na importação</p>
-                <p>{importError}</p>
-              </div>
-            </div>
-          )}
-          <UploadCSV
-            onUploadSuccess={async (dados) => {
-              setImportError(null);
-              try {
-                await apiClient.importInvoices(dados);
-                setShowUpload(false);
-                fetchInvoices();
-              } catch (error: unknown) {
-                const msg = error && typeof error === 'object' && 'data' in error && error.data && typeof error.data === 'object' && 'details' in error.data
-                  ? (error.data as { details: string[] }).details.join(" | ")
-                  : error && typeof error === 'object' && 'message' in error
-                    ? (error as { message: string }).message
-                    : "Erro desconhecido ao importar.";
-                setImportError(msg);
-              }
-            }}
-          />
-        </div>
-      ) : null}
-
-      {/* Table area */}
-      {isLoading ? (
-        <div className="h-64 flex flex-col items-center justify-center text-slate-400">
-          <RefreshCw size={36} className="animate-spin mb-4" />
-          <p className="text-sm">Carregando cobranças...</p>
-        </div>
-      ) : devedores.length > 0 ? (
-        <>
-          {/* Search */}
-          <div className="relative mb-4">
-            <Search
-              size={18}
-              className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"
-            />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Buscar por nome, telefone ou e-mail..."
-              className="w-full sm:w-80 pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-shadow"
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery("")}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-              >
-                <X size={16} />
-              </button>
-            )}
-          </div>
-
-          <InvoiceTable data={filteredData} />
-
-          {searchQuery && filteredData.length === 0 && (
-            <div className="text-center py-12 text-slate-400 text-sm">
-              Nenhum resultado para &ldquo;{searchQuery}&rdquo;
-            </div>
-          )}
-        </>
-      ) : (
-        !showUpload && (
-          <div className="text-center py-20 bg-white rounded-xl border border-dashed border-slate-300">
-            <div className="mx-auto w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
-              <FileSpreadsheet size={28} className="text-slate-400" />
-            </div>
-            <h3 className="font-semibold text-slate-900 mb-1">
-              Nenhuma cobrança encontrada
-            </h3>
-            <p className="text-slate-500 text-sm mb-6 max-w-sm mx-auto">
-              Importe uma planilha CSV com os dados dos devedores para começar.
+            <h1 className="text-2xl font-bold text-slate-900">
+              Gestão de Cobranças
+            </h1>
+            <p className="mt-1 text-sm text-slate-500">
+              Gira os devedores, adicione novas faturas ou importe listas em
+              lote.
             </p>
+          </div>
+
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+            <div className="relative w-full lg:w-80">
+              <Search
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                size={18}
+              />
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Pesquisar por nome ou CPF..."
+                className="h-11 w-full rounded-md border border-slate-200 bg-white py-2 pl-10 pr-3 text-sm text-slate-900 outline-none transition-all duration-200 placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+              />
+            </div>
+
             <button
-              onClick={() => setShowUpload(true)}
-              className="bg-slate-900 text-white px-5 py-2.5 rounded-xl text-sm font-semibold hover:bg-slate-800 transition-all inline-flex items-center gap-2"
+              type="button"
+              onClick={() => {
+                setImportError(null);
+                setIsUploadingCSV(true);
+              }}
+              className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-all duration-200 hover:bg-slate-100 hover:text-slate-900"
             >
-              <Plus size={18} />
-              Nova Importação
+              <FileUp size={17} />
+              Importar CSV
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsModalOpen(true)}
+              className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:bg-emerald-700"
+            >
+              <Plus size={17} />
+              Adicionar Manual
             </button>
           </div>
-        )
+        </header>
+
+        {errorMsg && (
+          <div className="flex items-start gap-3 rounded-md border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+            <AlertCircle className="mt-0.5 shrink-0" size={18} />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+
+        {isUploadingCSV ? (
+          <section className="rounded-md border border-slate-200 bg-white p-5">
+            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="font-semibold text-slate-900">
+                  Importar cobranças por CSV
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Envie uma planilha para cadastrar cobranças em lote.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setImportError(null);
+                  setIsUploadingCSV(false);
+                }}
+                className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-all duration-200 hover:bg-slate-100 hover:text-slate-900"
+              >
+                <ArrowLeft size={17} />
+                Voltar para a lista
+              </button>
+            </div>
+
+            {importError && (
+              <div className="mb-4 flex items-start gap-3 rounded-md border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+                <AlertCircle className="mt-0.5 shrink-0" size={18} />
+                <span>{importError}</span>
+              </div>
+            )}
+
+            <UploadCSV
+              onUploadSuccess={(importedDebtors) => {
+                void handleUploadSuccess(importedDebtors);
+              }}
+            />
+          </section>
+        ) : (
+          <section className="flex flex-col gap-4">
+            {isLoading ? (
+              <div className="flex min-h-80 flex-col items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500">
+                <Loader2 className="mb-3 animate-spin" size={34} />
+                <p className="text-sm">Carregando cobranças...</p>
+              </div>
+            ) : debtors.length > 0 ? (
+              <>
+                <div className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
+                  <span>
+                    <strong className="font-semibold text-slate-900">
+                      {filteredDebtors.length}
+                    </strong>{" "}
+                    de {debtors.length} cobranças
+                  </span>
+                </div>
+
+                <InvoiceTable data={filteredDebtors} />
+
+                {searchQuery && filteredDebtors.length === 0 && (
+                  <div className="rounded-md border border-dashed border-slate-300 bg-white py-12 text-center text-sm text-slate-500">
+                    Nenhum devedor encontrado para &quot;{searchQuery}&quot;.
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="rounded-md border border-dashed border-slate-300 bg-white px-6 py-16 text-center">
+                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-md bg-slate-100 text-slate-400">
+                  <FileSpreadsheet size={28} />
+                </div>
+                <h2 className="font-semibold text-slate-900">
+                  Nenhuma cobrança cadastrada
+                </h2>
+                <p className="mx-auto mt-2 max-w-md text-sm text-slate-500">
+                  Importe um CSV ou adicione uma fatura manualmente para começar
+                  a operação de cobrança.
+                </p>
+              </div>
+            )}
+          </section>
+        )}
+      </div>
+
+      {isModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 transition-all duration-200">
+          <div className="w-full max-w-lg rounded-md bg-white shadow-xl transition-all duration-200">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="font-semibold text-slate-900">
+                  Adicionar cobrança manual
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Preencha os dados principais da nova fatura.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeManualModal}
+                className="rounded-md p-2 text-slate-400 transition-all duration-200 hover:bg-slate-100 hover:text-slate-600"
+                aria-label="Fechar modal"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleManualSubmit}>
+              <div className="grid gap-4 px-5 py-5 sm:grid-cols-2">
+                <label className="flex flex-col gap-1.5 sm:col-span-2">
+                  <span className="text-xs font-semibold uppercase text-slate-500">
+                    Nome do Cliente
+                  </span>
+                  <input
+                    required
+                    type="text"
+                    value={manualForm.customerName}
+                    onChange={(event) =>
+                      updateManualForm("customerName", event.target.value)
+                    }
+                    className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1.5 sm:col-span-2">
+                  <span className="text-xs font-semibold uppercase text-slate-500">
+                    Email
+                  </span>
+                  <input
+                    required
+                    type="email"
+                    value={manualForm.email}
+                    onChange={(event) =>
+                      updateManualForm("email", event.target.value)
+                    }
+                    className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-semibold uppercase text-slate-500">
+                    WhatsApp (com DDD)
+                  </span>
+                  <input
+                    required
+                    type="tel"
+                    value={manualForm.whatsapp}
+                    onChange={(event) =>
+                      updateManualForm("whatsapp", event.target.value)
+                    }
+                    className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-semibold uppercase text-slate-500">
+                    Forma de Pagamento
+                  </span>
+                  <select
+                    required
+                    value={manualForm.billingType}
+                    onChange={(event) =>
+                      updateManualForm(
+                        "billingType",
+                        event.target.value as PaymentMethod,
+                      )
+                    }
+                    className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  >
+                    <option value="PIX">PIX</option>
+                    <option value="BOLETO">Boleto</option>
+                    <option value="BOTH">PIX e Boleto</option>
+                  </select>
+                </label>
+
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-semibold uppercase text-slate-500">
+                    Valor (R$)
+                  </span>
+                  <input
+                    required
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={manualForm.amount}
+                    onChange={(event) =>
+                      updateManualForm("amount", event.target.value)
+                    }
+                    className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1.5 sm:col-span-2">
+                  <span className="text-xs font-semibold uppercase text-slate-500">
+                    Data de Vencimento
+                  </span>
+                  <input
+                    required
+                    type="date"
+                    value={manualForm.dueDate}
+                    onChange={(event) =>
+                      updateManualForm("dueDate", event.target.value)
+                    }
+                    className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  />
+                </label>
+              </div>
+
+              <div className="flex flex-col-reverse gap-2 border-t border-slate-200 px-5 py-4 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={closeManualModal}
+                  className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-all duration-200 hover:bg-slate-100"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="inline-flex items-center justify-center rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:bg-emerald-700"
+                >
+                  Salvar Cobrança
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
-    </div>
+    </main>
   );
 }

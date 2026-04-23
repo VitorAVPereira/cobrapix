@@ -1,15 +1,17 @@
 /**
- * Cliente HTTP para API Nest
- * Wrapper em torno de fetch com autenticação automática
+ * Cliente HTTP para API Nest.
+ * O frontend nao acessa banco diretamente; toda persistencia passa por aqui.
  */
-
-import { auth } from "@/lib/auth";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
-interface ApiError extends Error {
+export interface ApiError extends Error {
   status?: number;
-  data?: any;
+  data?: unknown;
+}
+
+interface ApiErrorBody {
+  message?: string | string[];
 }
 
 interface BillingResponse {
@@ -34,6 +36,98 @@ interface WhatsAppStatusResponse {
   dbStatus: string;
 }
 
+export interface MessageTemplate {
+  id: string;
+  name: string;
+  slug: string;
+  content: string;
+  isActive: boolean;
+  companyId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SaveMessageTemplateInput {
+  name: string;
+  slug: string;
+  content: string;
+  isActive?: boolean;
+}
+
+export interface GatewayAccountInput {
+  corporateName: string;
+  cnpj: string;
+  email: string;
+  phoneNumber: string;
+  legalRepresentative: string;
+  legalRepresentativeCpf: string;
+  legalRepresentativeBirthDate: string;
+  postalCode: string;
+  street: string;
+  number: string;
+  district: string;
+  city: string;
+  state: string;
+  bankName: string;
+  bankAgency: string;
+  bankAccount: string;
+  bankAccountDigit: string;
+  bankAccountType: "CHECKING" | "SAVINGS";
+  environment: "homologation" | "production";
+  efiClientId: string;
+  efiClientSecret: string;
+  efiPayeeCode: string;
+  efiAccountNumber: string;
+  efiAccountDigit: string;
+  efiPixKey: string;
+  efiCertificatePath: string;
+  efiCertificatePassword: string;
+  gatewayStatus: "PENDING" | "ACTIVE" | "REJECTED" | "DISABLED";
+}
+
+export interface GatewayAccountStatus {
+  provider: string;
+  accountId: string | null;
+  environment: string | null;
+  status: string;
+  hasApiKey: boolean;
+  company: {
+    corporateName: string;
+    cnpj: string;
+    email: string;
+    phoneNumber: string;
+  };
+  legalRepresentative: {
+    name: string | null;
+    cpf: string | null;
+    birthDate: string | null;
+  };
+  address: {
+    postalCode: string | null;
+    street: string | null;
+    number: string | null;
+    district: string | null;
+    city: string | null;
+    state: string | null;
+  };
+  bank: {
+    name: string | null;
+    agency: string | null;
+    account: string | null;
+    accountDigit: string | null;
+    accountType: string | null;
+    holderName: string | null;
+    holderDocument: string | null;
+  };
+  efi: {
+    payeeCode: string | null;
+    accountNumber: string | null;
+    accountDigit: string | null;
+    pixKey: string | null;
+    hasCertificate: boolean;
+  };
+}
+
 class ApiClient {
   private baseUrl: string;
   private token: string | null;
@@ -43,88 +137,89 @@ class ApiClient {
     this.token = token;
   }
 
-  setToken(token: string | null) {
+  setToken(token: string | null): void {
     this.token = token;
   }
 
-  private async getAuthHeader(): Promise<string | null> {
-    if (this.token) {
-      return this.token;
-    }
-    const session = await auth();
-    return session?.access_token || null;
+  private getAuthHeader(): string | null {
+    return this.token;
   }
 
   private async fetch<T>(
     endpoint: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
-    const token = await this.getAuthHeader();
+    const token = this.getAuthHeader();
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      ...(options.headers as Record<string, string>),
+      ...(options.headers as Record<string, string> | undefined),
     };
 
     if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
+      headers.Authorization = `Bearer ${token}`;
     }
 
-    const config: RequestInit = {
+    const response = await fetch(url, {
       ...options,
       headers,
-    };
-
-    const response = await fetch(url, config);
+    });
 
     if (!response.ok) {
-      const error: ApiError = new Error(
-        `API Error: ${response.status} ${response.statusText}`
-      );
-      error.status = response.status;
+      let data: unknown;
       try {
-        error.data = await response.json();
+        data = await response.json();
       } catch {
-        error.data = await response.text();
+        data = await response.text();
       }
+
+      const errorBody = data as ApiErrorBody;
+      const errorMessage =
+        errorBody.message || `API Error: ${response.status} ${response.statusText}`;
+
+      const error: ApiError = new Error(
+        Array.isArray(errorMessage) ? errorMessage[0] : errorMessage,
+      );
+
+      error.status = response.status;
+      error.data = data;
       throw error;
     }
 
-    // Retorna null para respostas 204
     if (response.status === 204) {
       return null as T;
     }
 
-    return response.json();
+    return response.json() as Promise<T>;
   }
 
   // Auth
-  async login(email: string, password: string) {
+  async login(email: string, password: string): Promise<unknown> {
     return this.fetch("/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
     });
   }
 
-  async logout() {
+  async logout(): Promise<unknown> {
     return this.fetch("/auth/logout", {
       method: "POST",
     });
   }
 
-  async getSession() {
+  async getSession(): Promise<unknown> {
     return this.fetch("/auth/session", {
       method: "POST",
     });
   }
 
   // Invoices
-  async getInvoices() {
+  async getInvoices(): Promise<unknown> {
     return this.fetch("/invoices");
   }
 
-  async importInvoices(data: any[]) {
+  async importInvoices(data: ReadonlyArray<unknown>): Promise<unknown> {
     return this.fetch("/invoices/import", {
       method: "POST",
       body: JSON.stringify(data),
@@ -155,8 +250,44 @@ class ApiClient {
     });
   }
 
+  // Templates
+  async getTemplates(): Promise<MessageTemplate[]> {
+    return this.fetch<MessageTemplate[]>("/templates");
+  }
+
+  async createTemplate(data: SaveMessageTemplateInput): Promise<MessageTemplate> {
+    return this.fetch<MessageTemplate>("/templates", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateTemplate(
+    id: string,
+    data: Partial<SaveMessageTemplateInput>,
+  ): Promise<MessageTemplate> {
+    return this.fetch<MessageTemplate>(`/templates/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  // Payment gateway
+  async getGatewayAccount(): Promise<GatewayAccountStatus> {
+    return this.fetch<GatewayAccountStatus>("/payments/gateway-account");
+  }
+
+  async createGatewayAccount(
+    data: GatewayAccountInput,
+  ): Promise<GatewayAccountStatus> {
+    return this.fetch<GatewayAccountStatus>("/payments/gateway-account", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
   // Health
-  async getHealth() {
+  async getHealth(): Promise<unknown> {
     return this.fetch("/health");
   }
 }
