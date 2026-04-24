@@ -19,7 +19,10 @@
 3. Required env vars in api-cobranca:
    - `DATABASE_URL`, `DIRECT_URL`
    - `EVOLUTION_API_KEY`, `EVOLUTION_JWT_SECRET`
-   - `ASAAS_API_KEY` (para pagamentos)
+   - `PAYMENT_SECRET_KEY` (criptografia das credenciais do gateway)
+   - `EFI_PLATFORM_CLIENT_ID`, `EFI_PLATFORM_CLIENT_SECRET`
+   - `EFI_PLATFORM_PAYEE_CODE`, `EFI_PLATFORM_SPLIT_PERCENTAGE`
+   - `EFI_WEBHOOK_BASE_URL`
    - `REDIS_HOST`, `REDIS_PORT` (para filas)
 
 ## Commands
@@ -39,13 +42,13 @@ npm run test
 npm run lint
 ```
 
-## Payment API (Asaas)
+## Payment API (Efí Bank)
 
 Endpoints para geração de PIX e Boleto:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/payments/create` | Cria cobrança PIX |
+| POST | `/payments/create` | Cria cobrança PIX CobV |
 | POST | `/payments/create-batch` | Cria cobranças em lote |
 | POST | `/payments/boleto` | Cria boleto |
 | POST | `/payments/boleto-batch` | Cria múltiplos boletos |
@@ -66,7 +69,8 @@ Endpoints para geração de PIX e Boleto:
 | Endpoint | Description |
 |----------|-------------|
 | POST | `/webhooks/evolution` | Status conexão WhatsApp |
-| POST | `/webhooks/asaas` | Notificações de pagamento |
+| POST | `/webhooks/efi/pix` | Notificações de pagamento Pix |
+| POST | `/webhooks/efi/cobrancas` | Notificações de cobranças/boleto |
 
 ## Prisma Schema
 

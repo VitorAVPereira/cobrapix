@@ -51,7 +51,9 @@ export class WebhooksService {
     // Valida API key se configurada
     const expectedKey = this.configService.get<string>('EVOLUTION_API_KEY');
     if (expectedKey && payload.apikey !== expectedKey) {
-      this.logger.warn(`Webhook Evolution: apikey invalida para instancia ${instanceName}`);
+      this.logger.warn(
+        `Webhook Evolution: apikey invalida para instancia ${instanceName}`,
+      );
       throw new Error('Nao autorizado');
     }
 
@@ -61,7 +63,9 @@ export class WebhooksService {
     });
 
     if (!company) {
-      this.logger.warn(`Webhook Evolution: instancia ${instanceName} nao pertence a nenhuma empresa`);
+      this.logger.warn(
+        `Webhook Evolution: instancia ${instanceName} nao pertence a nenhuma empresa`,
+      );
       return { ignored: true, updated: false };
     }
 
@@ -82,77 +86,11 @@ export class WebhooksService {
       data: { whatsappStatus: newStatus },
     });
 
-    this.logger.log(`Webhook Evolution: ${instanceName} -> ${state} -> status atualizado para ${newStatus}`);
+    this.logger.log(
+      `Webhook Evolution: ${instanceName} -> ${state} -> status atualizado para ${newStatus}`,
+    );
 
     return { updated: true, status: newStatus };
-  }
-
-  async handleAsaasWebhook(
-    payload: unknown,
-  ): Promise<{ processed: boolean; invoiceId?: string; status?: string }> {
-    if (!this.isRecord(payload)) {
-      return { processed: false };
-    }
-
-    const event = typeof payload.event === 'string' ? payload.event : null;
-    const payment = typeof payload.payment === 'string' ? payload.payment : null;
-    const status = typeof payload.status === 'string' ? payload.status : null;
-
-    if (!payment) {
-      this.logger.warn('Webhook Asaas: payment nao presente no payload');
-      return { processed: false };
-    }
-
-    if (!event || !event.startsWith('PAYMENT_')) {
-      this.logger.log(`Webhook Asaas: evento ignorado - ${event}`);
-      return { processed: false };
-    }
-
-    const invoice = await this.prisma.invoice.findFirst({
-      where: { gatewayId: payment },
-    });
-
-    if (!invoice) {
-      this.logger.warn(`Webhook Asaas: fatura nao encontrada para gatewayId ${payment}`);
-      return { processed: false };
-    }
-
-    let newStatus: 'PENDING' | 'PAID' | 'CANCELED' | null = null;
-
-    if (status === 'CONFIRMED' || status === 'RECEIVED' || status === 'PAID') {
-      newStatus = 'PAID';
-    } else if (status === 'CANCELED' || status === 'EXPIRED' || status === 'REJECTED') {
-      newStatus = 'CANCELED';
-    }
-
-    if (!newStatus) {
-      this.logger.log(`Webhook Asaas: status ${status} nao requer atualizacao`);
-      return { processed: false };
-    }
-
-    if (invoice.status === newStatus) {
-      this.logger.log(`Webhook Asaas: fatura ${invoice.id} ja esta com status ${newStatus}`);
-      return { processed: true, invoiceId: invoice.id, status: newStatus };
-    }
-
-    await this.prisma.invoice.update({
-      where: { id: invoice.id },
-      data: { status: newStatus },
-    });
-
-    await this.prisma.collectionLog.create({
-      data: {
-        companyId: invoice.companyId,
-        invoiceId: invoice.id,
-        actionType: 'PAYMENT_WEBHOOK',
-        description: `Pagamento atualizado via webhook: ${event} - ${status}`,
-        status: newStatus,
-      },
-    });
-
-    this.logger.log(`Webhook Asaas: fatura ${invoice.id} atualizada para ${newStatus} (evento: ${event})`);
-
-    return { processed: true, invoiceId: invoice.id, status: newStatus };
   }
 
   async handleEfiPixWebhook(payload: unknown): Promise<{

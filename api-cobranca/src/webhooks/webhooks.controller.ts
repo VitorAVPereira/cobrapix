@@ -30,20 +30,6 @@ export class WebhooksController {
     }
   }
 
-  @Post('asaas')
-  async handleAsaasWebhook(@Body() payload: unknown) {
-    try {
-      const result = await this.webhooksService.handleAsaasWebhook(payload);
-      return result;
-    } catch (error) {
-      this.logger.error('Erro ao processar webhook Asaas:', error);
-      throw new HttpException(
-        'Falha ao processar webhook',
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
-  }
-
   @Post('efi/pix')
   async handleEfiPixWebhook(@Body() payload: unknown) {
     try {

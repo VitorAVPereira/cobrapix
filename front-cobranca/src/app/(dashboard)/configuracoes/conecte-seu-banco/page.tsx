@@ -60,14 +60,18 @@ type FormField = {
 };
 
 const companyFields: FormField[] = [
-  { name: "corporateName", label: "Razao social", autoComplete: "organization" },
+  {
+    name: "corporateName",
+    label: "Razao social",
+    autoComplete: "organization",
+  },
   { name: "cnpj", label: "CNPJ", autoComplete: "off" },
   { name: "email", label: "Email", type: "email", autoComplete: "email" },
   { name: "phoneNumber", label: "Telefone comercial", autoComplete: "tel" },
 ];
 
 const representativeFields: FormField[] = [
-  { name: "legalRepresentative", label: "Nome do dono", autoComplete: "name" },
+  { name: "legalRepresentative", label: "Nome do Representante Legal", autoComplete: "name" },
   { name: "legalRepresentativeCpf", label: "CPF", autoComplete: "off" },
   {
     name: "legalRepresentativeBirthDate",
@@ -187,7 +191,10 @@ export default function PaymentSettingsPage() {
 
   const isConfigured = Boolean(accountStatus?.accountId);
   const badgeClass = useMemo(() => {
-    if (accountStatus?.status === "ACTIVE" || accountStatus?.status === "APPROVED") {
+    if (
+      accountStatus?.status === "ACTIVE" ||
+      accountStatus?.status === "APPROVED"
+    ) {
       return "bg-emerald-50 text-emerald-700 border-emerald-200";
     }
 
@@ -233,7 +240,9 @@ export default function PaymentSettingsPage() {
     setForm((current) => ({ ...current, [name]: nextValue }));
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+  async function handleSubmit(
+    event: FormEvent<HTMLFormElement>,
+  ): Promise<void> {
     event.preventDefault();
     setErrorMsg(null);
     setSuccessMsg(null);
@@ -245,9 +254,7 @@ export default function PaymentSettingsPage() {
       setForm(buildFormFromStatus(data));
       setSuccessMsg("Conta Efi cadastrada e pronta para emitir cobrancas.");
     } catch (error: unknown) {
-      setErrorMsg(
-        getErrorMessage(error, "Nao foi possivel criar a subconta."),
-      );
+      setErrorMsg(getErrorMessage(error, "Nao foi possivel criar a subconta."));
     } finally {
       setSaving(false);
     }
@@ -259,19 +266,23 @@ export default function PaymentSettingsPage() {
         <header className="flex flex-col gap-4 rounded-md border border-slate-200 bg-white p-5 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl font-bold text-slate-950">
-              Configuracoes de Pagamento
+              Configurações de Pagamento
             </h1>
             <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">
-              Cadastre os dados fiscais e bancarios da clinica para habilitar a
-              conta Efi, split automatico e credenciais de emissao para receber
-              cobrancas pelo backend.
+              Cadastre os dados fiscais e bancarios da empresa para habilitar a
+              sua conta no Efí Bank com Split automatico e credenciais de
+              emissão para gerarmos cobranças automatizadas.
             </p>
           </div>
 
           <div
             className={`inline-flex w-fit items-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold ${badgeClass}`}
           >
-            {isConfigured ? <CheckCircle2 size={17} /> : <AlertCircle size={17} />}
+            {isConfigured ? (
+              <CheckCircle2 size={17} />
+            ) : (
+              <AlertCircle size={17} />
+            )}
             {isConfigured
               ? statusLabel(accountStatus?.status || "PENDING")
               : "Pendente"}
@@ -318,7 +329,7 @@ export default function PaymentSettingsPage() {
 
             <FormSection
               icon={MapPin}
-              title="Endereco"
+              title="Endereço"
               fields={addressFields}
               form={form}
               disabled={isConfigured || saving}
@@ -327,28 +338,31 @@ export default function PaymentSettingsPage() {
 
             <FormSection
               icon={Landmark}
-              title="Dados Bancarios da Clinica"
+              title="Dados Bancários da Empresa"
               fields={bankFields}
               form={form}
               disabled={isConfigured || saving}
               onChange={updateField}
             />
 
-            <FormSection
+            {/* <FormSection
               icon={Banknote}
-              title="Credenciais Efi"
+              title="Credenciais Efí Bank"
               fields={efiFields}
               form={form}
               disabled={isConfigured || saving}
               onChange={updateField}
-            />
+            /> */}
 
             <footer className="flex flex-col gap-3 rounded-md border border-slate-200 bg-white p-5 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-start gap-3 text-sm text-slate-600">
-                <Banknote className="mt-0.5 shrink-0 text-emerald-600" size={18} />
+                <Banknote
+                  className="mt-0.5 shrink-0 text-emerald-600"
+                  size={18}
+                />
                 <span>
-                  As chaves do gateway ficam apenas no backend. O painel mostra
-                  somente o status da conta Efi.
+                  As chaves do gateway ficam apenas no servidor. O painel mostra
+                  somente o status da conta.
                 </span>
               </div>
 
@@ -362,7 +376,7 @@ export default function PaymentSettingsPage() {
                 ) : (
                   <Send size={17} />
                 )}
-                {isConfigured ? "Conta Efi cadastrada" : "Cadastrar Efi"}
+                {isConfigured ? "Conta Efí cadastrada" : "Cadastrar Conta Efí"}
               </button>
             </footer>
           </form>

@@ -1,0 +1,2 @@
+ALTER TABLE "Company"
+ADD COLUMN "collectionReminderDays" INTEGER[] NOT NULL DEFAULT ARRAY[0]::INTEGER[];

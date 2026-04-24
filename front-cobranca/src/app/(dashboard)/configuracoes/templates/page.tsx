@@ -44,7 +44,7 @@ const DEFAULT_TEMPLATE_OPTION: TemplateOption = {
   name: "Vencimento hoje",
   slug: "vencimento-hoje",
   defaultContent:
-    "{Ola|Oi|Tudo bem}, {debtorName}. Sua fatura de {originalAmount} vence em {dueDate}.",
+    "{Olá|Oi|Tudo bem}, {debtorName}. Sua fatura de {originalAmount} vence em {dueDate}.",
 };
 
 const TEMPLATE_OPTIONS: TemplateOption[] = [
@@ -53,31 +53,31 @@ const TEMPLATE_OPTIONS: TemplateOption[] = [
     name: "Lembrete antes do vencimento",
     slug: "pre-vencimento",
     defaultContent:
-      "{Ola|Oi}, {debtorName}. Passando para lembrar que sua fatura de {originalAmount} vence em {dueDate}.",
+      "{Olá|Oi}, {debtorName}. Passando para lembrar que sua fatura de {originalAmount} vence em {dueDate}.",
   },
   {
     name: "Primeiro aviso de atraso",
     slug: "atraso-primeiro-aviso",
     defaultContent:
-      "{Ola|Oi}, {debtorName}. Identificamos uma fatura em aberto de {originalAmount}, vencida em {dueDate}.",
+      "{Olá|Oi}, {debtorName}. Identificamos uma fatura em aberto de {originalAmount}, vencida em {dueDate}.",
   },
   {
     name: "Atraso recorrente",
     slug: "atraso-recorrente",
     defaultContent:
-      "{Ola|Oi}, {debtorName}. Ainda consta uma pendencia de {originalAmount} com vencimento em {dueDate}.",
+      "{Olá|Oi}, {debtorName}. Ainda consta uma pendencia de {originalAmount} com vencimento em {dueDate}.",
   },
   {
     name: "Ultimo aviso",
     slug: "ultimo-aviso",
     defaultContent:
-      "{Ola|Oi}, {debtorName}. Este e um ultimo lembrete sobre a fatura de {originalAmount}, vencida em {dueDate}.",
+      "{Olá|Oi}, {debtorName}. Este e um ultimo lembrete sobre a fatura de {originalAmount}, vencida em {dueDate}.",
   },
   {
     name: "Confirmacao de pagamento",
     slug: "pagamento-confirmado",
     defaultContent:
-      "{Ola|Oi}, {debtorName}. Recebemos o pagamento da sua fatura de {originalAmount}. Obrigado!",
+      "{Olá|Oi}, {debtorName}. Recebemos o pagamento da sua fatura de {originalAmount}. Obrigado!",
   },
 ];
 
@@ -100,7 +100,7 @@ const VARIABLES: TemplateVariable[] = [
   { tag: "{companyName}", label: "Empresa", preview: "Clinica Exemplo" },
   {
     tag: "{pixCopyPaste}",
-    label: "PIX copia e cola",
+    label: "PIX copia e cOlá",
     preview: "00020101021226...",
     reserved: true,
   },
@@ -496,12 +496,12 @@ export default function TemplatesPage() {
                   }
                   rows={12}
                   className="w-full resize-none rounded-md border border-slate-300 px-3 py-3 text-sm leading-6 text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                  placeholder="{Ola|Oi}, {debtorName}. Sua fatura de {originalAmount} vence em {dueDate}."
+                  placeholder="{Olá|Oi}, {debtorName}. Sua fatura de {originalAmount} vence em {dueDate}."
                 />
               </label>
 
               <div className="rounded-md border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-                Use Spintax com pipe, como {"{Ola|Oi|Tudo bem}"}. As variaveis
+                Use Spintax com pipe, como {"{Olá|Oi|Tudo bem}"}. As variaveis
                 financeiras foram reservadas para o proximo passo do fluxo de
                 PIX.
               </div>

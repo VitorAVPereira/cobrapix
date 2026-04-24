@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import {
+  CalendarClock,
   ChevronDown,
   Database,
   FileText,
@@ -31,6 +32,11 @@ const mainItems = [
 ];
 
 const settingsItems = [
+  {
+    href: "/configuracoes/cobranca",
+    label: "Cobranca",
+    icon: CalendarClock,
+  },
   { href: "/configuracoes/whatsapp", label: "WhatsApp", icon: MessageCircle },
   {
     href: "/configuracoes/templates",

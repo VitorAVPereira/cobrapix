@@ -1,35 +1,19 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { GatewayAccount, InvoiceStatus } from '@prisma/client';
-import { readFileSync } from 'fs';
-import { request as httpsRequest, RequestOptions } from 'https';
-import { URL } from 'url';
+import EfiPay from 'sdk-node-apis-efi';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateGatewayAccountDto } from './dto/gateway-account.dto';
 import { PaymentCryptoService } from './payment-crypto.service';
 
 type EfiEnvironment = 'homologation' | 'production';
-type EfiApi = 'pix' | 'charges' | 'accounts';
 type BillingType = 'PIX' | 'BOLETO';
-
-interface TokenCacheEntry {
-  accessToken: string;
-  expiresAt: number;
-}
 
 interface EfiCredentials {
   clientId: string;
   clientSecret: string;
-  certificatePath?: string;
-  certificatePassword?: string;
-  encryptedCertificate?: string;
-}
-
-interface EfiErrorResponse {
-  error?: string;
-  error_description?: string;
-  message?: string;
-  nome?: string;
+  certificate?: string;
+  certificateIsBase64: boolean;
 }
 
 interface EfiPixCobvResponse {
@@ -38,9 +22,14 @@ interface EfiPixCobvResponse {
     id?: number;
     location?: string;
   };
+  location?: string;
   pixCopiaECola?: string;
-  copiaECola?: string;
   status?: string;
+}
+
+interface EfiPixQrCodeResponse {
+  qrcode?: string;
+  imagemQrcode?: string;
 }
 
 interface EfiSplitConfigResponse {
@@ -49,21 +38,15 @@ interface EfiSplitConfigResponse {
 }
 
 interface EfiChargeResponse {
-  charge_id?: number;
-  chargeId?: number;
-  total?: number;
-  status?: string;
-  link?: string;
-  pdf?: {
-    charge?: string;
-  };
-  payment?: {
-    banking_billet?: {
-      barcode?: string;
-      link?: string;
-      pdf?: {
-        charge?: string;
-      };
+  code?: number;
+  data?: {
+    charge_id?: number;
+    status?: string;
+    barcode?: string;
+    link?: string;
+    billet_link?: string;
+    pdf?: {
+      charge?: string;
     };
     pix?: {
       qrcode?: string;
@@ -74,12 +57,24 @@ interface EfiChargeResponse {
 
 interface EfiNotificationResponse {
   data?: Array<{
-    custom_id?: string;
-    charge_id?: number;
+    custom_id?: string | null;
+    identifiers?: {
+      charge_id?: number;
+    };
     status?: {
       current?: string;
     };
   }>;
+}
+
+interface EfiErrorResponse {
+  nome?: string;
+  mensagem?: string;
+  message?: string;
+  error?: string;
+  error_description?: string;
+  title?: string;
+  detail?: string;
 }
 
 interface PaymentInvoice {
@@ -101,6 +96,14 @@ interface PaymentInvoice {
     email: string | null;
     phoneNumber: string;
   };
+  company: {
+    addressPostalCode: string | null;
+    addressStreet: string | null;
+    addressNumber: string | null;
+    addressDistrict: string | null;
+    addressCity: string | null;
+    addressState: string | null;
+  };
 }
 
 export interface EfiPaymentResult {
@@ -119,7 +122,6 @@ export interface EfiPaymentResult {
 @Injectable()
 export class EfiService {
   private readonly logger = new Logger(EfiService.name);
-  private readonly tokenCache = new Map<string, TokenCacheEntry>();
 
   constructor(
     private readonly config: ConfigService,
@@ -183,11 +185,11 @@ export class EfiService {
   ): Promise<EfiPaymentResult> {
     const invoice = await this.prisma.invoice.findFirst({
       where: { id: invoiceId, companyId },
-      include: { debtor: true },
+      include: { debtor: true, company: true },
     });
 
     if (!invoice) {
-      throw new HttpException('Fatura nao encontrada', HttpStatus.NOT_FOUND);
+      throw new HttpException('Fatura não encontrada', HttpStatus.NOT_FOUND);
     }
 
     const gatewayAccount = await this.getActiveGatewayAccount(companyId);
@@ -250,21 +252,20 @@ export class EfiService {
       return { processed: false };
     }
 
-    const gatewayAccount = await this.findGatewayAccountByNotification(
-      notification,
-    );
+    const gatewayAccount =
+      await this.findGatewayAccountByNotification(notification);
 
     if (!gatewayAccount) {
       this.logger.warn('Webhook Efi Cobrancas sem conta Efi relacionada');
       return { processed: false };
     }
 
-    const data = await this.requestJson<EfiNotificationResponse>(
-      gatewayAccount,
-      'charges',
-      'GET',
-      `/v1/notification/${encodeURIComponent(notification)}`,
+    const client = this.createSdkClient(gatewayAccount);
+    const response = await this.runEfiRequest(
+      () => client.getNotification({ token: notification }),
+      'consultar notificacao de cobranca',
     );
+    const data = response as EfiNotificationResponse;
     const event = data.data?.at(-1);
 
     if (!event) {
@@ -277,7 +278,7 @@ export class EfiService {
         })
       : await this.prisma.invoice.findFirst({
           where: {
-            efiChargeId: event.charge_id?.toString(),
+            efiChargeId: event.identifiers?.charge_id?.toString(),
             companyId: gatewayAccount.companyId,
           },
         });
@@ -317,25 +318,6 @@ export class EfiService {
     return value === 'production' ? 'production' : 'homologation';
   }
 
-  getBaseUrl(api: EfiApi, environment: EfiEnvironment): string {
-    const hosts: Record<EfiApi, Record<EfiEnvironment, string>> = {
-      charges: {
-        homologation: 'https://cobrancas-h.api.efipay.com.br',
-        production: 'https://cobrancas.api.efipay.com.br',
-      },
-      pix: {
-        homologation: 'https://pix-h.api.efipay.com.br',
-        production: 'https://pix.api.efipay.com.br',
-      },
-      accounts: {
-        homologation: 'https://abrircontas-h.api.efipay.com.br',
-        production: 'https://abrircontas.api.efipay.com.br',
-      },
-    };
-
-    return hosts[api][environment];
-  }
-
   private async createPixCobv(
     invoice: PaymentInvoice,
     gatewayAccount: GatewayAccount,
@@ -345,6 +327,9 @@ export class EfiService {
       return existing;
     }
 
+    this.ensurePixCertificate(gatewayAccount);
+
+    const client = this.createSdkClient(gatewayAccount);
     const txid = invoice.efiTxid ?? this.generateTxid(invoice.id);
     const dueDate = this.formatDate(invoice.dueDate);
     const amount = this.formatAmount(invoice.originalAmount);
@@ -355,6 +340,7 @@ export class EfiService {
         validadeAposVencimento: 30,
       },
       devedor: {
+        ...this.buildPixDebtorAddress(invoice),
         nome: invoice.debtor.name,
         ...(debtorDocument.length === 14
           ? { cnpj: debtorDocument }
@@ -367,28 +353,37 @@ export class EfiService {
       solicitacaoPagador: `Cobranca ${invoice.id.slice(0, 8)}`,
     };
 
-    const cobv = await this.requestJson<EfiPixCobvResponse>(
-      gatewayAccount,
-      'pix',
-      'PUT',
-      `/v2/cobv/${txid}`,
-      cobvPayload,
+    await this.runEfiRequest(
+      () => client.pixCreateDueCharge({ txid }, cobvPayload),
+      'criar Pix CobV',
     );
+
+    const detail = (await this.runEfiRequest(
+      () => client.pixDetailDueCharge({ txid }),
+      'consultar Pix CobV',
+    )) as EfiPixCobvResponse;
 
     const splitConfigId = await this.createPixSplitConfig(
+      client,
       gatewayAccount,
       txid,
-      amount,
     );
 
-    await this.requestJson<Record<string, unknown>>(
-      gatewayAccount,
-      'pix',
-      'PUT',
-      `/v2/gn/split/cobv/${txid}/vinculo/${splitConfigId}`,
-    );
+    if (splitConfigId) {
+      await this.runEfiRequest(
+        () => client.pixSplitLinkDueCharge({ txid, splitConfigId }),
+        'vincular split Pix CobV',
+      );
+    }
 
-    const pixCopyPaste = cobv.pixCopiaECola ?? cobv.copiaECola ?? '';
+    const locId = detail.loc?.id;
+    const qrCode = locId
+      ? ((await this.runEfiRequest(
+          () => client.pixGenerateQRCode({ id: locId }),
+          'gerar QR Code Pix CobV',
+        )) as EfiPixQrCodeResponse)
+      : null;
+    const pixCopyPaste = qrCode?.qrcode ?? detail.pixCopiaECola ?? '';
     const expiresAt = new Date(invoice.dueDate);
     expiresAt.setDate(expiresAt.getDate() + 1);
 
@@ -400,10 +395,10 @@ export class EfiService {
         pixPayload: pixCopyPaste,
         pixExpiresAt: expiresAt,
         efiTxid: txid,
-        efiLocId: cobv.loc?.id?.toString(),
+        efiLocId: detail.loc?.id?.toString(),
         efiPixCopiaECola: pixCopyPaste,
         splitConfigId,
-        gatewayStatusRaw: cobv.status,
+        gatewayStatusRaw: detail.status,
       },
     });
 
@@ -419,8 +414,9 @@ export class EfiService {
       gatewayId: txid,
       txid,
       pixCopyPaste,
+      pixQrCode: qrCode?.imagemQrcode,
       expiresAt,
-      paymentLink: cobv.loc?.location ?? '',
+      paymentLink: detail.loc?.location ?? detail.location ?? '',
     };
   }
 
@@ -433,32 +429,30 @@ export class EfiService {
       return existing;
     }
 
+    const client = this.createSdkClient(gatewayAccount);
     const webhookUrl = this.buildWebhookUrl('/webhooks/efi/cobrancas');
+    const customer = this.buildBoletoCustomer(invoice);
+    const marketplaceRepasses =
+      this.buildBoletoMarketplaceRepasses(gatewayAccount);
     const payload = {
       items: [
         {
           name: `Cobranca ${invoice.id.slice(0, 8)}`,
           value: Math.round(Number(invoice.originalAmount) * 100),
           amount: 1,
-          marketplace: {
-            repasses: [
-              {
-                payee_code: gatewayAccount.payeeCode,
-                percentage: 10000,
-              },
-            ],
-          },
+          ...(marketplaceRepasses.length > 0
+            ? {
+                marketplace: {
+                  repasses: marketplaceRepasses,
+                },
+              }
+            : {}),
         },
       ],
       payment: {
         banking_billet: {
           expire_at: this.formatDate(invoice.dueDate),
-          customer: {
-            name: invoice.debtor.name,
-            cpf: this.onlyDigits(invoice.debtor.document ?? '00000000000'),
-            email: invoice.debtor.email ?? undefined,
-            phone_number: this.onlyDigits(invoice.debtor.phoneNumber),
-          },
+          customer,
         },
       },
       metadata: {
@@ -467,15 +461,13 @@ export class EfiService {
       },
     };
 
-    const charge = await this.requestJson<EfiChargeResponse>(
-      gatewayAccount,
-      'charges',
-      'POST',
-      '/v1/charge/one-step',
-      payload,
-    );
+    const charge = (await this.runEfiRequest(
+      () => client.createOneStepCharge({}, payload),
+      'criar boleto',
+    )) as EfiChargeResponse;
 
-    const chargeId = (charge.charge_id ?? charge.chargeId)?.toString();
+    const chargeData = charge.data;
+    const chargeId = chargeData?.charge_id?.toString();
     if (!chargeId) {
       throw new HttpException(
         'Efi nao retornou charge_id para o boleto.',
@@ -483,10 +475,9 @@ export class EfiService {
       );
     }
 
-    const bankingBillet = charge.payment?.banking_billet;
-    const boletoLink = bankingBillet?.link ?? charge.link ?? '';
-    const boletoPdf = bankingBillet?.pdf?.charge ?? charge.pdf?.charge ?? '';
-    const boletoCode = bankingBillet?.barcode ?? '';
+    const boletoLink = chargeData?.billet_link ?? chargeData?.link ?? '';
+    const boletoPdf = chargeData?.pdf?.charge ?? '';
+    const boletoCode = chargeData?.barcode ?? '';
 
     await this.prisma.invoice.updateMany({
       where: { id: invoice.id, companyId: invoice.companyId },
@@ -498,8 +489,8 @@ export class EfiService {
         boletoLinhaDigitavel: boletoCode,
         boletoLink,
         boletoPdf,
-        efiPixCopiaECola: charge.payment?.pix?.qrcode,
-        gatewayStatusRaw: charge.status,
+        efiPixCopiaECola: chargeData?.pix?.qrcode,
+        gatewayStatusRaw: chargeData?.status,
       },
     });
 
@@ -517,54 +508,60 @@ export class EfiService {
       boletoCode,
       boletoLink,
       boletoPdf,
-      pixCopyPaste: charge.payment?.pix?.qrcode,
+      pixCopyPaste: chargeData?.pix?.qrcode,
+      pixQrCode: chargeData?.pix?.qrcode_image,
       expiresAt: invoice.dueDate,
       paymentLink: boletoLink,
     };
   }
 
   private async createPixSplitConfig(
+    client: EfiPay,
     gatewayAccount: GatewayAccount,
     txid: string,
-    amount: string,
-  ): Promise<string> {
-    const platformPayeeCode =
-      this.config.get<string>('EFI_PLATFORM_PAYEE_CODE') ?? gatewayAccount.payeeCode;
-    const platformPercentage = Number(
-      this.config.get<string>('EFI_PLATFORM_SPLIT_PERCENTAGE') ?? '0',
+  ): Promise<string | null> {
+    const platformPayeeCode = this.config.get<string>(
+      'EFI_PLATFORM_PAYEE_CODE',
     );
-    const clientPercentage = Math.max(0, 10000 - platformPercentage);
-    const repasses =
-      platformPercentage > 0 && platformPayeeCode !== gatewayAccount.payeeCode
-        ? [
-            { tipo: 'porcentagem', valor: platformPercentage, favorecido: { conta: platformPayeeCode } },
-            { tipo: 'porcentagem', valor: clientPercentage, favorecido: { conta: gatewayAccount.payeeCode } },
-          ]
-        : [
-            { tipo: 'porcentagem', valor: 10000, favorecido: { conta: gatewayAccount.payeeCode } },
-          ];
+    const platformPercentage = this.getPlatformSplitPercentage();
 
-    const response = await this.requestJson<EfiSplitConfigResponse>(
-      gatewayAccount,
-      'pix',
-      'POST',
-      '/v2/gn/split/config',
-      {
-        descricao: `Split invoice ${txid}`,
-        lancamento: {
-          imediato: true,
-        },
-        split: {
-          divisaoTarifa: 'assumir_total',
-          minhaParte: {
-            tipo: 'porcentagem',
-            valor: 0,
+    if (
+      platformPercentage === 0 ||
+      !platformPayeeCode ||
+      platformPayeeCode === gatewayAccount.payeeCode
+    ) {
+      return null;
+    }
+
+    const clientPercentage = 10000 - platformPercentage;
+
+    const response = (await this.runEfiRequest(
+      () =>
+        client.pixSplitConfig(
+          {},
+          {
+            descricao: `Split invoice ${txid}`,
+            lancamento: {
+              imediato: true,
+            },
+            split: {
+              divisaoTarifa: 'assumir_total',
+              minhaParte: {
+                tipo: 'porcentagem',
+                valor: this.formatBasisPointsAsPercent(clientPercentage),
+              },
+              repasses: [
+                {
+                  tipo: 'porcentagem',
+                  valor: this.formatBasisPointsAsPercent(platformPercentage),
+                  favorecido: { conta: platformPayeeCode },
+                },
+              ],
+            },
           },
-          repasses,
-        },
-        valor: amount,
-      },
-    );
+        ),
+      'criar configuracao de split Pix',
+    )) as EfiSplitConfigResponse;
 
     const splitConfigId = response.id ?? response.splitConfigId;
     if (!splitConfigId) {
@@ -575,6 +572,30 @@ export class EfiService {
     }
 
     return splitConfigId;
+  }
+
+  private buildBoletoMarketplaceRepasses(
+    gatewayAccount: GatewayAccount,
+  ): Array<{ payee_code: string; percentage: number }> {
+    const platformPayeeCode = this.config.get<string>(
+      'EFI_PLATFORM_PAYEE_CODE',
+    );
+    const platformPercentage = this.getPlatformSplitPercentage();
+
+    if (
+      platformPercentage === 0 ||
+      !platformPayeeCode ||
+      platformPayeeCode === gatewayAccount.payeeCode
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        payee_code: platformPayeeCode,
+        percentage: platformPercentage,
+      },
+    ];
   }
 
   private buildExistingPixResult(
@@ -653,178 +674,24 @@ export class EfiService {
     });
   }
 
-  private async requestJson<T>(
-    gatewayAccount: GatewayAccount,
-    api: EfiApi,
-    method: 'GET' | 'POST' | 'PUT',
-    path: string,
-    body?: unknown,
-  ): Promise<T> {
-    const token = await this.getAccessToken(gatewayAccount, api);
-    const environment = this.getEnvironment(gatewayAccount.environment);
-    const url = `${this.getBaseUrl(api, environment)}${path}`;
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    };
-
-    const response =
-      api === 'pix' || api === 'accounts'
-        ? await this.requestWithMtls(gatewayAccount, url, method, headers, body)
-        : await fetch(url, {
-            method,
-            headers,
-            body: body ? JSON.stringify(body) : undefined,
-          });
-
-    if (!response.ok) {
-      const message = await this.getSafeErrorMessage(response);
-      this.logger.error(`Erro Efi ${api} ${method} ${path}: ${message}`);
-      throw new HttpException(
-        'Falha ao processar cobranca na Efi.',
-        HttpStatus.BAD_GATEWAY,
-      );
-    }
-
-    if (response.status === 204) {
-      return {} as T;
-    }
-
-    return (await response.json()) as T;
-  }
-
-  private async getAccessToken(
-    gatewayAccount: GatewayAccount,
-    api: EfiApi,
-  ): Promise<string> {
-    const environment = this.getEnvironment(gatewayAccount.environment);
-    const cacheKey = `${gatewayAccount.companyId}:${api}:${environment}`;
-    const cached = this.tokenCache.get(cacheKey);
-
-    if (cached && cached.expiresAt > Date.now() + 30_000) {
-      return cached.accessToken;
-    }
-
+  private createSdkClient(gatewayAccount: GatewayAccount): EfiPay {
     const credentials = this.getCredentials(gatewayAccount);
-    const authorization = Buffer.from(
-      `${credentials.clientId}:${credentials.clientSecret}`,
-      'utf8',
-    ).toString('base64');
-    const url =
-      api === 'charges'
-        ? `${this.getBaseUrl(api, environment)}/v1/authorize`
-        : `${this.getBaseUrl(api, environment)}/oauth/token`;
-    const payload =
-      api === 'charges'
-        ? { grant_type: 'client_credentials' }
-        : {
-            grant_type: 'client_credentials',
-            scope:
-              'cobv.write cobv.read pix.read webhook.write webhook.read gn.split.write gn.split.read',
-          };
-    const headers = {
-      Authorization: `Basic ${authorization}`,
-      'Content-Type': 'application/json',
-    };
-    const response =
-      api === 'charges'
-        ? await fetch(url, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(payload),
-          })
-        : await this.requestWithMtls(
-            gatewayAccount,
-            url,
-            'POST',
-            headers,
-            payload,
-          );
 
-    if (!response.ok) {
-      const message = await this.getSafeErrorMessage(response);
-      this.logger.error(`Erro ao autenticar Efi ${api}: ${message}`);
+    if (!credentials.clientId || !credentials.clientSecret) {
       throw new HttpException(
-        'Falha ao autenticar na Efi.',
-        HttpStatus.BAD_GATEWAY,
-      );
-    }
-
-    const token = (await response.json()) as {
-      access_token?: string;
-      expires_in?: number;
-    };
-
-    if (!token.access_token) {
-      throw new HttpException(
-        'Efi nao retornou access_token.',
-        HttpStatus.BAD_GATEWAY,
-      );
-    }
-
-    this.tokenCache.set(cacheKey, {
-      accessToken: token.access_token,
-      expiresAt: Date.now() + (token.expires_in ?? 300) * 1000,
-    });
-
-    return token.access_token;
-  }
-
-  private requestWithMtls(
-    gatewayAccount: GatewayAccount,
-    urlValue: string,
-    method: 'GET' | 'POST' | 'PUT',
-    headers: Record<string, string>,
-    body?: unknown,
-  ): Promise<Response> {
-    const credentials = this.getCredentials(gatewayAccount);
-    const url = new URL(urlValue);
-    const bodyText = body ? JSON.stringify(body) : undefined;
-    const pfx = credentials.encryptedCertificate
-      ? Buffer.from(credentials.encryptedCertificate, 'base64')
-      : credentials.certificatePath
-        ? readFileSync(credentials.certificatePath)
-        : undefined;
-
-    if (!pfx) {
-      throw new HttpException(
-        'Certificado Efi nao configurado para APIs com mTLS.',
+        'Credenciais Efi nao configuradas.',
         HttpStatus.SERVICE_UNAVAILABLE,
       );
     }
 
-    const options: RequestOptions = {
-      hostname: url.hostname,
-      path: `${url.pathname}${url.search}`,
-      method,
-      headers,
-      pfx,
-      passphrase: credentials.certificatePassword,
-    };
-
-    return new Promise<Response>((resolve, reject) => {
-      const req = httpsRequest(options, (res) => {
-        const chunks: Buffer[] = [];
-
-        res.on('data', (chunk: Buffer) => chunks.push(chunk));
-        res.on('end', () => {
-          const responseBody = Buffer.concat(chunks);
-          const response = new Response(responseBody, {
-            status: res.statusCode ?? 500,
-            statusText: res.statusMessage,
-            headers: res.headers as HeadersInit,
-          });
-          resolve(response);
-        });
-      });
-
-      req.on('error', reject);
-
-      if (bodyText) {
-        req.write(bodyText);
-      }
-
-      req.end();
+    return new EfiPay({
+      sandbox:
+        this.getEnvironment(gatewayAccount.environment) === 'homologation',
+      client_id: credentials.clientId,
+      client_secret: credentials.clientSecret,
+      certificate: credentials.certificate,
+      cert_base64: credentials.certificateIsBase64,
+      cache: true,
     });
   }
 
@@ -833,39 +700,118 @@ export class EfiService {
     const platformClientSecret = this.config.get<string>(
       'EFI_PLATFORM_CLIENT_SECRET',
     );
+    const certificateBase64 = gatewayAccount.encryptedCertificate
+      ? this.crypto.decrypt(gatewayAccount.encryptedCertificate)
+      : undefined;
 
     return {
       clientId: gatewayAccount.encryptedClientId
         ? this.crypto.decrypt(gatewayAccount.encryptedClientId)
-        : platformClientId ?? '',
+        : (platformClientId ?? ''),
       clientSecret: gatewayAccount.encryptedClientSecret
         ? this.crypto.decrypt(gatewayAccount.encryptedClientSecret)
-        : platformClientSecret ?? '',
-      certificatePath:
+        : (platformClientSecret ?? ''),
+      certificate:
+        certificateBase64 ??
         gatewayAccount.certificatePath ??
         this.config.get<string>('EFI_PLATFORM_CERT_PATH'),
-      certificatePassword: gatewayAccount.encryptedCertificatePassword
-        ? this.crypto.decrypt(gatewayAccount.encryptedCertificatePassword)
-        : this.config.get<string>('EFI_PLATFORM_CERT_PASSWORD'),
-      encryptedCertificate: gatewayAccount.encryptedCertificate
-        ? this.crypto.decrypt(gatewayAccount.encryptedCertificate)
-        : undefined,
+      certificateIsBase64: Boolean(certificateBase64),
     };
   }
 
-  private async getSafeErrorMessage(response: Response): Promise<string> {
-    try {
-      const body = (await response.json()) as EfiErrorResponse;
-      return (
-        body.error_description ??
-        body.message ??
-        body.error ??
-        body.nome ??
-        response.statusText
+  private ensurePixCertificate(gatewayAccount: GatewayAccount): void {
+    if (!this.getCredentials(gatewayAccount).certificate) {
+      throw new HttpException(
+        'Certificado Efi nao configurado para Pix.',
+        HttpStatus.SERVICE_UNAVAILABLE,
       );
-    } catch {
-      return response.statusText;
     }
+  }
+
+  private async runEfiRequest<T>(
+    request: () => Promise<T>,
+    action: string,
+  ): Promise<T> {
+    try {
+      return await request();
+    } catch (error) {
+      this.logger.error(`Erro Efi ao ${action}: ${this.formatEfiError(error)}`);
+      throw new HttpException(
+        'Falha ao processar cobranca na Efi.',
+        HttpStatus.BAD_GATEWAY,
+      );
+    }
+  }
+
+  private formatEfiError(error: unknown): string {
+    if (typeof error === 'string') {
+      return error;
+    }
+
+    if (this.isRecord(error)) {
+      const efiError = error as EfiErrorResponse;
+      return (
+        efiError.error_description ??
+        efiError.detail ??
+        efiError.mensagem ??
+        efiError.message ??
+        efiError.error ??
+        efiError.title ??
+        'erro desconhecido'
+      );
+    }
+
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    return 'erro desconhecido';
+  }
+
+  private buildPixDebtorAddress(invoice: PaymentInvoice): {
+    logradouro: string;
+    cidade: string;
+    uf: string;
+    cep: string;
+  } {
+    return {
+      logradouro: invoice.company.addressStreet ?? 'Nao informado',
+      cidade: invoice.company.addressCity ?? 'Sao Paulo',
+      uf: invoice.company.addressState ?? 'SP',
+      cep: this.onlyDigits(invoice.company.addressPostalCode ?? '00000000'),
+    };
+  }
+
+  private buildBoletoCustomer(invoice: PaymentInvoice): {
+    name: string;
+    cpf?: string;
+    email?: string;
+    phone_number?: string;
+    address: {
+      street: string;
+      number: string;
+      neighborhood: string;
+      zipcode: string;
+      city: string;
+      state: string;
+    };
+  } {
+    return {
+      name: invoice.debtor.name,
+      cpf: this.onlyDigits(invoice.debtor.document ?? '00000000000'),
+      email: invoice.debtor.email ?? undefined,
+      phone_number: this.onlyDigits(invoice.debtor.phoneNumber),
+      address: {
+        street: invoice.company.addressStreet ?? 'Nao informado',
+        number: invoice.company.addressNumber ?? '0',
+        neighborhood: invoice.company.addressDistrict ?? 'Nao informado',
+        zipcode: this.onlyDigits(
+          invoice.company.addressPostalCode ?? '00000000',
+        ),
+        city: invoice.company.addressCity ?? 'Sao Paulo',
+        state: invoice.company.addressState ?? 'SP',
+      },
+    };
   }
 
   private extractPixTxids(payload: unknown): string[] {
@@ -904,7 +850,7 @@ export class EfiService {
   }
 
   private mapChargeStatus(status?: string): InvoiceStatus | null {
-    if (status === 'paid') {
+    if (status === 'paid' || status === 'settled') {
       return 'PAID';
     }
 
@@ -977,6 +923,25 @@ export class EfiService {
 
   private formatAmount(value: unknown): string {
     return Number(value).toFixed(2);
+  }
+
+  private getPlatformSplitPercentage(): number {
+    const percentage = Number(
+      this.config.get<string>('EFI_PLATFORM_SPLIT_PERCENTAGE') ?? '0',
+    );
+
+    if (!Number.isInteger(percentage) || percentage < 0 || percentage >= 10000) {
+      throw new HttpException(
+        'EFI_PLATFORM_SPLIT_PERCENTAGE deve estar entre 0 e 9999.',
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+
+    return percentage;
+  }
+
+  private formatBasisPointsAsPercent(value: number): string {
+    return (value / 100).toFixed(2);
   }
 
   private onlyDigits(value: string): string {

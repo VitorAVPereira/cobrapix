@@ -1,12 +1,6 @@
 ALTER TABLE "Company"
 ALTER COLUMN "gatewayProvider" SET DEFAULT 'EFI';
 
-UPDATE "Company"
-SET "gatewayProvider" = 'EFI'
-WHERE "gatewayProvider" = 'ASAAS'
-  AND "gatewayAccountId" IS NULL
-  AND "gatewayApiKey" IS NULL;
-
 CREATE TABLE IF NOT EXISTS "GatewayAccount" (
   "id" TEXT NOT NULL,
   "companyId" TEXT NOT NULL,

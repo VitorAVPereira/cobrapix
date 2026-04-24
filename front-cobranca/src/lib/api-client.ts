@@ -25,6 +25,10 @@ interface BillingResponse {
   message: string;
 }
 
+export interface BillingSettings {
+  collectionReminderDays: number[];
+}
+
 interface WhatsAppInstanceResponse {
   qrCode: string;
   instanceName: string;
@@ -176,7 +180,8 @@ class ApiClient {
 
       const errorBody = data as ApiErrorBody;
       const errorMessage =
-        errorBody.message || `API Error: ${response.status} ${response.statusText}`;
+        errorBody.message ||
+        `API Error: ${response.status} ${response.statusText}`;
 
       const error: ApiError = new Error(
         Array.isArray(errorMessage) ? errorMessage[0] : errorMessage,
@@ -250,12 +255,25 @@ class ApiClient {
     });
   }
 
+  async getBillingSettings(): Promise<BillingSettings> {
+    return this.fetch<BillingSettings>("/billing/settings");
+  }
+
+  async updateBillingSettings(data: BillingSettings): Promise<BillingSettings> {
+    return this.fetch<BillingSettings>("/billing/settings", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
   // Templates
   async getTemplates(): Promise<MessageTemplate[]> {
     return this.fetch<MessageTemplate[]>("/templates");
   }
 
-  async createTemplate(data: SaveMessageTemplateInput): Promise<MessageTemplate> {
+  async createTemplate(
+    data: SaveMessageTemplateInput,
+  ): Promise<MessageTemplate> {
     return this.fetch<MessageTemplate>("/templates", {
       method: "POST",
       body: JSON.stringify(data),

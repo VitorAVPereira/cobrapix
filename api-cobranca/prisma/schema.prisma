@@ -1,0 +1,232 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum InvoiceStatus {
+  PENDING
+  PAID
+  CANCELED
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  INCOMPLETE
+}
+
+enum WhatsappStatus {
+  CONNECTED
+  DISCONNECTED
+  PENDING
+}
+
+model Company {
+  id                           String         @id @default(uuid())
+  corporateName                String
+  document                     String         @unique
+  email                        String         @unique
+  phoneNumber                  String
+  gatewayToken                 String?
+  gatewayProvider              String         @default("EFI")
+  gatewayAccountId             String?
+  gatewayApiKey                String?
+  gatewayStatus                String         @default("PENDING")
+  legalRepresentative          String?
+  legalRepresentativeCpf       String?
+  legalRepresentativeBirthDate DateTime?
+  addressPostalCode            String?
+  addressStreet                String?
+  addressNumber                String?
+  addressDistrict              String?
+  addressCity                  String?
+  addressState                 String?
+  bankName                     String?
+  bankAgency                   String?
+  bankAccount                  String?
+  maxDiscountsPerDebtor        Int            @default(1)
+  discountTriggerDay           Int            @default(15)
+  collectionReminderDays       Int[]          @default([0])
+  whatsappInstanceId           String?
+  whatsappStatus               WhatsappStatus @default(DISCONNECTED)
+
+  templates           MessageTemplate[]
+  users               User[]
+  debtors             Debtor[]
+  invoices            Invoice[]
+  collectionLogs      CollectionLog[]
+  subscription        Subscription?
+  paymentGateway      GatewayAccount?
+  originalBankAccount OriginalBankAccount?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model GatewayAccount {
+  id                           String  @id @default(uuid())
+  companyId                    String  @unique
+  company                      Company @relation(fields: [companyId], references: [id])
+  provider                     String  @default("EFI")
+  environment                  String  @default("homologation")
+  status                       String  @default("PENDING")
+  payeeCode                    String
+  efiAccountNumber             String
+  efiAccountDigit              String?
+  pixKey                       String
+  encryptedClientId            String  @db.Text
+  encryptedClientSecret        String  @db.Text
+  encryptedCertificate         String? @db.Text
+  certificatePath              String?
+  encryptedCertificatePassword String? @db.Text
+  lastError                    String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([provider, environment])
+}
+
+model OriginalBankAccount {
+  id             String  @id @default(uuid())
+  companyId      String  @unique
+  company        Company @relation(fields: [companyId], references: [id])
+  holderName     String
+  holderDocument String
+  bankName       String
+  agency         String
+  account        String
+  accountDigit   String?
+  accountType    String  @default("CHECKING")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+}
+
+model Debtor {
+  id                String  @id @default(uuid())
+  companyId         String
+  company           Company @relation(fields: [companyId], references: [id])
+  name              String
+  document          String?
+  phoneNumber       String
+  email             String?
+  gatewayCustomerId String?
+
+  invoices Invoice[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, phoneNumber])
+  @@index([companyId])
+}
+
+model Invoice {
+  id        String  @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
+  debtorId  String
+  debtor    Debtor  @relation(fields: [debtorId], references: [id])
+
+  originalAmount       Decimal       @db.Decimal(10, 2)
+  dueDate              DateTime
+  status               InvoiceStatus @default(PENDING)
+  gatewayId            String?       @unique
+  pixPayload           String?       @db.Text
+  pixExpiresAt         DateTime?
+  efiTxid              String?       @unique
+  efiChargeId          String?       @unique
+  efiLocId             String?
+  efiPixCopiaECola     String?       @db.Text
+  boletoLinhaDigitavel String?
+  boletoLink           String?       @db.Text
+  boletoPdf            String?       @db.Text
+  splitConfigId        String?
+  notificationToken    String?
+  gatewayStatusRaw     String?
+  discountApplied      Decimal?      @db.Decimal(10, 2)
+  billingType          String        @default("PIX")
+
+  collectionLogs CollectionLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([debtorId])
+}
+
+model CollectionLog {
+  id          String  @id @default(uuid())
+  companyId   String
+  company     Company @relation(fields: [companyId], references: [id])
+  invoiceId   String
+  invoice     Invoice @relation(fields: [invoiceId], references: [id])
+  actionType  String
+  description String
+  status      String
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId])
+  @@index([invoiceId])
+}
+
+model User {
+  id        String  @id @default(uuid())
+  email     String  @unique
+  password  String
+  name      String?
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+}
+
+model Plan {
+  id            String         @id @default(uuid())
+  name          String
+  price         Decimal        @db.Decimal(10, 2)
+  invoiceLimit  Int
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id                    String             @id @default(uuid())
+  companyId             String             @unique
+  company               Company            @relation(fields: [companyId], references: [id])
+  planId                String
+  plan                  Plan               @relation(fields: [planId], references: [id])
+  status                SubscriptionStatus @default(INCOMPLETE)
+  currentPeriodEnd      DateTime
+  gatewaySubscriptionId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model MessageTemplate {
+  id        String   @id @default(uuid())
+  name      String // Nome para o lojista (ex: "Aviso de Vencimento")
+  slug      String // Identificador interno (ex: "vencimento-hoje", "atraso-5-dias")
+  content   String   @db.Text // O texto com Spintax e variáveis
+  isActive  Boolean  @default(true)
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, slug])
+}

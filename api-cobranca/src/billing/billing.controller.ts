@@ -1,8 +1,22 @@
-import { Controller, Post, UseGuards, HttpException, HttpStatus } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpException,
+  HttpStatus,
+  Post,
+  Put,
+  UseGuards,
+} from '@nestjs/common';
 import { BillingService } from './billing.service';
+import { UpdateBillingSettingsDto } from './dto/update-billing-settings.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
+
+interface AuthenticatedUser {
+  companyId: string;
+}
 
 @Controller('billing')
 @UseGuards(JwtAuthGuard)
@@ -13,7 +27,7 @@ export class BillingController {
   ) {}
 
   @Post('run')
-  async runBilling(@GetUser() user: any) {
+  async runBilling(@GetUser() user: AuthenticatedUser) {
     try {
       const company = await this.prisma.company.findUnique({
         where: { id: user.companyId },
@@ -46,14 +60,32 @@ export class BillingController {
           queued: result.queued,
           skipped: result.skipped,
         },
-        message: `Cobrança executada: ${result.queued} mensagens enfileiradas, ${result.skipped} já cobradas hoje.`,
+        message: `Cobrança executada: ${result.queued} mensagens enfileiradas, ${result.skipped} puladas.`,
       };
     } catch (error) {
       if (error instanceof HttpException) throw error;
       throw new HttpException(
-        error instanceof Error ? error.message : 'Falha interna ao executar cobrança.',
+        error instanceof Error
+          ? error.message
+          : 'Falha interna ao executar cobrança.',
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
+  }
+
+  @Get('settings')
+  async getSettings(@GetUser() user: AuthenticatedUser) {
+    return this.billingService.getSettings(user.companyId);
+  }
+
+  @Put('settings')
+  async updateSettings(
+    @GetUser() user: AuthenticatedUser,
+    @Body() dto: UpdateBillingSettingsDto,
+  ) {
+    return this.billingService.updateSettings(
+      user.companyId,
+      dto.collectionReminderDays,
+    );
   }
 }
