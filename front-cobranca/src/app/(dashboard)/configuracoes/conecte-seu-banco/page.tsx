@@ -71,7 +71,11 @@ const companyFields: FormField[] = [
 ];
 
 const representativeFields: FormField[] = [
-  { name: "legalRepresentative", label: "Nome do Representante Legal", autoComplete: "name" },
+  {
+    name: "legalRepresentative",
+    label: "Nome do Representante Legal",
+    autoComplete: "name",
+  },
   { name: "legalRepresentativeCpf", label: "CPF", autoComplete: "off" },
   {
     name: "legalRepresentativeBirthDate",
@@ -99,22 +103,6 @@ const bankFields: FormField[] = [
   { name: "bankAgency", label: "Agencia" },
   { name: "bankAccount", label: "Conta" },
   { name: "bankAccountDigit", label: "Digito", required: false },
-];
-
-const efiFields: FormField[] = [
-  { name: "efiClientId", label: "Client ID Efi" },
-  { name: "efiClientSecret", label: "Client Secret Efi", type: "password" },
-  { name: "efiPayeeCode", label: "Payee code" },
-  { name: "efiAccountNumber", label: "Conta Efi" },
-  { name: "efiAccountDigit", label: "Digito Efi", required: false },
-  { name: "efiPixKey", label: "Chave Pix" },
-  { name: "efiCertificatePath", label: "Caminho do certificado .p12" },
-  {
-    name: "efiCertificatePassword",
-    label: "Senha do certificado",
-    type: "password",
-    required: false,
-  },
 ];
 
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -195,14 +183,14 @@ export default function PaymentSettingsPage() {
       accountStatus?.status === "ACTIVE" ||
       accountStatus?.status === "APPROVED"
     ) {
-      return "bg-emerald-50 text-emerald-700 border-emerald-200";
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
     }
 
     if (accountStatus?.status === "REJECTED") {
-      return "bg-rose-50 text-rose-700 border-rose-200";
+      return "border-rose-200 bg-rose-50 text-rose-700";
     }
 
-    return "bg-amber-50 text-amber-700 border-amber-200";
+    return "border-amber-200 bg-amber-50 text-amber-700";
   }, [accountStatus?.status]);
 
   useEffect(() => {
@@ -266,12 +254,12 @@ export default function PaymentSettingsPage() {
         <header className="flex flex-col gap-4 rounded-md border border-slate-200 bg-white p-5 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl font-bold text-slate-950">
-              Configurações de Pagamento
+              Configuracoes de Pagamento
             </h1>
             <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">
               Cadastre os dados fiscais e bancarios da empresa para habilitar a
-              sua conta no Efí Bank com Split automatico e credenciais de
-              emissão para gerarmos cobranças automatizadas.
+              sua conta no Efi Bank com split automatico e credenciais de
+              emissao para gerarmos cobrancas automatizadas.
             </p>
           </div>
 
@@ -329,7 +317,7 @@ export default function PaymentSettingsPage() {
 
             <FormSection
               icon={MapPin}
-              title="Endereço"
+              title="Endereco"
               fields={addressFields}
               form={form}
               disabled={isConfigured || saving}
@@ -338,21 +326,12 @@ export default function PaymentSettingsPage() {
 
             <FormSection
               icon={Landmark}
-              title="Dados Bancários da Empresa"
+              title="Dados Bancarios da Empresa"
               fields={bankFields}
               form={form}
               disabled={isConfigured || saving}
               onChange={updateField}
             />
-
-            {/* <FormSection
-              icon={Banknote}
-              title="Credenciais Efí Bank"
-              fields={efiFields}
-              form={form}
-              disabled={isConfigured || saving}
-              onChange={updateField}
-            /> */}
 
             <footer className="flex flex-col gap-3 rounded-md border border-slate-200 bg-white p-5 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-start gap-3 text-sm text-slate-600">
@@ -376,7 +355,7 @@ export default function PaymentSettingsPage() {
                 ) : (
                   <Send size={17} />
                 )}
-                {isConfigured ? "Conta Efí cadastrada" : "Cadastrar Conta Efí"}
+                {isConfigured ? "Conta Efi cadastrada" : "Cadastrar Conta Efi"}
               </button>
             </footer>
           </form>

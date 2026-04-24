@@ -30,14 +30,16 @@ export interface BillingSettings {
 }
 
 interface WhatsAppInstanceResponse {
-  qrCode: string;
+  qrCode: string | null;
   instanceName: string;
-  pairingCode?: string;
+  pairingCode?: string | null;
+  state?: string;
+  dbStatus?: string;
 }
 
 interface WhatsAppStatusResponse {
-  state: string;
-  dbStatus: string;
+  state?: string;
+  dbStatus?: string;
 }
 
 export interface MessageTemplate {

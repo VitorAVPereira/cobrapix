@@ -1,15 +1,15 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useApiClient } from "@/lib/use-api-client";
 import {
-  QrCode,
-  CheckCircle2,
   AlertCircle,
+  CheckCircle2,
   Loader2,
-  Smartphone,
-  RefreshCcw,
   LogOut,
+  QrCode,
+  RefreshCcw,
+  Smartphone,
   WifiOff,
 } from "lucide-react";
 
@@ -21,8 +21,24 @@ type ConnectionStatus =
   | "CONNECTED"
   | "ERROR";
 
+type BackendWhatsappStatus = {
+  state?: string;
+  dbStatus?: string;
+};
+
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
+}
+
+function isConnectedStatus(data: BackendWhatsappStatus): boolean {
+  const state = data.state?.toLowerCase();
+  const dbStatus = data.dbStatus?.toUpperCase();
+
+  return (
+    state === "open" ||
+    state === "connected" ||
+    dbStatus === "CONNECTED"
+  );
 }
 
 export default function WhatsappConfigPage() {
@@ -44,14 +60,14 @@ export default function WhatsappConfigPage() {
     pollingRef.current = setInterval(async () => {
       try {
         const data = await apiClient.getWhatsappStatus();
-        // Verifica se a API ou o Banco de Dados confirmam a conexão
-        if (data.state === "open" || data.dbStatus === "CONNECTED") {
+
+        if (isConnectedStatus(data)) {
           stopPolling();
           setQrCode(null);
           setStatus("CONNECTED");
         }
       } catch {
-        /* silent */
+        // Mantém o polling silencioso enquanto a instância termina de subir.
       }
     }, 3000);
   }, [apiClient, stopPolling]);
@@ -62,19 +78,20 @@ export default function WhatsappConfigPage() {
     async function checkInitialStatus() {
       try {
         const data = await apiClient.getWhatsappStatus();
-        if (cancelled) return;
+        if (cancelled) {
+          return;
+        }
 
-        if (data.state === "open" || data.dbStatus === "CONNECTED") {
-          setStatus("CONNECTED");
-        } else {
+        setStatus(isConnectedStatus(data) ? "CONNECTED" : "DISCONNECTED");
+      } catch {
+        if (!cancelled) {
           setStatus("DISCONNECTED");
         }
-      } catch {
-        if (!cancelled) setStatus("DISCONNECTED");
       }
     }
 
     void checkInitialStatus();
+
     return () => {
       cancelled = true;
     };
@@ -90,6 +107,20 @@ export default function WhatsappConfigPage() {
 
     try {
       const data = await apiClient.createWhatsappInstance();
+
+      if (isConnectedStatus(data)) {
+        stopPolling();
+        setQrCode(null);
+        setStatus("CONNECTED");
+        return;
+      }
+
+      if (!data.qrCode) {
+        throw new Error(
+          "O QR Code ainda não foi liberado pela Evolution API. Tente novamente em alguns segundos.",
+        );
+      }
+
       setQrCode(data.qrCode);
       setStatus("SCAN_READY");
       startPolling();
@@ -120,28 +151,27 @@ export default function WhatsappConfigPage() {
   };
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto">
+    <div className="mx-auto max-w-5xl p-4 sm:p-6 lg:p-8">
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-slate-900">
           Configuração do WhatsApp
         </h1>
-        <p className="text-slate-500 text-sm mt-1">
+        <p className="mt-1 text-sm text-slate-500">
           Conecte o número da sua empresa para iniciar os disparos automáticos.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8">
-        {/* Status & QR Code */}
-        <div className="bg-white p-6 lg:p-8 rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center justify-center min-h-80">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 lg:gap-8">
+        <div className="flex min-h-80 flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:p-8">
           <div
-            className="transition-all duration-300 ease-out flex flex-col items-center"
+            className="flex flex-col items-center transition-all duration-300 ease-out"
             key={status}
             style={{ animation: "fadeIn 0.3s ease-out" }}
           >
             {status === "LOADING" && (
               <div className="text-center">
                 <Loader2
-                  className="animate-spin text-slate-400 mx-auto mb-4"
+                  className="mx-auto mb-4 animate-spin text-slate-400"
                   size={36}
                 />
                 <p className="text-sm text-slate-500">Verificando conexão...</p>
@@ -150,18 +180,18 @@ export default function WhatsappConfigPage() {
 
             {status === "DISCONNECTED" && (
               <div className="text-center">
-                <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4 border border-slate-100">
+                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full border border-slate-100 bg-slate-50">
                   <Smartphone className="text-slate-400" size={28} />
                 </div>
-                <h3 className="font-bold text-slate-900 mb-1">
+                <h3 className="mb-1 font-bold text-slate-900">
                   Pronto para conectar
                 </h3>
-                <p className="text-sm text-slate-500 mb-6 max-w-xs">
+                <p className="mb-6 max-w-xs text-sm text-slate-500">
                   Seu WhatsApp ainda não está vinculado ao motor de cobrança.
                 </p>
                 <button
                   onClick={handleConnect}
-                  className="bg-emerald-600 text-white px-6 py-2.5 rounded-xl font-bold hover:bg-emerald-700 active:scale-[0.98] transition-all shadow-md"
+                  className="rounded-xl bg-emerald-600 px-6 py-2.5 font-bold text-white shadow-md transition-all hover:bg-emerald-700 active:scale-[0.98]"
                 >
                   Gerar QR Code
                 </button>
@@ -171,13 +201,13 @@ export default function WhatsappConfigPage() {
             {status === "GENERATING" && (
               <div className="text-center">
                 <Loader2
-                  className="animate-spin text-emerald-500 mx-auto mb-4"
+                  className="mx-auto mb-4 animate-spin text-emerald-500"
                   size={42}
                 />
                 <p className="font-medium text-slate-700">
                   Iniciando instância...
                 </p>
-                <p className="text-xs text-slate-400 mt-1.5">
+                <p className="mt-1.5 text-xs text-slate-400">
                   Conectando à Evolution API.
                 </p>
               </div>
@@ -185,15 +215,15 @@ export default function WhatsappConfigPage() {
 
             {status === "SCAN_READY" && qrCode && (
               <div className="text-center">
-                <div className="p-3 bg-white border-[3px] border-emerald-500 rounded-2xl mb-4 inline-block shadow-lg shadow-emerald-500/10">
+                <div className="mb-4 inline-block rounded-2xl border-[3px] border-emerald-500 bg-white p-3 shadow-lg shadow-emerald-500/10">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={`data:image/png;base64,${qrCode}`}
                     alt="WhatsApp QR Code"
-                    className="w-44 h-44"
+                    className="h-44 w-44"
                   />
                 </div>
-                <div className="flex items-center justify-center gap-2 text-emerald-600 font-bold mb-1 text-sm">
+                <div className="mb-1 flex items-center justify-center gap-2 text-sm font-bold text-emerald-600">
                   <RefreshCcw size={14} className="animate-spin" />
                   Aguardando leitura...
                 </div>
@@ -205,69 +235,67 @@ export default function WhatsappConfigPage() {
 
             {status === "CONNECTED" && (
               <div className="text-center">
-                <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
                   <CheckCircle2 size={40} />
                 </div>
                 <h3 className="text-xl font-bold text-slate-900">Conectado!</h3>
-                <p className="text-sm text-emerald-600 font-medium mt-1.5 bg-emerald-50 px-4 py-2 rounded-lg">
+                <p className="mt-1.5 rounded-lg bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-600">
                   Tudo pronto por aqui! Aproveite o sistema.
                 </p>
                 <button
                   onClick={handleDisconnect}
-                  className="mt-8 text-slate-400 text-xs font-semibold flex items-center gap-2 hover:text-rose-600 transition-colors mx-auto"
+                  className="mx-auto mt-8 flex items-center gap-2 text-xs font-semibold text-slate-400 transition-colors hover:text-rose-600"
                 >
                   <LogOut size={14} />
-                  Desconectar Aparelho
+                  Desconectar aparelho
                 </button>
               </div>
             )}
 
             {status === "ERROR" && (
               <div className="text-center">
-                <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4 border border-red-100">
+                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full border border-red-100 bg-red-50">
                   <WifiOff className="text-red-400" size={28} />
                 </div>
-                <h3 className="font-bold text-slate-900 mb-1">
-                  Falha na Conexão
+                <h3 className="mb-1 font-bold text-slate-900">
+                  Falha na conexão
                 </h3>
-                <p className="text-sm text-red-600 mb-6 max-w-xs">{errorMsg}</p>
+                <p className="mb-6 max-w-xs text-sm text-red-600">{errorMsg}</p>
                 <button
                   onClick={handleConnect}
-                  className="bg-slate-900 text-white px-6 py-2.5 rounded-xl font-bold hover:bg-slate-800 active:scale-[0.98] transition-all shadow-md"
+                  className="rounded-xl bg-slate-900 px-6 py-2.5 font-bold text-white shadow-md transition-all hover:bg-slate-800 active:scale-[0.98]"
                 >
-                  Tentar Novamente
+                  Tentar novamente
                 </button>
               </div>
             )}
           </div>
         </div>
 
-        {/* Instructions */}
         <div className="space-y-5">
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-            <h4 className="font-bold text-slate-900 mb-4 flex items-center gap-2 text-sm">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h4 className="mb-4 flex items-center gap-2 text-sm font-bold text-slate-900">
               <QrCode size={18} className="text-emerald-600" />
               Como conectar?
             </h4>
             <ul className="space-y-3.5 text-sm text-slate-600">
               <li className="flex gap-3">
-                <span className="flex-none w-6 h-6 bg-emerald-100 text-emerald-700 rounded-full flex items-center justify-center font-bold text-xs">
+                <span className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">
                   1
                 </span>
                 <span>Abra o WhatsApp no seu celular.</span>
               </li>
               <li className="flex gap-3">
-                <span className="flex-none w-6 h-6 bg-emerald-100 text-emerald-700 rounded-full flex items-center justify-center font-bold text-xs">
+                <span className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">
                   2
                 </span>
                 <span>
-                  Toque em <strong>Configurações</strong> ou{" "}
-                  <strong>Menu</strong> e selecione{" "}
-                  <strong>Aparelhos Conectados</strong>.
+                  Toque em <strong>Configurações</strong> ou <strong>Menu</strong>{" "}
+                  e selecione <strong>Aparelhos conectados</strong>.
                 </span>
               </li>
               <li className="flex gap-3">
-                <span className="flex-none w-6 h-6 bg-emerald-100 text-emerald-700 rounded-full flex items-center justify-center font-bold text-xs">
+                <span className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">
                   3
                 </span>
                 <span>
@@ -278,18 +306,18 @@ export default function WhatsappConfigPage() {
             </ul>
           </div>
 
-          <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-100 rounded-xl">
-            <AlertCircle className="text-amber-600 shrink-0 mt-0.5" size={18} />
-            <p className="text-xs text-amber-800 leading-relaxed">
+          <div className="flex items-start gap-3 rounded-xl border border-amber-100 bg-amber-50 p-4">
+            <AlertCircle className="mt-0.5 shrink-0 text-amber-600" size={18} />
+            <p className="text-xs leading-relaxed text-amber-800">
               <strong>Importante:</strong> Evite desconectar o celular da
               internet. O aparelho deve permanecer vinculado para que as
               cobranças saiam no horário.
             </p>
           </div>
 
-          <div className="flex items-start gap-3 p-4 bg-blue-50 border border-blue-100 rounded-xl">
-            <AlertCircle className="text-blue-600 shrink-0 mt-0.5" size={18} />
-            <p className="text-xs text-blue-800 leading-relaxed">
+          <div className="flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50 p-4">
+            <AlertCircle className="mt-0.5 shrink-0 text-blue-600" size={18} />
+            <p className="text-xs leading-relaxed text-blue-800">
               <strong>Requisito:</strong> A Evolution API deve estar rodando no
               Docker (porta 8080). Caso veja erros, verifique se o container
               está ativo.
@@ -298,7 +326,6 @@ export default function WhatsappConfigPage() {
         </div>
       </div>
 
-      {/* CSS for fade animation */}
       <style jsx>{`
         @keyframes fadeIn {
           from {

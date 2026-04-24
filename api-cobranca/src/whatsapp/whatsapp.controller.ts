@@ -1,36 +1,39 @@
 import {
   Controller,
-  Post,
   Get,
-  UseGuards,
-  Body,
   HttpException,
   HttpStatus,
+  Logger,
+  Post,
+  UseGuards,
 } from '@nestjs/common';
-import { WhatsappService } from './whatsapp.service';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GetUser } from '../auth/decorators/get-user.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
+import { WhatsappService } from './whatsapp.service';
+
+interface AuthenticatedUser {
+  companyId: string;
+}
 
 @Controller('whatsapp')
 @UseGuards(JwtAuthGuard)
 export class WhatsappController {
+  private readonly logger = new Logger(WhatsappController.name);
+
   constructor(
     private readonly whatsappService: WhatsappService,
     private readonly prisma: PrismaService,
   ) {}
 
   @Post('instance')
-  @Post('instance')
-  async createInstance(@GetUser() user: any) {
+  async createInstance(@GetUser() user: AuthenticatedUser) {
     try {
       const instanceName = `cobrapix_${user.companyId}`;
 
-      // 1. Dispara a ordem de criação da instância
-      const createRes: any =
+      const createResult =
         await this.whatsappService.createInstance(instanceName);
 
-      // Atualiza empresa no banco
       await this.prisma.company.update({
         where: { id: user.companyId },
         data: {
@@ -39,63 +42,61 @@ export class WhatsappController {
         },
       });
 
-      // 🚨 A MÁGICA AQUI: Espera 2 segundos para o motor do WhatsApp (Baileys) dar boot
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await this.waitForEvolutionBoot();
 
-      // 2. Pede o status da conexão e o QR Code gerado
-      const qrResponse: any =
+      const connectResult =
         await this.whatsappService.connectInstance(instanceName);
 
-      // 🚨 FALLBACK TRIPLO: Procura o Base64 em todas as ramificações possíveis da V2
-      const base64Code =
-        qrResponse?.qrcode?.base64 ||
-        qrResponse?.base64 ||
-        createRes?.qrcode?.base64 ||
-        createRes?.base64;
+      if (connectResult.state === 'open' || createResult.state === 'open') {
+        await this.prisma.company.update({
+          where: { id: user.companyId },
+          data: { whatsappStatus: 'CONNECTED' },
+        });
 
-      if (!base64Code) {
-        // Se a instância já estiver aberta (conectada), o QR Code vem nulo propositalmente
-        if (qrResponse?.instance?.state === 'open') {
-          throw new HttpException(
-            'WhatsApp já está conectado!',
-            HttpStatus.BAD_REQUEST,
-          );
-        }
+        return {
+          qrCode: null,
+          instanceName,
+          pairingCode: connectResult.pairingCode ?? createResult.pairingCode,
+          state: 'open' as const,
+          dbStatus: 'CONNECTED' as const,
+        };
+      }
 
-        // Log salva-vidas: Se falhar de novo, isso vai aparecer no seu terminal do NestJS
-        console.error(
-          '[Evolution API] Resposta sem QR Code:',
-          JSON.stringify(qrResponse),
+      const qrCode = connectResult.qrCode ?? createResult.qrCode;
+
+      if (!qrCode) {
+        this.logger.warn(
+          `[Evolution API] Instância ${instanceName} ainda sem QR code disponível`,
         );
-
         throw new HttpException(
-          'O motor do WhatsApp está aquecendo. Clique em Tentar Novamente.',
-          HttpStatus.ACCEPTED,
+          'O motor do WhatsApp ainda está iniciando. Tente novamente em alguns segundos.',
+          HttpStatus.SERVICE_UNAVAILABLE,
         );
       }
 
-      // Limpa o prefixo do Data URI para o React renderizar perfeito
-      const cleanQrCode = base64Code.replace(/^data:image\/[a-z]+;base64,/, '');
-
       return {
-        qrCode: cleanQrCode,
+        qrCode,
         instanceName,
-        pairingCode: qrResponse?.pairingCode || createRes?.qrcode?.pairingCode,
+        pairingCode: connectResult.pairingCode ?? createResult.pairingCode,
+        state: 'connecting' as const,
+        dbStatus: 'PENDING' as const,
       };
     } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+
       throw new HttpException(
         error instanceof Error
           ? error.message
-          : 'Erro ao criar instância WhatsApp',
-        error instanceof HttpException
-          ? error.getStatus()
-          : HttpStatus.BAD_GATEWAY,
+          : 'Erro ao criar instância do WhatsApp',
+        HttpStatus.BAD_GATEWAY,
       );
     }
   }
-  
+
   @Get('status')
-  async getStatus(@GetUser() user: any) {
+  async getStatus(@GetUser() user: AuthenticatedUser) {
     try {
       const company = await this.prisma.company.findUnique({
         where: { id: user.companyId },
@@ -104,52 +105,72 @@ export class WhatsappController {
 
       if (!company?.whatsappInstanceId) {
         return {
-          state: 'close',
-          dbStatus: company?.whatsappStatus || 'DISCONNECTED',
+          state: 'close' as const,
+          dbStatus: company?.whatsappStatus ?? 'DISCONNECTED',
         };
       }
 
-      // 🚨 ESCUDO 1: A Fonte da Verdade! Se o nosso Webhook já atualizou o banco, libera a tela do usuário na hora.
       if (company.whatsappStatus === 'CONNECTED') {
-        return { state: 'open', dbStatus: 'CONNECTED' };
+        return { state: 'open' as const, dbStatus: 'CONNECTED' as const };
       }
 
       try {
-        // 🚨 ESCUDO 2: Se o banco ainda não sabe, pergunta direto para a Evolution API
-        const result: any = await this.whatsappService.getConnectionState(
+        const result = await this.whatsappService.getConnectionState(
           company.whatsappInstanceId,
         );
 
-        // Extrai o status de forma robusta, suportando os vários formatos da V2
-        const rawState =
-          result?.instance?.state || result?.state || 'connecting';
-        const state = rawState.toLowerCase();
-
-        // Se a Evolution confirmar a conexão, salva no banco e avisa o React
-        if (state === 'open' || state === 'connected') {
+        if (result.state === 'open') {
           await this.prisma.company.update({
             where: { id: user.companyId },
             data: { whatsappStatus: 'CONNECTED' },
           });
-          return { state: 'open', dbStatus: 'CONNECTED' };
+
+          return { state: 'open' as const, dbStatus: 'CONNECTED' as const };
         }
 
-        return { state, dbStatus: company.whatsappStatus };
-      } catch (evoError) {
-        // 🚨 ESCUDO 3: Se a Evolution demorar para responder (Timeout), não quebramos a API com Erro 502.
-        // Apenas mandamos a tela "esperar" até a próxima tentativa de 3 segundos.
-        return { state: 'connecting', dbStatus: company.whatsappStatus };
+        if (result.state === 'close') {
+          await this.prisma.company.update({
+            where: { id: user.companyId },
+            data: { whatsappStatus: 'DISCONNECTED' },
+          });
+
+          return {
+            state: 'close' as const,
+            dbStatus: 'DISCONNECTED' as const,
+          };
+        }
+
+        return {
+          state: 'connecting' as const,
+          dbStatus: company.whatsappStatus,
+        };
+      } catch (evolutionError) {
+        this.logger.warn(
+          `Falha ao consultar status da Evolution para ${company.whatsappInstanceId}: ${
+            evolutionError instanceof Error
+              ? evolutionError.message
+              : 'erro desconhecido'
+          }`,
+        );
+
+        const fallbackState =
+          company.whatsappStatus === 'DISCONNECTED' ? 'close' : 'connecting';
+
+        return {
+          state: fallbackState,
+          dbStatus: company.whatsappStatus,
+        };
       }
-    } catch (error) {
+    } catch {
       throw new HttpException(
-        'Erro interno ao consultar status',
+        'Erro interno ao consultar status do WhatsApp.',
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
 
   @Post('disconnect')
-  async disconnect(@GetUser() user: any) {
+  async disconnect(@GetUser() user: AuthenticatedUser) {
     try {
       const company = await this.prisma.company.findUnique({
         where: { id: user.companyId },
@@ -158,7 +179,7 @@ export class WhatsappController {
 
       if (!company?.whatsappInstanceId) {
         throw new HttpException(
-          'Nenhuma instância WhatsApp ativa.',
+          'Nenhuma instância do WhatsApp está ativa.',
           HttpStatus.BAD_REQUEST,
         );
       }
@@ -175,10 +196,20 @@ export class WhatsappController {
 
       return { success: true };
     } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+
       throw new HttpException(
-        error instanceof Error ? error.message : 'Erro ao desconectar WhatsApp',
+        error instanceof Error
+          ? error.message
+          : 'Erro ao desconectar WhatsApp.',
         HttpStatus.BAD_GATEWAY,
       );
     }
+  }
+
+  private async waitForEvolutionBoot(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
   }
 }
