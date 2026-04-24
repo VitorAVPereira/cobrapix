@@ -26,7 +26,56 @@ interface BillingResponse {
 }
 
 export interface BillingSettings {
+  preferredBillingMethod: BillingMethod;
   collectionReminderDays: number[];
+  autoDiscountEnabled: boolean;
+  autoDiscountDaysAfterDue: number | null;
+  autoDiscountPercentage: number | null;
+  tariffs: Record<
+    BillingMethod,
+    {
+      method: BillingMethod;
+      efiLabel: string;
+      platformLabel: string;
+      combinedLabel: string;
+      efiKind: "percentage" | "fixed";
+      efiValue: number;
+      platformFixedFee: number;
+    }
+  >;
+}
+
+export interface UpdateBillingSettingsInput {
+  preferredBillingMethod: BillingMethod;
+  collectionReminderDays: number[];
+  autoDiscountEnabled: boolean;
+  autoDiscountDaysAfterDue: number | null;
+  autoDiscountPercentage: number | null;
+}
+
+export type BillingMethod = "PIX" | "BOLETO" | "BOLIX";
+
+export interface DebtorBillingSettings {
+  debtorId: string;
+  debtorName: string;
+  useGlobalBillingSettings: boolean;
+  customPreferredBillingMethod: BillingMethod | null;
+  customCollectionReminderDays: number[];
+  customAutoDiscountEnabled: boolean | null;
+  customAutoDiscountDaysAfterDue: number | null;
+  customAutoDiscountPercentage: number | null;
+  globalSettings: BillingSettings;
+  effectiveSettings: BillingSettings;
+  updatedAt: string;
+}
+
+export interface UpdateDebtorBillingSettingsInput {
+  useGlobalBillingSettings: boolean;
+  preferredBillingMethod?: BillingMethod | null;
+  collectionReminderDays?: number[] | null;
+  autoDiscountEnabled?: boolean | null;
+  autoDiscountDaysAfterDue?: number | null;
+  autoDiscountPercentage?: number | null;
 }
 
 interface WhatsAppInstanceResponse {
@@ -267,11 +316,34 @@ class ApiClient {
     return this.fetch<BillingSettings>("/billing/settings");
   }
 
-  async updateBillingSettings(data: BillingSettings): Promise<BillingSettings> {
+  async updateBillingSettings(
+    data: UpdateBillingSettingsInput,
+  ): Promise<BillingSettings> {
     return this.fetch<BillingSettings>("/billing/settings", {
       method: "PUT",
       body: JSON.stringify(data),
     });
+  }
+
+  async getDebtorBillingSettings(
+    debtorId: string,
+  ): Promise<DebtorBillingSettings> {
+    return this.fetch<DebtorBillingSettings>(
+      `/invoices/debtors/${debtorId}/settings`,
+    );
+  }
+
+  async updateDebtorBillingSettings(
+    debtorId: string,
+    data: UpdateDebtorBillingSettingsInput,
+  ): Promise<DebtorBillingSettings> {
+    return this.fetch<DebtorBillingSettings>(
+      `/invoices/debtors/${debtorId}/settings`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      },
+    );
   }
 
   // Templates

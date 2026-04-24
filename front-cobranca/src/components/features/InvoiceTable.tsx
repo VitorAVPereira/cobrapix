@@ -17,13 +17,15 @@ import {
   Clock,
   CheckCircle2,
   Ban,
+  SlidersHorizontal,
 } from "lucide-react";
 
 interface InvoiceTableProps {
   data: ParsedDebtor[];
+  onConfigureDebtor: (debtor: ParsedDebtor) => void;
 }
 
-export function InvoiceTable({ data }: InvoiceTableProps) {
+export function InvoiceTable({ data, onConfigureDebtor }: InvoiceTableProps) {
   const checkStatus = (row: ParsedDebtor) => {
     if (row.status === "PAID") {
       return {
@@ -153,8 +155,8 @@ export function InvoiceTable({ data }: InvoiceTableProps) {
       cell: (info) => {
         const billingType = info.getValue() as string | undefined;
         const label =
-          billingType === "BOTH"
-            ? "PIX e Boleto"
+          billingType === "BOLIX"
+            ? "Bolix"
             : billingType === "BOLETO"
               ? "Boleto"
               : "PIX";
@@ -181,6 +183,23 @@ export function InvoiceTable({ data }: InvoiceTableProps) {
           </div>
         );
       },
+    },
+    {
+      id: "actions",
+      header: () => <span className="block text-center">Configuracoes</span>,
+      cell: (info) => (
+        <div className="flex justify-center">
+          <button
+            type="button"
+            onClick={() => onConfigureDebtor(info.row.original)}
+            disabled={!info.row.original.debtorId}
+            className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <SlidersHorizontal size={14} />
+            Editar
+          </button>
+        </div>
+      ),
     },
   ];
 

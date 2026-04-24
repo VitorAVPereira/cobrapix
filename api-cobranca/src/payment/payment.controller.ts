@@ -37,7 +37,7 @@ class CreatePaymentDto {
 
   @IsOptional()
   @IsString()
-  billingType?: 'PIX' | 'BOLETO';
+  billingType?: 'PIX' | 'BOLETO' | 'BOLIX';
 }
 
 class CreateBatchPaymentDto {
@@ -47,7 +47,7 @@ class CreateBatchPaymentDto {
 
   @IsOptional()
   @IsString()
-  billingType?: 'PIX' | 'BOLETO';
+  billingType?: 'PIX' | 'BOLETO' | 'BOLIX';
 }
 
 class InvoiceStatusDto {
@@ -125,7 +125,8 @@ export class PaymentController {
         accountDigit: gatewayAccount?.efiAccountDigit ?? null,
         pixKey: gatewayAccount?.pixKey ?? null,
         hasCertificate: Boolean(
-          gatewayAccount?.certificatePath ?? gatewayAccount?.encryptedCertificate,
+          gatewayAccount?.certificatePath ??
+          gatewayAccount?.encryptedCertificate,
         ),
       },
     };
@@ -420,7 +421,9 @@ export class PaymentController {
         this.efiService.getEnvironment(undefined),
       accountStatus:
         company?.paymentGateway?.status ?? company?.gatewayStatus ?? 'PENDING',
-      hasSubAccount: Boolean(company?.paymentGateway ?? company?.gatewayAccountId),
+      hasSubAccount: Boolean(
+        company?.paymentGateway ?? company?.gatewayAccountId,
+      ),
     };
   }
 

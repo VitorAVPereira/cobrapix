@@ -21,7 +21,10 @@ export class TemplatesController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  async create(@GetUser() user: { companyId: string }, @Body() dto: CreateTemplateDto) {
+  async create(
+    @GetUser() user: { companyId: string },
+    @Body() dto: CreateTemplateDto,
+  ) {
     return this.templatesService.create(user.companyId, dto);
   }
 
@@ -31,7 +34,10 @@ export class TemplatesController {
   }
 
   @Get(':id')
-  async findOne(@GetUser() user: { companyId: string }, @Param('id') id: string) {
+  async findOne(
+    @GetUser() user: { companyId: string },
+    @Param('id') id: string,
+  ) {
     return this.templatesService.findOne(user.companyId, id);
   }
 

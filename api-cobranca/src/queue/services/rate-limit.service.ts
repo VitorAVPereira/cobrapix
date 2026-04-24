@@ -17,7 +17,8 @@ export class RateLimitService {
   };
 
   constructor(private configService: ConfigService) {
-    const redisHost = this.configService.get<string>('REDIS_HOST') || 'localhost';
+    const redisHost =
+      this.configService.get<string>('REDIS_HOST') || 'localhost';
     const redisPort = this.configService.get<number>('REDIS_PORT') || 6379;
     const redisPassword = this.configService.get<string>('REDIS_PASSWORD');
 
@@ -37,7 +38,10 @@ export class RateLimitService {
     });
   }
 
-  async checkRateLimit(phoneNumber: string, config?: Partial<RateLimitConfig>): Promise<{
+  async checkRateLimit(
+    phoneNumber: string,
+    config?: Partial<RateLimitConfig>,
+  ): Promise<{
     allowed: boolean;
     remaining: number;
     resetAt: number;
@@ -65,7 +69,7 @@ export class RateLimitService {
         return {
           allowed: false,
           remaining: 0,
-          resetAt: Date.now() + (ttl * 1000),
+          resetAt: Date.now() + ttl * 1000,
         };
       }
 

@@ -1,19 +1,45 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { BillingMethod } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MessageQueueService, SendMessageJob } from '../queue/message.queue';
 import { SpintaxService } from '../queue/services/spintax.service';
 
 const DEFAULT_COLLECTION_REMINDER_DAYS = [0];
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_AUTO_DISCOUNT_ENABLED = false;
+const PLATFORM_FIXED_FEE = 0.5;
 
 interface BillingExecutionResult {
   queued: number;
   skipped: number;
 }
 
+interface TariffDetails {
+  method: BillingMethod;
+  efiLabel: string;
+  platformLabel: string;
+  combinedLabel: string;
+  efiKind: 'percentage' | 'fixed';
+  efiValue: number;
+  platformFixedFee: number;
+}
+
 export interface BillingSettingsResponse {
+  preferredBillingMethod: BillingMethod;
   collectionReminderDays: number[];
+  autoDiscountEnabled: boolean;
+  autoDiscountDaysAfterDue: number | null;
+  autoDiscountPercentage: number | null;
+  tariffs: Record<BillingMethod, TariffDetails>;
+}
+
+interface BillingSettingsInput {
+  preferredBillingMethod: BillingMethod;
+  collectionReminderDays: number[];
+  autoDiscountEnabled: boolean;
+  autoDiscountDaysAfterDue?: number | null;
+  autoDiscountPercentage?: number | null;
 }
 
 @Injectable()
@@ -91,33 +117,43 @@ export class BillingService {
   async getSettings(companyId: string): Promise<BillingSettingsResponse> {
     const company = await this.prisma.company.findUnique({
       where: { id: companyId },
-      select: { collectionReminderDays: true },
+      select: {
+        preferredBillingMethod: true,
+        collectionReminderDays: true,
+        autoDiscountEnabled: true,
+        autoDiscountDaysAfterDue: true,
+        autoDiscountPercentage: true,
+      },
     });
 
-    return {
-      collectionReminderDays: this.normalizeReminderDays(
-        company?.collectionReminderDays,
-      ),
-    };
+    return this.buildBillingSettingsResponse(company);
   }
 
   async updateSettings(
     companyId: string,
-    reminderDays: number[],
+    settings: BillingSettingsInput,
   ): Promise<BillingSettingsResponse> {
-    const collectionReminderDays = this.normalizeReminderDays(reminderDays);
+    const normalizedSettings = this.normalizeSettingsInput(settings);
 
     const company = await this.prisma.company.update({
       where: { id: companyId },
-      data: { collectionReminderDays },
-      select: { collectionReminderDays: true },
+      data: {
+        preferredBillingMethod: normalizedSettings.preferredBillingMethod,
+        collectionReminderDays: normalizedSettings.collectionReminderDays,
+        autoDiscountEnabled: normalizedSettings.autoDiscountEnabled,
+        autoDiscountDaysAfterDue: normalizedSettings.autoDiscountDaysAfterDue,
+        autoDiscountPercentage: normalizedSettings.autoDiscountPercentage,
+      },
+      select: {
+        preferredBillingMethod: true,
+        collectionReminderDays: true,
+        autoDiscountEnabled: true,
+        autoDiscountDaysAfterDue: true,
+        autoDiscountPercentage: true,
+      },
     });
 
-    return {
-      collectionReminderDays: this.normalizeReminderDays(
-        company.collectionReminderDays,
-      ),
-    };
+    return this.buildBillingSettingsResponse(company);
   }
 
   private async queueBillingForCompany(
@@ -261,6 +297,150 @@ export class BillingService {
     return normalizedDays.length > 0
       ? normalizedDays
       : DEFAULT_COLLECTION_REMINDER_DAYS;
+  }
+
+  private normalizeBillingMethod(
+    value: BillingMethod | null | undefined,
+  ): BillingMethod {
+    if (value === 'PIX' || value === 'BOLETO' || value === 'BOLIX') {
+      return value;
+    }
+
+    return 'PIX';
+  }
+
+  private normalizeDiscountDays(value: number | null | undefined): number {
+    if (!Number.isInteger(value) || value === undefined || value === null) {
+      return 0;
+    }
+
+    if (value < 0) {
+      return 0;
+    }
+
+    if (value > 365) {
+      return 365;
+    }
+
+    return value;
+  }
+
+  private normalizeDiscountPercentage(
+    value: number | null | undefined,
+  ): number {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      return 0;
+    }
+
+    if (value < 0.01) {
+      return 0.01;
+    }
+
+    if (value > 100) {
+      return 100;
+    }
+
+    return Number(value.toFixed(2));
+  }
+
+  private normalizeSettingsInput(
+    settings: BillingSettingsInput,
+  ): Omit<BillingSettingsResponse, 'tariffs'> {
+    const autoDiscountEnabled =
+      settings.autoDiscountEnabled ?? DEFAULT_AUTO_DISCOUNT_ENABLED;
+
+    if (!autoDiscountEnabled) {
+      return {
+        preferredBillingMethod: this.normalizeBillingMethod(
+          settings.preferredBillingMethod,
+        ),
+        collectionReminderDays: this.normalizeReminderDays(
+          settings.collectionReminderDays,
+        ),
+        autoDiscountEnabled: false,
+        autoDiscountDaysAfterDue: null,
+        autoDiscountPercentage: null,
+      };
+    }
+
+    return {
+      preferredBillingMethod: this.normalizeBillingMethod(
+        settings.preferredBillingMethod,
+      ),
+      collectionReminderDays: this.normalizeReminderDays(
+        settings.collectionReminderDays,
+      ),
+      autoDiscountEnabled: true,
+      autoDiscountDaysAfterDue: this.normalizeDiscountDays(
+        settings.autoDiscountDaysAfterDue,
+      ),
+      autoDiscountPercentage: this.normalizeDiscountPercentage(
+        settings.autoDiscountPercentage,
+      ),
+    };
+  }
+
+  private buildBillingSettingsResponse(
+    company: {
+      preferredBillingMethod?: BillingMethod | null;
+      collectionReminderDays?: number[] | null;
+      autoDiscountEnabled?: boolean | null;
+      autoDiscountDaysAfterDue?: number | null;
+      autoDiscountPercentage?: { toNumber(): number } | null;
+    } | null,
+  ): BillingSettingsResponse {
+    const autoDiscountEnabled = company?.autoDiscountEnabled ?? false;
+
+    return {
+      preferredBillingMethod: this.normalizeBillingMethod(
+        company?.preferredBillingMethod,
+      ),
+      collectionReminderDays: this.normalizeReminderDays(
+        company?.collectionReminderDays,
+      ),
+      autoDiscountEnabled,
+      autoDiscountDaysAfterDue: autoDiscountEnabled
+        ? this.normalizeDiscountDays(company?.autoDiscountDaysAfterDue)
+        : null,
+      autoDiscountPercentage: autoDiscountEnabled
+        ? this.normalizeDiscountPercentage(
+            company?.autoDiscountPercentage?.toNumber(),
+          )
+        : null,
+      tariffs: this.buildTariffs(),
+    };
+  }
+
+  private buildTariffs(): Record<BillingMethod, TariffDetails> {
+    return {
+      PIX: {
+        method: 'PIX',
+        efiLabel: '1,19%',
+        platformLabel: 'R$ 0,50',
+        combinedLabel: '1,19% + R$ 0,50',
+        efiKind: 'percentage',
+        efiValue: 1.19,
+        platformFixedFee: PLATFORM_FIXED_FEE,
+      },
+      BOLETO: {
+        method: 'BOLETO',
+        efiLabel: 'R$ 3,45',
+        platformLabel: 'R$ 0,50',
+        combinedLabel: 'R$ 3,95',
+        efiKind: 'fixed',
+        efiValue: 3.45,
+        platformFixedFee: PLATFORM_FIXED_FEE,
+      },
+      BOLIX: {
+        method: 'BOLIX',
+        efiLabel: 'R$ 3,45',
+        platformLabel: 'R$ 0,50',
+        combinedLabel: 'R$ 3,95',
+        efiKind: 'fixed',
+        efiValue: 3.45,
+        platformFixedFee: PLATFORM_FIXED_FEE,
+      },
+    };
   }
 
   private getTemplateSlugsForOffsets(offsets: number[]): string[] {

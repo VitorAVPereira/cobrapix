@@ -14,10 +14,10 @@ export class SpintaxService {
 
   private expand(text: string): string {
     const regex = /\{([^{}]+)\}/g;
-    
+
     let result = text;
     let match: RegExpExecArray | null;
-    
+
     while ((match = regex.exec(text)) !== null) {
       const matchContent = match[1];
       if (!matchContent) continue;
@@ -77,11 +77,7 @@ export class SpintaxService {
       `Para mais informações, favor nos contatar.`,
     ];
 
-    const signatures = [
-      `Atenciosamente,`,
-      `Att,`,
-      `Cordialmente,`,
-    ];
+    const signatures = [`Atenciosamente,`, `Att,`, `Cordialmente,`];
 
     const spintax = [
       `{${greetings.join('|')}}`,

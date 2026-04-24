@@ -11,10 +11,7 @@ export class EvolutionHealthIndicator {
   private readonly url: string;
 
   constructor(config: ConfigService) {
-    this.url = config.get<string>(
-      'EVOLUTION_API_URL',
-      'http://localhost:8080',
-    );
+    this.url = config.get<string>('EVOLUTION_API_URL', 'http://localhost:8080');
   }
 
   async check(): Promise<HealthCheckResult> {

@@ -1,7 +1,7 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { EfiPaymentResult, EfiService } from './efi.service';
 
-type BillingType = 'PIX' | 'BOLETO';
+type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
 
 @Injectable()
 export class PaymentService {
@@ -14,7 +14,11 @@ export class PaymentService {
     companyId: string,
     billingType: BillingType = 'PIX',
   ): Promise<EfiPaymentResult> {
-    if (billingType !== 'PIX' && billingType !== 'BOLETO') {
+    if (
+      billingType !== 'PIX' &&
+      billingType !== 'BOLETO' &&
+      billingType !== 'BOLIX'
+    ) {
       throw new HttpException(
         'Tipo de cobranca invalido.',
         HttpStatus.BAD_REQUEST,
@@ -47,7 +51,11 @@ export class PaymentService {
 
     for (const invoiceId of invoiceIds) {
       try {
-        const result = await this.createPayment(invoiceId, companyId, billingType);
+        const result = await this.createPayment(
+          invoiceId,
+          companyId,
+          billingType,
+        );
         results.push({
           invoiceId,
           gatewayId: result.gatewayId,
@@ -79,6 +87,13 @@ export class PaymentService {
     companyId: string,
   ): Promise<EfiPaymentResult> {
     return this.createPayment(invoiceId, companyId, 'BOLETO');
+  }
+
+  async createBolixPayment(
+    invoiceId: string,
+    companyId: string,
+  ): Promise<EfiPaymentResult> {
+    return this.createPayment(invoiceId, companyId, 'BOLIX');
   }
 
   async createBoletoPaymentBatch(

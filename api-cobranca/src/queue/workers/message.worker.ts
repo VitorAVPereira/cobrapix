@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Worker, Job } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -17,29 +22,36 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     private prisma: PrismaService,
     private rateLimitService: RateLimitService,
   ) {
-    this.baseUrl = this.configService.get<string>('EVOLUTION_API_URL') || 'http://localhost:8080';
+    this.baseUrl =
+      this.configService.get<string>('EVOLUTION_API_URL') ||
+      'http://localhost:8080';
     this.apiKey = this.configService.getOrThrow<string>('EVOLUTION_API_KEY');
   }
 
   onModuleInit() {
-    const redisHost = this.configService.get<string>('REDIS_HOST') || 'localhost';
+    const redisHost =
+      this.configService.get<string>('REDIS_HOST') || 'localhost';
     const redisPort = this.configService.get<number>('REDIS_PORT') || 6379;
     const redisPassword = this.configService.get<string>('REDIS_PASSWORD');
 
-    this.worker = new Worker('whatsapp-messages', async (job: Job) => {
-      await this.processJob(job);
-    }, {
-      connection: {
-        host: redisHost,
-        port: redisPort,
-        password: redisPassword,
+    this.worker = new Worker(
+      'whatsapp-messages',
+      async (job: Job) => {
+        await this.processJob(job);
       },
-      concurrency: 5,
-      limiter: {
-        max: 10,
-        duration: 1000,
+      {
+        connection: {
+          host: redisHost,
+          port: redisPort,
+          password: redisPassword,
+        },
+        concurrency: 5,
+        limiter: {
+          max: 10,
+          duration: 1000,
+        },
       },
-    });
+    );
 
     this.worker.on('completed', (job) => {
       this.logger.log(`Job ${job.id} completado com sucesso`);
@@ -65,23 +77,35 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
 
   private async processJob(job: Job): Promise<void> {
     const data = job.data as SendMessageJob;
-    const { invoiceId, companyId, phoneNumber, instanceName, message, debtorName } = data;
+    const {
+      invoiceId,
+      companyId,
+      phoneNumber,
+      instanceName,
+      message,
+      debtorName,
+    } = data;
 
     this.logger.log(`Processando mensagem para ${debtorName} (${phoneNumber})`);
 
-    const rateLimitResult = await this.rateLimitService.checkRateLimit(phoneNumber);
+    const rateLimitResult =
+      await this.rateLimitService.checkRateLimit(phoneNumber);
 
     if (!rateLimitResult.allowed) {
       this.logger.warn(
         `Rate limit atingido para ${phoneNumber}. Agendando retry em ${rateLimitResult.resetAt - Date.now()}ms`,
       );
-      
+
       const delay = Math.max(rateLimitResult.resetAt - Date.now(), 0);
       throw new Error(`Rate limit: retry after ${delay}ms`);
     }
 
     try {
-      const response = await this.sendMessageViaEvolution(instanceName, phoneNumber, message);
+      const response = await this.sendMessageViaEvolution(
+        instanceName,
+        phoneNumber,
+        message,
+      );
 
       await this.prisma.collectionLog.create({
         data: {
@@ -95,7 +119,8 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
 
       this.logger.log(`Mensagem enviada com sucesso para ${phoneNumber}`);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
+      const errorMessage =
+        error instanceof Error ? error.message : 'Erro desconhecido';
 
       await this.prisma.collectionLog.create({
         data: {
@@ -107,7 +132,10 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         },
       });
 
-      this.logger.error(`Erro ao enviar mensagem para ${phoneNumber}:`, errorMessage);
+      this.logger.error(
+        `Erro ao enviar mensagem para ${phoneNumber}:`,
+        errorMessage,
+      );
       throw error;
     }
   }
@@ -134,7 +162,9 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
 
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(`Evolution API: falha ao enviar mensagem (${res.status}): ${body}`);
+      throw new Error(
+        `Evolution API: falha ao enviar mensagem (${res.status}): ${body}`,
+      );
     }
 
     return res.json();

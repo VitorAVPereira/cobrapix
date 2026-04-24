@@ -22,7 +22,8 @@ export class MessageQueueService {
   async addSendMessageJob(job: SendMessageJob): Promise<void> {
     const minDelay = 1000;
     const maxDelay = 5000;
-    const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+    const delay =
+      Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
 
     await this.whatsappQueue.add('send-message', job, {
       delay,
@@ -46,13 +47,14 @@ export class MessageQueueService {
     const bulkJobs = jobs.map((job) => {
       const minDelay = 1000;
       const maxDelay = 5000;
-      const baseDelay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
-      
+      const baseDelay =
+        Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+
       return {
         name: 'send-message',
         data: job,
         opts: {
-          delay: baseDelay + (jobs.indexOf(job) * 2000),
+          delay: baseDelay + jobs.indexOf(job) * 2000,
           attempts: 3,
           backoff: {
             type: 'exponential',

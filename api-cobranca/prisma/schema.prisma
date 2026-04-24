@@ -26,6 +26,12 @@ enum WhatsappStatus {
   PENDING
 }
 
+enum BillingMethod {
+  PIX
+  BOLETO
+  BOLIX
+}
+
 model Company {
   id                           String         @id @default(uuid())
   corporateName                String
@@ -52,6 +58,10 @@ model Company {
   maxDiscountsPerDebtor        Int            @default(1)
   discountTriggerDay           Int            @default(15)
   collectionReminderDays       Int[]          @default([0])
+  autoDiscountEnabled          Boolean        @default(false)
+  autoDiscountDaysAfterDue     Int?
+  autoDiscountPercentage       Decimal?       @db.Decimal(5, 2)
+  preferredBillingMethod       BillingMethod  @default(PIX)
   whatsappInstanceId           String?
   whatsappStatus               WhatsappStatus @default(DISCONNECTED)
 
@@ -112,14 +122,20 @@ model OriginalBankAccount {
 }
 
 model Debtor {
-  id                String  @id @default(uuid())
-  companyId         String
-  company           Company @relation(fields: [companyId], references: [id])
-  name              String
-  document          String?
-  phoneNumber       String
-  email             String?
-  gatewayCustomerId String?
+  id                           String   @id @default(uuid())
+  companyId                    String
+  company                      Company  @relation(fields: [companyId], references: [id])
+  name                         String
+  document                     String?
+  phoneNumber                  String
+  email                        String?
+  gatewayCustomerId            String?
+  useGlobalBillingSettings     Boolean  @default(true)
+  collectionReminderDays       Int[]    @default([])
+  autoDiscountEnabled          Boolean?
+  autoDiscountDaysAfterDue     Int?
+  autoDiscountPercentage       Decimal? @db.Decimal(5, 2)
+  preferredBillingMethod       BillingMethod?
 
   invoices Invoice[]
 

@@ -5,10 +5,7 @@ import { BillingController } from './billing.controller';
 import { QueueModule } from '../queue/queue.module';
 
 @Module({
-  imports: [
-    ScheduleModule.forRoot(),
-    QueueModule,
-  ],
+  imports: [ScheduleModule.forRoot(), QueueModule],
   controllers: [BillingController],
   providers: [BillingService],
   exports: [BillingService],

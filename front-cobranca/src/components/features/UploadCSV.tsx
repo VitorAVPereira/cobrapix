@@ -5,9 +5,10 @@ import { useDropzone } from "react-dropzone";
 import Papa from "papaparse";
 import { AlertCircle, Download, FileType, UploadCloud } from "lucide-react";
 
-export type PaymentMethod = "PIX" | "BOLETO" | "BOTH";
+export type PaymentMethod = "PIX" | "BOLETO" | "BOLIX";
 
 export interface ParsedDebtor {
+  id?: string;
   name: string;
   document?: string;
   phone_number: string;
@@ -16,6 +17,7 @@ export interface ParsedDebtor {
   due_date: string;
   billing_type?: PaymentMethod;
   status?: string;
+  debtorId?: string;
 }
 
 interface UploadCSVProps {
@@ -37,12 +39,8 @@ function normalizePaymentMethod(value: string): PaymentMethod | null {
     return "BOLETO";
   }
 
-  if (
-    normalized === "AMBOS" ||
-    normalized === "BOTH" ||
-    normalized === "PIX E BOLETO"
-  ) {
-    return "BOTH";
+  if (normalized === "BOLIX") {
+    return "BOLIX";
   }
 
   return null;
@@ -54,7 +52,7 @@ export function UploadCSV({ onUploadSuccess }: UploadCSVProps) {
 
   const downloadTemplate = (): void => {
     const templateContent =
-      "Nome,WhatsApp,Email,Valor,Vencimento,Forma de Pagamento\nJoao Silva,5511999999999,joao@email.com,150.50,2025-12-01,PIX";
+      "Nome,WhatsApp,Email,Valor,Vencimento,Forma de Pagamento\nJoao Silva,5511999999999,joao@email.com,150.50,2025-12-01,BOLIX";
     const blob = new Blob([templateContent], {
       type: "text/csv;charset=utf-8;",
     });
@@ -132,7 +130,7 @@ export function UploadCSV({ onUploadSuccess }: UploadCSVProps) {
                 normalizePaymentMethod(formaPagamentoRaw);
               if (!formaPagamento) {
                 throw new Error(
-                  `Linha ${index + 2}: Forma de pagamento invalida. Use PIX, BOLETO ou AMBOS.`,
+                  `Linha ${index + 2}: Forma de pagamento invalida. Use PIX, BOLETO ou BOLIX.`,
                 );
               }
 

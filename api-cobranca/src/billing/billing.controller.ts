@@ -83,9 +83,12 @@ export class BillingController {
     @GetUser() user: AuthenticatedUser,
     @Body() dto: UpdateBillingSettingsDto,
   ) {
-    return this.billingService.updateSettings(
-      user.companyId,
-      dto.collectionReminderDays,
-    );
+    return this.billingService.updateSettings(user.companyId, {
+      preferredBillingMethod: dto.preferredBillingMethod,
+      collectionReminderDays: dto.collectionReminderDays,
+      autoDiscountEnabled: dto.autoDiscountEnabled,
+      autoDiscountDaysAfterDue: dto.autoDiscountDaysAfterDue,
+      autoDiscountPercentage: dto.autoDiscountPercentage,
+    });
   }
 }

@@ -4,14 +4,29 @@ import {
   Get,
   HttpException,
   HttpStatus,
+  Param,
   Post,
+  Put,
   UseGuards,
 } from '@nestjs/common';
-import { InvoicesService } from './invoices.service';
+import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  ArrayUnique,
+  IsArray,
+  IsBoolean,
+  IsIn,
+  IsInt,
+  IsNumber,
+  Max,
+  Min,
+  ValidateIf,
+} from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GetUser } from '../auth/decorators/get-user.decorator';
+import { DebtorSettingsResponse, InvoicesService } from './invoices.service';
 
-type BillingType = 'PIX' | 'BOLETO' | 'BOTH';
+type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
 
 interface AuthenticatedUser {
   companyId: string;
@@ -35,6 +50,47 @@ interface ValidImportRow {
   billing_type: BillingType;
 }
 
+class UpdateDebtorSettingsDto {
+  @IsBoolean()
+  useGlobalBillingSettings!: boolean;
+
+  @ValidateIf((dto: UpdateDebtorSettingsDto) => !dto.useGlobalBillingSettings)
+  @IsIn(['PIX', 'BOLETO', 'BOLIX'])
+  preferredBillingMethod?: BillingType;
+
+  @ValidateIf((dto: UpdateDebtorSettingsDto) => !dto.useGlobalBillingSettings)
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(12)
+  @ArrayUnique()
+  @IsInt({ each: true })
+  @Min(-30, { each: true })
+  @Max(365, { each: true })
+  collectionReminderDays?: number[];
+
+  @ValidateIf((dto: UpdateDebtorSettingsDto) => !dto.useGlobalBillingSettings)
+  @IsBoolean()
+  autoDiscountEnabled?: boolean;
+
+  @ValidateIf(
+    (dto: UpdateDebtorSettingsDto) =>
+      !dto.useGlobalBillingSettings && dto.autoDiscountEnabled === true,
+  )
+  @IsInt()
+  @Min(0)
+  @Max(365)
+  autoDiscountDaysAfterDue?: number;
+
+  @ValidateIf(
+    (dto: UpdateDebtorSettingsDto) =>
+      !dto.useGlobalBillingSettings && dto.autoDiscountEnabled === true,
+  )
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  @Max(100)
+  autoDiscountPercentage?: number;
+}
+
 @Controller('invoices')
 @UseGuards(JwtAuthGuard)
 export class InvoicesController {
@@ -43,6 +99,57 @@ export class InvoicesController {
   @Get()
   async findAll(@GetUser() user: AuthenticatedUser): Promise<unknown> {
     return this.invoicesService.findAll(user.companyId);
+  }
+
+  @Get('debtors/:debtorId/settings')
+  async getDebtorSettings(
+    @GetUser() user: AuthenticatedUser,
+    @Param('debtorId') debtorId: string,
+  ): Promise<DebtorSettingsResponse> {
+    if (!this.isUuid(debtorId)) {
+      throw new HttpException('Devedor invalido.', HttpStatus.BAD_REQUEST);
+    }
+
+    const settings = await this.invoicesService.getDebtorSettings(
+      user.companyId,
+      debtorId,
+    );
+
+    if (!settings) {
+      throw new HttpException('Devedor nao encontrado.', HttpStatus.NOT_FOUND);
+    }
+
+    return settings;
+  }
+
+  @Put('debtors/:debtorId/settings')
+  async updateDebtorSettings(
+    @GetUser() user: AuthenticatedUser,
+    @Param('debtorId') debtorId: string,
+    @Body() dto: UpdateDebtorSettingsDto,
+  ): Promise<DebtorSettingsResponse> {
+    if (!this.isUuid(debtorId)) {
+      throw new HttpException('Devedor invalido.', HttpStatus.BAD_REQUEST);
+    }
+
+    const settings = await this.invoicesService.updateDebtorSettings(
+      user.companyId,
+      debtorId,
+      {
+        useGlobalBillingSettings: dto.useGlobalBillingSettings,
+        preferredBillingMethod: dto.preferredBillingMethod,
+        collectionReminderDays: dto.collectionReminderDays,
+        autoDiscountEnabled: dto.autoDiscountEnabled,
+        autoDiscountDaysAfterDue: dto.autoDiscountDaysAfterDue,
+        autoDiscountPercentage: dto.autoDiscountPercentage,
+      },
+    );
+
+    if (!settings) {
+      throw new HttpException('Devedor nao encontrado.', HttpStatus.NOT_FOUND);
+    }
+
+    return settings;
   }
 
   @Post('import')
@@ -131,13 +238,19 @@ export class InvoicesController {
     }
 
     if (!this.isBillingType(row.billing_type)) {
-      return `Linha ${i}: Forma de pagamento deve ser PIX, BOLETO ou BOTH.`;
+      return `Linha ${i}: Forma de pagamento deve ser PIX, BOLETO ou BOLIX.`;
     }
 
     return null;
   }
 
   private isBillingType(value: unknown): value is BillingType {
-    return value === 'PIX' || value === 'BOLETO' || value === 'BOTH';
+    return value === 'PIX' || value === 'BOLETO' || value === 'BOLIX';
+  }
+
+  private isUuid(value: string): value is string {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value,
+    );
   }
 }

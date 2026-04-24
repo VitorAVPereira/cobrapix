@@ -7,7 +7,7 @@ import { CreateGatewayAccountDto } from './dto/gateway-account.dto';
 import { PaymentCryptoService } from './payment-crypto.service';
 
 type EfiEnvironment = 'homologation' | 'production';
-type BillingType = 'PIX' | 'BOLETO';
+type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
 
 interface EfiCredentials {
   clientId: string;
@@ -95,6 +95,11 @@ interface PaymentInvoice {
     document: string | null;
     email: string | null;
     phoneNumber: string;
+    useGlobalBillingSettings: boolean;
+    collectionReminderDays: number[];
+    autoDiscountEnabled: boolean | null;
+    autoDiscountDaysAfterDue: number | null;
+    autoDiscountPercentage: { toNumber(): number } | null;
   };
   company: {
     addressPostalCode: string | null;
@@ -103,7 +108,17 @@ interface PaymentInvoice {
     addressDistrict: string | null;
     addressCity: string | null;
     addressState: string | null;
+    collectionReminderDays: number[];
+    autoDiscountEnabled: boolean;
+    autoDiscountDaysAfterDue: number | null;
+    autoDiscountPercentage: { toNumber(): number } | null;
   };
+}
+
+interface ResolvedDiscountSettings {
+  enabled: boolean;
+  daysAfterDue: number | null;
+  percentage: number | null;
 }
 
 export interface EfiPaymentResult {
@@ -194,8 +209,8 @@ export class EfiService {
 
     const gatewayAccount = await this.getActiveGatewayAccount(companyId);
 
-    if (billingType === 'BOLETO') {
-      return this.createBoleto(invoice, gatewayAccount);
+    if (billingType === 'BOLETO' || billingType === 'BOLIX') {
+      return this.createBoleto(invoice, gatewayAccount, billingType);
     }
 
     return this.createPixCobv(invoice, gatewayAccount);
@@ -334,6 +349,7 @@ export class EfiService {
     const dueDate = this.formatDate(invoice.dueDate);
     const amount = this.formatAmount(invoice.originalAmount);
     const debtorDocument = this.onlyDigits(invoice.debtor.document ?? '');
+    const discountSettings = this.resolveDiscountSettings(invoice);
     const cobvPayload = {
       calendario: {
         dataDeVencimento: dueDate,
@@ -348,6 +364,14 @@ export class EfiService {
       },
       valor: {
         original: amount,
+        ...(discountSettings.enabled
+          ? {
+              desconto: {
+                modalidade: 3,
+                valorPerc: this.formatPercentage(discountSettings.percentage),
+              },
+            }
+          : {}),
       },
       chave: gatewayAccount.pixKey,
       solicitacaoPagador: `Cobranca ${invoice.id.slice(0, 8)}`,
@@ -399,6 +423,10 @@ export class EfiService {
         efiPixCopiaECola: pixCopyPaste,
         splitConfigId,
         gatewayStatusRaw: detail.status,
+        discountApplied: this.calculateDiscountAmount(
+          invoice.originalAmount,
+          discountSettings.percentage,
+        ),
       },
     });
 
@@ -423,6 +451,7 @@ export class EfiService {
   private async createBoleto(
     invoice: PaymentInvoice,
     gatewayAccount: GatewayAccount,
+    billingType: 'BOLETO' | 'BOLIX',
   ): Promise<EfiPaymentResult> {
     const existing = this.buildExistingBoletoResult(invoice);
     if (existing) {
@@ -434,6 +463,22 @@ export class EfiService {
     const customer = this.buildBoletoCustomer(invoice);
     const marketplaceRepasses =
       this.buildBoletoMarketplaceRepasses(gatewayAccount);
+    const discountSettings = this.resolveDiscountSettings(invoice);
+    const boletoDiscount =
+      discountSettings.enabled && discountSettings.percentage !== null
+        ? {
+            conditional_discount: {
+              type: 'percentage' as const,
+              value: discountSettings.percentage,
+              until_date: this.formatDate(
+                this.addDays(
+                  invoice.dueDate,
+                  discountSettings.daysAfterDue ?? 0,
+                ),
+              ),
+            },
+          }
+        : {};
     const payload = {
       items: [
         {
@@ -453,6 +498,7 @@ export class EfiService {
         banking_billet: {
           expire_at: this.formatDate(invoice.dueDate),
           customer,
+          ...boletoDiscount,
         },
       },
       metadata: {
@@ -483,7 +529,7 @@ export class EfiService {
       where: { id: invoice.id, companyId: invoice.companyId },
       data: {
         gatewayId: chargeId,
-        billingType: 'BOLETO',
+        billingType,
         pixExpiresAt: invoice.dueDate,
         efiChargeId: chargeId,
         boletoLinhaDigitavel: boletoCode,
@@ -491,14 +537,20 @@ export class EfiService {
         boletoPdf,
         efiPixCopiaECola: chargeData?.pix?.qrcode,
         gatewayStatusRaw: chargeData?.status,
+        discountApplied: this.calculateDiscountAmount(
+          invoice.originalAmount,
+          discountSettings.percentage,
+        ),
       },
     });
 
     await this.createLog(
       invoice.companyId,
       invoice.id,
-      'EFI_BOLETO_CREATED',
-      'Boleto/Bolix Efi criado com split automatico',
+      billingType === 'BOLIX' ? 'EFI_BOLIX_CREATED' : 'EFI_BOLETO_CREATED',
+      billingType === 'BOLIX'
+        ? 'Bolix Efi criado com split automatico'
+        : 'Boleto Efi criado com split automatico',
       'PENDING',
     );
 
@@ -629,6 +681,65 @@ export class EfiService {
       boletoPdf: invoice.boletoPdf ?? undefined,
       expiresAt: invoice.pixExpiresAt ?? invoice.dueDate,
       paymentLink: invoice.boletoLink ?? '',
+    };
+  }
+
+  private resolveDiscountSettings(
+    invoice: PaymentInvoice,
+  ): ResolvedDiscountSettings {
+    if (!invoice.debtor.useGlobalBillingSettings) {
+      const debtorEnabled = invoice.debtor.autoDiscountEnabled;
+
+      if (!debtorEnabled) {
+        return {
+          enabled: false,
+          daysAfterDue: null,
+          percentage: null,
+        };
+      }
+
+      return this.normalizeDiscountSettings({
+        enabled: true,
+        daysAfterDue: invoice.debtor.autoDiscountDaysAfterDue,
+        percentage: invoice.debtor.autoDiscountPercentage?.toNumber(),
+      });
+    }
+
+    return this.normalizeDiscountSettings({
+      enabled: invoice.company.autoDiscountEnabled,
+      daysAfterDue: invoice.company.autoDiscountDaysAfterDue,
+      percentage: invoice.company.autoDiscountPercentage?.toNumber(),
+    });
+  }
+
+  private normalizeDiscountSettings(input: {
+    enabled: boolean | null | undefined;
+    daysAfterDue: number | null | undefined;
+    percentage: number | null | undefined;
+  }): ResolvedDiscountSettings {
+    if (!input.enabled) {
+      return {
+        enabled: false,
+        daysAfterDue: null,
+        percentage: null,
+      };
+    }
+
+    const daysAfterDue = this.normalizeDiscountDays(input.daysAfterDue);
+    const percentage = this.normalizeDiscountPercentage(input.percentage);
+
+    if (percentage === null) {
+      return {
+        enabled: false,
+        daysAfterDue: null,
+        percentage: null,
+      };
+    }
+
+    return {
+      enabled: true,
+      daysAfterDue,
+      percentage,
     };
   }
 
@@ -925,12 +1036,73 @@ export class EfiService {
     return Number(value).toFixed(2);
   }
 
+  private formatPercentage(value: number | null): string {
+    return (value ?? 0).toFixed(2);
+  }
+
+  private normalizeDiscountDays(value: number | null | undefined): number {
+    if (!Number.isInteger(value) || value === undefined || value === null) {
+      return 0;
+    }
+
+    if (value < 0) {
+      return 0;
+    }
+
+    if (value > 365) {
+      return 365;
+    }
+
+    return value;
+  }
+
+  private normalizeDiscountPercentage(
+    value: number | null | undefined,
+  ): number | null {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      return null;
+    }
+
+    if (value <= 0) {
+      return null;
+    }
+
+    if (value > 100) {
+      return 100;
+    }
+
+    return Number(value.toFixed(2));
+  }
+
+  private calculateDiscountAmount(
+    originalAmount: unknown,
+    percentage: number | null,
+  ): string | null {
+    if (percentage === null) {
+      return null;
+    }
+
+    const total = Number(originalAmount);
+    const discountAmount = (total * percentage) / 100;
+    return discountAmount.toFixed(2);
+  }
+
+  private addDays(date: Date, days: number): Date {
+    const target = new Date(date);
+    target.setDate(target.getDate() + days);
+    return target;
+  }
+
   private getPlatformSplitPercentage(): number {
     const percentage = Number(
       this.config.get<string>('EFI_PLATFORM_SPLIT_PERCENTAGE') ?? '0',
     );
 
-    if (!Number.isInteger(percentage) || percentage < 0 || percentage >= 10000) {
+    if (
+      !Number.isInteger(percentage) ||
+      percentage < 0 ||
+      percentage >= 10000
+    ) {
       throw new HttpException(
         'EFI_PLATFORM_SPLIT_PERCENTAGE deve estar entre 0 e 9999.',
         HttpStatus.SERVICE_UNAVAILABLE,

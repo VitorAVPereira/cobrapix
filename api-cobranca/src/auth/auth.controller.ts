@@ -1,4 +1,12 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, Res, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  HttpCode,
+  HttpStatus,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { LocalAuthGuard } from './guards/local-auth.guard';
@@ -18,7 +26,7 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const { access_token, user } = await this.authService.login(loginDto);
-    
+
     // Set cookie para compatibilidade com NextAuth
     res.cookie('next-auth.session-token', access_token, {
       httpOnly: true,

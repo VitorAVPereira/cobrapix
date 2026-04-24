@@ -12,6 +12,7 @@ import {
   Search,
   X,
 } from "lucide-react";
+import { DebtorSettingsModal } from "@/components/features/DebtorSettingsModal";
 import { InvoiceTable } from "@/components/features/InvoiceTable";
 import { UploadCSV } from "@/components/features/UploadCSV";
 import type {
@@ -86,6 +87,7 @@ function getErrorMessage(error: unknown, fallback: string): string {
 export default function CobrancasPage() {
   const apiClient = useApiClient();
   const [debtors, setDebtors] = useState<ParsedDebtor[]>([]);
+  const [selectedDebtor, setSelectedDebtor] = useState<ParsedDebtor | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isUploadingCSV, setIsUploadingCSV] = useState(false);
@@ -163,6 +165,15 @@ export default function CobrancasPage() {
   function closeManualModal(): void {
     setIsModalOpen(false);
     setManualForm(initialManualChargeForm);
+  }
+
+  function openDebtorSettings(debtor: ParsedDebtor): void {
+    if (!debtor.debtorId) {
+      setErrorMsg("Nao foi possivel identificar o devedor desta cobranca.");
+      return;
+    }
+
+    setSelectedDebtor(debtor);
   }
 
   function handleManualSubmit(event: FormEvent<HTMLFormElement>): void {
@@ -286,7 +297,10 @@ export default function CobrancasPage() {
                   </span>
                 </div>
 
-                <InvoiceTable data={filteredDebtors} />
+                <InvoiceTable
+                  data={filteredDebtors}
+                  onConfigureDebtor={openDebtorSettings}
+                />
 
                 {searchQuery && filteredDebtors.length === 0 && (
                   <div className="rounded-md border border-dashed border-slate-300 bg-white py-12 text-center text-sm text-slate-500">
@@ -399,7 +413,7 @@ export default function CobrancasPage() {
                   >
                     <option value="PIX">PIX</option>
                     <option value="BOLETO">Boleto</option>
-                    <option value="BOTH">PIX e Boleto</option>
+                    <option value="BOLIX">Bolix</option>
                   </select>
                 </label>
 
@@ -454,6 +468,14 @@ export default function CobrancasPage() {
             </form>
           </div>
         </div>
+      )}
+
+      {selectedDebtor?.debtorId && (
+        <DebtorSettingsModal
+          debtorId={selectedDebtor.debtorId}
+          debtorName={selectedDebtor.name}
+          onClose={() => setSelectedDebtor(null)}
+        />
       )}
     </main>
   );

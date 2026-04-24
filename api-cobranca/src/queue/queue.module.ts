@@ -41,10 +41,6 @@ import { PrismaModule } from '../prisma/prisma.module';
     SpintaxService,
     RateLimitService,
   ],
-  exports: [
-    MessageQueueService,
-    SpintaxService,
-    RateLimitService,
-  ],
+  exports: [MessageQueueService, SpintaxService, RateLimitService],
 })
 export class QueueModule {}

@@ -31,6 +31,14 @@ declare module 'sdk-node-apis-efi' {
     };
     valor: {
       original: string;
+      desconto?: {
+        modalidade: number;
+        valorPerc?: string;
+        descontoDataFixa?: Array<{
+          data: string;
+          valorPerc: string;
+        }>;
+      };
     };
     chave: string;
     solicitacaoPagador?: string;
@@ -98,6 +106,25 @@ declare module 'sdk-node-apis-efi' {
     payment: {
       banking_billet: {
         expire_at: string;
+        discount?: {
+          type: 'percentage' | 'currency';
+          value: number;
+        };
+        conditional_discount?: {
+          type: 'percentage' | 'currency';
+          value: number;
+          until_date: string;
+        };
+        configurations?: {
+          days_to_write_off?: number;
+          fine?: number;
+          interest?:
+            | number
+            | {
+                value: number;
+                type: 'monthly' | 'daily';
+              };
+        };
         customer: {
           name: string;
           cpf?: string;
