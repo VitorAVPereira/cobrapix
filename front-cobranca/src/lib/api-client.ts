@@ -51,9 +51,15 @@ export interface MessageTemplate {
   updatedAt: string;
 }
 
+export type MessageTemplateSlug =
+  | "vencimento-hoje"
+  | "pre-vencimento"
+  | "atraso-primeiro-aviso"
+  | "atraso-recorrente";
+
 export interface SaveMessageTemplateInput {
   name: string;
-  slug: string;
+  slug: MessageTemplateSlug;
   content: string;
   isActive?: boolean;
 }

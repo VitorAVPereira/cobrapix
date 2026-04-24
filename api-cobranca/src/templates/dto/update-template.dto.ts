@@ -1,4 +1,11 @@
-import { IsString, IsOptional, MaxLength, IsBoolean } from 'class-validator';
+import {
+  IsBoolean,
+  IsIn,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
+import { TEMPLATE_SLUGS } from '../template-catalog';
 
 export class UpdateTemplateDto {
   @IsString()
@@ -9,6 +16,7 @@ export class UpdateTemplateDto {
   @IsString()
   @IsOptional()
   @MaxLength(50)
+  @IsIn(TEMPLATE_SLUGS)
   slug?: string;
 
   @IsString()

@@ -11,25 +11,26 @@ import {
   ToggleLeft,
   ToggleRight,
 } from "lucide-react";
-import { useApiClient } from "@/lib/use-api-client";
-import { spin } from "@/lib/spintax";
 import type {
   ApiError,
   MessageTemplate,
+  MessageTemplateSlug,
   SaveMessageTemplateInput,
 } from "@/lib/api-client";
+import { useApiClient } from "@/lib/use-api-client";
+import { spin } from "@/lib/spintax";
 
 interface TemplateFormState {
   id: string | null;
   name: string;
-  slug: string;
+  slug: MessageTemplateSlug;
   content: string;
   isActive: boolean;
 }
 
 interface TemplateOption {
   name: string;
-  slug: string;
+  slug: MessageTemplateSlug;
   defaultContent: string;
 }
 
@@ -37,95 +38,80 @@ interface TemplateVariable {
   tag: string;
   label: string;
   preview: string;
-  reserved?: boolean;
 }
 
-const DEFAULT_TEMPLATE_OPTION: TemplateOption = {
-  name: "Vencimento hoje",
-  slug: "vencimento-hoje",
-  defaultContent:
-    "{Olá|Oi|Tudo bem}, {debtorName}. Sua fatura de {originalAmount} vence em {dueDate}.",
-};
-
-const TEMPLATE_OPTIONS: TemplateOption[] = [
-  DEFAULT_TEMPLATE_OPTION,
+const TEMPLATE_OPTIONS: readonly TemplateOption[] = [
+  {
+    name: "Vencimento hoje",
+    slug: "vencimento-hoje",
+    defaultContent:
+      "{Ola|Oi|Tudo bem}, {debtorName}. A cobranca de {originalAmount} da {companyName} vence hoje ({dueDate}).",
+  },
   {
     name: "Lembrete antes do vencimento",
     slug: "pre-vencimento",
     defaultContent:
-      "{Olá|Oi}, {debtorName}. Passando para lembrar que sua fatura de {originalAmount} vence em {dueDate}.",
+      "{Ola|Oi}, {debtorName}. Passando para lembrar que a cobranca de {originalAmount} da {companyName} vence em {dueDate}.",
   },
   {
     name: "Primeiro aviso de atraso",
     slug: "atraso-primeiro-aviso",
     defaultContent:
-      "{Olá|Oi}, {debtorName}. Identificamos uma fatura em aberto de {originalAmount}, vencida em {dueDate}.",
+      "{Ola|Oi}, {debtorName}. Identificamos uma cobranca em aberto de {originalAmount} da {companyName}, vencida em {dueDate}.",
   },
   {
     name: "Atraso recorrente",
     slug: "atraso-recorrente",
     defaultContent:
-      "{Olá|Oi}, {debtorName}. Ainda consta uma pendencia de {originalAmount} com vencimento em {dueDate}.",
+      "{Ola|Oi}, {debtorName}. Ainda consta uma cobranca pendente de {originalAmount} da {companyName}, com vencimento em {dueDate}.",
   },
-  {
-    name: "Ultimo aviso",
-    slug: "ultimo-aviso",
-    defaultContent:
-      "{Olá|Oi}, {debtorName}. Este e um ultimo lembrete sobre a fatura de {originalAmount}, vencida em {dueDate}.",
-  },
-  {
-    name: "Confirmacao de pagamento",
-    slug: "pagamento-confirmado",
-    defaultContent:
-      "{Olá|Oi}, {debtorName}. Recebemos o pagamento da sua fatura de {originalAmount}. Obrigado!",
-  },
-];
+] as const;
 
-const DEFAULT_TEMPLATE = {
+const TEMPLATE_ORDER = new Map(
+  TEMPLATE_OPTIONS.map((option, index) => [option.slug, index]),
+);
+
+const DEFAULT_TEMPLATE_OPTION = TEMPLATE_OPTIONS[0];
+
+const EMPTY_FORM: TemplateFormState = {
+  id: null,
   name: DEFAULT_TEMPLATE_OPTION.name,
   slug: DEFAULT_TEMPLATE_OPTION.slug,
   content: DEFAULT_TEMPLATE_OPTION.defaultContent,
   isActive: true,
 };
 
-const EMPTY_FORM: TemplateFormState = {
-  id: null,
-  ...DEFAULT_TEMPLATE,
-};
-
-const VARIABLES: TemplateVariable[] = [
+const VARIABLES: readonly TemplateVariable[] = [
   { tag: "{debtorName}", label: "Cliente", preview: "Joao Silva" },
   { tag: "{originalAmount}", label: "Valor", preview: "R$ 150,00" },
   { tag: "{dueDate}", label: "Vencimento", preview: "22/04/2026" },
   { tag: "{companyName}", label: "Empresa", preview: "Clinica Exemplo" },
-  {
-    tag: "{pixCopyPaste}",
-    label: "PIX copia e cOlá",
-    preview: "00020101021226...",
-    reserved: true,
-  },
-  {
-    tag: "{paymentLink}",
-    label: "Link de pagamento",
-    preview: "https://pay.example/cobranca",
-    reserved: true,
-  },
-];
+] as const;
+
+function getTemplateOption(slug: MessageTemplateSlug): TemplateOption | undefined {
+  return TEMPLATE_OPTIONS.find((option) => option.slug === slug);
+}
+
+function sortTemplates(templates: MessageTemplate[]): MessageTemplate[] {
+  return [...templates].sort((left, right) => {
+    const leftOrder = TEMPLATE_ORDER.get(left.slug as MessageTemplateSlug) ?? 999;
+    const rightOrder =
+      TEMPLATE_ORDER.get(right.slug as MessageTemplateSlug) ?? 999;
+
+    return leftOrder - rightOrder || left.name.localeCompare(right.name);
+  });
+}
 
 function templateToForm(template: MessageTemplate): TemplateFormState {
-  const option = getTemplateOption(template.slug);
+  const option = getTemplateOption(template.slug as MessageTemplateSlug);
 
   return {
     id: template.id,
     name: option?.name ?? template.name,
-    slug: template.slug,
+    slug: (option?.slug ?? DEFAULT_TEMPLATE_OPTION.slug) as MessageTemplateSlug,
     content: template.content,
     isActive: template.isActive,
   };
-}
-
-function getTemplateOption(slug: string): TemplateOption | undefined {
-  return TEMPLATE_OPTIONS.find((option) => option.slug === slug);
 }
 
 function getFirstAvailableTemplateOption(
@@ -169,9 +155,7 @@ export default function TemplatesPage() {
   const [success, setSuccess] = useState<string | null>(null);
 
   const preview = useMemo(() => renderPreview(form.content), [form.content]);
-  const selectedTemplate = templates.find(
-    (template) => template.id === form.id,
-  );
+  const selectedTemplate = templates.find((template) => template.id === form.id);
 
   useEffect(() => {
     let active = true;
@@ -181,14 +165,14 @@ export default function TemplatesPage() {
       setError(null);
 
       try {
-        const data = await apiClient.getTemplates();
+        const data = sortTemplates(await apiClient.getTemplates());
         if (!active) {
           return;
         }
 
         setTemplates(data);
         const firstTemplate =
-          data.find((template) => template.slug === DEFAULT_TEMPLATE.slug) ??
+          data.find((template) => template.slug === DEFAULT_TEMPLATE_OPTION.slug) ??
           data[0];
         setForm(firstTemplate ? templateToForm(firstTemplate) : EMPTY_FORM);
       } catch (loadError) {
@@ -244,7 +228,7 @@ export default function TemplatesPage() {
     );
   }
 
-  function selectTemplateType(slug: string): void {
+  function selectTemplateType(slug: MessageTemplateSlug): void {
     const option = getTemplateOption(slug);
 
     if (!option) {
@@ -289,14 +273,11 @@ export default function TemplatesPage() {
         : await apiClient.createTemplate(payload);
 
       setTemplates((current) => {
-        const exists = current.some((template) => template.id === saved.id);
-        if (exists) {
-          return current.map((template) =>
-            template.id === saved.id ? saved : template,
-          );
-        }
+        const nextTemplates = current.some((template) => template.id === saved.id)
+          ? current.map((template) => (template.id === saved.id ? saved : template))
+          : [...current, saved];
 
-        return [saved, ...current];
+        return sortTemplates(nextTemplates);
       });
       setForm(templateToForm(saved));
       setSuccess("Template salvo com sucesso.");
@@ -429,7 +410,9 @@ export default function TemplatesPage() {
                 </span>
                 <select
                   value={form.slug}
-                  onChange={(event) => selectTemplateType(event.target.value)}
+                  onChange={(event) =>
+                    selectTemplateType(event.target.value as MessageTemplateSlug)
+                  }
                   className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                 >
                   {TEMPLATE_OPTIONS.map((option) => (
@@ -443,7 +426,7 @@ export default function TemplatesPage() {
               <button
                 type="button"
                 onClick={() => updateForm("isActive", !form.isActive)}
-                className="inline-flex items-center mt-1.5 gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
+                className="mt-1.5 inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
               >
                 {form.isActive ? (
                   <ToggleRight className="text-emerald-600" size={22} />
@@ -462,22 +445,8 @@ export default function TemplatesPage() {
                     <button
                       key={variable.tag}
                       type="button"
-                      onClick={() => {
-                        if (!variable.reserved) {
-                          insertVariable(variable.tag);
-                        }
-                      }}
-                      disabled={variable.reserved}
-                      title={
-                        variable.reserved
-                          ? "Reservada para a sprint de pagamento"
-                          : undefined
-                      }
-                      className={`rounded-md border px-3 py-1.5 text-xs font-semibold transition ${
-                        variable.reserved
-                          ? "cursor-not-allowed border-sky-200 bg-sky-50 text-sky-700 opacity-70"
-                          : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                      }`}
+                      onClick={() => insertVariable(variable.tag)}
+                      className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
                     >
                       {variable.label}
                     </button>
@@ -491,19 +460,17 @@ export default function TemplatesPage() {
                 </span>
                 <textarea
                   value={form.content}
-                  onChange={(event) =>
-                    updateForm("content", event.target.value)
-                  }
+                  onChange={(event) => updateForm("content", event.target.value)}
                   rows={12}
                   className="w-full resize-none rounded-md border border-slate-300 px-3 py-3 text-sm leading-6 text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                  placeholder="{Olá|Oi}, {debtorName}. Sua fatura de {originalAmount} vence em {dueDate}."
+                  placeholder="{Ola|Oi}, {debtorName}. A cobranca de {originalAmount} da {companyName} vence hoje ({dueDate})."
                 />
               </label>
 
               <div className="rounded-md border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-                Use Spintax com pipe, como {"{Olá|Oi|Tudo bem}"}. As variaveis
-                financeiras foram reservadas para o proximo passo do fluxo de
-                PIX.
+                Use Spintax com pipe, como {"{Ola|Oi|Tudo bem}"}. Hoje o motor de
+                cobranca renderiza apenas {`{debtorName}`}, {`{originalAmount}`},{" "}
+                {`{dueDate}`} e {`{companyName}`}.
               </div>
             </div>
           </section>
@@ -527,7 +494,7 @@ export default function TemplatesPage() {
                 </div>
 
                 <div className="flex flex-1 items-start p-4">
-                  <div className="max-w-[92%] whitespace-pre-wrap wrap-break-word rounded-md rounded-tl-none bg-white px-3 py-2 text-sm leading-5 text-slate-900 shadow-sm">
+                  <div className="max-w-[92%] break-words whitespace-pre-wrap rounded-md rounded-tl-none bg-white px-3 py-2 text-sm leading-5 text-slate-900 shadow-sm">
                     {preview || "A mensagem aparecera aqui."}
                     <div className="mt-1 text-right text-[11px] text-slate-400">
                       09:00
