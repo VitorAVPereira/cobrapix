@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { BillingMethod } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { PaymentService } from '../payment/payment.service';
 import { MessageQueueService, SendMessageJob } from '../queue/message.queue';
 import { SpintaxService } from '../queue/services/spintax.service';
 
@@ -42,6 +43,40 @@ interface BillingSettingsInput {
   autoDiscountPercentage?: number | null;
 }
 
+interface ScheduledInvoice {
+  id: string;
+  companyId: string;
+  originalAmount: unknown;
+  dueDate: Date;
+  gatewayId: string | null;
+  pixPayload: string | null;
+  efiTxid: string | null;
+  efiChargeId: string | null;
+  efiPixCopiaECola: string | null;
+  boletoLinhaDigitavel: string | null;
+  boletoLink: string | null;
+  boletoPdf: string | null;
+  pixExpiresAt: Date | null;
+  billingType: string | null;
+  debtor: {
+    name: string;
+    phoneNumber: string;
+    useGlobalBillingSettings: boolean;
+    preferredBillingMethod: BillingMethod | null;
+  };
+  collectionLogs: Array<{ id: string }>;
+}
+
+interface PaymentMessageData {
+  billingType: BillingMethod;
+  billingTypeLabel: string;
+  paymentLink: string;
+  pixCopiaECola: string;
+  boletoLinhaDigitavel: string;
+  boletoLink: string;
+  boletoPdf: string;
+}
+
 @Injectable()
 export class BillingService {
   private readonly logger = new Logger(BillingService.name);
@@ -51,6 +86,7 @@ export class BillingService {
     private prisma: PrismaService,
     private messageQueue: MessageQueueService,
     private spintaxService: SpintaxService,
+    private paymentService: PaymentService,
   ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_9AM)
@@ -213,7 +249,7 @@ export class BillingService {
           collectionLogs: {
             where: {
               createdAt: { gte: startOfToday },
-              actionType: 'WHATSAPP_SENT',
+              actionType: { in: ['WHATSAPP_QUEUED', 'WHATSAPP_SENT'] },
             },
           },
         },
@@ -238,6 +274,12 @@ export class BillingService {
           continue;
         }
 
+        const paymentData = await this.ensureInvoicePayment(invoice, company);
+        if (!paymentData) {
+          skippedCount++;
+          continue;
+        }
+
         let phone = invoice.debtor.phoneNumber;
         if (!phone.startsWith('55')) {
           phone = `55${phone}`;
@@ -250,6 +292,7 @@ export class BillingService {
           originalAmount: Number(invoice.originalAmount),
           dueDate: invoice.dueDate,
           companyName: company.corporateName,
+          paymentData,
         });
 
         jobs.push({
@@ -264,6 +307,7 @@ export class BillingService {
 
       if (jobs.length > 0) {
         await this.messageQueue.addBulkSendMessageJobs(jobs);
+        await this.logQueuedMessages(jobs);
         this.logger.log(
           `Empresa ${company.corporateName}: ${jobs.length} mensagens enfileiradas, ${skippedCount} puladas`,
         );
@@ -281,6 +325,241 @@ export class BillingService {
       );
       return { queued: 0, skipped: 0 };
     }
+  }
+
+  private async ensureInvoicePayment(
+    invoice: ScheduledInvoice,
+    company: {
+      id: string;
+      preferredBillingMethod: BillingMethod;
+    },
+  ): Promise<PaymentMessageData | null> {
+    const billingType = this.resolveInvoiceBillingType(invoice, company);
+
+    if (this.hasValidPaymentData(invoice, billingType)) {
+      await this.createCollectionLog(
+        company.id,
+        invoice.id,
+        'PAYMENT_REUSED',
+        'Cobranca existente reutilizada para mensagem automatica.',
+        'PENDING',
+      );
+      return this.buildPaymentMessageData(invoice, billingType);
+    }
+
+    try {
+      await this.paymentService.createPayment(
+        invoice.id,
+        company.id,
+        billingType,
+      );
+
+      const updatedInvoice = await this.prisma.invoice.findFirst({
+        where: { id: invoice.id, companyId: company.id },
+        select: {
+          id: true,
+          companyId: true,
+          originalAmount: true,
+          dueDate: true,
+          gatewayId: true,
+          pixPayload: true,
+          efiTxid: true,
+          efiChargeId: true,
+          efiPixCopiaECola: true,
+          boletoLinhaDigitavel: true,
+          boletoLink: true,
+          boletoPdf: true,
+          pixExpiresAt: true,
+          billingType: true,
+        },
+      });
+
+      if (
+        !updatedInvoice ||
+        !this.hasValidPaymentData(updatedInvoice, billingType)
+      ) {
+        await this.createCollectionLog(
+          company.id,
+          invoice.id,
+          'PAYMENT_GENERATION_FAILED',
+          'A Efi criou a cobranca, mas nao retornou dados de pagamento utilizaveis.',
+          'FAILED',
+        );
+        return null;
+      }
+
+      await this.createCollectionLog(
+        company.id,
+        invoice.id,
+        'PAYMENT_GENERATED',
+        'Cobranca Efi gerada antes do envio automatico.',
+        'PENDING',
+      );
+
+      return this.buildPaymentMessageData(updatedInvoice, billingType);
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'erro desconhecido';
+
+      await this.createCollectionLog(
+        company.id,
+        invoice.id,
+        'PAYMENT_GENERATION_FAILED',
+        `Nao foi possivel gerar a cobranca na Efi: ${errorMessage}`,
+        'FAILED',
+      );
+
+      this.logger.warn(
+        `Fatura ${invoice.id}: falha ao gerar pagamento ${billingType}: ${errorMessage}`,
+      );
+      return null;
+    }
+  }
+
+  private resolveInvoiceBillingType(
+    invoice: ScheduledInvoice,
+    company: { preferredBillingMethod: BillingMethod | null },
+  ): BillingMethod {
+    if (this.isBillingMethod(invoice.billingType)) {
+      return invoice.billingType;
+    }
+
+    if (
+      !invoice.debtor.useGlobalBillingSettings &&
+      this.isBillingMethod(invoice.debtor.preferredBillingMethod)
+    ) {
+      return invoice.debtor.preferredBillingMethod;
+    }
+
+    return this.normalizeBillingMethod(company.preferredBillingMethod);
+  }
+
+  private isBillingMethod(value: unknown): value is BillingMethod {
+    return value === 'PIX' || value === 'BOLETO' || value === 'BOLIX';
+  }
+
+  private hasValidPaymentData(
+    invoice: {
+      gatewayId: string | null;
+      pixPayload: string | null;
+      efiTxid: string | null;
+      efiChargeId: string | null;
+      efiPixCopiaECola: string | null;
+      boletoLinhaDigitavel: string | null;
+      boletoLink: string | null;
+    },
+    billingType: BillingMethod,
+  ): boolean {
+    if (billingType === 'PIX') {
+      return Boolean(
+        invoice.gatewayId &&
+        invoice.efiTxid &&
+        (invoice.pixPayload || invoice.efiPixCopiaECola),
+      );
+    }
+
+    return Boolean(
+      invoice.gatewayId &&
+      invoice.efiChargeId &&
+      (invoice.boletoLink || invoice.boletoLinhaDigitavel),
+    );
+  }
+
+  private buildPaymentMessageData(
+    invoice: {
+      pixPayload: string | null;
+      efiPixCopiaECola: string | null;
+      boletoLinhaDigitavel: string | null;
+      boletoLink: string | null;
+      boletoPdf: string | null;
+    },
+    billingType: BillingMethod,
+  ): PaymentMessageData {
+    const pixCopiaECola = invoice.efiPixCopiaECola ?? invoice.pixPayload ?? '';
+    const boletoLink = invoice.boletoLink ?? '';
+    const boletoLinhaDigitavel = invoice.boletoLinhaDigitavel ?? '';
+    const boletoPdf = invoice.boletoPdf ?? '';
+
+    return {
+      billingType,
+      billingTypeLabel: this.getBillingMethodLabel(billingType),
+      paymentLink: this.resolvePaymentLink({
+        billingType,
+        pixCopiaECola,
+        boletoLinhaDigitavel,
+        boletoLink,
+        boletoPdf,
+      }),
+      pixCopiaECola,
+      boletoLinhaDigitavel,
+      boletoLink,
+      boletoPdf,
+    };
+  }
+
+  private resolvePaymentLink(params: {
+    billingType: BillingMethod;
+    pixCopiaECola: string;
+    boletoLinhaDigitavel: string;
+    boletoLink: string;
+    boletoPdf: string;
+  }): string {
+    const { billingType, pixCopiaECola, boletoLinhaDigitavel, boletoLink } =
+      params;
+
+    if (billingType === 'PIX') {
+      return pixCopiaECola;
+    }
+
+    if (billingType === 'BOLETO') {
+      return boletoLink || boletoLinhaDigitavel || params.boletoPdf;
+    }
+
+    return (
+      boletoLink || pixCopiaECola || boletoLinhaDigitavel || params.boletoPdf
+    );
+  }
+
+  private getBillingMethodLabel(billingType: BillingMethod): string {
+    const labels: Record<BillingMethod, string> = {
+      PIX: 'PIX',
+      BOLETO: 'Boleto',
+      BOLIX: 'Bolix',
+    };
+
+    return labels[billingType];
+  }
+
+  private async logQueuedMessages(jobs: SendMessageJob[]): Promise<void> {
+    await Promise.all(
+      jobs.map((job) =>
+        this.createCollectionLog(
+          job.companyId,
+          job.invoiceId,
+          'WHATSAPP_QUEUED',
+          `Mensagem de cobranca enfileirada para ${job.debtorName} (${job.phoneNumber}).`,
+          'QUEUED',
+        ),
+      ),
+    );
+  }
+
+  private async createCollectionLog(
+    companyId: string,
+    invoiceId: string,
+    actionType: string,
+    description: string,
+    status: string,
+  ): Promise<void> {
+    await this.prisma.collectionLog.create({
+      data: {
+        companyId,
+        invoiceId,
+        actionType,
+        description,
+        status,
+      },
+    });
   }
 
   private normalizeReminderDays(
@@ -516,6 +795,7 @@ export class BillingService {
       originalAmount: number;
       dueDate: Date;
       companyName: string;
+      paymentData: PaymentMessageData;
     },
   ): string {
     const valorFormatado = new Intl.NumberFormat('pt-BR', {
@@ -530,12 +810,93 @@ export class BillingService {
       timeZone: 'America/Sao_Paulo',
     }).format(params.dueDate);
 
-    const message = templateContent
-      .replace(/{debtorName}/g, params.debtorName)
-      .replace(/{originalAmount}/g, valorFormatado)
-      .replace(/{dueDate}/g, dataFormatada)
-      .replace(/{companyName}/g, params.companyName);
+    const replacements: Record<string, string> = {
+      debtorName: params.debtorName,
+      originalAmount: valorFormatado,
+      dueDate: dataFormatada,
+      companyName: params.companyName,
+      payment_link: params.paymentData.paymentLink,
+      pix_copia_e_cola: params.paymentData.pixCopiaECola,
+      boleto_linha_digitavel: params.paymentData.boletoLinhaDigitavel,
+      boleto_link: params.paymentData.boletoLink,
+      boleto_pdf: params.paymentData.boletoPdf,
+      billing_type: params.paymentData.billingType,
+      metodo_pagamento: params.paymentData.billingTypeLabel,
+      valor: valorFormatado,
+      data_vencimento: dataFormatada,
+      nome_devedor: params.debtorName,
+      nome_empresa: params.companyName,
+    };
 
-    return this.spintaxService.process(message);
+    const contentWithoutEmptyPaymentLines = this.removeEmptyVariableLines(
+      templateContent,
+      replacements,
+    );
+
+    const message = Object.entries(replacements).reduce(
+      (content, [key, value]) =>
+        content
+          .replace(new RegExp(`{{\\s*${key}\\s*}}`, 'g'), value)
+          .replace(new RegExp(`{${key}}`, 'g'), value),
+      contentWithoutEmptyPaymentLines,
+    );
+
+    const processedMessage = this.spintaxService
+      .process(message)
+      .replace(/\{\{\s*[a-zA-Z][a-zA-Z0-9_]*\s*\}\}/g, '')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    return this.ensurePaymentInstruction(processedMessage, params.paymentData);
+  }
+
+  private ensurePaymentInstruction(
+    message: string,
+    paymentData: PaymentMessageData,
+  ): string {
+    const paymentValues = [
+      paymentData.paymentLink,
+      paymentData.pixCopiaECola,
+      paymentData.boletoLinhaDigitavel,
+      paymentData.boletoLink,
+      paymentData.boletoPdf,
+    ].filter((value) => value !== '');
+
+    if (paymentValues.some((value) => message.includes(value))) {
+      return message;
+    }
+
+    return [
+      message,
+      '',
+      `Forma de pagamento: ${paymentData.billingTypeLabel}`,
+      `Acesse/pague por aqui: ${paymentData.paymentLink}`,
+    ]
+      .filter((line) => line !== '')
+      .join('\n');
+  }
+
+  private removeEmptyVariableLines(
+    content: string,
+    replacements: Record<string, string>,
+  ): string {
+    return content
+      .split('\n')
+      .filter((line) => !this.hasEmptyTemplateVariable(line, replacements))
+      .join('\n');
+  }
+
+  private hasEmptyTemplateVariable(
+    line: string,
+    replacements: Record<string, string>,
+  ): boolean {
+    const variables = Array.from(
+      line.matchAll(/\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g),
+    )
+      .map((match) => match[1])
+      .filter((variable): variable is string => typeof variable === 'string');
+
+    return variables.some((variable) => replacements[variable] === '');
   }
 }

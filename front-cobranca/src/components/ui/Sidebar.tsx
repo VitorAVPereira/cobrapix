@@ -29,6 +29,11 @@ const mainItems = [
     label: "Cobranças",
     icon: HandCoins,
   },
+  {
+    href: "/devedores-recorrentes",
+    label: "Recorrentes",
+    icon: CalendarClock,
+  },
 ];
 
 const settingsItems = [

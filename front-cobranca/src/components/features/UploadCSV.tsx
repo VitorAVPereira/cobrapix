@@ -9,6 +9,7 @@ export type PaymentMethod = "PIX" | "BOLETO" | "BOLIX";
 
 export interface ParsedDebtor {
   id?: string;
+  invoiceId?: string;
   name: string;
   document?: string;
   phone_number: string;
@@ -18,6 +19,12 @@ export interface ParsedDebtor {
   billing_type?: PaymentMethod;
   status?: string;
   debtorId?: string;
+  recurrence?: {
+    recurrenceId: string;
+    period: string;
+    dueDay: number;
+    status: "ACTIVE" | "PAUSED";
+  };
 }
 
 interface UploadCSVProps {

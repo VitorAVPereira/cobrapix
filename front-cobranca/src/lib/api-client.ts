@@ -54,6 +54,71 @@ export interface UpdateBillingSettingsInput {
 }
 
 export type BillingMethod = "PIX" | "BOLETO" | "BOLIX";
+export type RecurringInvoiceStatus = "ACTIVE" | "PAUSED";
+
+export interface InvoiceListItem {
+  id: string;
+  invoiceId: string;
+  name: string;
+  phone_number: string;
+  email?: string;
+  original_amount: number;
+  due_date: string;
+  status?: string;
+  debtorId: string;
+  gatewayId: string | null;
+  pixPayload: string | null;
+  billing_type: BillingMethod;
+  createdAt: string;
+  recurrence?: {
+    recurrenceId: string;
+    period: string;
+    dueDay: number;
+    status: RecurringInvoiceStatus;
+  };
+}
+
+export interface CreateInvoiceInput {
+  debtorId?: string;
+  name?: string;
+  phone_number?: string;
+  email?: string;
+  original_amount: number;
+  due_date?: string;
+  billing_type: BillingMethod;
+  recurring?: boolean;
+  due_day?: number;
+}
+
+export interface RecurringInvoice {
+  recurrenceId: string;
+  debtor: {
+    debtorId: string;
+    name: string;
+    phone_number: string;
+    email?: string;
+  };
+  amount: number;
+  billingType: BillingMethod;
+  dueDay: number;
+  status: RecurringInvoiceStatus;
+  nextDueDate: string | null;
+  lastGeneratedPeriod: string | null;
+  pendingInvoice: {
+    invoiceId: string;
+    dueDate: string;
+    amount: number;
+    status: string;
+  } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpdateRecurringInvoiceInput {
+  amount: number;
+  billingType: BillingMethod;
+  dueDay: number;
+}
 
 export interface DebtorBillingSettings {
   debtorId: string;
@@ -277,8 +342,8 @@ class ApiClient {
   }
 
   // Invoices
-  async getInvoices(): Promise<unknown> {
-    return this.fetch("/invoices");
+  async getInvoices(): Promise<InvoiceListItem[]> {
+    return this.fetch<InvoiceListItem[]>("/invoices");
   }
 
   async importInvoices(data: ReadonlyArray<unknown>): Promise<unknown> {
@@ -286,6 +351,53 @@ class ApiClient {
       method: "POST",
       body: JSON.stringify(data),
     });
+  }
+
+  async createInvoice(data: CreateInvoiceInput): Promise<InvoiceListItem> {
+    return this.fetch<InvoiceListItem>("/invoices", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async createDebtorInvoice(
+    debtorId: string,
+    data: Omit<CreateInvoiceInput, "debtorId" | "name" | "phone_number" | "email">,
+  ): Promise<InvoiceListItem> {
+    return this.fetch<InvoiceListItem>(`/invoices/debtors/${debtorId}/invoices`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getRecurringInvoices(): Promise<RecurringInvoice[]> {
+    return this.fetch<RecurringInvoice[]>("/invoices/recurring");
+  }
+
+  async updateRecurringInvoice(
+    recurrenceId: string,
+    data: UpdateRecurringInvoiceInput,
+  ): Promise<RecurringInvoice> {
+    return this.fetch<RecurringInvoice>(`/invoices/recurring/${recurrenceId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async pauseRecurringInvoice(recurrenceId: string): Promise<RecurringInvoice> {
+    return this.fetch<RecurringInvoice>(
+      `/invoices/recurring/${recurrenceId}/pause`,
+      { method: "POST" },
+    );
+  }
+
+  async activateRecurringInvoice(
+    recurrenceId: string,
+  ): Promise<RecurringInvoice> {
+    return this.fetch<RecurringInvoice>(
+      `/invoices/recurring/${recurrenceId}/activate`,
+      { method: "POST" },
+    );
   }
 
   // WhatsApp

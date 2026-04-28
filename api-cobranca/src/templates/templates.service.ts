@@ -109,7 +109,7 @@ export class TemplatesService {
 
   private validateTemplateContent(content: string): void {
     const variables = Array.from(
-      content.matchAll(/\{([a-zA-Z][a-zA-Z0-9]*)\}/g),
+      content.matchAll(/\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g),
     )
       .map((match) => match[1])
       .filter((variable): variable is string => typeof variable === 'string');
@@ -131,7 +131,7 @@ export class TemplatesService {
 
     throw new HttpException(
       `Variaveis nao suportadas: ${invalidVariables
-        .map((variable) => `{${variable}}`)
+        .map((variable) => `{{${variable}}}`)
         .join(', ')}.`,
       HttpStatus.BAD_REQUEST,
     );

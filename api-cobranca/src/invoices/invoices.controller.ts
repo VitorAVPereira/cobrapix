@@ -9,24 +9,16 @@ import {
   Put,
   UseGuards,
 } from '@nestjs/common';
-import {
-  ArrayMaxSize,
-  ArrayMinSize,
-  ArrayUnique,
-  IsArray,
-  IsBoolean,
-  IsIn,
-  IsInt,
-  IsNumber,
-  Max,
-  Min,
-  ValidateIf,
-} from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { DebtorSettingsResponse, InvoicesService } from './invoices.service';
-
-type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
+import {
+  BillingType,
+  CreateDebtorInvoiceDto,
+  CreateInvoiceDto,
+  UpdateDebtorSettingsDto,
+  UpdateRecurringInvoiceDto,
+} from './dto/invoice.dto';
 
 interface AuthenticatedUser {
   companyId: string;
@@ -50,47 +42,6 @@ interface ValidImportRow {
   billing_type: BillingType;
 }
 
-class UpdateDebtorSettingsDto {
-  @IsBoolean()
-  useGlobalBillingSettings!: boolean;
-
-  @ValidateIf((dto: UpdateDebtorSettingsDto) => !dto.useGlobalBillingSettings)
-  @IsIn(['PIX', 'BOLETO', 'BOLIX'])
-  preferredBillingMethod?: BillingType;
-
-  @ValidateIf((dto: UpdateDebtorSettingsDto) => !dto.useGlobalBillingSettings)
-  @IsArray()
-  @ArrayMinSize(1)
-  @ArrayMaxSize(12)
-  @ArrayUnique()
-  @IsInt({ each: true })
-  @Min(-30, { each: true })
-  @Max(365, { each: true })
-  collectionReminderDays?: number[];
-
-  @ValidateIf((dto: UpdateDebtorSettingsDto) => !dto.useGlobalBillingSettings)
-  @IsBoolean()
-  autoDiscountEnabled?: boolean;
-
-  @ValidateIf(
-    (dto: UpdateDebtorSettingsDto) =>
-      !dto.useGlobalBillingSettings && dto.autoDiscountEnabled === true,
-  )
-  @IsInt()
-  @Min(0)
-  @Max(365)
-  autoDiscountDaysAfterDue?: number;
-
-  @ValidateIf(
-    (dto: UpdateDebtorSettingsDto) =>
-      !dto.useGlobalBillingSettings && dto.autoDiscountEnabled === true,
-  )
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0.01)
-  @Max(100)
-  autoDiscountPercentage?: number;
-}
-
 @Controller('invoices')
 @UseGuards(JwtAuthGuard)
 export class InvoicesController {
@@ -99,6 +50,152 @@ export class InvoicesController {
   @Get()
   async findAll(@GetUser() user: AuthenticatedUser): Promise<unknown> {
     return this.invoicesService.findAll(user.companyId);
+  }
+
+  @Post()
+  async createInvoice(
+    @GetUser() user: AuthenticatedUser,
+    @Body() dto: CreateInvoiceDto,
+  ): Promise<unknown> {
+    if (dto.debtorId && !this.isUuid(dto.debtorId)) {
+      throw new HttpException('Devedor invalido.', HttpStatus.BAD_REQUEST);
+    }
+
+    try {
+      return await this.invoicesService.createInvoice(user.companyId, {
+        debtorId: dto.debtorId,
+        name: dto.name,
+        phone_number: dto.phone_number,
+        email: dto.email,
+        original_amount: dto.original_amount,
+        due_date: dto.due_date,
+        billing_type: dto.billing_type,
+        recurring: dto.recurring,
+        due_day: dto.due_day,
+      });
+    } catch (error) {
+      throw new HttpException(
+        error instanceof Error ? error.message : 'Nao foi possivel criar a fatura.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+  }
+
+  @Get('recurring')
+  async listRecurringInvoices(
+    @GetUser() user: AuthenticatedUser,
+  ): Promise<unknown> {
+    return this.invoicesService.listRecurringInvoices(user.companyId);
+  }
+
+  @Put('recurring/:recurringInvoiceId')
+  async updateRecurringInvoice(
+    @GetUser() user: AuthenticatedUser,
+    @Param('recurringInvoiceId') recurringInvoiceId: string,
+    @Body() dto: UpdateRecurringInvoiceDto,
+  ): Promise<unknown> {
+    if (!this.isUuid(recurringInvoiceId)) {
+      throw new HttpException('Recorrencia invalida.', HttpStatus.BAD_REQUEST);
+    }
+
+    const recurrence = await this.invoicesService.updateRecurringInvoice(
+      user.companyId,
+      recurringInvoiceId,
+      {
+        amount: dto.amount,
+        billingType: dto.billingType,
+        dueDay: dto.dueDay,
+      },
+    );
+
+    if (!recurrence) {
+      throw new HttpException(
+        'Recorrencia nao encontrada.',
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    return recurrence;
+  }
+
+  @Post('recurring/:recurringInvoiceId/pause')
+  async pauseRecurringInvoice(
+    @GetUser() user: AuthenticatedUser,
+    @Param('recurringInvoiceId') recurringInvoiceId: string,
+  ): Promise<unknown> {
+    if (!this.isUuid(recurringInvoiceId)) {
+      throw new HttpException('Recorrencia invalida.', HttpStatus.BAD_REQUEST);
+    }
+
+    const recurrence = await this.invoicesService.updateRecurringStatus(
+      user.companyId,
+      recurringInvoiceId,
+      'PAUSED',
+    );
+
+    if (!recurrence) {
+      throw new HttpException(
+        'Recorrencia nao encontrada.',
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    return recurrence;
+  }
+
+  @Post('recurring/:recurringInvoiceId/activate')
+  async activateRecurringInvoice(
+    @GetUser() user: AuthenticatedUser,
+    @Param('recurringInvoiceId') recurringInvoiceId: string,
+  ): Promise<unknown> {
+    if (!this.isUuid(recurringInvoiceId)) {
+      throw new HttpException('Recorrencia invalida.', HttpStatus.BAD_REQUEST);
+    }
+
+    const recurrence = await this.invoicesService.updateRecurringStatus(
+      user.companyId,
+      recurringInvoiceId,
+      'ACTIVE',
+    );
+
+    if (!recurrence) {
+      throw new HttpException(
+        'Recorrencia nao encontrada.',
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    return recurrence;
+  }
+
+  @Post('debtors/:debtorId/invoices')
+  async createDebtorInvoice(
+    @GetUser() user: AuthenticatedUser,
+    @Param('debtorId') debtorId: string,
+    @Body() dto: CreateDebtorInvoiceDto,
+  ): Promise<unknown> {
+    if (!this.isUuid(debtorId)) {
+      throw new HttpException('Devedor invalido.', HttpStatus.BAD_REQUEST);
+    }
+
+    try {
+      return await this.invoicesService.createDebtorInvoice(
+        user.companyId,
+        debtorId,
+        {
+          original_amount: dto.original_amount,
+          due_date: dto.due_date,
+          billing_type: dto.billing_type,
+          recurring: dto.recurring,
+          due_day: dto.due_day,
+        },
+      );
+    } catch (error) {
+      throw new HttpException(
+        error instanceof Error ? error.message : 'Nao foi possivel criar a fatura.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
   }
 
   @Get('debtors/:debtorId/settings')

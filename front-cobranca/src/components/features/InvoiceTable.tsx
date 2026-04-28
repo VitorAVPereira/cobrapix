@@ -17,15 +17,21 @@ import {
   Clock,
   CheckCircle2,
   Ban,
+  PlusCircle,
   SlidersHorizontal,
 } from "lucide-react";
 
 interface InvoiceTableProps {
   data: ParsedDebtor[];
   onConfigureDebtor: (debtor: ParsedDebtor) => void;
+  onAddInvoice: (debtor: ParsedDebtor) => void;
 }
 
-export function InvoiceTable({ data, onConfigureDebtor }: InvoiceTableProps) {
+export function InvoiceTable({
+  data,
+  onConfigureDebtor,
+  onAddInvoice,
+}: InvoiceTableProps) {
   const checkStatus = (row: ParsedDebtor) => {
     if (row.status === "PAID") {
       return {
@@ -186,9 +192,18 @@ export function InvoiceTable({ data, onConfigureDebtor }: InvoiceTableProps) {
     },
     {
       id: "actions",
-      header: () => <span className="block text-center">Configuracoes</span>,
+      header: () => <span className="block text-center">Acoes</span>,
       cell: (info) => (
-        <div className="flex justify-center">
+        <div className="flex justify-center gap-2">
+          <button
+            type="button"
+            onClick={() => onAddInvoice(info.row.original)}
+            disabled={!info.row.original.debtorId}
+            className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <PlusCircle size={14} />
+            Fatura
+          </button>
           <button
             type="button"
             onClick={() => onConfigureDebtor(info.row.original)}

@@ -32,6 +32,11 @@ enum BillingMethod {
   BOLIX
 }
 
+enum RecurringInvoiceStatus {
+  ACTIVE
+  PAUSED
+}
+
 model Company {
   id                           String         @id @default(uuid())
   corporateName                String
@@ -69,6 +74,7 @@ model Company {
   users               User[]
   debtors             Debtor[]
   invoices            Invoice[]
+  recurringInvoices   RecurringInvoice[]
   collectionLogs      CollectionLog[]
   subscription        Subscription?
   paymentGateway      GatewayAccount?
@@ -138,6 +144,7 @@ model Debtor {
   preferredBillingMethod       BillingMethod?
 
   invoices Invoice[]
+  recurringInvoices RecurringInvoice[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -152,6 +159,8 @@ model Invoice {
   company   Company @relation(fields: [companyId], references: [id])
   debtorId  String
   debtor    Debtor  @relation(fields: [debtorId], references: [id])
+  recurringInvoiceId String?
+  recurringInvoice   RecurringInvoice? @relation(fields: [recurringInvoiceId], references: [id])
 
   originalAmount       Decimal       @db.Decimal(10, 2)
   dueDate              DateTime
@@ -171,6 +180,7 @@ model Invoice {
   gatewayStatusRaw     String?
   discountApplied      Decimal?      @db.Decimal(10, 2)
   billingType          String        @default("PIX")
+  recurrencePeriod     String?
 
   collectionLogs CollectionLog[]
 
@@ -179,6 +189,32 @@ model Invoice {
 
   @@index([companyId])
   @@index([debtorId])
+  @@index([recurringInvoiceId])
+  @@unique([recurringInvoiceId, recurrencePeriod])
+}
+
+model RecurringInvoice {
+  id        String  @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
+  debtorId  String
+  debtor    Debtor  @relation(fields: [debtorId], references: [id])
+
+  amount              Decimal                @db.Decimal(10, 2)
+  billingType         BillingMethod
+  dueDay              Int
+  status              RecurringInvoiceStatus @default(ACTIVE)
+  lastGeneratedPeriod String?
+  nextDueDate         DateTime?
+
+  invoices Invoice[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([debtorId])
+  @@index([companyId, status])
 }
 
 model CollectionLog {

@@ -19,6 +19,7 @@ import type {
   ParsedDebtor,
   PaymentMethod,
 } from "@/components/features/UploadCSV";
+import type { BillingSettings } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 
 interface ApiErrorData {
@@ -33,6 +34,8 @@ interface ManualChargeForm {
   amount: string;
   dueDate: string;
   billingType: PaymentMethod;
+  recurring: boolean;
+  dueDay: string;
 }
 
 const initialManualChargeForm: ManualChargeForm = {
@@ -42,6 +45,8 @@ const initialManualChargeForm: ManualChargeForm = {
   amount: "",
   dueDate: "",
   billingType: "PIX",
+  recurring: false,
+  dueDay: "10",
 };
 
 function isParsedDebtorArray(data: unknown): data is ParsedDebtor[] {
@@ -88,9 +93,14 @@ export default function CobrancasPage() {
   const apiClient = useApiClient();
   const [debtors, setDebtors] = useState<ParsedDebtor[]>([]);
   const [selectedDebtor, setSelectedDebtor] = useState<ParsedDebtor | null>(null);
+  const [invoiceTargetDebtor, setInvoiceTargetDebtor] =
+    useState<ParsedDebtor | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isUploadingCSV, setIsUploadingCSV] = useState(false);
+  const [isSavingInvoice, setIsSavingInvoice] = useState(false);
+  const [billingSettings, setBillingSettings] =
+    useState<BillingSettings | null>(null);
   const [manualForm, setManualForm] = useState<ManualChargeForm>(
     initialManualChargeForm,
   );
@@ -117,6 +127,19 @@ export default function CobrancasPage() {
   useEffect(() => {
     void fetchInvoices();
   }, [fetchInvoices]);
+
+  useEffect(() => {
+    async function fetchBillingSettings(): Promise<void> {
+      try {
+        const settings = await apiClient.getBillingSettings();
+        setBillingSettings(settings);
+      } catch {
+        setBillingSettings(null);
+      }
+    }
+
+    void fetchBillingSettings();
+  }, [apiClient]);
 
   const filteredDebtors = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -164,6 +187,7 @@ export default function CobrancasPage() {
 
   function closeManualModal(): void {
     setIsModalOpen(false);
+    setInvoiceTargetDebtor(null);
     setManualForm(initialManualChargeForm);
   }
 
@@ -176,11 +200,81 @@ export default function CobrancasPage() {
     setSelectedDebtor(debtor);
   }
 
-  function handleManualSubmit(event: FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
-    console.log("Nova cobranca manual:", manualForm);
-    closeManualModal();
+  function openInvoiceModal(debtor: ParsedDebtor): void {
+    if (!debtor.debtorId) {
+      setErrorMsg("Nao foi possivel identificar o devedor desta cobranca.");
+      return;
+    }
+
+    setInvoiceTargetDebtor(debtor);
+    setManualForm({
+      ...initialManualChargeForm,
+      billingType: debtor.billing_type ?? "PIX",
+    });
+    setIsModalOpen(true);
   }
+
+  async function handleManualSubmit(
+    event: FormEvent<HTMLFormElement>,
+  ): Promise<void> {
+    event.preventDefault();
+    setErrorMsg(null);
+    setIsSavingInvoice(true);
+
+    const amount = Number(manualForm.amount);
+    const dueDay = Number(manualForm.dueDay);
+    const phoneNumber = manualForm.whatsapp.replace(/\D/g, "");
+
+    try {
+      if (!Number.isFinite(amount) || amount <= 0) {
+        throw new Error("Informe um valor de fatura valido.");
+      }
+
+      if (
+        manualForm.recurring &&
+        (!Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31)
+      ) {
+        throw new Error("Informe um dia de vencimento entre 1 e 31.");
+      }
+
+      if (!manualForm.recurring && !manualForm.dueDate) {
+        throw new Error("Informe a data de vencimento.");
+      }
+
+      if (invoiceTargetDebtor?.debtorId) {
+        await apiClient.createDebtorInvoice(invoiceTargetDebtor.debtorId, {
+          original_amount: amount,
+          due_date: manualForm.recurring ? undefined : manualForm.dueDate,
+          billing_type: manualForm.billingType,
+          recurring: manualForm.recurring,
+          due_day: manualForm.recurring ? dueDay : undefined,
+        });
+      } else {
+        await apiClient.createInvoice({
+          name: manualForm.customerName.trim(),
+          email: manualForm.email.trim(),
+          phone_number: phoneNumber,
+          original_amount: amount,
+          due_date: manualForm.recurring ? undefined : manualForm.dueDate,
+          billing_type: manualForm.billingType,
+          recurring: manualForm.recurring,
+          due_day: manualForm.recurring ? dueDay : undefined,
+        });
+      }
+
+      closeManualModal();
+      await fetchInvoices();
+    } catch (error: unknown) {
+      setErrorMsg(getErrorMessage(error, "Nao foi possivel salvar a fatura."));
+    } finally {
+      setIsSavingInvoice(false);
+    }
+  }
+
+  const paymentMethods: PaymentMethod[] = ["PIX", "BOLETO", "BOLIX"];
+  const modalTitle = invoiceTargetDebtor
+    ? `Nova fatura para ${invoiceTargetDebtor.name}`
+    : "Adicionar cobrança manual";
 
   return (
     <main className="min-h-full bg-slate-50">
@@ -225,7 +319,11 @@ export default function CobrancasPage() {
 
             <button
               type="button"
-              onClick={() => setIsModalOpen(true)}
+              onClick={() => {
+                setInvoiceTargetDebtor(null);
+                setManualForm(initialManualChargeForm);
+                setIsModalOpen(true);
+              }}
               className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:bg-emerald-700"
             >
               <Plus size={17} />
@@ -300,6 +398,7 @@ export default function CobrancasPage() {
                 <InvoiceTable
                   data={filteredDebtors}
                   onConfigureDebtor={openDebtorSettings}
+                  onAddInvoice={openInvoiceModal}
                 />
 
                 {searchQuery && filteredDebtors.length === 0 && (
@@ -332,10 +431,12 @@ export default function CobrancasPage() {
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
               <div>
                 <h2 className="font-semibold text-slate-900">
-                  Adicionar cobrança manual
+                  {modalTitle}
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Preencha os dados principais da nova fatura.
+                  {invoiceTargetDebtor
+                    ? "Preencha os dados da nova fatura deste devedor."
+                    : "Preencha os dados principais da nova fatura."}
                 </p>
               </div>
 
@@ -351,50 +452,54 @@ export default function CobrancasPage() {
 
             <form onSubmit={handleManualSubmit}>
               <div className="grid gap-4 px-5 py-5 sm:grid-cols-2">
-                <label className="flex flex-col gap-1.5 sm:col-span-2">
-                  <span className="text-xs font-semibold uppercase text-slate-500">
-                    Nome do Cliente
-                  </span>
-                  <input
-                    required
-                    type="text"
-                    value={manualForm.customerName}
-                    onChange={(event) =>
-                      updateManualForm("customerName", event.target.value)
-                    }
-                    className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                  />
-                </label>
+                {!invoiceTargetDebtor && (
+                  <>
+                    <label className="flex flex-col gap-1.5 sm:col-span-2">
+                      <span className="text-xs font-semibold uppercase text-slate-500">
+                        Nome do Devedor
+                      </span>
+                      <input
+                        required
+                        type="text"
+                        value={manualForm.customerName}
+                        onChange={(event) =>
+                          updateManualForm("customerName", event.target.value)
+                        }
+                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                      />
+                    </label>
 
-                <label className="flex flex-col gap-1.5 sm:col-span-2">
-                  <span className="text-xs font-semibold uppercase text-slate-500">
-                    Email
-                  </span>
-                  <input
-                    required
-                    type="email"
-                    value={manualForm.email}
-                    onChange={(event) =>
-                      updateManualForm("email", event.target.value)
-                    }
-                    className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                  />
-                </label>
+                    <label className="flex flex-col gap-1.5 sm:col-span-2">
+                      <span className="text-xs font-semibold uppercase text-slate-500">
+                        Email
+                      </span>
+                      <input
+                        required
+                        type="email"
+                        value={manualForm.email}
+                        onChange={(event) =>
+                          updateManualForm("email", event.target.value)
+                        }
+                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                      />
+                    </label>
 
-                <label className="flex flex-col gap-1.5">
-                  <span className="text-xs font-semibold uppercase text-slate-500">
-                    WhatsApp (com DDD)
-                  </span>
-                  <input
-                    required
-                    type="tel"
-                    value={manualForm.whatsapp}
-                    onChange={(event) =>
-                      updateManualForm("whatsapp", event.target.value)
-                    }
-                    className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                  />
-                </label>
+                    <label className="flex flex-col gap-1.5">
+                      <span className="text-xs font-semibold uppercase text-slate-500">
+                        WhatsApp (com DDD)
+                      </span>
+                      <input
+                        required
+                        type="tel"
+                        value={manualForm.whatsapp}
+                        onChange={(event) =>
+                          updateManualForm("whatsapp", event.target.value)
+                        }
+                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                      />
+                    </label>
+                  </>
+                )}
 
                 <label className="flex flex-col gap-1.5">
                   <span className="text-xs font-semibold uppercase text-slate-500">
@@ -411,9 +516,23 @@ export default function CobrancasPage() {
                     }
                     className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                   >
-                    <option value="PIX">PIX</option>
-                    <option value="BOLETO">Boleto</option>
-                    <option value="BOLIX">Bolix</option>
+                    {paymentMethods.map((method) => {
+                      const tariff = billingSettings?.tariffs[method];
+                      const label =
+                        method === "BOLETO"
+                          ? "Boleto"
+                          : method === "BOLIX"
+                            ? "Bolix"
+                            : "PIX";
+
+                      return (
+                        <option key={method} value={method}>
+                          {tariff
+                            ? `${label} - ${tariff.combinedLabel}`
+                            : label}
+                        </option>
+                      );
+                    })}
                   </select>
                 </label>
 
@@ -434,16 +553,41 @@ export default function CobrancasPage() {
                   />
                 </label>
 
+                <label className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 sm:col-span-2">
+                  <input
+                    type="checkbox"
+                    checked={manualForm.recurring}
+                    onChange={(event) =>
+                      updateManualForm("recurring", event.target.checked)
+                    }
+                    className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span className="text-sm font-medium text-slate-700">
+                    Cobrança recorrente mensal
+                  </span>
+                </label>
+
                 <label className="flex flex-col gap-1.5 sm:col-span-2">
                   <span className="text-xs font-semibold uppercase text-slate-500">
-                    Data de Vencimento
+                    {manualForm.recurring
+                      ? "Dia de Vencimento"
+                      : "Data de Vencimento"}
                   </span>
                   <input
                     required
-                    type="date"
-                    value={manualForm.dueDate}
+                    type={manualForm.recurring ? "number" : "date"}
+                    min={manualForm.recurring ? "1" : undefined}
+                    max={manualForm.recurring ? "31" : undefined}
+                    value={
+                      manualForm.recurring
+                        ? manualForm.dueDay
+                        : manualForm.dueDate
+                    }
                     onChange={(event) =>
-                      updateManualForm("dueDate", event.target.value)
+                      updateManualForm(
+                        manualForm.recurring ? "dueDay" : "dueDate",
+                        event.target.value,
+                      )
                     }
                     className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                   />
@@ -460,8 +604,10 @@ export default function CobrancasPage() {
                 </button>
                 <button
                   type="submit"
-                  className="inline-flex items-center justify-center rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:bg-emerald-700"
+                  disabled={isSavingInvoice}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
+                  {isSavingInvoice && <Loader2 size={16} className="animate-spin" />}
                   Salvar Cobrança
                 </button>
               </div>
