@@ -50,6 +50,7 @@ interface InvoiceListItem {
   gatewayId: string | null;
   pixPayload: string | null;
   billing_type: string;
+  payment: InvoicePaymentSummary;
   createdAt: string;
   recurrence?: {
     recurrenceId: string;
@@ -57,6 +58,17 @@ interface InvoiceListItem {
     dueDay: number;
     status: RecurringInvoiceStatus;
   };
+}
+
+interface InvoicePaymentSummary {
+  generated: boolean;
+  method: BillingMethod;
+  pixCopyPaste: string | null;
+  boletoLine: string | null;
+  boletoUrl: string | null;
+  boletoPdf: string | null;
+  paymentLink: string | null;
+  expiresAt: string | null;
 }
 
 interface CreateInvoiceInput {
@@ -114,6 +126,13 @@ interface InvoiceWithRelations {
   status: string;
   gatewayId: string | null;
   pixPayload: string | null;
+  pixExpiresAt: Date | null;
+  efiTxid: string | null;
+  efiChargeId: string | null;
+  efiPixCopiaECola: string | null;
+  boletoLinhaDigitavel: string | null;
+  boletoLink: string | null;
+  boletoPdf: string | null;
   billingType: string;
   createdAt: Date;
   recurringInvoiceId: string | null;
@@ -674,6 +693,7 @@ export class InvoicesService {
       gatewayId: invoice.gatewayId,
       pixPayload: invoice.pixPayload,
       billing_type: invoice.billingType,
+      payment: this.buildInvoicePaymentSummary(invoice),
       createdAt: invoice.createdAt.toISOString(),
       recurrence:
         invoice.recurringInvoiceId && invoice.recurrencePeriod
@@ -687,6 +707,81 @@ export class InvoicesService {
             }
           : undefined,
     };
+  }
+
+  private buildInvoicePaymentSummary(
+    invoice: InvoiceWithRelations,
+  ): InvoicePaymentSummary {
+    const method = this.normalizeBillingMethod(invoice.billingType);
+    const pixCopyPaste = invoice.efiPixCopiaECola ?? invoice.pixPayload;
+    const boletoUrl = invoice.boletoLink ?? invoice.boletoPdf;
+    const generated = this.hasUsablePaymentData({
+      method,
+      pixCopyPaste,
+      boletoLine: invoice.boletoLinhaDigitavel,
+      boletoUrl,
+    });
+
+    return {
+      generated,
+      method,
+      pixCopyPaste,
+      boletoLine: invoice.boletoLinhaDigitavel,
+      boletoUrl,
+      boletoPdf: invoice.boletoPdf,
+      paymentLink: this.resolveInvoicePaymentLink({
+        method,
+        pixCopyPaste,
+        boletoLine: invoice.boletoLinhaDigitavel,
+        boletoUrl,
+        boletoPdf: invoice.boletoPdf,
+      }),
+      expiresAt: invoice.pixExpiresAt
+        ? invoice.pixExpiresAt.toISOString()
+        : null,
+    };
+  }
+
+  private resolveInvoicePaymentLink(params: {
+    method: BillingMethod;
+    pixCopyPaste: string | null;
+    boletoLine: string | null;
+    boletoUrl: string | null;
+    boletoPdf: string | null;
+  }): string | null {
+    if (params.method === 'PIX') {
+      return params.pixCopyPaste;
+    }
+
+    if (params.method === 'BOLETO') {
+      return params.boletoUrl ?? params.boletoLine ?? params.boletoPdf;
+    }
+
+    return (
+      params.boletoUrl ??
+      params.pixCopyPaste ??
+      params.boletoLine ??
+      params.boletoPdf
+    );
+  }
+
+  private hasUsablePaymentData(params: {
+    method: BillingMethod;
+    pixCopyPaste: string | null;
+    boletoLine: string | null;
+    boletoUrl: string | null;
+  }): boolean {
+    if (params.method === 'PIX') {
+      return Boolean(params.pixCopyPaste);
+    }
+
+    if (params.method === 'BOLETO') {
+      return Boolean(params.boletoUrl || params.boletoLine);
+    }
+
+    return Boolean(
+      params.pixCopyPaste || params.boletoUrl || params.boletoLine,
+    );
   }
 
   private mapRecurringInvoiceListItem(
@@ -738,7 +833,10 @@ export class InvoicesService {
     return currentMonthDate;
   }
 
-  private computeNextMonthlyDueDate(currentDueDate: Date, dueDay: number): Date {
+  private computeNextMonthlyDueDate(
+    currentDueDate: Date,
+    dueDay: number,
+  ): Date {
     return this.getMonthlyDueDate(
       currentDueDate.getUTCFullYear(),
       currentDueDate.getUTCMonth() + 1,
@@ -817,9 +915,7 @@ export class InvoicesService {
     return normalizedDays.length > 0 ? normalizedDays : [0];
   }
 
-  private normalizeBillingMethod(
-    value: BillingMethod | null | undefined,
-  ): BillingMethod {
+  private normalizeBillingMethod(value: unknown): BillingMethod {
     if (value === 'PIX' || value === 'BOLETO' || value === 'BOLIX') {
       return value;
     }

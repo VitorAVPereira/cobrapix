@@ -75,7 +75,9 @@ export class InvoicesController {
       });
     } catch (error) {
       throw new HttpException(
-        error instanceof Error ? error.message : 'Nao foi possivel criar a fatura.',
+        error instanceof Error
+          ? error.message
+          : 'Nao foi possivel criar a fatura.',
         HttpStatus.BAD_REQUEST,
       );
     }
@@ -192,7 +194,9 @@ export class InvoicesController {
       );
     } catch (error) {
       throw new HttpException(
-        error instanceof Error ? error.message : 'Nao foi possivel criar a fatura.',
+        error instanceof Error
+          ? error.message
+          : 'Nao foi possivel criar a fatura.',
         HttpStatus.BAD_REQUEST,
       );
     }

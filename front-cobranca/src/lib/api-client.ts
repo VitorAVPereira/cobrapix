@@ -14,14 +14,15 @@ interface ApiErrorBody {
   message?: string | string[];
 }
 
-interface BillingResponse {
+export interface BillingRunSummary {
+  total: number;
+  queued: number;
+  skipped: number;
+}
+
+export interface BillingResponse {
   success: boolean;
-  summary: {
-    total: number;
-    sent: number;
-    failed: number;
-    skipped: number;
-  };
+  summary: BillingRunSummary;
   message: string;
 }
 
@@ -56,6 +57,17 @@ export interface UpdateBillingSettingsInput {
 export type BillingMethod = "PIX" | "BOLETO" | "BOLIX";
 export type RecurringInvoiceStatus = "ACTIVE" | "PAUSED";
 
+export interface InvoicePaymentSummary {
+  generated: boolean;
+  method: BillingMethod;
+  pixCopyPaste: string | null;
+  boletoLine: string | null;
+  boletoUrl: string | null;
+  boletoPdf: string | null;
+  paymentLink: string | null;
+  expiresAt: string | null;
+}
+
 export interface InvoiceListItem {
   id: string;
   invoiceId: string;
@@ -69,6 +81,7 @@ export interface InvoiceListItem {
   gatewayId: string | null;
   pixPayload: string | null;
   billing_type: BillingMethod;
+  payment: InvoicePaymentSummary;
   createdAt: string;
   recurrence?: {
     recurrenceId: string;
@@ -362,12 +375,18 @@ class ApiClient {
 
   async createDebtorInvoice(
     debtorId: string,
-    data: Omit<CreateInvoiceInput, "debtorId" | "name" | "phone_number" | "email">,
+    data: Omit<
+      CreateInvoiceInput,
+      "debtorId" | "name" | "phone_number" | "email"
+    >,
   ): Promise<InvoiceListItem> {
-    return this.fetch<InvoiceListItem>(`/invoices/debtors/${debtorId}/invoices`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
+    return this.fetch<InvoiceListItem>(
+      `/invoices/debtors/${debtorId}/invoices`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    );
   }
 
   async getRecurringInvoices(): Promise<RecurringInvoice[]> {

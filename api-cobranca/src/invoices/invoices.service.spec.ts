@@ -30,6 +30,13 @@ function buildInvoice(overrides: {
     status: 'PENDING',
     gatewayId: null,
     pixPayload: null,
+    pixExpiresAt: null,
+    efiTxid: null,
+    efiChargeId: null,
+    efiPixCopiaECola: null,
+    boletoLinhaDigitavel: null,
+    boletoLink: null,
+    boletoPdf: null,
     billingType: 'PIX',
     createdAt: new Date('2026-04-25T12:00:00.000Z'),
     updatedAt: new Date('2026-04-25T12:00:00.000Z'),
@@ -51,21 +58,24 @@ describe('InvoicesService', () => {
 
   it('cria fatura avulsa para devedor existente respeitando companyId', async () => {
     const invoice = buildInvoice({});
-    const transaction = jest.fn(async (callback: (tx: {
-      debtor: { findFirst: jest.Mock };
-      invoice: { create: jest.Mock };
-    }) => Promise<unknown>) =>
-      callback({
-        debtor: {
-          findFirst: jest.fn().mockResolvedValue({
-            id: 'debtor-1',
-            name: 'Maria Silva',
-          }),
-        },
-        invoice: {
-          create: jest.fn().mockResolvedValue(invoice),
-        },
-      }),
+    const transaction = jest.fn(
+      async (
+        callback: (tx: {
+          debtor: { findFirst: jest.Mock };
+          invoice: { create: jest.Mock };
+        }) => Promise<unknown>,
+      ) =>
+        callback({
+          debtor: {
+            findFirst: jest.fn().mockResolvedValue({
+              id: 'debtor-1',
+              name: 'Maria Silva',
+            }),
+          },
+          invoice: {
+            create: jest.fn().mockResolvedValue(invoice),
+          },
+        }),
     );
     const prisma = {
       $transaction: transaction,
@@ -89,14 +99,17 @@ describe('InvoicesService', () => {
     const debtorUpsert = jest.fn().mockResolvedValue({ id: 'debtor-new' });
     const invoiceCreate = jest.fn().mockResolvedValue(invoice);
     const prisma = {
-      $transaction: jest.fn(async (callback: (tx: {
-        debtor: { upsert: typeof debtorUpsert };
-        invoice: { create: typeof invoiceCreate };
-      }) => Promise<unknown>) =>
-        callback({
-          debtor: { upsert: debtorUpsert },
-          invoice: { create: invoiceCreate },
-        }),
+      $transaction: jest.fn(
+        async (
+          callback: (tx: {
+            debtor: { upsert: typeof debtorUpsert };
+            invoice: { create: typeof invoiceCreate };
+          }) => Promise<unknown>,
+        ) =>
+          callback({
+            debtor: { upsert: debtorUpsert },
+            invoice: { create: invoiceCreate },
+          }),
       ),
     } as unknown as PrismaService;
 
@@ -125,7 +138,7 @@ describe('InvoicesService', () => {
         data: expect.objectContaining({
           companyId: 'company-1',
           debtorId: 'debtor-new',
-        }),
+        }) as unknown,
       }),
     );
   });
@@ -201,7 +214,7 @@ describe('InvoicesService', () => {
           companyId: 'company-1',
           dueDate: new Date('2026-04-30T12:00:00.000Z'),
           recurrencePeriod: '2026-04',
-        }),
+        }) as unknown,
       }),
     );
   });

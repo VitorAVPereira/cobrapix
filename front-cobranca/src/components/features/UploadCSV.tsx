@@ -19,6 +19,16 @@ export interface ParsedDebtor {
   billing_type?: PaymentMethod;
   status?: string;
   debtorId?: string;
+  payment?: {
+    generated: boolean;
+    method: PaymentMethod;
+    pixCopyPaste: string | null;
+    boletoLine: string | null;
+    boletoUrl: string | null;
+    boletoPdf: string | null;
+    paymentLink: string | null;
+    expiresAt: string | null;
+  };
   recurrence?: {
     recurrenceId: string;
     period: string;
@@ -133,8 +143,7 @@ export function UploadCSV({ onUploadSuccess }: UploadCSVProps) {
                 );
               }
 
-              const formaPagamento =
-                normalizePaymentMethod(formaPagamentoRaw);
+              const formaPagamento = normalizePaymentMethod(formaPagamentoRaw);
               if (!formaPagamento) {
                 throw new Error(
                   `Linha ${index + 2}: Forma de pagamento invalida. Use PIX, BOLETO ou BOLIX.`,

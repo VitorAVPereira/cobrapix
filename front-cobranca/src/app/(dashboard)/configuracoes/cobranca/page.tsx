@@ -1,16 +1,25 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   CalendarClock,
   CheckCircle2,
   CirclePlus,
   CreditCard,
   Loader2,
+  MessageCircle,
+  Play,
+  RefreshCcw,
   Save,
   Trash2,
 } from "lucide-react";
-import type { BillingMethod, BillingSettings } from "@/lib/api-client";
+import type {
+  BillingMethod,
+  BillingRunSummary,
+  BillingSettings,
+} from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 
 const DEFAULT_OFFSETS = [-2, 0, 2, 7];
@@ -18,6 +27,8 @@ const QUICK_OFFSETS = [-7, -3, -2, -1, 0, 1, 2, 3, 7, 15, 30];
 const MIN_OFFSET = -30;
 const MAX_OFFSET = 365;
 const BILLING_METHODS: BillingMethod[] = ["PIX", "BOLETO", "BOLIX"];
+
+type WhatsAppConnectionStatus = "checking" | "connected" | "disconnected";
 
 function normalizeOffsets(offsets: number[]): number[] {
   return Array.from(
@@ -50,12 +61,35 @@ function getMethodDescription(method: BillingMethod): string {
   return "Cobrança Bolix com tarifa fixa da Efí somada à taxa fixa da plataforma.";
 }
 
-function getErrorMessage(error: unknown): string {
+function getErrorMessage(
+  error: unknown,
+  fallback = "Nao foi possivel salvar a configuracao.",
+): string {
   if (error instanceof Error) {
     return error.message;
   }
 
-  return "Nao foi possivel salvar a configuracao.";
+  return fallback;
+}
+
+function isWhatsappConnected(data: { state?: string; dbStatus?: string }): boolean {
+  const state = data.state?.toLowerCase();
+  const dbStatus = data.dbStatus?.toUpperCase();
+
+  return state === "open" || state === "connected" || dbStatus === "CONNECTED";
+}
+
+function getBillingRunErrorMessage(error: unknown): string {
+  const message = getErrorMessage(
+    error,
+    "Nao foi possivel executar a regua de cobranca agora.",
+  );
+
+  if (message.toLowerCase().includes("whatsapp")) {
+    return "WhatsApp nao esta conectado. Conecte o aparelho para executar a regua manual.";
+  }
+
+  return message;
 }
 
 function formatOffset(offset: number): string {
@@ -99,11 +133,36 @@ export default function BillingSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [whatsappStatus, setWhatsappStatus] =
+    useState<WhatsAppConnectionStatus>("checking");
+  const [runningBilling, setRunningBilling] = useState(false);
+  const [billingRunResult, setBillingRunResult] =
+    useState<BillingRunSummary | null>(null);
+  const [billingRunMessage, setBillingRunMessage] = useState<string | null>(
+    null,
+  );
+  const [billingRunError, setBillingRunError] = useState<string | null>(null);
 
   const orderedOffsets = useMemo(
     () => normalizeOffsets(selectedOffsets),
     [selectedOffsets],
   );
+  const whatsappConnected = whatsappStatus === "connected";
+
+  const refreshWhatsappStatus = useCallback(async (): Promise<boolean> => {
+    setWhatsappStatus("checking");
+
+    try {
+      const response = await apiClient.getWhatsappStatus();
+      const connected = isWhatsappConnected(response);
+
+      setWhatsappStatus(connected ? "connected" : "disconnected");
+      return connected;
+    } catch {
+      setWhatsappStatus("disconnected");
+      return false;
+    }
+  }, [apiClient]);
 
   useEffect(() => {
     let active = true;
@@ -146,6 +205,10 @@ export default function BillingSettingsPage() {
       active = false;
     };
   }, [apiClient]);
+
+  useEffect(() => {
+    void refreshWhatsappStatus();
+  }, [refreshWhatsappStatus]);
 
   function toggleOffset(offset: number): void {
     setSelectedOffsets((current) => {
@@ -251,6 +314,39 @@ export default function BillingSettingsPage() {
     }
   }
 
+  async function runBillingNow(): Promise<void> {
+    setRunningBilling(true);
+    setBillingRunError(null);
+    setBillingRunMessage(null);
+    setBillingRunResult(null);
+
+    const connected = await refreshWhatsappStatus();
+
+    if (!connected) {
+      setBillingRunError(
+        "WhatsApp nao esta conectado. Conecte o aparelho para executar a regua manual.",
+      );
+      setRunningBilling(false);
+      return;
+    }
+
+    try {
+      const response = await apiClient.runBilling();
+      setBillingRunResult(response.summary);
+      setBillingRunMessage(response.message);
+      setSuccess(null);
+    } catch (runError) {
+      const message = getBillingRunErrorMessage(runError);
+      setBillingRunError(message);
+
+      if (message.toLowerCase().includes("whatsapp")) {
+        setWhatsappStatus("disconnected");
+      }
+    } finally {
+      setRunningBilling(false);
+    }
+  }
+
   return (
     <main className="min-h-full bg-slate-50">
       <div className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-6">
@@ -291,6 +387,142 @@ export default function BillingSettingsPage() {
             {success}
           </div>
         )}
+
+        <section className="rounded-md border border-slate-200 bg-white">
+          <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-start gap-2">
+              <Play size={20} className="mt-0.5 text-emerald-600" />
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900">
+                  Executar regua agora
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Enfileire manualmente as cobrancas elegiveis para os dias ativos da agenda.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <span
+                className={`inline-flex h-9 items-center justify-center gap-2 rounded-md border px-3 text-xs font-semibold ${
+                  whatsappStatus === "checking"
+                    ? "border-slate-200 bg-slate-50 text-slate-600"
+                    : whatsappConnected
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border-amber-200 bg-amber-50 text-amber-800"
+                }`}
+              >
+                {whatsappStatus === "checking" ? (
+                  <Loader2 className="animate-spin" size={15} />
+                ) : whatsappConnected ? (
+                  <CheckCircle2 size={15} />
+                ) : (
+                  <MessageCircle size={15} />
+                )}
+                {whatsappStatus === "checking"
+                  ? "Verificando WhatsApp"
+                  : whatsappConnected
+                    ? "WhatsApp conectado"
+                    : "WhatsApp desconectado"}
+              </span>
+
+              <button
+                type="button"
+                onClick={() => void refreshWhatsappStatus()}
+                disabled={runningBilling || whatsappStatus === "checking"}
+                title="Atualizar status do WhatsApp"
+                aria-label="Atualizar status do WhatsApp"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <RefreshCcw
+                  size={16}
+                  className={whatsappStatus === "checking" ? "animate-spin" : ""}
+                />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void runBillingNow()}
+                disabled={
+                  runningBilling ||
+                  whatsappStatus === "checking" ||
+                  !whatsappConnected
+                }
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {runningBilling ? (
+                  <Loader2 className="animate-spin" size={17} />
+                ) : (
+                  <Play size={17} />
+                )}
+                Executar agora
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-4 p-5">
+            {!whatsappConnected && whatsappStatus !== "checking" && (
+              <div className="flex flex-col gap-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 shrink-0" size={18} />
+                  <p>
+                    Conecte o WhatsApp antes de rodar a regua. Assim as mensagens podem ser enfileiradas com seguranca.
+                  </p>
+                </div>
+                <Link
+                  href="/configuracoes/whatsapp"
+                  className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-md bg-amber-900 px-3 text-sm font-semibold text-white transition hover:bg-amber-800"
+                >
+                  <MessageCircle size={16} />
+                  Conectar
+                </Link>
+              </div>
+            )}
+
+            {billingRunError && (
+              <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+                <AlertTriangle className="mt-0.5 shrink-0" size={18} />
+                <span>{billingRunError}</span>
+              </div>
+            )}
+
+            {billingRunResult && (
+              <div className="space-y-4">
+                <div className="flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
+                  <CheckCircle2 className="mt-0.5 shrink-0" size={18} />
+                  <span>{billingRunMessage ?? "Regua de cobranca executada."}</span>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-xs font-semibold uppercase text-slate-500">
+                      Avaliadas
+                    </p>
+                    <p className="mt-2 text-2xl font-bold text-slate-950">
+                      {billingRunResult.total}
+                    </p>
+                  </div>
+                  <div className="rounded-md border border-emerald-200 bg-emerald-50 p-4">
+                    <p className="text-xs font-semibold uppercase text-emerald-700">
+                      Enfileiradas
+                    </p>
+                    <p className="mt-2 text-2xl font-bold text-emerald-800">
+                      {billingRunResult.queued}
+                    </p>
+                  </div>
+                  <div className="rounded-md border border-amber-200 bg-amber-50 p-4">
+                    <p className="text-xs font-semibold uppercase text-amber-700">
+                      Puladas
+                    </p>
+                    <p className="mt-2 text-2xl font-bold text-amber-800">
+                      {billingRunResult.skipped}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
 
         <section className="rounded-md border border-slate-200 bg-white">
           <div className="flex items-center gap-2 border-b border-slate-200 px-5 py-4">

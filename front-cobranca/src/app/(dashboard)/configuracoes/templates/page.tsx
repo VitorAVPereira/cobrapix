@@ -38,6 +38,7 @@ interface TemplateVariable {
   tag: string;
   label: string;
   preview: string;
+  group: "Cobranca" | "Pagamento";
 }
 
 const TEMPLATE_OPTIONS: readonly TemplateOption[] = [
@@ -45,25 +46,25 @@ const TEMPLATE_OPTIONS: readonly TemplateOption[] = [
     name: "Vencimento hoje",
     slug: "vencimento-hoje",
     defaultContent:
-      "{Ola|Oi|Tudo bem}, {debtorName}. A cobranca de {originalAmount} da {companyName} vence hoje ({dueDate}).",
+      "{Ola|Oi|Tudo bem}, {{nome_devedor}}. Sua cobranca de {{valor}} da {{nome_empresa}} vence hoje ({{data_vencimento}}).\n\nForma de pagamento: {{metodo_pagamento}}\nAcesse/pague por aqui: {{payment_link}}\nPix copia e cola: {{pix_copia_e_cola}}\nLinha digitavel: {{boleto_linha_digitavel}}\nBoleto: {{boleto_link}}\nPDF do boleto: {{boleto_pdf}}",
   },
   {
     name: "Lembrete antes do vencimento",
     slug: "pre-vencimento",
     defaultContent:
-      "{Ola|Oi}, {debtorName}. Passando para lembrar que a cobranca de {originalAmount} da {companyName} vence em {dueDate}.",
+      "{Ola|Oi}, {{nome_devedor}}. Passando para lembrar que a cobranca de {{valor}} da {{nome_empresa}} vence em {{data_vencimento}}.\n\nForma de pagamento: {{metodo_pagamento}}\nAcesse/pague por aqui: {{payment_link}}\nPix copia e cola: {{pix_copia_e_cola}}\nLinha digitavel: {{boleto_linha_digitavel}}\nBoleto: {{boleto_link}}\nPDF do boleto: {{boleto_pdf}}",
   },
   {
     name: "Primeiro aviso de atraso",
     slug: "atraso-primeiro-aviso",
     defaultContent:
-      "{Ola|Oi}, {debtorName}. Identificamos uma cobranca em aberto de {originalAmount} da {companyName}, vencida em {dueDate}.",
+      "{Ola|Oi}, {{nome_devedor}}. Identificamos uma cobranca em aberto de {{valor}} da {{nome_empresa}}, vencida em {{data_vencimento}}.\n\nForma de pagamento: {{metodo_pagamento}}\nAcesse/pague por aqui: {{payment_link}}\nPix copia e cola: {{pix_copia_e_cola}}\nLinha digitavel: {{boleto_linha_digitavel}}\nBoleto: {{boleto_link}}\nPDF do boleto: {{boleto_pdf}}",
   },
   {
     name: "Atraso recorrente",
     slug: "atraso-recorrente",
     defaultContent:
-      "{Ola|Oi}, {debtorName}. Ainda consta uma cobranca pendente de {originalAmount} da {companyName}, com vencimento em {dueDate}.",
+      "{Ola|Oi}, {{nome_devedor}}. Ainda consta uma cobranca pendente de {{valor}} da {{nome_empresa}}, com vencimento em {{data_vencimento}}.\n\nForma de pagamento: {{metodo_pagamento}}\nAcesse/pague por aqui: {{payment_link}}\nPix copia e cola: {{pix_copia_e_cola}}\nLinha digitavel: {{boleto_linha_digitavel}}\nBoleto: {{boleto_link}}\nPDF do boleto: {{boleto_pdf}}",
   },
 ] as const;
 
@@ -82,11 +83,112 @@ const EMPTY_FORM: TemplateFormState = {
 };
 
 const VARIABLES: readonly TemplateVariable[] = [
-  { tag: "{debtorName}", label: "Cliente", preview: "Joao Silva" },
-  { tag: "{originalAmount}", label: "Valor", preview: "R$ 150,00" },
-  { tag: "{dueDate}", label: "Vencimento", preview: "22/04/2026" },
-  { tag: "{companyName}", label: "Empresa", preview: "Clinica Exemplo" },
+  {
+    tag: "{{nome_devedor}}",
+    label: "Nome do devedor",
+    preview: "Joao Silva",
+    group: "Cobranca",
+  },
+  {
+    tag: "{{nome_empresa}}",
+    label: "Empresa",
+    preview: "Clinica Exemplo",
+    group: "Cobranca",
+  },
+  {
+    tag: "{{valor}}",
+    label: "Valor",
+    preview: "R$ 150,00",
+    group: "Cobranca",
+  },
+  {
+    tag: "{{data_vencimento}}",
+    label: "Vencimento",
+    preview: "22/04/2026",
+    group: "Cobranca",
+  },
+  {
+    tag: "{{metodo_pagamento}}",
+    label: "Metodo",
+    preview: "Pix",
+    group: "Pagamento",
+  },
+  {
+    tag: "{{payment_link}}",
+    label: "Link de pagamento",
+    preview: "https://cobrapix.com/pagar/abc123",
+    group: "Pagamento",
+  },
+  {
+    tag: "{{pix_copia_e_cola}}",
+    label: "Pix copia e cola",
+    preview: "00020101021226860014br.gov.bcb.pix...",
+    group: "Pagamento",
+  },
+  {
+    tag: "{{boleto_linha_digitavel}}",
+    label: "Linha digitavel",
+    preview: "36490.00027 00000.000000 00000.000000 1 99990000015000",
+    group: "Pagamento",
+  },
+  {
+    tag: "{{boleto_link}}",
+    label: "Link do boleto",
+    preview: "https://cobrapix.com/boleto/abc123",
+    group: "Pagamento",
+  },
+  {
+    tag: "{{boleto_pdf}}",
+    label: "PDF do boleto",
+    preview: "https://cobrapix.com/boleto/abc123.pdf",
+    group: "Pagamento",
+  },
 ] as const;
+
+const VARIABLE_GROUPS = ["Cobranca", "Pagamento"] as const;
+
+function getVariableKey(tag: string): string {
+  return tag.replace(/^\{\{\s*/, "").replace(/\s*\}\}$/, "");
+}
+
+function interpolatePreviewVariables(content: string): string {
+  return VARIABLES.reduce((message, variable) => {
+    const key = getVariableKey(variable.tag);
+    const pattern = new RegExp(`{{\\s*${key}\\s*}}`, "g");
+
+    return message.replace(pattern, variable.preview);
+  }, content);
+}
+
+function maskUnresolvedPlaceholders(content: string): {
+  maskedContent: string;
+  placeholders: ReadonlyMap<string, string>;
+} {
+  let placeholderIndex = 0;
+  const placeholders = new Map<string, string>();
+  const maskedContent = content.replace(
+    /\{\{\s*[a-zA-Z][a-zA-Z0-9_]*\s*\}\}/g,
+    (placeholder) => {
+      const token = `__COBRAPIX_PLACEHOLDER_${placeholderIndex}__`;
+      placeholderIndex += 1;
+      placeholders.set(token, placeholder);
+
+      return token;
+    },
+  );
+
+  return { maskedContent, placeholders };
+}
+
+function restoreMaskedPlaceholders(
+  content: string,
+  placeholders: ReadonlyMap<string, string>,
+): string {
+  return Array.from(placeholders.entries()).reduce(
+    (message, [token, placeholder]) => message.replaceAll(token, placeholder),
+    content,
+  );
+}
 
 function getTemplateOption(slug: MessageTemplateSlug): TemplateOption | undefined {
   return TEMPLATE_OPTIONS.find((option) => option.slug === slug);
@@ -133,15 +235,14 @@ function getErrorMessage(error: unknown): string {
 }
 
 function renderPreview(content: string): string {
-  const withVariables = VARIABLES.reduce(
-    (message, variable) => message.replaceAll(variable.tag, variable.preview),
-    content,
-  );
+  const withVariables = interpolatePreviewVariables(content);
+  const { maskedContent, placeholders } =
+    maskUnresolvedPlaceholders(withVariables);
 
   try {
-    return spin(withVariables);
+    return restoreMaskedPlaceholders(spin(maskedContent), placeholders);
   } catch {
-    return withVariables;
+    return restoreMaskedPlaceholders(maskedContent, placeholders);
   }
 }
 
@@ -302,7 +403,8 @@ export default function TemplatesPage() {
               Regras de cobranca
             </h1>
             <p className="mt-1 text-sm text-slate-600">
-              Configure jornadas de WhatsApp com Spintax e variaveis do backend.
+              Configure jornadas de WhatsApp com Spintax e placeholders
+              suportados pelo backend.
             </p>
           </div>
 
@@ -438,18 +540,33 @@ export default function TemplatesPage() {
 
               <div className="space-y-2">
                 <span className="text-sm font-medium text-slate-700">
-                  Variaveis
+                  Placeholders
                 </span>
-                <div className="flex flex-wrap gap-2">
-                  {VARIABLES.map((variable) => (
-                    <button
-                      key={variable.tag}
-                      type="button"
-                      onClick={() => insertVariable(variable.tag)}
-                      className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
-                    >
-                      {variable.label}
-                    </button>
+                <div className="space-y-3">
+                  {VARIABLE_GROUPS.map((group) => (
+                    <div key={group} className="space-y-2">
+                      <p className="text-xs font-semibold uppercase text-slate-500">
+                        {group}
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {VARIABLES.filter(
+                          (variable) => variable.group === group,
+                        ).map((variable) => (
+                          <button
+                            key={variable.tag}
+                            type="button"
+                            onClick={() => insertVariable(variable.tag)}
+                            title={variable.tag}
+                            className="max-w-full rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-left text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                          >
+                            <span className="block">{variable.label}</span>
+                            <code className="block break-all font-mono text-[11px] font-medium text-emerald-900">
+                              {variable.tag}
+                            </code>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -463,14 +580,15 @@ export default function TemplatesPage() {
                   onChange={(event) => updateForm("content", event.target.value)}
                   rows={12}
                   className="w-full resize-none rounded-md border border-slate-300 px-3 py-3 text-sm leading-6 text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                  placeholder="{Ola|Oi}, {debtorName}. A cobranca de {originalAmount} da {companyName} vence hoje ({dueDate})."
+                  placeholder="{Ola|Oi}, {{nome_devedor}}. Sua cobranca de {{valor}} da {{nome_empresa}} vence hoje ({{data_vencimento}})."
                 />
               </label>
 
               <div className="rounded-md border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-                Use Spintax com pipe, como {"{Ola|Oi|Tudo bem}"}. Hoje o motor de
-                cobranca renderiza apenas {`{debtorName}`}, {`{originalAmount}`},{" "}
-                {`{dueDate}`} e {`{companyName}`}.
+                Use Spintax com pipe, como {"{Ola|Oi|Tudo bem}"}. Placeholders
+                precisam estar em double mustache, por exemplo{" "}
+                {`{{nome_devedor}}`}. Linhas com dados de pagamento vazios sao
+                removidas automaticamente no envio.
               </div>
             </div>
           </section>

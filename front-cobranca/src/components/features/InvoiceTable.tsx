@@ -16,7 +16,9 @@ import {
   AlertCircle,
   Clock,
   CheckCircle2,
+  Copy,
   Ban,
+  ExternalLink,
   PlusCircle,
   SlidersHorizontal,
 } from "lucide-react";
@@ -32,6 +34,10 @@ export function InvoiceTable({
   onConfigureDebtor,
   onAddInvoice,
 }: InvoiceTableProps) {
+  const [copiedPaymentAction, setCopiedPaymentAction] = useState<string | null>(
+    null,
+  );
+
   const checkStatus = (row: ParsedDebtor) => {
     if (row.status === "PAID") {
       return {
@@ -82,7 +88,7 @@ export function InvoiceTable({
     };
   };
 
-  const formatarDataBR = (dataString: string) => {
+  const formatarDataBR = (dataString: string): string => {
     if (!dataString) return "";
     if (dataString.includes("/")) return dataString;
     if (dataString.includes("-")) {
@@ -90,6 +96,46 @@ export function InvoiceTable({
       return `${dia}/${mes}/${ano}`;
     }
     return dataString;
+  };
+
+  const getPaymentMethodLabel = (billingType?: string): string => {
+    if (billingType === "BOLIX") {
+      return "Bolix";
+    }
+
+    if (billingType === "BOLETO") {
+      return "Boleto";
+    }
+
+    return "PIX";
+  };
+
+  const copyPaymentValue = async (
+    invoice: ParsedDebtor,
+    value: string,
+    action: string,
+  ): Promise<void> => {
+    await navigator.clipboard.writeText(value);
+
+    const invoiceKey = invoice.invoiceId ?? invoice.id ?? invoice.phone_number;
+    const copiedKey = `${invoiceKey}:${action}`;
+    setCopiedPaymentAction(copiedKey);
+    window.setTimeout(() => {
+      setCopiedPaymentAction((current) =>
+        current === copiedKey ? null : current,
+      );
+    }, 1800);
+  };
+
+  const getCopiedLabel = (
+    invoice: ParsedDebtor,
+    action: string,
+    defaultLabel: string,
+  ): string => {
+    const invoiceKey = invoice.invoiceId ?? invoice.id ?? invoice.phone_number;
+    return copiedPaymentAction === `${invoiceKey}:${action}`
+      ? "Copiado"
+      : defaultLabel;
   };
 
   const columns: ColumnDef<ParsedDebtor>[] = [
@@ -107,10 +153,7 @@ export function InvoiceTable({
       header: "WhatsApp",
       cell: (info) => {
         const zap = info.getValue() as string;
-        const mascara = zap.replace(
-          /^(\d{2})(\d{5})(\d{4}).*/,
-          "($1) $2-$3"
-        );
+        const mascara = zap.replace(/^(\d{2})(\d{5})(\d{4}).*/, "($1) $2-$3");
         return (
           <div className="flex items-center gap-2 text-slate-600">
             <MessageCircle size={15} className="text-emerald-500 shrink-0" />
@@ -160,15 +203,24 @@ export function InvoiceTable({
       header: "Pagamento",
       cell: (info) => {
         const billingType = info.getValue() as string | undefined;
-        const label =
-          billingType === "BOLIX"
-            ? "Bolix"
-            : billingType === "BOLETO"
-              ? "Boleto"
-              : "PIX";
+        const payment = info.row.original.payment;
+        const isGenerated = payment?.generated ?? false;
 
         return (
-          <span className="text-slate-600 whitespace-nowrap">{label}</span>
+          <div className="flex flex-col gap-1">
+            <span className="font-medium text-slate-700 whitespace-nowrap">
+              {getPaymentMethodLabel(payment?.method ?? billingType)}
+            </span>
+            <span
+              className={`w-fit rounded-full border px-2 py-0.5 text-xs font-medium ${
+                isGenerated
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-slate-200 bg-slate-50 text-slate-500"
+              }`}
+            >
+              {isGenerated ? "Gerado" : "Não gerado"}
+            </span>
+          </div>
         );
       },
     },
@@ -192,29 +244,78 @@ export function InvoiceTable({
     },
     {
       id: "actions",
-      header: () => <span className="block text-center">Acoes</span>,
-      cell: (info) => (
-        <div className="flex justify-center gap-2">
-          <button
-            type="button"
-            onClick={() => onAddInvoice(info.row.original)}
-            disabled={!info.row.original.debtorId}
-            className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <PlusCircle size={14} />
-            Fatura
-          </button>
-          <button
-            type="button"
-            onClick={() => onConfigureDebtor(info.row.original)}
-            disabled={!info.row.original.debtorId}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <SlidersHorizontal size={14} />
-            Editar
-          </button>
-        </div>
-      ),
+      header: () => <span className="block text-center">Ações</span>,
+      cell: (info) => {
+        const invoice = info.row.original;
+        const payment = invoice.payment;
+        const pixCopyPaste =
+          payment?.generated === true ? payment.pixCopyPaste : null;
+        const boletoUrl =
+          payment?.generated === true ? payment.boletoUrl : null;
+        const boletoLine =
+          payment?.generated === true ? payment.boletoLine : null;
+
+        return (
+          <div className="flex flex-wrap justify-center gap-2">
+            {pixCopyPaste && (
+              <button
+                type="button"
+                onClick={() => {
+                  void copyPaymentValue(invoice, pixCopyPaste, "pix");
+                }}
+                className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                title="Copiar Pix cópia e cola"
+              >
+                <Copy size={14} />
+                {getCopiedLabel(invoice, "pix", "Pix")}
+              </button>
+            )}
+            {boletoUrl && (
+              <a
+                href={boletoUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
+                title="Abrir boleto"
+              >
+                <ExternalLink size={14} />
+                Boleto
+              </a>
+            )}
+            {!boletoUrl && boletoLine && (
+              <button
+                type="button"
+                onClick={() => {
+                  void copyPaymentValue(invoice, boletoLine, "boleto");
+                }}
+                className="inline-flex items-center gap-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
+                title="Copiar linha digitável"
+              >
+                <Copy size={14} />
+                {getCopiedLabel(invoice, "boleto", "Linha")}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onAddInvoice(invoice)}
+              disabled={!invoice.debtorId}
+              className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <PlusCircle size={14} />
+              Fatura
+            </button>
+            <button
+              type="button"
+              onClick={() => onConfigureDebtor(invoice)}
+              disabled={!invoice.debtorId}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <SlidersHorizontal size={14} />
+              Editar
+            </button>
+          </div>
+        );
+      },
     },
   ];
 
@@ -250,7 +351,7 @@ export function InvoiceTable({
                   >
                     {flexRender(
                       header.column.columnDef.header,
-                      header.getContext()
+                      header.getContext(),
                     )}
                   </th>
                 ))}
@@ -264,14 +365,8 @@ export function InvoiceTable({
                 className="hover:bg-slate-50/50 transition-colors"
               >
                 {row.getVisibleCells().map((cell) => (
-                  <td
-                    key={cell.id}
-                    className="px-5 py-3.5 whitespace-nowrap"
-                  >
-                    {flexRender(
-                      cell.column.columnDef.cell,
-                      cell.getContext()
-                    )}
+                  <td key={cell.id} className="px-5 py-3.5 whitespace-nowrap">
+                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </td>
                 ))}
               </tr>
@@ -286,8 +381,7 @@ export function InvoiceTable({
           <span className="font-medium text-slate-700">
             {rangeStart}-{rangeEnd}
           </span>{" "}
-          de{" "}
-          <span className="font-medium text-slate-700">{totalRows}</span>{" "}
+          de <span className="font-medium text-slate-700">{totalRows}</span>{" "}
           registros
         </p>
 
