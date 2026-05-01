@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PaymentService } from '../payment/payment.service';
 import { MessageQueueService, SendMessageJob } from '../queue/message.queue';
 import { SpintaxService } from '../queue/services/spintax.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 
 const DEFAULT_COLLECTION_REMINDER_DAYS = [0];
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -81,8 +82,10 @@ interface ScheduledInvoice {
   pixExpiresAt: Date | null;
   billingType: string | null;
   debtor: {
+    id: string;
     name: string;
     phoneNumber: string;
+    whatsappOptIn: boolean;
     useGlobalBillingSettings: boolean;
     preferredBillingMethod: BillingMethod | null;
   };
@@ -109,6 +112,7 @@ export class BillingService {
     private messageQueue: MessageQueueService,
     private spintaxService: SpintaxService,
     private paymentService: PaymentService,
+    private whatsappService?: WhatsappService,
   ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_9AM)
@@ -457,6 +461,23 @@ export class BillingService {
 
         const templateSlug = this.getTemplateSlugForOffset(daysFromDueDate);
         const template = templatesBySlug.get(templateSlug) ?? fallbackTemplate;
+        const replacements = this.buildTemplateReplacements({
+          debtorName: invoice.debtor.name,
+          originalAmount: Number(invoice.originalAmount),
+          dueDate: invoice.dueDate,
+          companyName: company.corporateName,
+          paymentData,
+        });
+        const templateParameters = this.whatsappService?.buildTemplateParameters
+          ? this.whatsappService.buildTemplateParameters(
+              template.content,
+              replacements,
+            )
+          : this.buildTemplateParameters(template.content, replacements);
+        const templateName =
+          template.metaTemplateName ??
+          this.whatsappService?.buildMetaTemplateName(template.slug) ??
+          this.buildMetaTemplateName(template.slug);
         const message = this.buildMessageFromTemplate(template.content, {
           debtorName: invoice.debtor.name,
           originalAmount: Number(invoice.originalAmount),
@@ -468,8 +489,12 @@ export class BillingService {
         jobs.push({
           invoiceId: invoice.id,
           companyId: company.id,
+          debtorId: invoice.debtor.id,
           phoneNumber: phone,
-          instanceName: company.whatsappInstanceId,
+          senderKey: company.whatsappInstanceId,
+          templateName,
+          templateLanguage: template.metaLanguage,
+          templateParameters,
           message,
           debtorName: invoice.debtor.name,
         });
@@ -1027,36 +1052,7 @@ export class BillingService {
       paymentData: PaymentMessageData;
     },
   ): string {
-    const valorFormatado = new Intl.NumberFormat('pt-BR', {
-      style: 'currency',
-      currency: 'BRL',
-    }).format(params.originalAmount);
-
-    const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      timeZone: 'America/Sao_Paulo',
-    }).format(params.dueDate);
-
-    const replacements: Record<string, string> = {
-      debtorName: params.debtorName,
-      originalAmount: valorFormatado,
-      dueDate: dataFormatada,
-      companyName: params.companyName,
-      payment_link: params.paymentData.paymentLink,
-      pix_copia_e_cola: params.paymentData.pixCopiaECola,
-      boleto_linha_digitavel: params.paymentData.boletoLinhaDigitavel,
-      boleto_link: params.paymentData.boletoLink,
-      boleto_pdf: params.paymentData.boletoPdf,
-      billing_type: params.paymentData.billingType,
-      metodo_pagamento: params.paymentData.billingTypeLabel,
-      valor: valorFormatado,
-      data_vencimento: dataFormatada,
-      nome_devedor: params.debtorName,
-      nome_empresa: params.companyName,
-    };
-
+    const replacements = this.buildTemplateReplacements(params);
     const contentWithoutEmptyPaymentLines = this.removeEmptyVariableLines(
       templateContent,
       replacements,
@@ -1078,6 +1074,65 @@ export class BillingService {
       .trim();
 
     return this.ensurePaymentInstruction(processedMessage, params.paymentData);
+  }
+
+  private buildTemplateReplacements(params: {
+    debtorName: string;
+    originalAmount: number;
+    dueDate: Date;
+    companyName: string;
+    paymentData: PaymentMessageData;
+  }): Record<string, string> {
+    const valorFormatado = new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(params.originalAmount);
+
+    const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      timeZone: 'America/Sao_Paulo',
+    }).format(params.dueDate);
+
+    return {
+      debtorName: params.debtorName,
+      originalAmount: valorFormatado,
+      dueDate: dataFormatada,
+      companyName: params.companyName,
+      payment_link: params.paymentData.paymentLink,
+      pix_copia_e_cola: params.paymentData.pixCopiaECola,
+      boleto_linha_digitavel: params.paymentData.boletoLinhaDigitavel,
+      boleto_link: params.paymentData.boletoLink,
+      boleto_pdf: params.paymentData.boletoPdf,
+      billing_type: params.paymentData.billingType,
+      metodo_pagamento: params.paymentData.billingTypeLabel,
+      valor: valorFormatado,
+      data_vencimento: dataFormatada,
+      nome_devedor: params.debtorName,
+      nome_empresa: params.companyName,
+    };
+  }
+
+  private buildTemplateParameters(
+    templateContent: string,
+    replacements: Record<string, string>,
+  ): string[] {
+    return Array.from(
+      templateContent.matchAll(/\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g),
+    )
+      .map((match) => match[1])
+      .filter((variableName): variableName is string =>
+        Boolean(variableName),
+      )
+      .map((variableName) => replacements[variableName] ?? '');
+  }
+
+  private buildMetaTemplateName(slug: string): string {
+    return `cobrapix_${slug}`
+      .toLowerCase()
+      .replace(/[^a-z0-9_]+/g, '_')
+      .replace(/^_+|_+$/g, '');
   }
 
   private ensurePaymentInstruction(

@@ -4,7 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { rawBody: true });
 
   app.enableCors({
     origin: process.env.ALLOWED_ORIGINS?.split(',') || [
@@ -12,7 +12,7 @@ async function bootstrap(): Promise<void> {
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Hub-Signature-256'],
   });
 
   // Necessário para que PrismaService.onModuleDestroy seja chamado em SIGINT/SIGTERM

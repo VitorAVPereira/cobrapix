@@ -10,9 +10,13 @@ const SAFE_BULK_JITTER_MS = 15_000;
 export interface SendMessageJob {
   invoiceId: string;
   companyId: string;
+  debtorId: string;
   phoneNumber: string;
-  instanceName: string;
-  message: string;
+  senderKey: string;
+  templateName: string;
+  templateLanguage: string;
+  templateParameters: string[];
+  message?: string;
   debtorName: string;
   retryCount?: number;
 }

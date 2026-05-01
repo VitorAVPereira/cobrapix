@@ -3,52 +3,40 @@ import { ConfigService } from '@nestjs/config';
 import type { HealthCheckResult } from '../types';
 
 /**
- * Verifica se a Evolution API (container Docker) está respondendo.
- * Timeout de 5s evita que um container lento trave o health check do Nest.
+ * Mantem o nome da classe por compatibilidade interna, mas o check principal
+ * agora acompanha a configuracao da Meta Cloud API.
  */
 @Injectable()
 export class EvolutionHealthIndicator {
-  private readonly url: string;
-
-  constructor(config: ConfigService) {
-    this.url = config.get<string>('EVOLUTION_API_URL', 'http://localhost:8080');
-  }
+  constructor(private readonly config: ConfigService) {}
 
   async check(): Promise<HealthCheckResult> {
-    const startTime = Date.now();
-    try {
-      const response = await fetch(`${this.url}/health`, {
-        method: 'GET',
-        signal: AbortSignal.timeout(5000),
-      });
-      const latency = Date.now() - startTime;
+    const verifyToken = this.config.get<string>('META_WEBHOOK_VERIFY_TOKEN');
+    const appSecret = this.config.get<string>('META_APP_SECRET');
+    const graphVersion = this.config.get<string>(
+      'META_GRAPH_API_VERSION',
+      'v23.0',
+    );
 
-      if (response.ok) {
-        return {
-          service: 'Evolution API',
-          status: 'healthy',
-          message: 'Evolution API está respondendo',
-          latency,
-        };
-      }
-
+    if (!verifyToken) {
       return {
-        service: 'Evolution API',
+        service: 'Meta Cloud API',
         status: 'unhealthy',
-        message: `Evolution API retornou status ${response.status}`,
-        latency,
-      };
-    } catch (error) {
-      const latency = Date.now() - startTime;
-      const errorMessage =
-        error instanceof Error ? error.message : 'Erro desconhecido';
-      return {
-        service: 'Evolution API',
-        status: 'unhealthy',
-        message: `Falha ao conectar com Evolution API: ${errorMessage}`,
-        latency,
-        details: { error: errorMessage },
+        message: 'META_WEBHOOK_VERIFY_TOKEN nao configurado',
+        details: { graphVersion },
       };
     }
+
+    return {
+      service: 'Meta Cloud API',
+      status: 'healthy',
+      message: appSecret
+        ? 'Webhook Meta configurado com assinatura'
+        : 'Webhook Meta configurado sem validacao de assinatura',
+      details: {
+        graphVersion,
+        signatureValidation: Boolean(appSecret),
+      },
+    };
   }
 }

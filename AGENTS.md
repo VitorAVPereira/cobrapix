@@ -4,21 +4,24 @@
 
 - **front-cobranca**: Next.js 16 frontend (port 3000)
 - **api-cobranca**: NestJS backend (port 3001)
-- **Evolution API**: WhatsApp integration via Docker (port 8080)
+- **Meta Cloud API**: WhatsApp oficial via Graph API e webhook `/webhooks/meta`
+- **Evolution API**: legado opcional para migração (port 8080)
 - **Neon Database**: PostgreSQL cloud (não requer Docker)
 - **Redis**: Para filas de mensagens (port 6379)
 
 ## Prerequisites
 
-1. Start Docker containers (in api-cobranca dir):
+1. Start Redis (and Evolution only if testing the legacy path):
    ```bash
-   docker-compose up -d  # Evolution API (port 8080)
    docker run -d -p 6379:6379 redis:alpine  # Redis para filas
+   # Opcional legado:
+   # cd api-cobranca && docker-compose up -d  # Evolution API (port 8080)
    ```
 2. Set up `.env` from `.env.example` in each package
 3. Required env vars in api-cobranca:
    - `DATABASE_URL`, `DIRECT_URL`
-   - `EVOLUTION_API_KEY`, `EVOLUTION_JWT_SECRET`
+   - `META_WEBHOOK_VERIFY_TOKEN`, `META_APP_SECRET`
+   - `META_GRAPH_API_VERSION` (default `v23.0`)
    - `PAYMENT_SECRET_KEY` (criptografia das credenciais do gateway)
    - `EFI_PLATFORM_CLIENT_ID`, `EFI_PLATFORM_CLIENT_SECRET`
    - `EFI_PLATFORM_PAYEE_CODE`, `EFI_PLATFORM_SPLIT_PERCENTAGE`
@@ -68,7 +71,8 @@ Endpoints para geração de PIX e Boleto:
 
 | Endpoint | Description |
 |----------|-------------|
-| POST | `/webhooks/evolution` | Status conexão WhatsApp |
+| GET/POST | `/webhooks/meta` | Webhook oficial Meta Cloud API |
+| POST | `/webhooks/evolution` | Status conexão WhatsApp legado |
 | POST | `/webhooks/efi/pix` | Notificações de pagamento Pix |
 | POST | `/webhooks/efi/cobrancas` | Notificações de cobranças/boleto |
 
@@ -106,7 +110,7 @@ cd api-cobranca && npm test
 - `api-cobranca/src/health/` - Health check endpoints
 - `api-cobranca/src/payment/` - Payment service (PIX/Boleto)
 - `api-cobranca/src/queue/` - Message queue (BullMQ)
-- `front-cobranca/src/lib/evolution.ts` - WhatsApp client
+- `api-cobranca/src/whatsapp/` - Meta Cloud API client/configuração oficial
 
 ## Removed Files
 

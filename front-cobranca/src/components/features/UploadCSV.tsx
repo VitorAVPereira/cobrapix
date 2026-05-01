@@ -20,6 +20,7 @@ export interface ParsedDebtor {
   billing_type?: PaymentMethod;
   status?: string;
   debtorId?: string;
+  whatsapp_opt_in?: boolean;
   payment?: {
     generated: boolean;
     method: PaymentMethod;
@@ -70,7 +71,7 @@ export function UploadCSV({ onUploadSuccess }: UploadCSVProps) {
 
   const downloadTemplate = (): void => {
     const templateContent =
-      "Nome,WhatsApp,Email,Valor,Vencimento,Forma de Pagamento\nJoao Silva,+5511999999999,joao@email.com,150.50,2025-12-01,BOLIX";
+      "Nome,WhatsApp,Email,Valor,Vencimento,Forma de Pagamento,Opt-in WhatsApp\nJoao Silva,+5511999999999,joao@email.com,150.50,2026-12-01,BOLIX,SIM";
     const blob = new Blob([templateContent], {
       type: "text/csv;charset=utf-8;",
     });
@@ -117,6 +118,11 @@ export function UploadCSV({ onUploadSuccess }: UploadCSVProps) {
                 row.pagamento?.trim() ||
                 row.billing_type?.trim() ||
                 "";
+              const optInRaw =
+                row["Opt-in WhatsApp"]?.trim() ||
+                row.opt_in_whatsapp?.trim() ||
+                row.whatsapp_opt_in?.trim() ||
+                "";
 
               if (!nome || !zap || !emailRaw || !valorRaw || !vencimento) {
                 throw new Error(
@@ -159,6 +165,9 @@ export function UploadCSV({ onUploadSuccess }: UploadCSVProps) {
                 original_amount: valorNumerico,
                 due_date: vencimento,
                 billing_type: formaPagamento,
+                whatsapp_opt_in: ["SIM", "TRUE", "1", "YES"].includes(
+                  optInRaw.toUpperCase(),
+                ),
               };
             });
 

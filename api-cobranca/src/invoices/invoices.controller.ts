@@ -32,6 +32,7 @@ interface ImportRowInput {
   original_amount?: unknown;
   due_date?: unknown;
   billing_type?: unknown;
+  whatsapp_opt_in?: unknown;
 }
 
 interface ValidImportRow {
@@ -41,6 +42,7 @@ interface ValidImportRow {
   original_amount: number;
   due_date: string;
   billing_type: BillingType;
+  whatsapp_opt_in?: boolean;
 }
 
 @Controller('invoices')
@@ -68,6 +70,7 @@ export class InvoicesController {
         name: dto.name,
         phone_number: dto.phone_number,
         email: dto.email,
+        whatsappOptIn: dto.whatsappOptIn,
         original_amount: dto.original_amount,
         due_date: dto.due_date,
         billing_type: dto.billing_type,
@@ -239,6 +242,7 @@ export class InvoicesController {
       debtorId,
       {
         useGlobalBillingSettings: dto.useGlobalBillingSettings,
+        whatsappOptIn: dto.whatsappOptIn,
         preferredBillingMethod: dto.preferredBillingMethod,
         collectionReminderDays: dto.collectionReminderDays,
         autoGenerateFirstCharge: dto.autoGenerateFirstCharge,
@@ -294,6 +298,10 @@ export class InvoicesController {
           original_amount: row.original_amount as number,
           due_date: (row.due_date as string).trim(),
           billing_type: row.billing_type as BillingType,
+          whatsapp_opt_in:
+            typeof row.whatsapp_opt_in === 'boolean'
+              ? row.whatsapp_opt_in
+              : false,
         });
       }
     }

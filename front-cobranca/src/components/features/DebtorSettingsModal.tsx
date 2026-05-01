@@ -82,6 +82,7 @@ export function DebtorSettingsModal({
   const [settings, setSettings] = useState<DebtorBillingSettings | null>(null);
   const [useGlobalBillingSettings, setUseGlobalBillingSettings] =
     useState(true);
+  const [whatsappOptIn, setWhatsappOptIn] = useState(false);
   const [preferredBillingMethod, setPreferredBillingMethod] =
     useState<BillingMethod>("PIX");
   const [selectedOffsets, setSelectedOffsets] = useState<number[]>([0]);
@@ -113,6 +114,7 @@ export function DebtorSettingsModal({
         if (!active) return;
 
         setSettings(response);
+        setWhatsappOptIn(response.whatsappOptIn);
         setUseGlobalBillingSettings(response.useGlobalBillingSettings);
         setPreferredBillingMethod(
           response.useGlobalBillingSettings
@@ -293,6 +295,7 @@ export function DebtorSettingsModal({
     try {
       const saved = await apiClient.updateDebtorBillingSettings(debtorId, {
         useGlobalBillingSettings,
+        whatsappOptIn,
         preferredBillingMethod: useGlobalBillingSettings
           ? null
           : preferredBillingMethod,
@@ -316,6 +319,7 @@ export function DebtorSettingsModal({
       });
 
       setSettings(saved);
+      setWhatsappOptIn(saved.whatsappOptIn);
       setUseGlobalBillingSettings(saved.useGlobalBillingSettings);
       applySnapshot(saved.useGlobalBillingSettings, saved);
       setSuccess("Configuracoes do devedor salvas.");
@@ -372,6 +376,26 @@ export function DebtorSettingsModal({
           ) : (
             <>
               <section className="rounded-md border border-slate-200 bg-slate-50 p-4">
+                <label className="mb-4 flex items-start gap-3 border-b border-slate-200 pb-4">
+                  <input
+                    type="checkbox"
+                    checked={whatsappOptIn}
+                    onChange={(event) => {
+                      setWhatsappOptIn(event.target.checked);
+                      setSuccess(null);
+                    }}
+                    className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">
+                      Opt-in WhatsApp oficial
+                    </p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Autoriza templates de cobrança pela Meta Cloud API.
+                    </p>
+                  </div>
+                </label>
+
                 <label className="flex items-start gap-3">
                   <input
                     type="checkbox"

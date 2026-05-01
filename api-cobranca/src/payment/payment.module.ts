@@ -9,6 +9,6 @@ import { PaymentCryptoService } from './payment-crypto.service';
   imports: [PrismaModule],
   controllers: [PaymentController],
   providers: [PaymentService, EfiService, PaymentCryptoService],
-  exports: [PaymentService, EfiService],
+  exports: [PaymentService, EfiService, PaymentCryptoService],
 })
 export class PaymentModule {}

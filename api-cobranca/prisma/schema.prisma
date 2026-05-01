@@ -26,6 +26,17 @@ enum WhatsappStatus {
   PENDING
 }
 
+enum WhatsappProvider {
+  META_CLOUD
+  EVOLUTION
+}
+
+enum WhatsAppTemplateCategory {
+  UTILITY
+  MARKETING
+  AUTHENTICATION
+}
+
 enum BillingMethod {
   PIX
   BOLETO
@@ -68,8 +79,14 @@ model Company {
   autoDiscountDaysAfterDue     Int?
   autoDiscountPercentage       Decimal?       @db.Decimal(5, 2)
   preferredBillingMethod       BillingMethod  @default(PIX)
+  whatsappProvider             WhatsappProvider @default(META_CLOUD)
   whatsappInstanceId           String?
   whatsappStatus               WhatsappStatus @default(DISCONNECTED)
+  metaPhoneNumberId            String?
+  metaBusinessAccountId        String?
+  metaBusinessPhoneNumber      String?
+  metaAccessTokenEncrypted     String?        @db.Text
+  metaDefaultLanguage          String         @default("pt_BR")
 
   templates           MessageTemplate[]
   users               User[]
@@ -136,6 +153,9 @@ model Debtor {
   document                     String?
   phoneNumber                  String
   email                        String?
+  whatsappOptIn                Boolean  @default(false)
+  whatsappOptInAt              DateTime?
+  whatsappOptInSource          String?
   gatewayCustomerId            String?
   useGlobalBillingSettings     Boolean  @default(true)
   collectionReminderDays       Int[]    @default([])
@@ -277,6 +297,12 @@ model MessageTemplate {
   slug      String // Identificador interno (ex: "vencimento-hoje", "atraso-5-dias")
   content   String   @db.Text // O texto com Spintax e variáveis
   isActive  Boolean  @default(true)
+  metaTemplateName String?
+  metaLanguage     String   @default("pt_BR")
+  category         WhatsAppTemplateCategory @default(UTILITY)
+  metaStatus       String   @default("LOCAL")
+  metaRejectedReason String? @db.Text
+  lastMetaSyncAt   DateTime?
   companyId String
   company   Company  @relation(fields: [companyId], references: [id])
   createdAt DateTime @default(now())

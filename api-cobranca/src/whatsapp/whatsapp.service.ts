@@ -1,322 +1,417 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { MessageTemplate, WhatsAppTemplateCategory } from '@prisma/client';
+import { PaymentCryptoService } from '../payment/payment-crypto.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { ConfigureMetaWhatsappDto } from './dto/configure-meta-whatsapp.dto';
 
-export type EvolutionConnectionState = 'open' | 'close' | 'connecting';
-
-export interface EvolutionInstanceResult {
-  qrCode: string | null;
-  pairingCode: string | null;
-  state: EvolutionConnectionState;
-  raw: unknown;
+interface MetaPhoneNumberProfile {
+  id: string;
+  display_phone_number?: string;
+  verified_name?: string;
+  quality_rating?: string;
 }
 
-export interface ConnectionStateResponse {
-  state: EvolutionConnectionState;
-  raw: unknown;
-}
-
-export interface SendTextResponse {
-  key: {
-    remoteJid: string;
-    fromMe: boolean;
+interface MetaMessageResponse {
+  messaging_product: 'whatsapp';
+  contacts?: Array<{
+    input: string;
+    wa_id: string;
+  }>;
+  messages: Array<{
     id: string;
-  };
-  messageTimestamp: string;
-  status: string;
+    message_status?: string;
+  }>;
 }
+
+interface MetaTemplateResponse {
+  id: string;
+  status: string;
+  category?: string;
+}
+
+interface SendTemplateMessageInput {
+  companyId: string;
+  phoneNumber: string;
+  templateName: string;
+  languageCode: string;
+  bodyParameters: string[];
+}
+
+interface CreateOfficialTemplateInput {
+  companyId: string;
+  template: Pick<
+    MessageTemplate,
+    'id' | 'slug' | 'content' | 'metaTemplateName' | 'metaLanguage' | 'category'
+  >;
+}
+
+interface OfficialTemplatePayload {
+  name: string;
+  language: string;
+  category: WhatsAppTemplateCategory;
+  text: string;
+  examples: string[];
+}
+
+const TEMPLATE_EXAMPLES: Record<string, string> = {
+  nome_devedor: 'Joao Silva',
+  nome_empresa: 'Empresa Teste MVP',
+  valor: 'R$ 150,50',
+  data_vencimento: '01/12/2026',
+  metodo_pagamento: 'PIX',
+  payment_link: '00020101021226860014br.gov.bcb.pix2564qrcodepix.example',
+  pix_copia_e_cola: '00020101021226860014br.gov.bcb.pix2564qrcodepix.example',
+  boleto_linha_digitavel: '34191.79001 01043.510047 91020.150008 1 98760000015050',
+  boleto_link: 'https://cobranca.exemplo/boleto',
+  boleto_pdf: 'https://cobranca.exemplo/boleto.pdf',
+};
 
 @Injectable()
 export class WhatsappService {
   private readonly logger = new Logger(WhatsappService.name);
-  private readonly baseUrl: string;
-  private readonly apiKey: string;
+  private readonly graphBaseUrl: string;
 
-  constructor(private readonly configService: ConfigService) {
-    this.baseUrl =
-      this.configService.get<string>('EVOLUTION_API_URL') ||
-      'http://localhost:8080';
-    this.apiKey = this.configService.getOrThrow<string>('EVOLUTION_API_KEY');
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly prisma: PrismaService,
+    private readonly crypto: PaymentCryptoService,
+  ) {
+    const version = this.configService.get<string>(
+      'META_GRAPH_API_VERSION',
+      'v23.0',
+    );
+    this.graphBaseUrl = `https://graph.facebook.com/${version}`;
   }
 
-  private async evolutionFetch(
-    path: string,
-    options: RequestInit = {},
-  ): Promise<Response> {
-    const url = `${this.baseUrl.replace(/\/$/, '')}${path}`;
+  async configureMetaIntegration(
+    companyId: string,
+    dto: ConfigureMetaWhatsappDto,
+  ): Promise<{
+    provider: 'META_CLOUD';
+    state: 'open';
+    dbStatus: 'CONNECTED';
+    phoneNumberId: string;
+    businessPhoneNumber: string | null;
+    verifiedName: string | null;
+    qualityRating: string | null;
+  }> {
+    const profile = await this.graphFetch<MetaPhoneNumberProfile>(
+      `/${dto.phoneNumberId}?fields=id,display_phone_number,verified_name,quality_rating`,
+      dto.accessToken,
+      { method: 'GET' },
+    );
 
-    return fetch(url, {
-      ...options,
-      signal: options.signal ?? AbortSignal.timeout(15000),
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: this.apiKey,
-        ...options.headers,
+    const businessPhoneNumber =
+      dto.businessPhoneNumber ?? profile.display_phone_number ?? null;
+
+    await this.prisma.company.update({
+      where: { id: companyId },
+      data: {
+        whatsappProvider: 'META_CLOUD',
+        whatsappInstanceId: dto.phoneNumberId,
+        whatsappStatus: 'CONNECTED',
+        metaPhoneNumberId: dto.phoneNumberId,
+        metaBusinessAccountId: dto.businessAccountId,
+        metaBusinessPhoneNumber: businessPhoneNumber,
+        metaAccessTokenEncrypted: this.crypto.encrypt(dto.accessToken),
+        metaDefaultLanguage: dto.defaultLanguage ?? 'pt_BR',
       },
     });
-  }
 
-  async createInstance(instanceName: string): Promise<EvolutionInstanceResult> {
-    const response = await this.evolutionFetch('/instance/create', {
-      method: 'POST',
-      body: JSON.stringify({
-        instanceName,
-        qrcode: true,
-        integration: 'WHATSAPP-BAILEYS',
-        webhook: {
-          url: this.buildWebhookUrl('/webhooks/evolution'),
-          webhook_by_events: false,
-          webhook_base64: false,
-          events: ['CONNECTION_UPDATE'],
-        },
-      }),
-    });
-
-    if (!response.ok && response.status !== 403) {
-      const body = await this.readResponseBody(response);
-      throw new Error(
-        `Evolution API: falha ao criar instância (${response.status}): ${body}`,
-      );
-    }
-
-    const payload = await this.parseJsonResponse(response);
-    return this.normalizeInstanceResult(payload);
-  }
-
-  async connectInstance(
-    instanceName: string,
-  ): Promise<EvolutionInstanceResult> {
-    const response = await this.evolutionFetch(
-      `/instance/connect/${instanceName}`,
-    );
-
-    if (!response.ok) {
-      const body = await this.readResponseBody(response);
-      throw new Error(
-        `Evolution API: falha ao obter QR code (${response.status}): ${body}`,
-      );
-    }
-
-    const payload = await this.parseJsonResponse(response);
-    return this.normalizeInstanceResult(payload);
-  }
-
-  async getConnectionState(
-    instanceName: string,
-  ): Promise<ConnectionStateResponse> {
-    const response = await this.evolutionFetch(
-      `/instance/connectionState/${instanceName}`,
-    );
-
-    if (!response.ok) {
-      const body = await this.readResponseBody(response);
-      throw new Error(
-        `Evolution API: falha ao consultar status (${response.status}): ${body}`,
-      );
-    }
-
-    const payload = await this.parseJsonResponse(response);
     return {
-      state: this.extractState(payload),
-      raw: payload,
+      provider: 'META_CLOUD',
+      state: 'open',
+      dbStatus: 'CONNECTED',
+      phoneNumberId: dto.phoneNumberId,
+      businessPhoneNumber,
+      verifiedName: profile.verified_name ?? null,
+      qualityRating: profile.quality_rating ?? null,
     };
   }
 
-  async sendTextMessage(
-    instanceName: string,
-    phoneNumber: string,
-    text: string,
-  ): Promise<SendTextResponse> {
-    const response = await this.evolutionFetch(
-      `/message/sendText/${instanceName}`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ number: phoneNumber, text }),
+  async getStatus(companyId: string): Promise<{
+    provider: 'META_CLOUD';
+    state: 'open' | 'close';
+    dbStatus: 'CONNECTED' | 'DISCONNECTED' | 'PENDING';
+    phoneNumberId: string | null;
+    businessAccountId: string | null;
+    businessPhoneNumber: string | null;
+    defaultLanguage: string;
+    webhookUrl: string;
+    templatesRequired: true;
+  }> {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: {
+        whatsappStatus: true,
+        metaPhoneNumberId: true,
+        metaBusinessAccountId: true,
+        metaBusinessPhoneNumber: true,
+        metaDefaultLanguage: true,
+        metaAccessTokenEncrypted: true,
       },
+    });
+
+    const configured = Boolean(
+      company?.metaPhoneNumberId && company.metaAccessTokenEncrypted,
     );
+    const connected = configured && company?.whatsappStatus === 'CONNECTED';
 
-    if (!response.ok) {
-      const body = await this.readResponseBody(response);
-      throw new Error(
-        `Evolution API: falha ao enviar mensagem (${response.status}): ${body}`,
-      );
-    }
-
-    return response.json() as Promise<SendTextResponse>;
+    return {
+      provider: 'META_CLOUD',
+      state: connected ? 'open' : 'close',
+      dbStatus: connected
+        ? 'CONNECTED'
+        : (company?.whatsappStatus ?? 'DISCONNECTED'),
+      phoneNumberId: company?.metaPhoneNumberId ?? null,
+      businessAccountId: company?.metaBusinessAccountId ?? null,
+      businessPhoneNumber: company?.metaBusinessPhoneNumber ?? null,
+      defaultLanguage: company?.metaDefaultLanguage ?? 'pt_BR',
+      webhookUrl: this.buildWebhookUrl('/webhooks/meta'),
+      templatesRequired: true,
+    };
   }
 
-  async logoutInstance(instanceName: string): Promise<void> {
-    const response = await this.evolutionFetch(
-      `/instance/logout/${instanceName}`,
+  async disconnect(companyId: string): Promise<void> {
+    await this.prisma.company.update({
+      where: { id: companyId },
+      data: {
+        whatsappStatus: 'DISCONNECTED',
+        whatsappInstanceId: null,
+        metaPhoneNumberId: null,
+        metaBusinessAccountId: null,
+        metaBusinessPhoneNumber: null,
+        metaAccessTokenEncrypted: null,
+      },
+    });
+  }
+
+  async sendTemplateMessage(
+    input: SendTemplateMessageInput,
+  ): Promise<{ messageId: string; status: string | null }> {
+    const company = await this.prisma.company.findFirst({
+      where: {
+        id: input.companyId,
+        whatsappProvider: 'META_CLOUD',
+        whatsappStatus: 'CONNECTED',
+      },
+      select: {
+        metaPhoneNumberId: true,
+        metaAccessTokenEncrypted: true,
+      },
+    });
+
+    if (!company?.metaPhoneNumberId || !company.metaAccessTokenEncrypted) {
+      throw new Error('Meta Cloud API nao configurada para esta empresa.');
+    }
+
+    const body = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: input.phoneNumber,
+      type: 'template',
+      template: {
+        name: input.templateName,
+        language: {
+          code: input.languageCode,
+        },
+        components:
+          input.bodyParameters.length > 0
+            ? [
+                {
+                  type: 'body',
+                  parameters: input.bodyParameters.map((parameter) => ({
+                    type: 'text',
+                    text: parameter,
+                  })),
+                },
+              ]
+            : undefined,
+      },
+    };
+
+    const response = await this.graphFetch<MetaMessageResponse>(
+      `/${company.metaPhoneNumberId}/messages`,
+      this.crypto.decrypt(company.metaAccessTokenEncrypted),
       {
-        method: 'DELETE',
+        method: 'POST',
+        body: JSON.stringify(body),
       },
     );
 
-    if (!response.ok) {
-      const body = await this.readResponseBody(response);
-      throw new Error(
-        `Evolution API: falha ao desconectar (${response.status}): ${body}`,
+    const message = response.messages[0];
+    if (!message) {
+      throw new Error('Meta Cloud API nao retornou ID da mensagem.');
+    }
+
+    return {
+      messageId: message.id,
+      status: message.message_status ?? null,
+    };
+  }
+
+  async createOfficialTemplate(
+    input: CreateOfficialTemplateInput,
+  ): Promise<MetaTemplateResponse> {
+    const company = await this.prisma.company.findFirst({
+      where: {
+        id: input.companyId,
+        whatsappProvider: 'META_CLOUD',
+        whatsappStatus: 'CONNECTED',
+      },
+      select: {
+        metaBusinessAccountId: true,
+        metaAccessTokenEncrypted: true,
+      },
+    });
+
+    if (!company?.metaBusinessAccountId || !company.metaAccessTokenEncrypted) {
+      throw new HttpException(
+        'Configure a Meta Cloud API antes de enviar templates oficiais.',
+        HttpStatus.BAD_REQUEST,
       );
     }
+
+    const officialTemplate = this.buildOfficialTemplatePayload(input.template);
+    const response = await this.graphFetch<MetaTemplateResponse>(
+      `/${company.metaBusinessAccountId}/message_templates`,
+      this.crypto.decrypt(company.metaAccessTokenEncrypted),
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          name: officialTemplate.name,
+          language: officialTemplate.language,
+          category: officialTemplate.category,
+          components: [
+            {
+              type: 'BODY',
+              text: officialTemplate.text,
+              ...(officialTemplate.examples.length > 0
+                ? { example: { body_text: [officialTemplate.examples] } }
+                : {}),
+            },
+          ],
+        }),
+      },
+    );
+
+    await this.prisma.messageTemplate.updateMany({
+      where: { id: input.template.id, companyId: input.companyId },
+      data: {
+        metaTemplateName: officialTemplate.name,
+        metaLanguage: officialTemplate.language,
+        metaStatus: response.status,
+        metaRejectedReason: null,
+        lastMetaSyncAt: new Date(),
+      },
+    });
+
+    return response;
+  }
+
+  buildTemplateParameters(
+    templateContent: string,
+    replacements: Record<string, string>,
+  ): string[] {
+    const variableNames = this.extractTemplateVariableNames(templateContent);
+
+    return variableNames.map((variableName) => replacements[variableName] ?? '');
+  }
+
+  buildMetaTemplateName(slug: string): string {
+    return `cobrapix_${slug}`
+      .toLowerCase()
+      .replace(/[^a-z0-9_]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+  }
+
+  private buildOfficialTemplatePayload(
+    template: CreateOfficialTemplateInput['template'],
+  ): OfficialTemplatePayload {
+    const variableNames = this.extractTemplateVariableNames(template.content);
+    let index = 0;
+    const text = this.normalizeOfficialTemplateText(template.content).replace(
+      /\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g,
+      () => {
+        index++;
+        return `{{${index}}}`;
+      },
+    );
+
+    return {
+      name: template.metaTemplateName ?? this.buildMetaTemplateName(template.slug),
+      language: template.metaLanguage,
+      category: template.category,
+      text,
+      examples: variableNames.map(
+        (variableName) => TEMPLATE_EXAMPLES[variableName] ?? 'exemplo',
+      ),
+    };
+  }
+
+  private normalizeOfficialTemplateText(content: string): string {
+    return content.replace(
+      /\{([^{}|]+(?:\|[^{}|]+)+)\}/g,
+      (_match: string, options: string) => {
+        const firstOption = options.split('|')[0]?.trim();
+        return firstOption ?? '';
+      },
+    );
+  }
+
+  private extractTemplateVariableNames(templateContent: string): string[] {
+    return Array.from(
+      templateContent.matchAll(/\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g),
+    )
+      .map((match) => match[1])
+      .filter((variableName): variableName is string => Boolean(variableName));
+  }
+
+  private async graphFetch<T>(
+    path: string,
+    accessToken: string,
+    options: RequestInit,
+  ): Promise<T> {
+    const response = await fetch(`${this.graphBaseUrl}${path}`, {
+      ...options,
+      signal: options.signal ?? AbortSignal.timeout(20000),
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        ...options.headers,
+      },
+    });
+
+    const body = await response.text();
+    const payload = body ? (JSON.parse(body) as unknown) : null;
+
+    if (!response.ok) {
+      const message = this.extractGraphErrorMessage(payload);
+      throw new Error(
+        `Meta Cloud API: falha (${response.status})${message ? `: ${message}` : ''}`,
+      );
+    }
+
+    return payload as T;
+  }
+
+  private extractGraphErrorMessage(payload: unknown): string | null {
+    if (!this.isRecord(payload) || !this.isRecord(payload.error)) {
+      return null;
+    }
+
+    const message = payload.error.message;
+    return typeof message === 'string' ? message : null;
   }
 
   private buildWebhookUrl(path: string): string {
     const baseUrl =
+      this.configService.get<string>('META_WEBHOOK_BASE_URL') ??
       this.configService.get<string>('EFI_WEBHOOK_BASE_URL') ??
       'http://localhost:3001';
 
     return `${baseUrl.replace(/\/$/, '')}${path}`;
-  }
-
-  private async parseJsonResponse(response: Response): Promise<unknown> {
-    const body = await response.text();
-
-    if (!body) {
-      return null;
-    }
-
-    try {
-      return JSON.parse(body) as unknown;
-    } catch {
-      this.logger.warn(
-        `Evolution API retornou conteúdo não JSON em ${response.url}`,
-      );
-      return body;
-    }
-  }
-
-  private async readResponseBody(response: Response): Promise<string> {
-    const body = await this.parseJsonResponse(response);
-
-    if (typeof body === 'string') {
-      return body;
-    }
-
-    if (this.isRecord(body)) {
-      const message = this.readString(body, 'message');
-      if (message) {
-        return message;
-      }
-    }
-
-    return JSON.stringify(body);
-  }
-
-  private normalizeInstanceResult(payload: unknown): EvolutionInstanceResult {
-    return {
-      qrCode: this.extractQrCode(payload),
-      pairingCode: this.extractPairingCode(payload),
-      state: this.extractState(payload),
-      raw: payload,
-    };
-  }
-
-  private extractQrCode(payload: unknown): string | null {
-    if (!this.isRecord(payload)) {
-      return null;
-    }
-
-    const qrcode = payload.qrcode;
-    if (this.isRecord(qrcode)) {
-      const base64 = this.readString(qrcode, 'base64');
-      if (base64) {
-        return this.stripDataUri(base64);
-      }
-    }
-
-    const candidates = [
-      this.readString(payload, 'base64'),
-      this.readString(payload, 'code'),
-      this.readString(payload, 'qrCode'),
-    ];
-
-    for (const candidate of candidates) {
-      if (candidate) {
-        return this.stripDataUri(candidate);
-      }
-    }
-
-    return null;
-  }
-
-  private extractPairingCode(payload: unknown): string | null {
-    if (!this.isRecord(payload)) {
-      return null;
-    }
-
-    const qrcode = payload.qrcode;
-    if (this.isRecord(qrcode)) {
-      const pairingCode = this.readString(qrcode, 'pairingCode');
-      if (pairingCode) {
-        return pairingCode;
-      }
-    }
-
-    return this.readString(payload, 'pairingCode');
-  }
-
-  private extractState(payload: unknown): EvolutionConnectionState {
-    const rawState = this.extractRawState(payload)?.toLowerCase();
-
-    if (!rawState) {
-      return 'connecting';
-    }
-
-    if (
-      rawState === 'open' ||
-      rawState === 'connected' ||
-      rawState === 'online'
-    ) {
-      return 'open';
-    }
-
-    if (
-      rawState === 'close' ||
-      rawState === 'closed' ||
-      rawState === 'disconnected' ||
-      rawState === 'logout' ||
-      rawState === 'refused'
-    ) {
-      return 'close';
-    }
-
-    return 'connecting';
-  }
-
-  private extractRawState(payload: unknown): string | null {
-    if (!this.isRecord(payload)) {
-      return null;
-    }
-
-    const instance = payload.instance;
-    if (this.isRecord(instance)) {
-      const instanceState =
-        this.readString(instance, 'state') ??
-        this.readString(instance, 'status') ??
-        this.readString(instance, 'connectionStatus');
-
-      if (instanceState) {
-        return instanceState;
-      }
-    }
-
-    return (
-      this.readString(payload, 'state') ??
-      this.readString(payload, 'status') ??
-      this.readString(payload, 'connectionStatus')
-    );
-  }
-
-  private stripDataUri(value: string): string {
-    return value.replace(/^data:image\/[a-z]+;base64,/i, '');
-  }
-
-  private readString(
-    record: Record<string, unknown>,
-    key: string,
-  ): string | null {
-    const value = record[key];
-    return typeof value === 'string' && value.trim().length > 0 ? value : null;
   }
 
   private isRecord(value: unknown): value is Record<string, unknown> {

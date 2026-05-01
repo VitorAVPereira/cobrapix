@@ -7,6 +7,7 @@ import { SpintaxService } from './services/spintax.service';
 import { RateLimitService } from './services/rate-limit.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { PaymentModule } from '../payment/payment.module';
+import { WhatsappModule } from '../whatsapp/whatsapp.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { PaymentModule } from '../payment/payment.module';
       },
     }),
     PaymentModule,
+    WhatsappModule,
   ],
   providers: [
     MessageQueueService,

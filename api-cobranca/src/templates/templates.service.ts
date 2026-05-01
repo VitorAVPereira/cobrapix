@@ -1,6 +1,7 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import type { MessageTemplate } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { CreateTemplateDto, UpdateTemplateDto } from './dto';
 import {
   getTemplateDefinition,
@@ -14,7 +15,10 @@ export class TemplatesService {
     TEMPLATE_VARIABLE_TAGS,
   );
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly whatsappService: WhatsappService,
+  ) {}
 
   async create(
     companyId: string,
@@ -39,6 +43,11 @@ export class TemplatesService {
         slug: dto.slug,
         content: dto.content,
         isActive: dto.isActive ?? true,
+        metaTemplateName:
+          dto.metaTemplateName ??
+          this.whatsappService.buildMetaTemplateName(dto.slug),
+        metaLanguage: dto.metaLanguage ?? 'pt_BR',
+        category: dto.category ?? 'UTILITY',
         companyId,
       },
     });
@@ -103,8 +112,31 @@ export class TemplatesService {
         ...(dto.slug !== undefined && { slug: dto.slug }),
         ...(dto.content !== undefined && { content: dto.content }),
         ...(dto.isActive !== undefined && { isActive: dto.isActive }),
+        ...(dto.metaTemplateName !== undefined && {
+          metaTemplateName: dto.metaTemplateName,
+        }),
+        ...(dto.metaLanguage !== undefined && { metaLanguage: dto.metaLanguage }),
+        ...(dto.category !== undefined && { category: dto.category }),
+        ...(dto.content !== undefined && {
+          metaStatus: 'LOCAL',
+          metaRejectedReason: null,
+        }),
       },
     });
+  }
+
+  async submitToMeta(
+    companyId: string,
+    id: string,
+  ): Promise<{ template: MessageTemplate; meta: unknown }> {
+    const template = await this.findOne(companyId, id);
+    const meta = await this.whatsappService.createOfficialTemplate({
+      companyId,
+      template,
+    });
+    const updated = await this.findOne(companyId, id);
+
+    return { template: updated, meta };
   }
 
   private validateTemplateContent(content: string): void {

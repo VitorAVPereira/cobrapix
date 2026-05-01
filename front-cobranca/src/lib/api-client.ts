@@ -94,6 +94,7 @@ export interface InvoiceListItem {
   due_date: string;
   status?: string;
   debtorId: string;
+  whatsapp_opt_in: boolean;
   gatewayId: string | null;
   pixPayload: string | null;
   billing_type: BillingMethod;
@@ -112,6 +113,7 @@ export interface CreateInvoiceInput {
   name?: string;
   phone_number?: string;
   email?: string;
+  whatsappOptIn?: boolean;
   original_amount: number;
   due_date?: string;
   billing_type: BillingMethod;
@@ -152,6 +154,9 @@ export interface UpdateRecurringInvoiceInput {
 export interface DebtorBillingSettings {
   debtorId: string;
   debtorName: string;
+  whatsappOptIn: boolean;
+  whatsappOptInAt: string | null;
+  whatsappOptInSource: string | null;
   useGlobalBillingSettings: boolean;
   customPreferredBillingMethod: BillingMethod | null;
   customCollectionReminderDays: number[];
@@ -166,6 +171,7 @@ export interface DebtorBillingSettings {
 
 export interface UpdateDebtorBillingSettingsInput {
   useGlobalBillingSettings: boolean;
+  whatsappOptIn?: boolean;
   preferredBillingMethod?: BillingMethod | null;
   collectionReminderDays?: number[] | null;
   autoGenerateFirstCharge?: boolean | null;
@@ -174,17 +180,24 @@ export interface UpdateDebtorBillingSettingsInput {
   autoDiscountPercentage?: number | null;
 }
 
-interface WhatsAppInstanceResponse {
-  qrCode: string | null;
-  instanceName: string;
-  pairingCode?: string | null;
-  state?: string;
-  dbStatus?: string;
+export interface ConfigureMetaWhatsappInput {
+  phoneNumberId: string;
+  businessAccountId: string;
+  accessToken: string;
+  businessPhoneNumber?: string;
+  defaultLanguage?: string;
 }
 
 interface WhatsAppStatusResponse {
+  provider?: "META_CLOUD";
   state?: string;
   dbStatus?: string;
+  phoneNumberId?: string | null;
+  businessAccountId?: string | null;
+  businessPhoneNumber?: string | null;
+  defaultLanguage?: string;
+  webhookUrl?: string;
+  templatesRequired?: boolean;
 }
 
 export interface MessageTemplate {
@@ -193,6 +206,12 @@ export interface MessageTemplate {
   slug: string;
   content: string;
   isActive: boolean;
+  metaTemplateName: string | null;
+  metaLanguage: string;
+  category: "UTILITY" | "MARKETING" | "AUTHENTICATION";
+  metaStatus: string;
+  metaRejectedReason: string | null;
+  lastMetaSyncAt: string | null;
   companyId: string;
   createdAt: string;
   updatedAt: string;
@@ -209,6 +228,9 @@ export interface SaveMessageTemplateInput {
   slug: MessageTemplateSlug;
   content: string;
   isActive?: boolean;
+  metaTemplateName?: string;
+  metaLanguage?: string;
+  category?: "UTILITY" | "MARKETING" | "AUTHENTICATION";
 }
 
 export interface GatewayAccountInput {
@@ -438,9 +460,12 @@ class ApiClient {
   }
 
   // WhatsApp
-  async createWhatsappInstance(): Promise<WhatsAppInstanceResponse> {
-    return this.fetch<WhatsAppInstanceResponse>("/whatsapp/instance", {
+  async configureMetaWhatsapp(
+    data: ConfigureMetaWhatsappInput,
+  ): Promise<WhatsAppStatusResponse> {
+    return this.fetch<WhatsAppStatusResponse>("/whatsapp/meta", {
       method: "POST",
+      body: JSON.stringify(data),
     });
   }
 
@@ -528,6 +553,15 @@ class ApiClient {
       method: "PUT",
       body: JSON.stringify(data),
     });
+  }
+
+  async submitTemplateToMeta(
+    id: string,
+  ): Promise<{ template: MessageTemplate; meta: unknown }> {
+    return this.fetch<{ template: MessageTemplate; meta: unknown }>(
+      `/templates/${id}/submit-meta`,
+      { method: "POST" },
+    );
   }
 
   // Payment gateway

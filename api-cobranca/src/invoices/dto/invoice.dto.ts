@@ -37,6 +37,10 @@ export class CreateInvoiceDto {
   @IsEmail()
   email?: string;
 
+  @IsOptional()
+  @IsBoolean()
+  whatsappOptIn?: boolean;
+
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)
   @Max(999999.99)
@@ -102,6 +106,10 @@ export class UpdateRecurringInvoiceDto {
 export class UpdateDebtorSettingsDto {
   @IsBoolean()
   useGlobalBillingSettings!: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  whatsappOptIn?: boolean;
 
   @ValidateIf((dto: UpdateDebtorSettingsDto) => !dto.useGlobalBillingSettings)
   @IsIn(['PIX', 'BOLETO', 'BOLIX'])

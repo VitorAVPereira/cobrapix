@@ -1,18 +1,69 @@
 import {
   Body,
   Controller,
+  Get,
+  Headers,
   HttpException,
   HttpStatus,
   Logger,
   Post,
+  Query,
+  Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { WebhooksService } from './webhooks.service';
+
+type RawBodyRequest = Request & { rawBody?: Buffer };
 
 @Controller('webhooks')
 export class WebhooksController {
   private readonly logger = new Logger(WebhooksController.name);
 
   constructor(private readonly webhooksService: WebhooksService) {}
+
+  @Get('meta')
+  verifyMetaWebhook(
+    @Query('hub.mode') mode?: string,
+    @Query('hub.verify_token') verifyToken?: string,
+    @Query('hub.challenge') challenge?: string,
+  ): string {
+    try {
+      return this.webhooksService.verifyMetaWebhook({
+        mode,
+        verifyToken,
+        challenge,
+      });
+    } catch {
+      throw new HttpException('Nao autorizado', HttpStatus.FORBIDDEN);
+    }
+  }
+
+  @Post('meta')
+  async handleMetaWebhook(
+    @Body() payload: unknown,
+    @Headers('x-hub-signature-256') signature: string | undefined,
+    @Req() request: RawBodyRequest,
+  ) {
+    try {
+      return await this.webhooksService.handleMetaWebhook(
+        payload,
+        signature,
+        request.rawBody,
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message === 'Nao autorizado') {
+        throw new HttpException('Nao autorizado', HttpStatus.UNAUTHORIZED);
+      }
+      this.logger.error(
+        'Erro ao processar webhook Meta:',
+        error instanceof Error ? error.message : 'erro desconhecido',
+      );
+      throw new HttpException(
+        'Falha ao processar webhook',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
 
   @Post('evolution')
   async handleEvolutionWebhook(@Body() payload: unknown) {

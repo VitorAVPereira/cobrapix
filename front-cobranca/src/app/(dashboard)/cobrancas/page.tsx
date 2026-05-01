@@ -36,6 +36,7 @@ interface ManualChargeForm {
   customerName: string;
   email: string;
   whatsapp: string;
+  whatsappOptIn: boolean;
   amount: string;
   dueDate: string;
   billingType: PaymentMethod;
@@ -47,6 +48,7 @@ const initialManualChargeForm: ManualChargeForm = {
   customerName: "",
   email: "",
   whatsapp: "",
+  whatsappOptIn: false,
   amount: "",
   dueDate: "",
   billingType: "PIX",
@@ -283,6 +285,7 @@ export default function CobrancasPage() {
           name: manualForm.customerName.trim(),
           email: manualForm.email.trim(),
           phone_number: phoneNumber,
+          whatsappOptIn: manualForm.whatsappOptIn,
           original_amount: amount,
           due_date: manualForm.recurring ? undefined : manualForm.dueDate,
           billing_type: manualForm.billingType,
@@ -538,6 +541,21 @@ export default function CobrancasPage() {
                         }
                         className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                       />
+                    </label>
+
+                    <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 sm:col-span-2">
+                      <input
+                        type="checkbox"
+                        checked={manualForm.whatsappOptIn}
+                        onChange={(event) =>
+                          updateManualForm("whatsappOptIn", event.target.checked)
+                        }
+                        className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                      />
+                      <span className="text-sm font-medium text-slate-700">
+                        Cliente autorizou mensagens de cobrança pelo WhatsApp
+                        oficial
+                      </span>
                     </label>
                   </>
                 )}

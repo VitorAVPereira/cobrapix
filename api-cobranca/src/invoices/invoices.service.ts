@@ -41,6 +41,7 @@ interface ImportRow {
   original_amount: number;
   due_date: string;
   billing_type: 'PIX' | 'BOLETO' | 'BOLIX';
+  whatsapp_opt_in?: boolean;
 }
 
 interface InvoiceListItem {
@@ -53,6 +54,7 @@ interface InvoiceListItem {
   due_date: string;
   status: string;
   debtorId: string;
+  whatsapp_opt_in: boolean;
   gatewayId: string | null;
   pixPayload: string | null;
   billing_type: string;
@@ -82,6 +84,7 @@ interface CreateInvoiceInput {
   name?: string;
   phone_number?: string;
   email?: string;
+  whatsappOptIn?: boolean;
   original_amount: number;
   due_date?: string;
   billing_type: BillingType;
@@ -123,6 +126,7 @@ interface DebtorUpsertInput {
   name: string;
   phoneNumber: string;
   email?: string | null;
+  whatsappOptIn?: boolean;
 }
 
 interface DebtorIdentity {
@@ -136,6 +140,7 @@ interface InvoiceWithRelations {
     name: string;
     phoneNumber: string;
     email: string | null;
+    whatsappOptIn: boolean;
   };
   originalAmount: { toNumber(): number };
   dueDate: Date;
@@ -186,6 +191,9 @@ interface RecurringInvoiceWithRelations {
 export interface DebtorSettingsResponse {
   debtorId: string;
   debtorName: string;
+  whatsappOptIn: boolean;
+  whatsappOptInAt: string | null;
+  whatsappOptInSource: string | null;
   useGlobalBillingSettings: boolean;
   customPreferredBillingMethod: BillingMethod | null;
   customCollectionReminderDays: number[];
@@ -200,6 +208,7 @@ export interface DebtorSettingsResponse {
 
 export interface UpdateDebtorSettingsInput {
   useGlobalBillingSettings: boolean;
+  whatsappOptIn?: boolean;
   preferredBillingMethod?: BillingMethod | null;
   collectionReminderDays?: number[] | null;
   autoGenerateFirstCharge?: boolean | null;
@@ -248,6 +257,7 @@ export class InvoicesService {
           name: row.name,
           phoneNumber: row.phone_number,
           email: row.email || null,
+          whatsappOptIn: row.whatsapp_opt_in ?? false,
         });
 
         const dueDate = this.parseDueDate(row.due_date);
@@ -321,6 +331,7 @@ export class InvoicesService {
             name: input.name ?? '',
             phoneNumber: input.phone_number ?? '',
             email: input.email ?? null,
+            whatsappOptIn: input.whatsappOptIn ?? false,
           });
 
       if (!debtor) {
@@ -476,6 +487,9 @@ export class InvoicesService {
     return {
       debtorId: debtor.id,
       debtorName: debtor.name,
+      whatsappOptIn: debtor.whatsappOptIn,
+      whatsappOptInAt: debtor.whatsappOptInAt?.toISOString() ?? null,
+      whatsappOptInSource: debtor.whatsappOptInSource,
       useGlobalBillingSettings: debtor.useGlobalBillingSettings,
       customPreferredBillingMethod: debtor.preferredBillingMethod,
       customCollectionReminderDays: this.normalizeReminderDays(
@@ -547,6 +561,13 @@ export class InvoicesService {
         autoDiscountPercentage: useGlobalBillingSettings
           ? null
           : normalizedSettings.autoDiscountPercentage,
+        ...(input.whatsappOptIn !== undefined && {
+          whatsappOptIn: input.whatsappOptIn,
+          whatsappOptInAt: input.whatsappOptIn ? new Date() : null,
+          whatsappOptInSource: input.whatsappOptIn
+            ? 'debtor_settings'
+            : 'debtor_settings_revoked',
+        }),
       },
     });
 
@@ -592,6 +613,7 @@ export class InvoicesService {
           name: input.name ?? '',
           phoneNumber: input.phone_number ?? '',
           email: input.email ?? null,
+          whatsappOptIn: input.whatsappOptIn ?? false,
         });
 
     if (!debtor) {
@@ -716,6 +738,7 @@ export class InvoicesService {
       due_date: this.formatDateOnly(invoice.dueDate),
       status: invoice.status,
       debtorId: invoice.debtor.id,
+      whatsapp_opt_in: invoice.debtor.whatsappOptIn,
       gatewayId: invoice.gatewayId,
       pixPayload: invoice.pixPayload,
       billing_type: invoice.billingType,
@@ -764,6 +787,11 @@ export class InvoicesService {
           name: input.name,
           phoneNumber,
           email: input.email || null,
+          ...(input.whatsappOptIn === true && {
+            whatsappOptIn: true,
+            whatsappOptInAt: new Date(),
+            whatsappOptInSource: 'manual_import',
+          }),
         },
       });
 
@@ -776,6 +804,10 @@ export class InvoicesService {
         name: input.name,
         phoneNumber,
         email: input.email || null,
+        whatsappOptIn: input.whatsappOptIn === true,
+        whatsappOptInAt: input.whatsappOptIn === true ? new Date() : null,
+        whatsappOptInSource:
+          input.whatsappOptIn === true ? 'manual_import' : null,
       },
       select: { id: true },
     });

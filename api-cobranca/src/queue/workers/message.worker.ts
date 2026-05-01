@@ -10,6 +10,7 @@ import { Worker, Job } from 'bullmq';
 import { normalizeWhatsAppNumberForTransport } from '../../common/whatsapp-number';
 import { PaymentService } from '../../payment/payment.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { WhatsappService } from '../../whatsapp/whatsapp.service';
 import { RateLimitService } from '../services/rate-limit.service';
 import { SpintaxService } from '../services/spintax.service';
 import {
@@ -51,8 +52,10 @@ interface InitialChargeInvoice {
   boletoPdf: string | null;
   billingType: string | null;
   debtor: {
+    id: string;
     name: string;
     phoneNumber: string;
+    whatsappOptIn: boolean;
     useGlobalBillingSettings: boolean;
     preferredBillingMethod: BillingMethod | null;
     autoGenerateFirstCharge: boolean | null;
@@ -63,6 +66,7 @@ interface InitialChargeInvoice {
     autoGenerateFirstCharge: boolean;
     whatsappStatus: string;
     whatsappInstanceId: string | null;
+    metaPhoneNumberId: string | null;
   };
   collectionLogs: Array<{ id: string }>;
 }
@@ -83,14 +87,15 @@ interface InitialChargePaymentInvoice {
 interface MessageTemplateRecord {
   slug: string;
   content: string;
+  metaTemplateName: string | null;
+  metaLanguage: string;
+  metaStatus: string;
 }
 
 @Injectable()
 export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MessageWorkerService.name);
   private worker!: Worker;
-  private readonly baseUrl: string;
-  private readonly apiKey: string;
 
   constructor(
     private configService: ConfigService,
@@ -99,12 +104,8 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     private paymentService: PaymentService,
     private spintaxService: SpintaxService,
     private messageQueue: MessageQueueService,
-  ) {
-    this.baseUrl =
-      this.configService.get<string>('EVOLUTION_API_URL') ||
-      'http://localhost:8080';
-    this.apiKey = this.configService.getOrThrow<string>('EVOLUTION_API_KEY');
-  }
+    private whatsappService: WhatsappService,
+  ) {}
 
   onModuleInit() {
     const redisHost =
@@ -174,29 +175,43 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     const {
       invoiceId,
       companyId,
+      debtorId,
       phoneNumber,
-      instanceName,
-      message,
+      senderKey,
+      templateName,
+      templateLanguage,
+      templateParameters,
       debtorName,
     } = data;
 
     this.logger.log(`Processando mensagem para ${debtorName} (${phoneNumber})`);
 
-    await this.enforceRateLimits(instanceName, phoneNumber);
+    const hasOptIn = await this.ensureDebtorOptIn(
+      companyId,
+      debtorId,
+      invoiceId,
+      debtorName,
+    );
+    if (!hasOptIn) {
+      return;
+    }
+    await this.enforceRateLimits(senderKey, phoneNumber);
 
     try {
-      const response = await this.sendMessageViaEvolution(
-        instanceName,
+      const response = await this.whatsappService.sendTemplateMessage({
+        companyId,
         phoneNumber,
-        message,
-      );
+        templateName,
+        languageCode: templateLanguage,
+        bodyParameters: templateParameters,
+      });
 
       await this.prisma.collectionLog.create({
         data: {
           companyId,
           invoiceId,
           actionType: 'WHATSAPP_SENT',
-          description: `Mensagem de cobrança enviada para ${debtorName} (${phoneNumber}) - ID: ${response.key.id}`,
+          description: `Template oficial ${templateName} enviado para ${debtorName} (${phoneNumber}) - Meta ID: ${response.messageId}`,
           status: 'SENT',
         },
       });
@@ -262,13 +277,13 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
 
     if (
       invoice.company.whatsappStatus !== 'CONNECTED' ||
-      !invoice.company.whatsappInstanceId
+      !invoice.company.metaPhoneNumberId
     ) {
       await this.createCollectionLog(
         invoice.companyId,
         invoice.id,
         'INITIAL_CHARGE_PAYMENT_READY',
-        'Cobranca inicial gerada; WhatsApp nao conectado para envio automatico.',
+        'Cobranca inicial gerada; Meta Cloud API nao conectada para envio automatico.',
         'PENDING',
       );
       return;
@@ -287,6 +302,20 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     }
 
     const phoneNumber = this.normalizePhone(invoice.debtor.phoneNumber);
+    const replacements = this.buildTemplateReplacements({
+      debtorName: invoice.debtor.name,
+      originalAmount: Number(invoice.originalAmount),
+      dueDate: invoice.dueDate,
+      companyName: invoice.company.corporateName,
+      paymentData,
+    });
+    const templateParameters = this.whatsappService.buildTemplateParameters(
+      template.content,
+      replacements,
+    );
+    const templateName =
+      template.metaTemplateName ??
+      this.whatsappService.buildMetaTemplateName(template.slug);
     const message = this.buildMessageFromTemplate(template.content, {
       debtorName: invoice.debtor.name,
       originalAmount: Number(invoice.originalAmount),
@@ -298,8 +327,12 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     await this.messageQueue.addSendMessageJob({
       invoiceId: invoice.id,
       companyId: invoice.companyId,
+      debtorId: invoice.debtor.id,
       phoneNumber,
-      instanceName: invoice.company.whatsappInstanceId,
+      senderKey: invoice.company.metaPhoneNumberId,
+      templateName,
+      templateLanguage: template.metaLanguage,
+      templateParameters,
       message,
       debtorName: invoice.debtor.name,
     });
@@ -338,8 +371,10 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         billingType: true,
         debtor: {
           select: {
+            id: true,
             name: true,
             phoneNumber: true,
+            whatsappOptIn: true,
             useGlobalBillingSettings: true,
             preferredBillingMethod: true,
             autoGenerateFirstCharge: true,
@@ -352,6 +387,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
             autoGenerateFirstCharge: true,
             whatsappStatus: true,
             whatsappInstanceId: true,
+            metaPhoneNumberId: true,
           },
         },
         collectionLogs: {
@@ -455,6 +491,9 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       select: {
         slug: true,
         content: true,
+        metaTemplateName: true,
+        metaLanguage: true,
+        metaStatus: true,
       },
     });
     const templatesBySlug = new Map(
@@ -496,6 +535,32 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       );
       throw new Error(`Rate limit destinatario: retry after ${delay}ms`);
     }
+  }
+
+  private async ensureDebtorOptIn(
+    companyId: string,
+    debtorId: string,
+    invoiceId: string,
+    debtorName: string,
+  ): Promise<boolean> {
+    const debtor = await this.prisma.debtor.findFirst({
+      where: { id: debtorId, companyId },
+      select: { whatsappOptIn: true },
+    });
+
+    if (debtor?.whatsappOptIn === true) {
+      return true;
+    }
+
+    await this.createCollectionLog(
+      companyId,
+      invoiceId,
+      'WHATSAPP_OPT_IN_REQUIRED',
+      `Envio oficial bloqueado para ${debtorName}: opt-in WhatsApp ausente.`,
+      'SKIPPED',
+    );
+
+    return false;
   }
 
   private resolveInvoiceBillingType(
@@ -605,36 +670,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       paymentData: PaymentMessageData;
     },
   ): string {
-    const valorFormatado = new Intl.NumberFormat('pt-BR', {
-      style: 'currency',
-      currency: 'BRL',
-    }).format(params.originalAmount);
-
-    const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      timeZone: 'America/Sao_Paulo',
-    }).format(params.dueDate);
-
-    const replacements: Record<string, string> = {
-      debtorName: params.debtorName,
-      originalAmount: valorFormatado,
-      dueDate: dataFormatada,
-      companyName: params.companyName,
-      payment_link: params.paymentData.paymentLink,
-      pix_copia_e_cola: params.paymentData.pixCopiaECola,
-      boleto_linha_digitavel: params.paymentData.boletoLinhaDigitavel,
-      boleto_link: params.paymentData.boletoLink,
-      boleto_pdf: params.paymentData.boletoPdf,
-      billing_type: params.paymentData.billingType,
-      metodo_pagamento: params.paymentData.billingTypeLabel,
-      valor: valorFormatado,
-      data_vencimento: dataFormatada,
-      nome_devedor: params.debtorName,
-      nome_empresa: params.companyName,
-    };
-
+    const replacements = this.buildTemplateReplacements(params);
     const contentWithoutEmptyPaymentLines = this.removeEmptyVariableLines(
       templateContent,
       replacements,
@@ -656,6 +692,44 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       .trim();
 
     return this.ensurePaymentInstruction(processedMessage, params.paymentData);
+  }
+
+  private buildTemplateReplacements(params: {
+    debtorName: string;
+    originalAmount: number;
+    dueDate: Date;
+    companyName: string;
+    paymentData: PaymentMessageData;
+  }): Record<string, string> {
+    const valorFormatado = new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(params.originalAmount);
+
+    const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      timeZone: 'America/Sao_Paulo',
+    }).format(params.dueDate);
+
+    return {
+      debtorName: params.debtorName,
+      originalAmount: valorFormatado,
+      dueDate: dataFormatada,
+      companyName: params.companyName,
+      payment_link: params.paymentData.paymentLink,
+      pix_copia_e_cola: params.paymentData.pixCopiaECola,
+      boleto_linha_digitavel: params.paymentData.boletoLinhaDigitavel,
+      boleto_link: params.paymentData.boletoLink,
+      boleto_pdf: params.paymentData.boletoPdf,
+      billing_type: params.paymentData.billingType,
+      metodo_pagamento: params.paymentData.billingTypeLabel,
+      valor: valorFormatado,
+      data_vencimento: dataFormatada,
+      nome_devedor: params.debtorName,
+      nome_empresa: params.companyName,
+    };
   }
 
   private ensurePaymentInstruction(
@@ -782,9 +856,15 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     return (
       typeof value.invoiceId === 'string' &&
       typeof value.companyId === 'string' &&
+      typeof value.debtorId === 'string' &&
       typeof value.phoneNumber === 'string' &&
-      typeof value.instanceName === 'string' &&
-      typeof value.message === 'string' &&
+      typeof value.senderKey === 'string' &&
+      typeof value.templateName === 'string' &&
+      typeof value.templateLanguage === 'string' &&
+      Array.isArray(value.templateParameters) &&
+      value.templateParameters.every(
+        (parameter) => typeof parameter === 'string',
+      ) &&
       typeof value.debtorName === 'string'
     );
   }
@@ -793,33 +873,4 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     return typeof value === 'object' && value !== null;
   }
 
-  private async sendMessageViaEvolution(
-    instanceName: string,
-    phoneNumber: string,
-    text: string,
-  ): Promise<{
-    key: { id: string; remoteJid: string; fromMe: boolean };
-    messageTimestamp: string;
-    status: string;
-  }> {
-    const url = `${this.baseUrl}/api/v1/message/sendText/${instanceName}`;
-
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: this.apiKey,
-      },
-      body: JSON.stringify({ number: phoneNumber, text }),
-    });
-
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(
-        `Evolution API: falha ao enviar mensagem (${res.status}): ${body}`,
-      );
-    }
-
-    return res.json();
-  }
 }

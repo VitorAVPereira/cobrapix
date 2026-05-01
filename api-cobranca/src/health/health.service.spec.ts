@@ -22,7 +22,7 @@ describe('HealthService', () => {
     };
     const evo: Pick<EvolutionHealthIndicator, 'check'> = {
       check: jest.fn().mockResolvedValue({
-        service: 'Evolution API',
+        service: 'Meta Cloud API',
         status: evoStatus,
         message: 'mock',
       } satisfies HealthCheckResult),

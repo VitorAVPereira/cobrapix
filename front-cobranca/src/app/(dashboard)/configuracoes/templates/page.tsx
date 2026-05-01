@@ -10,6 +10,7 @@ import {
   Smartphone,
   ToggleLeft,
   ToggleRight,
+  UploadCloud,
 } from "lucide-react";
 import type {
   ApiError,
@@ -26,6 +27,9 @@ interface TemplateFormState {
   slug: MessageTemplateSlug;
   content: string;
   isActive: boolean;
+  metaTemplateName: string;
+  metaLanguage: string;
+  category: "UTILITY" | "MARKETING" | "AUTHENTICATION";
 }
 
 interface TemplateOption {
@@ -80,6 +84,9 @@ const EMPTY_FORM: TemplateFormState = {
   slug: DEFAULT_TEMPLATE_OPTION.slug,
   content: DEFAULT_TEMPLATE_OPTION.defaultContent,
   isActive: true,
+  metaTemplateName: "cobrapix_vencimento_hoje",
+  metaLanguage: "pt_BR",
+  category: "UTILITY",
 };
 
 const VARIABLES: readonly TemplateVariable[] = [
@@ -213,6 +220,10 @@ function templateToForm(template: MessageTemplate): TemplateFormState {
     slug: (option?.slug ?? DEFAULT_TEMPLATE_OPTION.slug) as MessageTemplateSlug,
     content: template.content,
     isActive: template.isActive,
+    metaTemplateName:
+      template.metaTemplateName ?? `cobrapix_${template.slug.replaceAll("-", "_")}`,
+    metaLanguage: template.metaLanguage,
+    category: template.category,
   };
 }
 
@@ -311,6 +322,9 @@ export default function TemplatesPage() {
       slug: option.slug,
       content: option.defaultContent,
       isActive: true,
+      metaTemplateName: `cobrapix_${option.slug.replaceAll("-", "_")}`,
+      metaLanguage: "pt_BR",
+      category: "UTILITY",
     });
     setError(null);
     setSuccess(null);
@@ -355,6 +369,9 @@ export default function TemplatesPage() {
       slug: option?.slug ?? form.slug,
       content: form.content.trim(),
       isActive: form.isActive,
+      metaTemplateName: form.metaTemplateName.trim(),
+      metaLanguage: form.metaLanguage.trim(),
+      category: form.category,
     };
 
     if (!payload.name || !payload.slug || !payload.content) {
@@ -389,6 +406,34 @@ export default function TemplatesPage() {
           ? "Ja existe um template desse tipo para esta empresa."
           : getErrorMessage(saveError),
       );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function submitToMeta(): Promise<void> {
+    if (!form.id) {
+      setError("Salve o template antes de enviar para a Meta.");
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const result = await apiClient.submitTemplateToMeta(form.id);
+      setTemplates((current) =>
+        sortTemplates(
+          current.map((template) =>
+            template.id === result.template.id ? result.template : template,
+          ),
+        ),
+      );
+      setForm(templateToForm(result.template));
+      setSuccess("Template enviado para aprovação na Meta.");
+    } catch (submitError) {
+      setError(getErrorMessage(submitError));
     } finally {
       setSaving(false);
     }
@@ -429,6 +474,15 @@ export default function TemplatesPage() {
                 <Save size={18} />
               )}
               Salvar
+            </button>
+            <button
+              type="button"
+              onClick={() => void submitToMeta()}
+              disabled={saving || loading || !form.id}
+              className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <UploadCloud size={18} />
+              Enviar Meta
             </button>
           </div>
         </div>
@@ -491,6 +545,9 @@ export default function TemplatesPage() {
                       >
                         {template.isActive ? "Ativo" : "Inativo"}
                       </span>
+                      <span className="ml-2 inline-flex rounded bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+                        {template.metaStatus}
+                      </span>
                     </button>
                   );
                 })
@@ -537,6 +594,54 @@ export default function TemplatesPage() {
                 )}
                 {form.isActive ? "Template ativo" : "Template inativo"}
               </button>
+
+              <div className="grid gap-4 md:grid-cols-3">
+                <label className="space-y-1.5 md:col-span-2">
+                  <span className="text-sm font-medium text-slate-700">
+                    Nome oficial na Meta
+                  </span>
+                  <input
+                    value={form.metaTemplateName}
+                    onChange={(event) =>
+                      updateForm("metaTemplateName", event.target.value)
+                    }
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  />
+                </label>
+
+                <label className="space-y-1.5">
+                  <span className="text-sm font-medium text-slate-700">
+                    Idioma
+                  </span>
+                  <input
+                    value={form.metaLanguage}
+                    onChange={(event) =>
+                      updateForm("metaLanguage", event.target.value)
+                    }
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  />
+                </label>
+
+                <label className="space-y-1.5 md:col-span-3">
+                  <span className="text-sm font-medium text-slate-700">
+                    Categoria
+                  </span>
+                  <select
+                    value={form.category}
+                    onChange={(event) =>
+                      updateForm(
+                        "category",
+                        event.target.value as TemplateFormState["category"],
+                      )
+                    }
+                    className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  >
+                    <option value="UTILITY">UTILITY</option>
+                    <option value="MARKETING">MARKETING</option>
+                    <option value="AUTHENTICATION">AUTHENTICATION</option>
+                  </select>
+                </label>
+              </div>
 
               <div className="space-y-2">
                 <span className="text-sm font-medium text-slate-700">

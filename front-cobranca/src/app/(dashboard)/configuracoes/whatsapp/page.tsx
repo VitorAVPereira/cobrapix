@@ -1,29 +1,46 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useApiClient } from "@/lib/use-api-client";
+import { useEffect, useState } from "react";
+import type { FormEvent } from "react";
 import {
   AlertCircle,
   CheckCircle2,
+  KeyRound,
   Loader2,
-  LogOut,
-  QrCode,
-  RefreshCcw,
-  Smartphone,
+  PlugZap,
+  Save,
+  ShieldCheck,
+  Webhook,
   WifiOff,
 } from "lucide-react";
+import { useApiClient } from "@/lib/use-api-client";
 
-type ConnectionStatus =
-  | "LOADING"
-  | "DISCONNECTED"
-  | "GENERATING"
-  | "SCAN_READY"
-  | "CONNECTED"
-  | "ERROR";
+type ConnectionStatus = "LOADING" | "CONNECTED" | "DISCONNECTED" | "SAVING";
 
-type BackendWhatsappStatus = {
+interface BackendWhatsappStatus {
   state?: string;
   dbStatus?: string;
+  phoneNumberId?: string | null;
+  businessAccountId?: string | null;
+  businessPhoneNumber?: string | null;
+  defaultLanguage?: string;
+  webhookUrl?: string;
+}
+
+interface MetaFormState {
+  phoneNumberId: string;
+  businessAccountId: string;
+  businessPhoneNumber: string;
+  defaultLanguage: string;
+  accessToken: string;
+}
+
+const INITIAL_FORM: MetaFormState = {
+  phoneNumberId: "",
+  businessAccountId: "",
+  businessPhoneNumber: "",
+  defaultLanguage: "pt_BR",
+  accessToken: "",
 };
 
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -34,310 +51,314 @@ function isConnectedStatus(data: BackendWhatsappStatus): boolean {
   const state = data.state?.toLowerCase();
   const dbStatus = data.dbStatus?.toUpperCase();
 
-  return (
-    state === "open" ||
-    state === "connected" ||
-    dbStatus === "CONNECTED"
-  );
+  return state === "open" || state === "connected" || dbStatus === "CONNECTED";
 }
 
 export default function WhatsappConfigPage() {
   const apiClient = useApiClient();
   const [status, setStatus] = useState<ConnectionStatus>("LOADING");
-  const [qrCode, setQrCode] = useState<string | null>(null);
+  const [form, setForm] = useState<MetaFormState>(INITIAL_FORM);
+  const [webhookUrl, setWebhookUrl] = useState<string>("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const stopPolling = useCallback(() => {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-  }, []);
-
-  const startPolling = useCallback(() => {
-    stopPolling();
-    pollingRef.current = setInterval(async () => {
-      try {
-        const data = await apiClient.getWhatsappStatus();
-
-        if (isConnectedStatus(data)) {
-          stopPolling();
-          setQrCode(null);
-          setStatus("CONNECTED");
-        }
-      } catch {
-        // Mantém o polling silencioso enquanto a instância termina de subir.
-      }
-    }, 3000);
-  }, [apiClient, stopPolling]);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    let active = true;
 
-    async function checkInitialStatus() {
+    async function loadStatus(): Promise<void> {
+      setErrorMsg(null);
+
       try {
         const data = await apiClient.getWhatsappStatus();
-        if (cancelled) {
-          return;
-        }
+        if (!active) return;
 
+        setWebhookUrl(data.webhookUrl ?? "");
+        setForm((current) => ({
+          ...current,
+          phoneNumberId: data.phoneNumberId ?? "",
+          businessAccountId: data.businessAccountId ?? "",
+          businessPhoneNumber: data.businessPhoneNumber ?? "",
+          defaultLanguage: data.defaultLanguage ?? "pt_BR",
+          accessToken: "",
+        }));
         setStatus(isConnectedStatus(data) ? "CONNECTED" : "DISCONNECTED");
-      } catch {
-        if (!cancelled) {
+      } catch (error) {
+        if (active) {
           setStatus("DISCONNECTED");
+          setErrorMsg(
+            getErrorMessage(error, "Nao foi possivel consultar o WhatsApp."),
+          );
         }
       }
     }
 
-    void checkInitialStatus();
+    void loadStatus();
 
     return () => {
-      cancelled = true;
+      active = false;
     };
   }, [apiClient]);
 
-  useEffect(() => {
-    return () => stopPolling();
-  }, [stopPolling]);
+  function updateForm<Field extends keyof MetaFormState>(
+    field: Field,
+    value: MetaFormState[Field],
+  ): void {
+    setForm((current) => ({ ...current, [field]: value }));
+    setSuccessMsg(null);
+  }
 
-  const handleConnect = async () => {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    setStatus("SAVING");
     setErrorMsg(null);
-    setStatus("GENERATING");
+    setSuccessMsg(null);
 
     try {
-      const data = await apiClient.createWhatsappInstance();
+      const saved = await apiClient.configureMetaWhatsapp({
+        phoneNumberId: form.phoneNumberId.trim(),
+        businessAccountId: form.businessAccountId.trim(),
+        businessPhoneNumber: form.businessPhoneNumber.trim() || undefined,
+        defaultLanguage: form.defaultLanguage.trim() || "pt_BR",
+        accessToken: form.accessToken.trim(),
+      });
 
-      if (isConnectedStatus(data)) {
-        stopPolling();
-        setQrCode(null);
-        setStatus("CONNECTED");
-        return;
-      }
-
-      if (!data.qrCode) {
-        throw new Error(
-          "O QR Code ainda não foi liberado pela Evolution API. Tente novamente em alguns segundos.",
-        );
-      }
-
-      setQrCode(data.qrCode);
-      setStatus("SCAN_READY");
-      startPolling();
+      setWebhookUrl(saved.webhookUrl ?? webhookUrl);
+      setForm((current) => ({ ...current, accessToken: "" }));
+      setStatus("CONNECTED");
+      setSuccessMsg("Meta Cloud API conectada.");
     } catch (error: unknown) {
-      setErrorMsg(getErrorMessage(error, "Erro ao gerar QR code."));
-      setStatus("ERROR");
+      setStatus("DISCONNECTED");
+      setErrorMsg(
+        getErrorMessage(error, "Nao foi possivel validar a Meta Cloud API."),
+      );
     }
-  };
+  }
 
-  const handleDisconnect = async () => {
-    if (
-      !confirm(
-        "Deseja realmente desconectar o WhatsApp? O motor de cobrança será interrompido.",
-      )
-    ) {
+  async function handleDisconnect(): Promise<void> {
+    if (!confirm("Deseja desconectar a Meta Cloud API desta empresa?")) {
       return;
     }
 
     try {
       await apiClient.disconnectWhatsapp();
-      stopPolling();
-      setQrCode(null);
+      setForm(INITIAL_FORM);
       setStatus("DISCONNECTED");
+      setSuccessMsg("Integração desconectada.");
     } catch (error: unknown) {
-      setErrorMsg(getErrorMessage(error, "Erro ao desconectar."));
-      setStatus("ERROR");
+      setErrorMsg(getErrorMessage(error, "Erro ao desconectar WhatsApp."));
     }
-  };
+  }
+
+  const connected = status === "CONNECTED";
+  const saving = status === "SAVING";
 
   return (
-    <div className="mx-auto max-w-5xl p-4 sm:p-6 lg:p-8">
+    <div className="mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-slate-900">
-          Configuração do WhatsApp
+          WhatsApp oficial
         </h1>
         <p className="mt-1 text-sm text-slate-500">
-          Conecte o número da sua empresa para iniciar os disparos automáticos.
+          Envio por Meta Cloud API com templates aprovados e controle de opt-in.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 lg:gap-8">
-        <div className="flex min-h-80 flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:p-8">
-          <div
-            className="flex flex-col items-center transition-all duration-300 ease-out"
-            key={status}
-            style={{ animation: "fadeIn 0.3s ease-out" }}
-          >
-            {status === "LOADING" && (
-              <div className="text-center">
-                <Loader2
-                  className="mx-auto mb-4 animate-spin text-slate-400"
-                  size={36}
-                />
-                <p className="text-sm text-slate-500">Verificando conexão...</p>
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <form
+          onSubmit={(event) => void handleSubmit(event)}
+          className="rounded-md border border-slate-200 bg-white shadow-sm"
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-md bg-emerald-50 text-emerald-700">
+                <PlugZap size={20} />
               </div>
-            )}
-
-            {status === "DISCONNECTED" && (
-              <div className="text-center">
-                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full border border-slate-100 bg-slate-50">
-                  <Smartphone className="text-slate-400" size={28} />
-                </div>
-                <h3 className="mb-1 font-bold text-slate-900">
-                  Pronto para conectar
-                </h3>
-                <p className="mb-6 max-w-xs text-sm text-slate-500">
-                  Seu WhatsApp ainda não está vinculado ao motor de cobrança.
-                </p>
-                <button
-                  onClick={handleConnect}
-                  className="rounded-xl bg-emerald-600 px-6 py-2.5 font-bold text-white shadow-md transition-all hover:bg-emerald-700 active:scale-[0.98]"
-                >
-                  Gerar QR Code
-                </button>
-              </div>
-            )}
-
-            {status === "GENERATING" && (
-              <div className="text-center">
-                <Loader2
-                  className="mx-auto mb-4 animate-spin text-emerald-500"
-                  size={42}
-                />
-                <p className="font-medium text-slate-700">
-                  Iniciando instância...
-                </p>
-                <p className="mt-1.5 text-xs text-slate-400">
-                  Conectando à Evolution API.
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900">
+                  Canal Meta Cloud API
+                </h2>
+                <p className="mt-1 text-xs text-slate-500">
+                  Credenciais oficiais do WhatsApp Business Platform.
                 </p>
               </div>
-            )}
+            </div>
 
-            {status === "SCAN_READY" && qrCode && (
-              <div className="text-center">
-                <div className="mb-4 inline-block rounded-2xl border-[3px] border-emerald-500 bg-white p-3 shadow-lg shadow-emerald-500/10">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={`data:image/png;base64,${qrCode}`}
-                    alt="WhatsApp QR Code"
-                    className="h-44 w-44"
-                  />
-                </div>
-                <div className="mb-1 flex items-center justify-center gap-2 text-sm font-bold text-emerald-600">
-                  <RefreshCcw size={14} className="animate-spin" />
-                  Aguardando leitura...
-                </div>
-                <p className="text-xs text-slate-400">
-                  Escaneie o QR Code com o WhatsApp.
-                </p>
-              </div>
-            )}
-
-            {status === "CONNECTED" && (
-              <div className="text-center">
-                <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
-                  <CheckCircle2 size={40} />
-                </div>
-                <h3 className="text-xl font-bold text-slate-900">Conectado!</h3>
-                <p className="mt-1.5 rounded-lg bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-600">
-                  Tudo pronto por aqui! Aproveite o sistema.
-                </p>
-                <button
-                  onClick={handleDisconnect}
-                  className="mx-auto mt-8 flex items-center gap-2 text-xs font-semibold text-slate-400 transition-colors hover:text-rose-600"
-                >
-                  <LogOut size={14} />
-                  Desconectar aparelho
-                </button>
-              </div>
-            )}
-
-            {status === "ERROR" && (
-              <div className="text-center">
-                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full border border-red-100 bg-red-50">
-                  <WifiOff className="text-red-400" size={28} />
-                </div>
-                <h3 className="mb-1 font-bold text-slate-900">
-                  Falha na conexão
-                </h3>
-                <p className="mb-6 max-w-xs text-sm text-red-600">{errorMsg}</p>
-                <button
-                  onClick={handleConnect}
-                  className="rounded-xl bg-slate-900 px-6 py-2.5 font-bold text-white shadow-md transition-all hover:bg-slate-800 active:scale-[0.98]"
-                >
-                  Tentar novamente
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="space-y-5">
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h4 className="mb-4 flex items-center gap-2 text-sm font-bold text-slate-900">
-              <QrCode size={18} className="text-emerald-600" />
-              Como conectar?
-            </h4>
-            <ul className="space-y-3.5 text-sm text-slate-600">
-              <li className="flex gap-3">
-                <span className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">
-                  1
-                </span>
-                <span>Abra o WhatsApp no seu celular.</span>
-              </li>
-              <li className="flex gap-3">
-                <span className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">
-                  2
-                </span>
-                <span>
-                  Toque em <strong>Configurações</strong> ou <strong>Menu</strong>{" "}
-                  e selecione <strong>Aparelhos conectados</strong>.
-                </span>
-              </li>
-              <li className="flex gap-3">
-                <span className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">
-                  3
-                </span>
-                <span>
-                  Toque em <strong>Conectar um aparelho</strong> e aponte a
-                  câmera para o QR Code.
-                </span>
-              </li>
-            </ul>
+            <span
+              className={`inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-semibold ${
+                connected
+                  ? "bg-emerald-50 text-emerald-700"
+                  : "bg-slate-100 text-slate-600"
+              }`}
+            >
+              {status === "LOADING" || saving ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : connected ? (
+                <CheckCircle2 size={14} />
+              ) : (
+                <WifiOff size={14} />
+              )}
+              {status === "LOADING"
+                ? "Verificando"
+                : saving
+                  ? "Validando"
+                  : connected
+                    ? "Conectado"
+                    : "Desconectado"}
+            </span>
           </div>
 
-          <div className="flex items-start gap-3 rounded-xl border border-amber-100 bg-amber-50 p-4">
-            <AlertCircle className="mt-0.5 shrink-0 text-amber-600" size={18} />
-            <p className="text-xs leading-relaxed text-amber-800">
-              <strong>Importante:</strong> Evite desconectar o celular da
-              internet. O aparelho deve permanecer vinculado para que as
-              cobranças saiam no horário.
+          <div className="grid gap-4 p-5 md:grid-cols-2">
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold uppercase text-slate-500">
+                Phone Number ID
+              </span>
+              <input
+                required
+                value={form.phoneNumberId}
+                onChange={(event) =>
+                  updateForm("phoneNumberId", event.target.value)
+                }
+                className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold uppercase text-slate-500">
+                WhatsApp Business Account ID
+              </span>
+              <input
+                required
+                value={form.businessAccountId}
+                onChange={(event) =>
+                  updateForm("businessAccountId", event.target.value)
+                }
+                className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold uppercase text-slate-500">
+                Número exibido
+              </span>
+              <input
+                value={form.businessPhoneNumber}
+                placeholder="+55 11 99999-9999"
+                onChange={(event) =>
+                  updateForm("businessPhoneNumber", event.target.value)
+                }
+                className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold uppercase text-slate-500">
+                Idioma padrão
+              </span>
+              <input
+                required
+                value={form.defaultLanguage}
+                onChange={(event) =>
+                  updateForm("defaultLanguage", event.target.value)
+                }
+                className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1.5 md:col-span-2">
+              <span className="text-xs font-semibold uppercase text-slate-500">
+                Access token permanente
+              </span>
+              <input
+                required
+                type="password"
+                value={form.accessToken}
+                onChange={(event) => updateForm("accessToken", event.target.value)}
+                className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+              />
+            </label>
+          </div>
+
+          {(errorMsg || successMsg) && (
+            <div className="px-5 pb-4">
+              <div
+                className={`rounded-md border px-4 py-3 text-sm font-medium ${
+                  errorMsg
+                    ? "border-red-200 bg-red-50 text-red-800"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-800"
+                }`}
+              >
+                {errorMsg ?? successMsg}
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-col-reverse gap-2 border-t border-slate-200 px-5 py-4 sm:flex-row sm:justify-end">
+            {connected && (
+              <button
+                type="button"
+                onClick={() => void handleDisconnect()}
+                className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+              >
+                Desconectar
+              </button>
+            )}
+            <button
+              type="submit"
+              disabled={saving || status === "LOADING"}
+              className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+              Salvar integração
+            </button>
+          </div>
+        </form>
+
+        <aside className="space-y-4">
+          <section className="rounded-md border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex items-center gap-2">
+              <Webhook size={18} className="text-emerald-600" />
+              <h3 className="text-sm font-semibold text-slate-900">Webhook</h3>
+            </div>
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+              {webhookUrl || "Configure META_WEBHOOK_BASE_URL no backend."}
+            </div>
+          </section>
+
+          <section className="rounded-md border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex items-center gap-2">
+              <ShieldCheck size={18} className="text-emerald-600" />
+              <h3 className="text-sm font-semibold text-slate-900">
+                Regras de envio
+              </h3>
+            </div>
+            <div className="space-y-3 text-sm text-slate-600">
+              <p>Mensagens de cobrança saem como templates oficiais.</p>
+              <p>Devedores sem opt-in são bloqueados antes do envio.</p>
+              <p>Respostas STOP, SAIR, PARAR ou CANCELAR revogam o opt-in.</p>
+            </div>
+          </section>
+
+          <section className="rounded-md border border-amber-200 bg-amber-50 p-4">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="mt-0.5 text-amber-700" size={18} />
+              <p className="text-xs leading-relaxed text-amber-900">
+                Cadastre no painel da Meta os eventos de mensagens para
+                `/webhooks/meta` e use o mesmo verify token do backend.
+              </p>
+            </div>
+          </section>
+
+          <section className="rounded-md border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-3 flex items-center gap-2">
+              <KeyRound size={18} className="text-emerald-600" />
+              <h3 className="text-sm font-semibold text-slate-900">Token</h3>
+            </div>
+            <p className="text-sm text-slate-600">
+              O token é validado na Meta e armazenado criptografado no backend.
             </p>
-          </div>
-
-          <div className="flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50 p-4">
-            <AlertCircle className="mt-0.5 shrink-0 text-blue-600" size={18} />
-            <p className="text-xs leading-relaxed text-blue-800">
-              <strong>Requisito:</strong> A Evolution API deve estar rodando no
-              Docker (porta 8080). Caso veja erros, verifique se o container
-              está ativo.
-            </p>
-          </div>
-        </div>
+          </section>
+        </aside>
       </div>
-
-      <style jsx>{`
-        @keyframes fadeIn {
-          from {
-            opacity: 0;
-            transform: translateY(4px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-      `}</style>
     </div>
   );
 }
