@@ -1,23 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Activity,
+  AlertCircle,
   ArrowUpRight,
   CircleDollarSign,
+  Loader2,
+  MessageCircle,
   Percent,
+  Send,
   WalletCards,
   type LucideIcon,
 } from "lucide-react";
+import type { BillingMetrics, DashboardPeriod } from "@/lib/api-client";
+import { useApiClient } from "@/lib/use-api-client";
 
 type Period = "Hoje" | "7 Dias" | "30 Dias" | "Este Ano";
-
-interface DashboardMetrics {
-  activeCharges: number;
-  pendingAmount: number;
-  recoveredAmount: number;
-  recoveryRate: number;
-}
 
 interface MetricCard {
   label: string;
@@ -29,31 +28,24 @@ interface MetricCard {
 
 const periods: Period[] = ["Hoje", "7 Dias", "30 Dias", "Este Ano"];
 
-const mockMetricsByPeriod: Record<Period, DashboardMetrics> = {
-  Hoje: {
-    activeCharges: 18,
-    pendingAmount: 8420.5,
-    recoveredAmount: 2140.9,
-    recoveryRate: 25.4,
-  },
-  "7 Dias": {
-    activeCharges: 74,
-    pendingAmount: 32890.75,
-    recoveredAmount: 11850.25,
-    recoveryRate: 36.0,
-  },
-  "30 Dias": {
-    activeCharges: 213,
-    pendingAmount: 92640.0,
-    recoveredAmount: 48720.45,
-    recoveryRate: 52.6,
-  },
-  "Este Ano": {
-    activeCharges: 1248,
-    pendingAmount: 418900.3,
-    recoveredAmount: 286450.1,
-    recoveryRate: 68.4,
-  },
+const periodToApiPeriod: Record<Period, DashboardPeriod> = {
+  Hoje: "today",
+  "7 Dias": "7d",
+  "30 Dias": "30d",
+  "Este Ano": "year",
+};
+
+const emptyMetrics: BillingMetrics = {
+  period: "30d",
+  activeCharges: 0,
+  pendingAmount: 0,
+  recoveredAmount: 0,
+  recoveryRate: 0,
+  paidCharges: 0,
+  overdueCharges: 0,
+  generatedPayments: 0,
+  queuedMessages: 0,
+  sentMessages: 0,
 };
 
 function formatBRL(value: number): string {
@@ -68,8 +60,35 @@ function formatPercent(value: number): string {
 }
 
 export default function DashboardPage() {
+  const apiClient = useApiClient();
   const [selectedPeriod, setSelectedPeriod] = useState<Period>("30 Dias");
-  const metrics = mockMetricsByPeriod[selectedPeriod];
+  const [metrics, setMetrics] = useState<BillingMetrics>(emptyMetrics);
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function fetchMetrics(): Promise<void> {
+      setIsLoading(true);
+      setErrorMsg(null);
+
+      try {
+        const data = await apiClient.getBillingMetrics(
+          periodToApiPeriod[selectedPeriod],
+        );
+        setMetrics(data);
+      } catch (error: unknown) {
+        setErrorMsg(
+          error instanceof Error
+            ? error.message
+            : "Nao foi possivel carregar as metricas.",
+        );
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    void fetchMetrics();
+  }, [apiClient, selectedPeriod]);
 
   const cards: MetricCard[] = [
     {
@@ -96,6 +115,31 @@ export default function DashboardPage() {
       value: formatPercent(metrics.recoveryRate),
       helper: "Conversão sobre cobranças ativas",
       icon: Percent,
+    },
+    {
+      label: "Pagas no Período",
+      value: metrics.paidCharges.toLocaleString("pt-BR"),
+      helper: "Confirmadas por webhook Efí",
+      icon: CircleDollarSign,
+      emphasis: "emerald",
+    },
+    {
+      label: "Mensagens Enviadas",
+      value: metrics.sentMessages.toLocaleString("pt-BR"),
+      helper: "Disparos confirmados pela fila",
+      icon: Send,
+    },
+    {
+      label: "Pagamentos Gerados",
+      value: metrics.generatedPayments.toLocaleString("pt-BR"),
+      helper: "PIX, boleto ou Bolix preparados",
+      icon: MessageCircle,
+    },
+    {
+      label: "Vencidas em Aberto",
+      value: metrics.overdueCharges.toLocaleString("pt-BR"),
+      helper: "Faturas pendentes após vencimento",
+      icon: AlertCircle,
     },
   ];
 
@@ -139,7 +183,14 @@ export default function DashboardPage() {
           </div>
         </header>
 
-        <section className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+        {errorMsg && (
+          <div className="flex items-start gap-3 rounded-md border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+            <AlertCircle className="mt-0.5 shrink-0" size={18} />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+
+        <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
           {cards.map((card) => {
             const Icon = card.icon;
             const isEmerald = card.emphasis === "emerald";
@@ -163,11 +214,13 @@ export default function DashboardPage() {
                   >
                     <Icon size={20} />
                   </div>
-                  {isEmerald && (
+                  {isLoading ? (
+                    <Loader2 className="animate-spin text-slate-400" size={17} />
+                  ) : isEmerald ? (
                     <span className="rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
                       ROI
                     </span>
-                  )}
+                  ) : null}
                 </div>
 
                 <p className="text-sm font-medium text-slate-500">
@@ -193,8 +246,8 @@ export default function DashboardPage() {
                 Performance do período
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                O painel usa dados demonstrativos até a API de analytics entrar
-                em produção.
+                Métricas alimentadas por faturas, logs da fila e webhooks da
+                Efí no período selecionado.
               </p>
             </div>
             <div className="rounded-md bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">

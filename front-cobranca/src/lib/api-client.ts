@@ -58,6 +58,20 @@ export interface UpdateBillingSettingsInput {
 
 export type BillingMethod = "PIX" | "BOLETO" | "BOLIX";
 export type RecurringInvoiceStatus = "ACTIVE" | "PAUSED";
+export type DashboardPeriod = "today" | "7d" | "30d" | "year";
+
+export interface BillingMetrics {
+  period: DashboardPeriod;
+  activeCharges: number;
+  pendingAmount: number;
+  recoveredAmount: number;
+  recoveryRate: number;
+  paidCharges: number;
+  overdueCharges: number;
+  generatedPayments: number;
+  queuedMessages: number;
+  sentMessages: number;
+}
 
 export interface InvoicePaymentSummary {
   generated: boolean;
@@ -445,6 +459,17 @@ class ApiClient {
     return this.fetch<BillingResponse>("/billing/run", {
       method: "POST",
     });
+  }
+
+  async runSelectedBilling(invoiceIds: string[]): Promise<BillingResponse> {
+    return this.fetch<BillingResponse>("/billing/invoices/run", {
+      method: "POST",
+      body: JSON.stringify({ invoiceIds }),
+    });
+  }
+
+  async getBillingMetrics(period: DashboardPeriod): Promise<BillingMetrics> {
+    return this.fetch<BillingMetrics>(`/billing/metrics?period=${period}`);
   }
 
   async getBillingSettings(): Promise<BillingSettings> {

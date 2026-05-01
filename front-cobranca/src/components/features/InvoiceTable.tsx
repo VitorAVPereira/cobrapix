@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -20,7 +20,9 @@ import {
   Copy,
   Ban,
   ExternalLink,
+  Loader2,
   PlusCircle,
+  Send,
   SlidersHorizontal,
 } from "lucide-react";
 
@@ -28,16 +30,94 @@ interface InvoiceTableProps {
   data: ParsedDebtor[];
   onConfigureDebtor: (debtor: ParsedDebtor) => void;
   onAddInvoice: (debtor: ParsedDebtor) => void;
+  onRunSelectedInvoices: (invoiceIds: string[]) => void;
+  isRunningSelected: boolean;
 }
 
 export function InvoiceTable({
   data,
   onConfigureDebtor,
   onAddInvoice,
+  onRunSelectedInvoices,
+  isRunningSelected,
 }: InvoiceTableProps) {
   const [copiedPaymentAction, setCopiedPaymentAction] = useState<string | null>(
     null,
   );
+  const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+
+  const selectableInvoiceIds = useMemo(
+    () =>
+      data
+        .filter((invoice) => isInvoiceSelectable(invoice))
+        .map((invoice) => getInvoiceId(invoice))
+        .filter((invoiceId): invoiceId is string => Boolean(invoiceId)),
+    [data],
+  );
+  const selectedIds = useMemo(
+    () =>
+      selectableInvoiceIds.filter((invoiceId) =>
+        selectedInvoiceIds.has(invoiceId),
+      ),
+    [selectableInvoiceIds, selectedInvoiceIds],
+  );
+  const allSelectableSelected =
+    selectableInvoiceIds.length > 0 &&
+    selectedIds.length === selectableInvoiceIds.length;
+
+  function getInvoiceId(invoice: ParsedDebtor): string | null {
+    return invoice.invoiceId ?? invoice.id ?? null;
+  }
+
+  function isInvoiceSelectable(invoice: ParsedDebtor): boolean {
+    return Boolean(
+      getInvoiceId(invoice) &&
+        invoice.status !== "PAID" &&
+        invoice.status !== "CANCELED",
+    );
+  }
+
+  function toggleInvoiceSelection(invoice: ParsedDebtor): void {
+    const invoiceId = getInvoiceId(invoice);
+
+    if (!invoiceId || !isInvoiceSelectable(invoice)) {
+      return;
+    }
+
+    setSelectedInvoiceIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+
+      if (nextIds.has(invoiceId)) {
+        nextIds.delete(invoiceId);
+      } else {
+        nextIds.add(invoiceId);
+      }
+
+      return nextIds;
+    });
+  }
+
+  function toggleAllSelectable(): void {
+    setSelectedInvoiceIds((currentIds) => {
+      if (allSelectableSelected) {
+        const nextIds = new Set(currentIds);
+        selectableInvoiceIds.forEach((invoiceId) => nextIds.delete(invoiceId));
+        return nextIds;
+      }
+
+      return new Set([...currentIds, ...selectableInvoiceIds]);
+    });
+  }
+
+  function runSelectedInvoices(): void {
+    if (selectedIds.length === 0) {
+      return;
+    }
+
+    onRunSelectedInvoices(selectedIds);
+  }
 
   const checkStatus = (row: ParsedDebtor) => {
     if (row.status === "PAID") {
@@ -140,6 +220,35 @@ export function InvoiceTable({
   };
 
   const columns: ColumnDef<ParsedDebtor>[] = [
+    {
+      id: "select",
+      header: () => (
+        <input
+          type="checkbox"
+          checked={allSelectableSelected}
+          disabled={selectableInvoiceIds.length === 0}
+          onChange={toggleAllSelectable}
+          className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
+          aria-label="Selecionar cobranças pendentes"
+        />
+      ),
+      cell: (info) => {
+        const invoice = info.row.original;
+        const invoiceId = getInvoiceId(invoice);
+        const isSelectable = isInvoiceSelectable(invoice);
+
+        return (
+          <input
+            type="checkbox"
+            checked={invoiceId ? selectedInvoiceIds.has(invoiceId) : false}
+            disabled={!isSelectable}
+            onChange={() => toggleInvoiceSelection(invoice)}
+            className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label="Selecionar cobrança"
+          />
+        );
+      },
+    },
     {
       accessorKey: "name",
       header: "Cliente / Devedor",
@@ -338,7 +447,33 @@ export function InvoiceTable({
   const totalPages = table.getPageCount();
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-col gap-3 border-b border-slate-200 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-slate-900">
+            {selectedIds.length} cobrança{selectedIds.length === 1 ? "" : "s"}{" "}
+            selecionada{selectedIds.length === 1 ? "" : "s"}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            O ciclo gera a cobrança Efí, aplica o template e envia pelo
+            WhatsApp.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={runSelectedInvoices}
+          disabled={selectedIds.length === 0 || isRunningSelected}
+          className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {isRunningSelected ? (
+            <Loader2 size={16} className="animate-spin" />
+          ) : (
+            <Send size={16} />
+          )}
+          Enviar selecionadas
+        </button>
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead className="bg-slate-50/80 border-b border-slate-200">

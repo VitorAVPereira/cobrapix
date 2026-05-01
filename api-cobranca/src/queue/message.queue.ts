@@ -20,7 +20,7 @@ export interface SendMessageJob {
 export interface InitialChargeJob {
   invoiceId: string;
   companyId: string;
-  source: 'MANUAL' | 'CSV' | 'RECURRING';
+  source: 'MANUAL' | 'CSV' | 'RECURRING' | 'SELECTED';
 }
 
 export type WhatsAppQueueJob = SendMessageJob | InitialChargeJob;
@@ -62,6 +62,22 @@ export class MessageQueueService {
         delay: this.buildSafeDelay(index),
         ...this.buildJobOptions(
           `initial-charge:${job.companyId}:${job.invoiceId}`,
+        ),
+      },
+    }));
+
+    await this.whatsappQueue.addBulk(bulkJobs);
+  }
+
+  async addSelectedInitialChargeJobs(jobs: InitialChargeJob[]): Promise<void> {
+    const requestedAt = Date.now();
+    const bulkJobs = jobs.map((job, index) => ({
+      name: 'initial-charge',
+      data: job,
+      opts: {
+        delay: this.buildSafeDelay(index),
+        ...this.buildJobOptions(
+          `initial-charge-selected:${job.companyId}:${job.invoiceId}:${requestedAt}`,
         ),
       },
     }));

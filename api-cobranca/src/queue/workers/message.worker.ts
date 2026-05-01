@@ -357,6 +357,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         collectionLogs: {
           where: {
             actionType: { in: ['WHATSAPP_QUEUED', 'WHATSAPP_SENT'] },
+            status: { in: ['QUEUED', 'SENT'] },
           },
           take: 1,
         },
@@ -768,7 +769,8 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       typeof value.companyId === 'string' &&
       (value.source === 'MANUAL' ||
         value.source === 'CSV' ||
-        value.source === 'RECURRING')
+        value.source === 'RECURRING' ||
+        value.source === 'SELECTED')
     );
   }
 

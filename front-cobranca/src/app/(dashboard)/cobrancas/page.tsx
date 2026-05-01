@@ -5,6 +5,7 @@ import type { FormEvent } from "react";
 import {
   AlertCircle,
   ArrowLeft,
+  CheckCircle2,
   FileSpreadsheet,
   FileUp,
   Loader2,
@@ -103,6 +104,7 @@ export default function CobrancasPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isUploadingCSV, setIsUploadingCSV] = useState(false);
   const [isSavingInvoice, setIsSavingInvoice] = useState(false);
+  const [isRunningSelected, setIsRunningSelected] = useState(false);
   const [billingSettings, setBillingSettings] =
     useState<BillingSettings | null>(null);
   const [manualForm, setManualForm] = useState<ManualChargeForm>(
@@ -110,11 +112,13 @@ export default function CobrancasPage() {
   );
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
 
   const fetchInvoices = useCallback(async (): Promise<void> => {
     setIsLoading(true);
     setErrorMsg(null);
+    setSuccessMsg(null);
 
     try {
       const data = await apiClient.getInvoices();
@@ -182,6 +186,24 @@ export default function CobrancasPage() {
       setImportError(
         getErrorMessage(error, "Nao foi possivel importar a planilha."),
       );
+    }
+  }
+
+  async function handleRunSelectedInvoices(invoiceIds: string[]): Promise<void> {
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setIsRunningSelected(true);
+
+    try {
+      const result = await apiClient.runSelectedBilling(invoiceIds);
+      await fetchInvoices();
+      setSuccessMsg(result.message);
+    } catch (error: unknown) {
+      setErrorMsg(
+        getErrorMessage(error, "Nao foi possivel iniciar as cobrancas."),
+      );
+    } finally {
+      setIsRunningSelected(false);
     }
   }
 
@@ -346,6 +368,13 @@ export default function CobrancasPage() {
           </div>
         )}
 
+        {successMsg && (
+          <div className="flex items-start gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">
+            <CheckCircle2 className="mt-0.5 shrink-0" size={18} />
+            <span>{successMsg}</span>
+          </div>
+        )}
+
         {isUploadingCSV ? (
           <section className="rounded-md border border-slate-200 bg-white p-5">
             <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -406,6 +435,10 @@ export default function CobrancasPage() {
                   data={filteredDebtors}
                   onConfigureDebtor={openDebtorSettings}
                   onAddInvoice={openInvoiceModal}
+                  onRunSelectedInvoices={(invoiceIds) => {
+                    void handleRunSelectedInvoices(invoiceIds);
+                  }}
+                  isRunningSelected={isRunningSelected}
                 />
 
                 {searchQuery && filteredDebtors.length === 0 && (
