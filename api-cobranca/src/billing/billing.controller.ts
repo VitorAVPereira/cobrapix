@@ -86,6 +86,7 @@ export class BillingController {
     return this.billingService.updateSettings(user.companyId, {
       preferredBillingMethod: dto.preferredBillingMethod,
       collectionReminderDays: dto.collectionReminderDays,
+      autoGenerateFirstCharge: dto.autoGenerateFirstCharge,
       autoDiscountEnabled: dto.autoDiscountEnabled,
       autoDiscountDaysAfterDue: dto.autoDiscountDaysAfterDue,
       autoDiscountPercentage: dto.autoDiscountPercentage,

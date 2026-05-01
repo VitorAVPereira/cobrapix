@@ -30,7 +30,7 @@ export class CreateInvoiceDto {
   name?: string;
 
   @ValidateIf((dto: CreateInvoiceDto) => !dto.debtorId)
-  @Matches(/^\d{10,13}$/)
+  @Matches(/^\+?[\d\s().-]{10,24}$/)
   phone_number?: string;
 
   @ValidateIf((dto: CreateInvoiceDto) => !dto.debtorId)
@@ -116,6 +116,10 @@ export class UpdateDebtorSettingsDto {
   @Min(-30, { each: true })
   @Max(365, { each: true })
   collectionReminderDays?: number[];
+
+  @ValidateIf((dto: UpdateDebtorSettingsDto) => !dto.useGlobalBillingSettings)
+  @IsBoolean()
+  autoGenerateFirstCharge?: boolean;
 
   @ValidateIf((dto: UpdateDebtorSettingsDto) => !dto.useGlobalBillingSettings)
   @IsBoolean()

@@ -29,6 +29,7 @@ export interface BillingResponse {
 export interface BillingSettings {
   preferredBillingMethod: BillingMethod;
   collectionReminderDays: number[];
+  autoGenerateFirstCharge: boolean;
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue: number | null;
   autoDiscountPercentage: number | null;
@@ -49,6 +50,7 @@ export interface BillingSettings {
 export interface UpdateBillingSettingsInput {
   preferredBillingMethod: BillingMethod;
   collectionReminderDays: number[];
+  autoGenerateFirstCharge: boolean;
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue: number | null;
   autoDiscountPercentage: number | null;
@@ -139,6 +141,7 @@ export interface DebtorBillingSettings {
   useGlobalBillingSettings: boolean;
   customPreferredBillingMethod: BillingMethod | null;
   customCollectionReminderDays: number[];
+  customAutoGenerateFirstCharge: boolean | null;
   customAutoDiscountEnabled: boolean | null;
   customAutoDiscountDaysAfterDue: number | null;
   customAutoDiscountPercentage: number | null;
@@ -151,6 +154,7 @@ export interface UpdateDebtorBillingSettingsInput {
   useGlobalBillingSettings: boolean;
   preferredBillingMethod?: BillingMethod | null;
   collectionReminderDays?: number[] | null;
+  autoGenerateFirstCharge?: boolean | null;
   autoDiscountEnabled?: boolean | null;
   autoDiscountDaysAfterDue?: number | null;
   autoDiscountPercentage?: number | null;

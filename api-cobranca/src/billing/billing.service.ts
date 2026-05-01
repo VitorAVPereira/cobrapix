@@ -8,6 +8,7 @@ import { SpintaxService } from '../queue/services/spintax.service';
 
 const DEFAULT_COLLECTION_REMINDER_DAYS = [0];
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_AUTO_GENERATE_FIRST_CHARGE = true;
 const DEFAULT_AUTO_DISCOUNT_ENABLED = false;
 const PLATFORM_FIXED_FEE = 0.5;
 
@@ -29,6 +30,7 @@ interface TariffDetails {
 export interface BillingSettingsResponse {
   preferredBillingMethod: BillingMethod;
   collectionReminderDays: number[];
+  autoGenerateFirstCharge: boolean;
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue: number | null;
   autoDiscountPercentage: number | null;
@@ -38,6 +40,7 @@ export interface BillingSettingsResponse {
 interface BillingSettingsInput {
   preferredBillingMethod: BillingMethod;
   collectionReminderDays: number[];
+  autoGenerateFirstCharge: boolean;
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue?: number | null;
   autoDiscountPercentage?: number | null;
@@ -156,6 +159,7 @@ export class BillingService {
       select: {
         preferredBillingMethod: true,
         collectionReminderDays: true,
+        autoGenerateFirstCharge: true,
         autoDiscountEnabled: true,
         autoDiscountDaysAfterDue: true,
         autoDiscountPercentage: true,
@@ -176,6 +180,7 @@ export class BillingService {
       data: {
         preferredBillingMethod: normalizedSettings.preferredBillingMethod,
         collectionReminderDays: normalizedSettings.collectionReminderDays,
+        autoGenerateFirstCharge: normalizedSettings.autoGenerateFirstCharge,
         autoDiscountEnabled: normalizedSettings.autoDiscountEnabled,
         autoDiscountDaysAfterDue: normalizedSettings.autoDiscountDaysAfterDue,
         autoDiscountPercentage: normalizedSettings.autoDiscountPercentage,
@@ -183,6 +188,7 @@ export class BillingService {
       select: {
         preferredBillingMethod: true,
         collectionReminderDays: true,
+        autoGenerateFirstCharge: true,
         autoDiscountEnabled: true,
         autoDiscountDaysAfterDue: true,
         autoDiscountPercentage: true,
@@ -636,6 +642,9 @@ export class BillingService {
         collectionReminderDays: this.normalizeReminderDays(
           settings.collectionReminderDays,
         ),
+        autoGenerateFirstCharge:
+          settings.autoGenerateFirstCharge ??
+          DEFAULT_AUTO_GENERATE_FIRST_CHARGE,
         autoDiscountEnabled: false,
         autoDiscountDaysAfterDue: null,
         autoDiscountPercentage: null,
@@ -649,6 +658,9 @@ export class BillingService {
       collectionReminderDays: this.normalizeReminderDays(
         settings.collectionReminderDays,
       ),
+      autoGenerateFirstCharge:
+        settings.autoGenerateFirstCharge ??
+        DEFAULT_AUTO_GENERATE_FIRST_CHARGE,
       autoDiscountEnabled: true,
       autoDiscountDaysAfterDue: this.normalizeDiscountDays(
         settings.autoDiscountDaysAfterDue,
@@ -663,6 +675,7 @@ export class BillingService {
     company: {
       preferredBillingMethod?: BillingMethod | null;
       collectionReminderDays?: number[] | null;
+      autoGenerateFirstCharge?: boolean | null;
       autoDiscountEnabled?: boolean | null;
       autoDiscountDaysAfterDue?: number | null;
       autoDiscountPercentage?: { toNumber(): number } | null;
@@ -677,6 +690,8 @@ export class BillingService {
       collectionReminderDays: this.normalizeReminderDays(
         company?.collectionReminderDays,
       ),
+      autoGenerateFirstCharge:
+        company?.autoGenerateFirstCharge ?? DEFAULT_AUTO_GENERATE_FIRST_CHARGE,
       autoDiscountEnabled,
       autoDiscountDaysAfterDue: autoDiscountEnabled
         ? this.normalizeDiscountDays(company?.autoDiscountDaysAfterDue)

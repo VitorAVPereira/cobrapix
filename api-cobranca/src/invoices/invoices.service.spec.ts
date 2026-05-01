@@ -1,5 +1,6 @@
 import { InvoicesService } from './invoices.service.ts';
 import { PrismaService } from '../prisma/prisma.service';
+import { MessageQueueService } from '../queue/message.queue';
 
 function decimal(value: number): { toNumber(): number } {
   return { toNumber: () => value };
@@ -52,6 +53,12 @@ function buildInvoice(overrides: {
 }
 
 describe('InvoicesService', () => {
+  function buildMessageQueue(): MessageQueueService {
+    return {
+      addInitialChargeJobs: jest.fn().mockResolvedValue(undefined),
+    } as unknown as MessageQueueService;
+  }
+
   afterEach(() => {
     jest.useRealTimers();
   });
@@ -81,7 +88,7 @@ describe('InvoicesService', () => {
       $transaction: transaction,
     } as unknown as PrismaService;
 
-    const service = new InvoicesService(prisma);
+    const service = new InvoicesService(prisma, buildMessageQueue());
     const result = await service.createInvoice('company-1', {
       debtorId: 'debtor-1',
       original_amount: 199.9,
@@ -96,25 +103,29 @@ describe('InvoicesService', () => {
 
   it('cria devedor novo com fatura manual', async () => {
     const invoice = buildInvoice({ debtorId: 'debtor-new' });
-    const debtorUpsert = jest.fn().mockResolvedValue({ id: 'debtor-new' });
+    const debtorFindMany = jest.fn().mockResolvedValue([]);
+    const debtorCreate = jest.fn().mockResolvedValue({ id: 'debtor-new' });
     const invoiceCreate = jest.fn().mockResolvedValue(invoice);
     const prisma = {
       $transaction: jest.fn(
         async (
           callback: (tx: {
-            debtor: { upsert: typeof debtorUpsert };
+            debtor: {
+              findMany: typeof debtorFindMany;
+              create: typeof debtorCreate;
+            };
             invoice: { create: typeof invoiceCreate };
           }) => Promise<unknown>,
         ) =>
           callback({
-            debtor: { upsert: debtorUpsert },
+            debtor: { findMany: debtorFindMany, create: debtorCreate },
             invoice: { create: invoiceCreate },
           }),
       ),
     } as unknown as PrismaService;
 
-    const service = new InvoicesService(prisma);
-    await service.createInvoice('company-1', {
+    const service = new InvoicesService(prisma, buildMessageQueue());
+    const result = await service.createInvoice('company-1', {
       name: 'Maria Silva',
       phone_number: '11999999999',
       email: 'maria@email.com',
@@ -123,14 +134,13 @@ describe('InvoicesService', () => {
       billing_type: 'PIX',
     });
 
-    expect(debtorUpsert).toHaveBeenCalledWith(
+    expect(result.phone_number).toBe('+5511999999999');
+    expect(debtorCreate).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: {
-          companyId_phoneNumber: {
-            companyId: 'company-1',
-            phoneNumber: '11999999999',
-          },
-        },
+        data: expect.objectContaining({
+          companyId: 'company-1',
+          phoneNumber: '+5511999999999',
+        }) as unknown,
       }),
     );
     expect(invoiceCreate).toHaveBeenCalledWith(
@@ -141,6 +151,64 @@ describe('InvoicesService', () => {
         }) as unknown,
       }),
     );
+  });
+
+  it('enfileira primeira cobranca apos importacao CSV', async () => {
+    const debtorFindMany = jest.fn().mockResolvedValue([]);
+    const debtorCreate = jest.fn().mockResolvedValue({ id: 'debtor-1' });
+    const invoiceCreate = jest.fn().mockResolvedValue({ id: 'invoice-1' });
+    const messageQueue = {
+      addInitialChargeJobs: jest.fn().mockResolvedValue(undefined),
+    } as unknown as MessageQueueService;
+    const prisma = {
+      $transaction: jest.fn(
+        async (
+          callback: (tx: {
+            debtor: {
+              findMany: typeof debtorFindMany;
+              create: typeof debtorCreate;
+            };
+            invoice: { create: typeof invoiceCreate };
+          }) => Promise<unknown>,
+        ) =>
+          callback({
+            debtor: { findMany: debtorFindMany, create: debtorCreate },
+            invoice: { create: invoiceCreate },
+          }),
+      ),
+    } as unknown as PrismaService;
+
+    const service = new InvoicesService(prisma, messageQueue);
+    const result = await service.importCsv('company-1', [
+      {
+        name: 'Maria Silva',
+        phone_number: '11999999999',
+        email: 'maria@email.com',
+        original_amount: 199.9,
+        due_date: '2026-05-10',
+        billing_type: 'PIX',
+      },
+    ]);
+
+    expect(result).toEqual({
+      success: true,
+      count: 1,
+      initialChargeQueued: 1,
+    });
+    expect(debtorCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          phoneNumber: '+5511999999999',
+        }) as unknown,
+      }),
+    );
+    expect(messageQueue.addInitialChargeJobs).toHaveBeenCalledWith([
+      {
+        invoiceId: 'invoice-1',
+        companyId: 'company-1',
+        source: 'CSV',
+      },
+    ]);
   });
 
   it('gera a primeira fatura recorrente no ultimo dia do mes quando dia 31 nao existe', async () => {
@@ -192,7 +260,7 @@ describe('InvoicesService', () => {
       },
     } as unknown as PrismaService;
 
-    const service = new InvoicesService(prisma);
+    const service = new InvoicesService(prisma, buildMessageQueue());
     const result = await service.createInvoice('company-1', {
       debtorId: 'debtor-1',
       original_amount: 199.9,

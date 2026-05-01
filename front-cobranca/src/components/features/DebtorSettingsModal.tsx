@@ -86,6 +86,7 @@ export function DebtorSettingsModal({
     useState<BillingMethod>("PIX");
   const [selectedOffsets, setSelectedOffsets] = useState<number[]>([0]);
   const [customOffset, setCustomOffset] = useState("");
+  const [autoGenerateFirstCharge, setAutoGenerateFirstCharge] = useState(true);
   const [autoDiscountEnabled, setAutoDiscountEnabled] = useState(false);
   const [autoDiscountDaysAfterDue, setAutoDiscountDaysAfterDue] = useState("0");
   const [autoDiscountPercentage, setAutoDiscountPercentage] = useState("");
@@ -125,6 +126,12 @@ export function DebtorSettingsModal({
               ? response.globalSettings.collectionReminderDays
               : response.customCollectionReminderDays,
           ),
+        );
+        setAutoGenerateFirstCharge(
+          response.useGlobalBillingSettings
+            ? response.globalSettings.autoGenerateFirstCharge
+            : (response.customAutoGenerateFirstCharge ??
+                response.globalSettings.autoGenerateFirstCharge),
         );
         setAutoDiscountEnabled(
           response.useGlobalBillingSettings
@@ -184,6 +191,12 @@ export function DebtorSettingsModal({
         ? snapshot.globalSettings.autoDiscountEnabled
         : (snapshot.customAutoDiscountEnabled ??
             snapshot.globalSettings.autoDiscountEnabled),
+    );
+    setAutoGenerateFirstCharge(
+      useGlobal
+        ? snapshot.globalSettings.autoGenerateFirstCharge
+        : (snapshot.customAutoGenerateFirstCharge ??
+            snapshot.globalSettings.autoGenerateFirstCharge),
     );
     setAutoDiscountDaysAfterDue(
       String(
@@ -286,6 +299,9 @@ export function DebtorSettingsModal({
         collectionReminderDays: useGlobalBillingSettings
           ? null
           : collectionReminderDays,
+        autoGenerateFirstCharge: useGlobalBillingSettings
+          ? null
+          : autoGenerateFirstCharge,
         autoDiscountEnabled: useGlobalBillingSettings
           ? null
           : autoDiscountEnabled,
@@ -424,6 +440,7 @@ export function DebtorSettingsModal({
                               Total: {estimateFee(method, settings?.globalSettings ?? {
                                 preferredBillingMethod: "PIX",
                                 collectionReminderDays: [0],
+                                autoGenerateFirstCharge: true,
                                 autoDiscountEnabled: false,
                                 autoDiscountDaysAfterDue: null,
                                 autoDiscountPercentage: null,
@@ -533,6 +550,37 @@ export function DebtorSettingsModal({
                   <section className="rounded-md border border-slate-200 bg-white">
                     <div className="border-b border-slate-200 px-4 py-3">
                       <h3 className="text-sm font-semibold text-slate-900">
+                        Primeira cobrança
+                      </h3>
+                    </div>
+
+                    <div className="p-4">
+                      <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-4">
+                        <input
+                          type="checkbox"
+                          checked={autoGenerateFirstCharge}
+                          disabled={useGlobalBillingSettings}
+                          onChange={(event) => {
+                            setAutoGenerateFirstCharge(event.target.checked);
+                            setSuccess(null);
+                          }}
+                          className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">
+                            Gerar no cadastro deste devedor
+                          </p>
+                          <p className="mt-1 text-sm text-slate-500">
+                            Quando ativo, a primeira fatura já entra na fila de cobrança.
+                          </p>
+                        </div>
+                      </label>
+                    </div>
+                  </section>
+
+                  <section className="rounded-md border border-slate-200 bg-white">
+                    <div className="border-b border-slate-200 px-4 py-3">
+                      <h3 className="text-sm font-semibold text-slate-900">
                         Desconto automatico
                       </h3>
                     </div>
@@ -627,6 +675,10 @@ export function DebtorSettingsModal({
                             .combinedLabel
                         : "-"}
                     </p>
+                    <p className="mt-2 text-sm text-slate-600">
+                      Primeira cobrança:{" "}
+                      {globalSummary?.autoGenerateFirstCharge ? "ativa" : "inativa"}
+                    </p>
                   </section>
 
                   <section className="rounded-md border border-slate-200 bg-slate-50 p-4">
@@ -651,6 +703,12 @@ export function DebtorSettingsModal({
                       {effectiveSummary?.collectionReminderDays
                         .map((offset) => formatOffset(offset))
                         .join(", ") || "-"}
+                    </p>
+                    <p className="mt-2 text-sm text-slate-600">
+                      Primeira cobrança:{" "}
+                      {effectiveSummary?.autoGenerateFirstCharge
+                        ? "ativa"
+                        : "inativa"}
                     </p>
                     <div className="mt-4 space-y-2">
                       {orderedOffsets.map((offset) => (

@@ -63,6 +63,7 @@ model Company {
   maxDiscountsPerDebtor        Int            @default(1)
   discountTriggerDay           Int            @default(15)
   collectionReminderDays       Int[]          @default([0])
+  autoGenerateFirstCharge      Boolean        @default(true)
   autoDiscountEnabled          Boolean        @default(false)
   autoDiscountDaysAfterDue     Int?
   autoDiscountPercentage       Decimal?       @db.Decimal(5, 2)
@@ -138,6 +139,7 @@ model Debtor {
   gatewayCustomerId            String?
   useGlobalBillingSettings     Boolean  @default(true)
   collectionReminderDays       Int[]    @default([])
+  autoGenerateFirstCharge      Boolean?
   autoDiscountEnabled          Boolean?
   autoDiscountDaysAfterDue     Int?
   autoDiscountPercentage       Decimal? @db.Decimal(5, 2)

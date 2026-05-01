@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import Papa from "papaparse";
 import { AlertCircle, Download, FileType, UploadCloud } from "lucide-react";
+import { normalizeWhatsAppNumber } from "@/lib/whatsapp-number";
 
 export type PaymentMethod = "PIX" | "BOLETO" | "BOLIX";
 
@@ -69,7 +70,7 @@ export function UploadCSV({ onUploadSuccess }: UploadCSVProps) {
 
   const downloadTemplate = (): void => {
     const templateContent =
-      "Nome,WhatsApp,Email,Valor,Vencimento,Forma de Pagamento\nJoao Silva,5511999999999,joao@email.com,150.50,2025-12-01,BOLIX";
+      "Nome,WhatsApp,Email,Valor,Vencimento,Forma de Pagamento\nJoao Silva,+5511999999999,joao@email.com,150.50,2025-12-01,BOLIX";
     const blob = new Blob([templateContent], {
       type: "text/csv;charset=utf-8;",
     });
@@ -129,8 +130,9 @@ export function UploadCSV({ onUploadSuccess }: UploadCSVProps) {
                 );
               }
 
-              zap = zap.replace(/\D/g, "");
-              if (zap.length < 10) {
+              try {
+                zap = normalizeWhatsAppNumber(zap);
+              } catch {
                 throw new Error(
                   `Linha ${index + 2}: O WhatsApp de ${nome} parece invalido (${zap}).`,
                 );

@@ -26,6 +26,9 @@ export class UpdateBillingSettingsDto {
   collectionReminderDays!: number[];
 
   @IsBoolean()
+  autoGenerateFirstCharge!: boolean;
+
+  @IsBoolean()
   autoDiscountEnabled!: boolean;
 
   @ValidateIf((dto: UpdateBillingSettingsDto) => dto.autoDiscountEnabled)

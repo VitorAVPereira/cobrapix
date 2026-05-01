@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GetUser } from '../auth/decorators/get-user.decorator';
+import { normalizeWhatsAppNumber } from '../common/whatsapp-number';
 import { DebtorSettingsResponse, InvoicesService } from './invoices.service';
 import {
   BillingType,
@@ -240,6 +241,7 @@ export class InvoicesController {
         useGlobalBillingSettings: dto.useGlobalBillingSettings,
         preferredBillingMethod: dto.preferredBillingMethod,
         collectionReminderDays: dto.collectionReminderDays,
+        autoGenerateFirstCharge: dto.autoGenerateFirstCharge,
         autoDiscountEnabled: dto.autoDiscountEnabled,
         autoDiscountDaysAfterDue: dto.autoDiscountDaysAfterDue,
         autoDiscountPercentage: dto.autoDiscountPercentage,
@@ -257,7 +259,7 @@ export class InvoicesController {
   async importCsv(
     @GetUser() user: AuthenticatedUser,
     @Body() body: unknown,
-  ): Promise<{ success: boolean; count: number }> {
+  ): Promise<{ success: boolean; count: number; initialChargeQueued: number }> {
     if (!Array.isArray(body) || body.length === 0) {
       throw new HttpException('Nenhum dado recebido.', HttpStatus.BAD_REQUEST);
     }
@@ -282,7 +284,9 @@ export class InvoicesController {
       } else {
         validRows.push({
           name: (row.name as string).trim(),
-          phone_number: (row.phone_number as string).trim(),
+          phone_number: normalizeWhatsAppNumber(
+            (row.phone_number as string).trim(),
+          ),
           email:
             typeof row.email === 'string' && row.email.trim()
               ? row.email.trim()
@@ -313,9 +317,9 @@ export class InvoicesController {
 
     if (
       typeof row.phone_number !== 'string' ||
-      !/^\d{10,13}$/.test(row.phone_number)
+      !this.isValidWhatsAppNumber(row.phone_number)
     ) {
-      return `Linha ${i}: WhatsApp invalido (esperado 10-13 digitos numericos).`;
+      return `Linha ${i}: WhatsApp invalido. Informe DDD e numero; sem codigo do pais o padrao sera +55.`;
     }
 
     if (typeof row.email !== 'string' || row.email.trim() === '') {
@@ -347,6 +351,15 @@ export class InvoicesController {
 
   private isBillingType(value: unknown): value is BillingType {
     return value === 'PIX' || value === 'BOLETO' || value === 'BOLIX';
+  }
+
+  private isValidWhatsAppNumber(value: string): boolean {
+    try {
+      normalizeWhatsAppNumber(value);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private isUuid(value: string): value is string {

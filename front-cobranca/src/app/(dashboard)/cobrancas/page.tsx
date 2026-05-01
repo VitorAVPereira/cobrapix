@@ -21,6 +21,10 @@ import type {
 } from "@/components/features/UploadCSV";
 import type { BillingSettings } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
+import {
+  formatWhatsAppNumber,
+  normalizeWhatsAppNumber,
+} from "@/lib/whatsapp-number";
 
 interface ApiErrorData {
   details?: string[];
@@ -149,10 +153,13 @@ export default function CobrancasPage() {
     }
 
     return debtors.filter((debtor) => {
+      const formattedPhoneNumber = formatWhatsAppNumber(debtor.phone_number);
       const searchableFields = [
         debtor.name,
         debtor.document || "",
         debtor.phone_number,
+        formattedPhoneNumber,
+        formattedPhoneNumber.replace(/\D/g, ""),
         debtor.email || "",
       ];
 
@@ -223,7 +230,7 @@ export default function CobrancasPage() {
 
     const amount = Number(manualForm.amount);
     const dueDay = Number(manualForm.dueDay);
-    const phoneNumber = manualForm.whatsapp.replace(/\D/g, "");
+    const phoneNumber = normalizeWhatsAppNumber(manualForm.whatsapp);
 
     try {
       if (!Number.isFinite(amount) || amount <= 0) {
@@ -300,7 +307,7 @@ export default function CobrancasPage() {
                 type="search"
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Pesquisar por nome ou CPF..."
+                placeholder="Pesquisar por nome, CPF ou WhatsApp..."
                 className="h-11 w-full rounded-md border border-slate-200 bg-white py-2 pl-10 pr-3 text-sm text-slate-900 outline-none transition-all duration-200 placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
               />
             </div>
@@ -486,12 +493,13 @@ export default function CobrancasPage() {
 
                     <label className="flex flex-col gap-1.5">
                       <span className="text-xs font-semibold uppercase text-slate-500">
-                        WhatsApp (com DDD)
+                        WhatsApp (pais + DDD)
                       </span>
                       <input
                         required
                         type="tel"
                         value={manualForm.whatsapp}
+                        placeholder="+55 (11) 99999-9999"
                         onChange={(event) =>
                           updateManualForm("whatsapp", event.target.value)
                         }

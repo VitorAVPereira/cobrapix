@@ -9,6 +9,7 @@ import {
   ColumnDef,
 } from "@tanstack/react-table";
 import type { ParsedDebtor } from "./UploadCSV";
+import { formatWhatsAppNumber } from "@/lib/whatsapp-number";
 import {
   ChevronLeft,
   ChevronRight,
@@ -153,11 +154,10 @@ export function InvoiceTable({
       header: "WhatsApp",
       cell: (info) => {
         const zap = info.getValue() as string;
-        const mascara = zap.replace(/^(\d{2})(\d{5})(\d{4}).*/, "($1) $2-$3");
         return (
           <div className="flex items-center gap-2 text-slate-600">
             <MessageCircle size={15} className="text-emerald-500 shrink-0" />
-            <span>{mascara}</span>
+            <span>{formatWhatsAppNumber(zap)}</span>
           </div>
         );
       },

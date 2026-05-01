@@ -1,7 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { BillingMethod, RecurringInvoiceStatus } from '@prisma/client';
+import { BillingMethod, Prisma, RecurringInvoiceStatus } from '@prisma/client';
+import {
+  getWhatsAppNumberLookupCandidates,
+  normalizeWhatsAppNumber,
+} from '../common/whatsapp-number';
 import { PrismaService } from '../prisma/prisma.service';
+import { InitialChargeJob, MessageQueueService } from '../queue/message.queue';
 import { BillingType } from './dto/invoice.dto';
 
 const PLATFORM_FIXED_FEE = 0.5;
@@ -11,6 +16,7 @@ const DAY_IN_MS = 24 * 60 * 60 * 1000;
 interface BillingSettingsSnapshot {
   preferredBillingMethod: BillingMethod;
   collectionReminderDays: number[];
+  autoGenerateFirstCharge: boolean;
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue: number | null;
   autoDiscountPercentage: number | null;
@@ -113,6 +119,16 @@ interface UpdateRecurringInvoiceInput {
   dueDay: number;
 }
 
+interface DebtorUpsertInput {
+  name: string;
+  phoneNumber: string;
+  email?: string | null;
+}
+
+interface DebtorIdentity {
+  id: string;
+}
+
 interface InvoiceWithRelations {
   id: string;
   debtor: {
@@ -173,6 +189,7 @@ export interface DebtorSettingsResponse {
   useGlobalBillingSettings: boolean;
   customPreferredBillingMethod: BillingMethod | null;
   customCollectionReminderDays: number[];
+  customAutoGenerateFirstCharge: boolean | null;
   customAutoDiscountEnabled: boolean | null;
   customAutoDiscountDaysAfterDue: number | null;
   customAutoDiscountPercentage: number | null;
@@ -185,6 +202,7 @@ export interface UpdateDebtorSettingsInput {
   useGlobalBillingSettings: boolean;
   preferredBillingMethod?: BillingMethod | null;
   collectionReminderDays?: number[] | null;
+  autoGenerateFirstCharge?: boolean | null;
   autoDiscountEnabled?: boolean | null;
   autoDiscountDaysAfterDue?: number | null;
   autoDiscountPercentage?: number | null;
@@ -194,7 +212,10 @@ export interface UpdateDebtorSettingsInput {
 export class InvoicesService {
   private readonly logger = new Logger(InvoicesService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly messageQueue: MessageQueueService,
+  ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   async generateScheduledRecurringInvoices(): Promise<void> {
@@ -217,34 +238,22 @@ export class InvoicesService {
   async importCsv(
     companyId: string,
     rows: ImportRow[],
-  ): Promise<{ success: boolean; count: number }> {
+  ): Promise<{ success: boolean; count: number; initialChargeQueued: number }> {
     const result = await this.prisma.$transaction(async (tx) => {
       let created = 0;
+      const invoiceIds: string[] = [];
 
       for (const row of rows) {
-        const debtor = await tx.debtor.upsert({
-          where: {
-            companyId_phoneNumber: {
-              companyId,
-              phoneNumber: row.phone_number,
-            },
-          },
-          update: {
-            name: row.name,
-            email: row.email || null,
-          },
-          create: {
-            companyId,
-            name: row.name,
-            phoneNumber: row.phone_number,
-            email: row.email || null,
-          },
+        const debtor = await this.upsertDebtor(tx, companyId, {
+          name: row.name,
+          phoneNumber: row.phone_number,
+          email: row.email || null,
         });
 
         const dueDate = this.parseDueDate(row.due_date);
         if (!dueDate) continue;
 
-        await tx.invoice.create({
+        const invoice = await tx.invoice.create({
           data: {
             companyId,
             debtorId: debtor.id,
@@ -254,13 +263,20 @@ export class InvoicesService {
           },
         });
 
+        invoiceIds.push(invoice.id);
         created++;
       }
 
-      return created;
+      return { created, invoiceIds };
     });
 
-    return { success: true, count: result };
+    const initialChargeQueued = await this.queueInitialChargeJobs(
+      companyId,
+      result.invoiceIds,
+      'CSV',
+    );
+
+    return { success: true, count: result.created, initialChargeQueued };
   }
 
   async createInvoice(
@@ -285,6 +301,8 @@ export class InvoicesService {
         throw new Error('Nao foi possivel criar a fatura recorrente.');
       }
 
+      await this.queueInitialChargeJobs(companyId, [invoice.id], 'RECURRING');
+
       return this.mapInvoiceListItem(invoice);
     }
 
@@ -297,24 +315,12 @@ export class InvoicesService {
       const debtor = debtorId
         ? await tx.debtor.findFirst({
             where: { id: debtorId, companyId },
+            select: { id: true },
           })
-        : await tx.debtor.upsert({
-            where: {
-              companyId_phoneNumber: {
-                companyId,
-                phoneNumber: input.phone_number ?? '',
-              },
-            },
-            update: {
-              name: input.name ?? '',
-              email: input.email ?? null,
-            },
-            create: {
-              companyId,
-              name: input.name ?? '',
-              phoneNumber: input.phone_number ?? '',
-              email: input.email ?? null,
-            },
+        : await this.upsertDebtor(tx, companyId, {
+            name: input.name ?? '',
+            phoneNumber: input.phone_number ?? '',
+            email: input.email ?? null,
           });
 
       if (!debtor) {
@@ -332,6 +338,8 @@ export class InvoicesService {
         include: { debtor: true, recurringInvoice: true },
       });
     });
+
+    await this.queueInitialChargeJobs(companyId, [invoice.id], 'MANUAL');
 
     return this.mapInvoiceListItem(invoice);
   }
@@ -439,6 +447,7 @@ export class InvoicesService {
           select: {
             preferredBillingMethod: true,
             collectionReminderDays: true,
+            autoGenerateFirstCharge: true,
             autoDiscountEnabled: true,
             autoDiscountDaysAfterDue: true,
             autoDiscountPercentage: true,
@@ -457,6 +466,7 @@ export class InvoicesService {
       : this.buildEffectiveCustomSettings({
           preferredBillingMethod: debtor.preferredBillingMethod,
           collectionReminderDays: debtor.collectionReminderDays,
+          autoGenerateFirstCharge: debtor.autoGenerateFirstCharge ?? true,
           autoDiscountEnabled: debtor.autoDiscountEnabled,
           autoDiscountDaysAfterDue: debtor.autoDiscountDaysAfterDue,
           autoDiscountPercentage:
@@ -472,6 +482,7 @@ export class InvoicesService {
         debtor.collectionReminderDays,
         true,
       ),
+      customAutoGenerateFirstCharge: debtor.autoGenerateFirstCharge,
       customAutoDiscountEnabled: debtor.autoDiscountEnabled,
       customAutoDiscountDaysAfterDue: debtor.autoDiscountDaysAfterDue,
       customAutoDiscountPercentage: debtor.autoDiscountPercentage
@@ -502,6 +513,7 @@ export class InvoicesService {
       ? {
           preferredBillingMethod: null,
           collectionReminderDays: [],
+          autoGenerateFirstCharge: null,
           autoDiscountEnabled: null,
           autoDiscountDaysAfterDue: null,
           autoDiscountPercentage: null,
@@ -509,6 +521,7 @@ export class InvoicesService {
       : this.buildEffectiveCustomSettings({
           preferredBillingMethod: input.preferredBillingMethod ?? 'PIX',
           collectionReminderDays: input.collectionReminderDays ?? [],
+          autoGenerateFirstCharge: input.autoGenerateFirstCharge ?? true,
           autoDiscountEnabled: input.autoDiscountEnabled ?? false,
           autoDiscountDaysAfterDue: input.autoDiscountDaysAfterDue ?? null,
           autoDiscountPercentage: input.autoDiscountPercentage ?? null,
@@ -522,6 +535,9 @@ export class InvoicesService {
           ? null
           : normalizedSettings.preferredBillingMethod,
         collectionReminderDays: normalizedSettings.collectionReminderDays,
+        autoGenerateFirstCharge: useGlobalBillingSettings
+          ? null
+          : normalizedSettings.autoGenerateFirstCharge,
         autoDiscountEnabled: useGlobalBillingSettings
           ? null
           : normalizedSettings.autoDiscountEnabled,
@@ -537,6 +553,28 @@ export class InvoicesService {
     return this.getDebtorSettings(companyId, debtorId);
   }
 
+  private async queueInitialChargeJobs(
+    companyId: string,
+    invoiceIds: string[],
+    source: InitialChargeJob['source'],
+  ): Promise<number> {
+    const uniqueInvoiceIds = Array.from(new Set(invoiceIds));
+
+    if (uniqueInvoiceIds.length === 0) {
+      return 0;
+    }
+
+    await this.messageQueue.addInitialChargeJobs(
+      uniqueInvoiceIds.map((invoiceId) => ({
+        invoiceId,
+        companyId,
+        source,
+      })),
+    );
+
+    return uniqueInvoiceIds.length;
+  }
+
   private async createRecurringInvoice(
     companyId: string,
     input: CreateInvoiceInput,
@@ -550,24 +588,10 @@ export class InvoicesService {
           where: { id: input.debtorId, companyId },
           select: { id: true },
         })
-      : await this.prisma.debtor.upsert({
-          where: {
-            companyId_phoneNumber: {
-              companyId,
-              phoneNumber: input.phone_number ?? '',
-            },
-          },
-          update: {
-            name: input.name ?? '',
-            email: input.email ?? null,
-          },
-          create: {
-            companyId,
-            name: input.name ?? '',
-            phoneNumber: input.phone_number ?? '',
-            email: input.email ?? null,
-          },
-          select: { id: true },
+      : await this.upsertDebtor(this.prisma, companyId, {
+          name: input.name ?? '',
+          phoneNumber: input.phone_number ?? '',
+          email: input.email ?? null,
         });
 
     if (!debtor) {
@@ -684,7 +708,9 @@ export class InvoicesService {
       id: invoice.id,
       invoiceId: invoice.id,
       name: invoice.debtor.name,
-      phone_number: invoice.debtor.phoneNumber,
+      phone_number: this.normalizePhoneNumberForResponse(
+        invoice.debtor.phoneNumber,
+      ),
       email: invoice.debtor.email || undefined,
       original_amount: Number(invoice.originalAmount.toNumber().toFixed(2)),
       due_date: this.formatDateOnly(invoice.dueDate),
@@ -707,6 +733,60 @@ export class InvoicesService {
             }
           : undefined,
     };
+  }
+
+  private async upsertDebtor(
+    client: Pick<Prisma.TransactionClient, 'debtor'>,
+    companyId: string,
+    input: DebtorUpsertInput,
+  ): Promise<DebtorIdentity> {
+    const phoneNumber = normalizeWhatsAppNumber(input.phoneNumber);
+    const lookupCandidates = getWhatsAppNumberLookupCandidates(phoneNumber);
+    const existingDebtors = await client.debtor.findMany({
+      where: {
+        companyId,
+        phoneNumber: { in: lookupCandidates },
+      },
+      select: {
+        id: true,
+        phoneNumber: true,
+      },
+    });
+    const exactDebtor =
+      existingDebtors.find((debtor) => debtor.phoneNumber === phoneNumber) ??
+      null;
+    const existingDebtor = exactDebtor ?? existingDebtors[0] ?? null;
+
+    if (existingDebtor) {
+      await client.debtor.updateMany({
+        where: { id: existingDebtor.id, companyId },
+        data: {
+          name: input.name,
+          phoneNumber,
+          email: input.email || null,
+        },
+      });
+
+      return { id: existingDebtor.id };
+    }
+
+    return client.debtor.create({
+      data: {
+        companyId,
+        name: input.name,
+        phoneNumber,
+        email: input.email || null,
+      },
+      select: { id: true },
+    });
+  }
+
+  private normalizePhoneNumberForResponse(phoneNumber: string): string {
+    try {
+      return normalizeWhatsAppNumber(phoneNumber);
+    } catch {
+      return phoneNumber;
+    }
   }
 
   private buildInvoicePaymentSummary(
@@ -794,7 +874,9 @@ export class InvoicesService {
       debtor: {
         debtorId: recurrence.debtor.id,
         name: recurrence.debtor.name,
-        phone_number: recurrence.debtor.phoneNumber,
+        phone_number: this.normalizePhoneNumberForResponse(
+          recurrence.debtor.phoneNumber,
+        ),
         email: recurrence.debtor.email || undefined,
       },
       amount: Number(recurrence.amount.toNumber().toFixed(2)),
@@ -960,6 +1042,7 @@ export class InvoicesService {
   private buildGlobalSettingsSnapshot(company: {
     preferredBillingMethod: BillingMethod;
     collectionReminderDays: number[];
+    autoGenerateFirstCharge: boolean;
     autoDiscountEnabled: boolean;
     autoDiscountDaysAfterDue: number | null;
     autoDiscountPercentage: { toNumber(): number } | null;
@@ -971,6 +1054,7 @@ export class InvoicesService {
       collectionReminderDays: this.normalizeReminderDays(
         company.collectionReminderDays,
       ),
+      autoGenerateFirstCharge: company.autoGenerateFirstCharge,
       autoDiscountEnabled: company.autoDiscountEnabled,
       autoDiscountDaysAfterDue: company.autoDiscountEnabled
         ? this.normalizeDiscountDays(company.autoDiscountDaysAfterDue)
@@ -987,6 +1071,7 @@ export class InvoicesService {
   private buildEffectiveCustomSettings(input: {
     preferredBillingMethod: BillingMethod | null;
     collectionReminderDays: number[];
+    autoGenerateFirstCharge: boolean | null;
     autoDiscountEnabled: boolean | null;
     autoDiscountDaysAfterDue: number | null;
     autoDiscountPercentage: number | null;
@@ -1000,6 +1085,7 @@ export class InvoicesService {
       collectionReminderDays: this.normalizeReminderDays(
         input.collectionReminderDays,
       ),
+      autoGenerateFirstCharge: input.autoGenerateFirstCharge ?? true,
       autoDiscountEnabled,
       autoDiscountDaysAfterDue: autoDiscountEnabled
         ? this.normalizeDiscountDays(input.autoDiscountDaysAfterDue)

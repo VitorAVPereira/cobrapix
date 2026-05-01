@@ -6,6 +6,7 @@ import { MessageWorkerService } from './workers/message.worker';
 import { SpintaxService } from './services/spintax.service';
 import { RateLimitService } from './services/rate-limit.service';
 import { PrismaModule } from '../prisma/prisma.module';
+import { PaymentModule } from '../payment/payment.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { PrismaModule } from '../prisma/prisma.module';
         },
       },
     }),
+    PaymentModule,
   ],
   providers: [
     MessageQueueService,

@@ -18,6 +18,7 @@ import type {
   RecurringInvoice,
 } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
+import { formatWhatsAppNumber } from "@/lib/whatsapp-number";
 
 interface EditForm {
   amount: string;
@@ -128,9 +129,14 @@ export default function DevedoresRecorrentesPage() {
     }
 
     return recurrences.filter((recurrence) => {
+      const formattedPhoneNumber = formatWhatsAppNumber(
+        recurrence.debtor.phone_number,
+      );
       const fields = [
         recurrence.debtor.name,
         recurrence.debtor.phone_number,
+        formattedPhoneNumber,
+        formattedPhoneNumber.replace(/\D/g, ""),
         recurrence.debtor.email ?? "",
       ];
 
@@ -231,7 +237,7 @@ export default function DevedoresRecorrentesPage() {
               type="search"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Pesquisar por devedor..."
+              placeholder="Pesquisar por devedor ou WhatsApp..."
               className="h-11 w-full rounded-md border border-slate-200 bg-white py-2 pl-10 pr-3 text-sm text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
             />
           </div>
@@ -286,7 +292,7 @@ export default function DevedoresRecorrentesPage() {
                           {recurrence.debtor.name}
                         </p>
                         <p className="mt-1 text-xs text-slate-500">
-                          {recurrence.debtor.phone_number}
+                          {formatWhatsAppNumber(recurrence.debtor.phone_number)}
                         </p>
                       </td>
                       <td className="px-5 py-4 font-semibold tabular-nums text-slate-900">

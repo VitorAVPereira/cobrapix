@@ -1,0 +1,5 @@
+ALTER TABLE "Company"
+ADD COLUMN IF NOT EXISTS "autoGenerateFirstCharge" BOOLEAN NOT NULL DEFAULT true;
+
+ALTER TABLE "Debtor"
+ADD COLUMN IF NOT EXISTS "autoGenerateFirstCharge" BOOLEAN;

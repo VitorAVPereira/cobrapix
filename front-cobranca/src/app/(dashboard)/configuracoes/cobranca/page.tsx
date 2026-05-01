@@ -126,6 +126,7 @@ export default function BillingSettingsPage() {
     useState<BillingMethod>("PIX");
   const [selectedOffsets, setSelectedOffsets] = useState<number[]>([0]);
   const [customOffset, setCustomOffset] = useState("");
+  const [autoGenerateFirstCharge, setAutoGenerateFirstCharge] = useState(true);
   const [autoDiscountEnabled, setAutoDiscountEnabled] = useState(false);
   const [autoDiscountDaysAfterDue, setAutoDiscountDaysAfterDue] = useState("0");
   const [autoDiscountPercentage, setAutoDiscountPercentage] = useState("");
@@ -181,6 +182,7 @@ export default function BillingSettingsPage() {
         setSettings(response);
         setPreferredBillingMethod(response.preferredBillingMethod);
         setSelectedOffsets(normalizeOffsets(response.collectionReminderDays));
+        setAutoGenerateFirstCharge(response.autoGenerateFirstCharge);
         setAutoDiscountEnabled(response.autoDiscountEnabled);
         setAutoDiscountDaysAfterDue(
           String(response.autoDiscountDaysAfterDue ?? 0),
@@ -291,6 +293,7 @@ export default function BillingSettingsPage() {
       const saved = await apiClient.updateBillingSettings({
         preferredBillingMethod,
         collectionReminderDays,
+        autoGenerateFirstCharge,
         autoDiscountEnabled,
         autoDiscountDaysAfterDue: autoDiscountEnabled ? parsedDiscountDays : null,
         autoDiscountPercentage: autoDiscountEnabled
@@ -301,6 +304,7 @@ export default function BillingSettingsPage() {
       setSettings(saved);
       setPreferredBillingMethod(saved.preferredBillingMethod);
       setSelectedOffsets(normalizeOffsets(saved.collectionReminderDays));
+      setAutoGenerateFirstCharge(saved.autoGenerateFirstCharge);
       setAutoDiscountEnabled(saved.autoDiscountEnabled);
       setAutoDiscountDaysAfterDue(String(saved.autoDiscountDaysAfterDue ?? 0));
       setAutoDiscountPercentage(
@@ -521,6 +525,42 @@ export default function BillingSettingsPage() {
                 </div>
               </div>
             )}
+          </div>
+        </section>
+
+        <section className="rounded-md border border-slate-200 bg-white">
+          <div className="flex items-center gap-2 border-b border-slate-200 px-5 py-4">
+            <MessageCircle size={20} className="text-emerald-600" />
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">
+                Primeira cobrança
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Gere e enfileire a primeira cobrança assim que uma fatura for cadastrada.
+              </p>
+            </div>
+          </div>
+
+          <div className="p-5">
+            <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-4">
+              <input
+                type="checkbox"
+                checked={autoGenerateFirstCharge}
+                onChange={(event) => {
+                  setAutoGenerateFirstCharge(event.target.checked);
+                  setSuccess(null);
+                }}
+                className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+              />
+              <div>
+                <p className="text-sm font-semibold text-slate-900">
+                  Ativar no cadastro
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  CSVs grandes passam pela fila com intervalos entre mensagens.
+                </p>
+              </div>
+            </label>
           </div>
         </section>
 
