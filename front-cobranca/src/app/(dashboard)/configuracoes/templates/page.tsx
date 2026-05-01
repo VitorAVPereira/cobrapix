@@ -245,13 +245,36 @@ function getErrorMessage(error: unknown): string {
   return "Nao foi possivel concluir a acao. Tente novamente.";
 }
 
+function createPreviewRng(content: string): () => number {
+  let seed = 0x811c9dc5;
+
+  for (let index = 0; index < content.length; index += 1) {
+    seed = Math.imul(seed ^ content.charCodeAt(index), 0x01000193);
+  }
+
+  let state = seed >>> 0;
+
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function renderPreview(content: string): string {
   const withVariables = interpolatePreviewVariables(content);
   const { maskedContent, placeholders } =
     maskUnresolvedPlaceholders(withVariables);
 
   try {
-    return restoreMaskedPlaceholders(spin(maskedContent), placeholders);
+    return restoreMaskedPlaceholders(
+      spin(maskedContent, createPreviewRng(maskedContent)),
+      placeholders,
+    );
   } catch {
     return restoreMaskedPlaceholders(maskedContent, placeholders);
   }
@@ -717,7 +740,7 @@ export default function TemplatesPage() {
                 </div>
 
                 <div className="flex flex-1 items-start p-4">
-                  <div className="max-w-[92%] break-words whitespace-pre-wrap rounded-md rounded-tl-none bg-white px-3 py-2 text-sm leading-5 text-slate-900 shadow-sm">
+                  <div className="max-w-[92%] wrap-break-word whitespace-pre-wrap rounded-md rounded-tl-none bg-white px-3 py-2 text-sm leading-5 text-slate-900 shadow-sm">
                     {preview || "A mensagem aparecera aqui."}
                     <div className="mt-1 text-right text-[11px] text-slate-400">
                       09:00
