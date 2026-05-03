@@ -34,7 +34,13 @@ import { TemplatesModule } from './templates/templates.module';
   providers: [
     {
       provide: APP_PIPE,
-      useClass: ValidationPipe,
+      useFactory: () =>
+        new ValidationPipe({
+          whitelist: true,
+          forbidNonWhitelisted: true,
+          transform: true,
+          transformOptions: { enableImplicitConversion: true },
+        }),
     },
   ],
 })
