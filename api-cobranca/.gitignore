@@ -4,6 +4,13 @@ node_modules/
 # Build
 dist/
 coverage/
+tsconfig.tsbuildinfo
+
+# Generated TypeScript artifacts
+src/**/*.js
+src/**/*.js.map
+src/**/*.d.ts
+!src/types/**/*.d.ts
 
 # Environment
 .env
