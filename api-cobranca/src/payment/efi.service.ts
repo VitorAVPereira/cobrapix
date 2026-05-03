@@ -1021,7 +1021,16 @@ export class EfiService {
 
   private buildWebhookUrl(path: string): string {
     const baseUrl = this.config.get<string>('EFI_WEBHOOK_BASE_URL') ?? '';
-    return `${baseUrl.replace(/\/$/, '')}${path}`;
+    const url = new URL(
+      path.replace(/^\//, ''),
+      `${baseUrl.replace(/\/$/, '')}/`,
+    );
+    url.searchParams.set(
+      'token',
+      this.config.getOrThrow<string>('EFI_WEBHOOK_SECRET'),
+    );
+
+    return url.toString();
   }
 
   private generateTxid(invoiceId: string): string {

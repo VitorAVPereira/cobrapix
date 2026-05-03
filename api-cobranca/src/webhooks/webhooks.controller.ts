@@ -9,8 +9,10 @@ import {
   Post,
   Query,
   Req,
+  UseGuards,
 } from '@nestjs/common';
 import type { Request } from 'express';
+import { EfiWebhookGuard } from './efi-webhook.guard';
 import { WebhooksService } from './webhooks.service';
 
 type RawBodyRequest = Request & { rawBody?: Buffer };
@@ -82,6 +84,7 @@ export class WebhooksController {
   }
 
   @Post('efi/pix')
+  @UseGuards(EfiWebhookGuard)
   async handleEfiPixWebhook(@Body() payload: unknown) {
     try {
       return await this.webhooksService.handleEfiPixWebhook(payload);
@@ -98,6 +101,7 @@ export class WebhooksController {
   }
 
   @Post('efi/cobrancas')
+  @UseGuards(EfiWebhookGuard)
   async handleEfiChargesWebhook(@Body() payload: unknown) {
     try {
       return await this.webhooksService.handleEfiChargesWebhook(payload);

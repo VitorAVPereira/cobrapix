@@ -37,6 +37,9 @@ export const envSchema = z.object({
     .max(10000)
     .default(0),
   EFI_WEBHOOK_BASE_URL: z.string().url().optional(),
+  EFI_WEBHOOK_SECRET: z
+    .string()
+    .min(32, 'EFI_WEBHOOK_SECRET deve ter pelo menos 32 caracteres'),
   PAYMENT_SECRET_KEY: z.string().min(32).optional(),
 });
 
