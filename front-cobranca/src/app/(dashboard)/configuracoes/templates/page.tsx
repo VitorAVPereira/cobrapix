@@ -245,6 +245,61 @@ function getErrorMessage(error: unknown): string {
   return "Nao foi possivel concluir a acao. Tente novamente.";
 }
 
+function getMetaStatusStyle(
+  status: string,
+): { backgroundColor: string; color: string } {
+  const upper = status.toUpperCase();
+
+  if (upper === "APPROVED") {
+    return { backgroundColor: "#ecfdf5", color: "#065f46" };
+  }
+
+  if (
+    upper === "PENDING" ||
+    upper === "IN_REVIEW" ||
+    upper === "SUBMITTED"
+  ) {
+    return { backgroundColor: "#fffbeb", color: "#92400e" };
+  }
+
+  if (upper === "REJECTED") {
+    return { backgroundColor: "#fef2f2", color: "#991b1b" };
+  }
+
+  if (upper === "LOCAL") {
+    return { backgroundColor: "#f1f5f9", color: "#475569" };
+  }
+
+  return { backgroundColor: "#f1f5f9", color: "#475569" };
+}
+
+function formatMetaStatus(status: string): string {
+  const upper = status.toUpperCase();
+
+  if (upper === "APPROVED") return "Aprovado";
+  if (upper === "PENDING" || upper === "SUBMITTED") return "Pendente";
+  if (upper === "IN_REVIEW") return "Em analise";
+  if (upper === "REJECTED") return "Rejeitado";
+  if (upper === "LOCAL") return "Local";
+  return status;
+}
+
+function formatSyncTime(isoDate: string | null): string | null {
+  if (!isoDate) return null;
+
+  const date = new Date(isoDate);
+
+  if (isNaN(date.getTime())) return null;
+
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 function createPreviewRng(content: string): () => number {
   let seed = 0x811c9dc5;
 
@@ -510,6 +565,29 @@ export default function TemplatesPage() {
           </div>
         </div>
 
+        {selectedTemplate && (
+          <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-slate-200 bg-white px-4 py-3 text-sm">
+            <span className="text-slate-500">Status na Meta:</span>
+            <span
+              className="inline-flex rounded px-2 py-0.5 text-xs font-semibold"
+              style={getMetaStatusStyle(selectedTemplate.metaStatus)}
+            >
+              {formatMetaStatus(selectedTemplate.metaStatus)}
+            </span>
+            {selectedTemplate.metaRejectedReason && (
+              <span className="text-red-600">
+                Motivo: {selectedTemplate.metaRejectedReason}
+              </span>
+            )}
+            {formatSyncTime(selectedTemplate.lastMetaSyncAt) && (
+              <span className="text-slate-400">
+                Ultima sincronizacao:{" "}
+                {formatSyncTime(selectedTemplate.lastMetaSyncAt)}
+              </span>
+            )}
+          </div>
+        )}
+
         {error && (
           <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
             {error}
@@ -568,8 +646,9 @@ export default function TemplatesPage() {
                       >
                         {template.isActive ? "Ativo" : "Inativo"}
                       </span>
-                      <span className="ml-2 inline-flex rounded bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
-                        {template.metaStatus}
+                      <span className="ml-2 inline-flex rounded px-2 py-0.5 text-xs font-semibold"
+                        style={getMetaStatusStyle(template.metaStatus)}>
+                        {formatMetaStatus(template.metaStatus)}
                       </span>
                     </button>
                   );

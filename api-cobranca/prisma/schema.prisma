@@ -28,7 +28,6 @@ enum WhatsappStatus {
 
 enum WhatsappProvider {
   META_CLOUD
-  EVOLUTION
 }
 
 enum WhatsAppTemplateCategory {

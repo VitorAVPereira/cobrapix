@@ -67,22 +67,6 @@ export class WebhooksController {
     }
   }
 
-  @Post('evolution')
-  async handleEvolutionWebhook(@Body() payload: unknown) {
-    try {
-      const result = await this.webhooksService.handleEvolutionWebhook(payload);
-      return result;
-    } catch (error) {
-      if (error instanceof Error && error.message === 'Nao autorizado') {
-        throw new HttpException('Nao autorizado', HttpStatus.UNAUTHORIZED);
-      }
-      throw new HttpException(
-        'Falha ao processar webhook',
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
-  }
-
   @Post('efi/pix')
   @UseGuards(EfiWebhookGuard)
   async handleEfiPixWebhook(@Body() payload: unknown) {

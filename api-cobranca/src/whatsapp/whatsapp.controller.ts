@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { MessagingLimitService } from '../queue/services/messaging-limit.service';
 import { ConfigureMetaWhatsappDto } from './dto/configure-meta-whatsapp.dto';
 import { WhatsappService } from './whatsapp.service';
@@ -18,7 +19,7 @@ interface AuthenticatedUser {
 }
 
 @Controller('whatsapp')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ThrottleGuard)
 export class WhatsappController {
   constructor(
     private readonly whatsappService: WhatsappService,

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
+import type { PaginationState } from "@tanstack/react-table";
 import {
   AlertCircle,
   ArrowLeft,
@@ -99,6 +100,11 @@ function getErrorMessage(error: unknown, fallback: string): string {
 export default function CobrancasPage() {
   const apiClient = useApiClient();
   const [debtors, setDebtors] = useState<ParsedDebtor[]>([]);
+  const [total, setTotal] = useState(0);
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 20,
+  });
   const [selectedDebtor, setSelectedDebtor] = useState<ParsedDebtor | null>(null);
   const [invoiceTargetDebtor, setInvoiceTargetDebtor] =
     useState<ParsedDebtor | null>(null);
@@ -123,8 +129,14 @@ export default function CobrancasPage() {
     setSuccessMsg(null);
 
     try {
-      const data = await apiClient.getInvoices();
-      setDebtors(isParsedDebtorArray(data) ? data : []);
+      const result = await apiClient.getInvoices({
+        page: pagination.pageIndex + 1,
+        pageSize: pagination.pageSize,
+        search: searchQuery.trim() || undefined,
+      });
+      const invoices = result.data;
+      setDebtors(isParsedDebtorArray(invoices) ? invoices : []);
+      setTotal(result.total);
     } catch (error: unknown) {
       setErrorMsg(
         getErrorMessage(error, "Nao foi possivel carregar as cobrancas."),
@@ -132,7 +144,7 @@ export default function CobrancasPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [apiClient]);
+  }, [apiClient, pagination.pageIndex, pagination.pageSize, searchQuery]);
 
   useEffect(() => {
     void fetchInvoices();
@@ -151,29 +163,7 @@ export default function CobrancasPage() {
     void fetchBillingSettings();
   }, [apiClient]);
 
-  const filteredDebtors = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-
-    if (!query) {
-      return debtors;
-    }
-
-    return debtors.filter((debtor) => {
-      const formattedPhoneNumber = formatWhatsAppNumber(debtor.phone_number);
-      const searchableFields = [
-        debtor.name,
-        debtor.document || "",
-        debtor.phone_number,
-        formattedPhoneNumber,
-        formattedPhoneNumber.replace(/\D/g, ""),
-        debtor.email || "",
-      ];
-
-      return searchableFields.some((field) =>
-        field.toLowerCase().includes(query),
-      );
-    });
-  }, [debtors, searchQuery]);
+  const filteredDebtors = debtors;
 
   async function handleUploadSuccess(
     importedDebtors: ParsedDebtor[],
@@ -331,7 +321,10 @@ export default function CobrancasPage() {
               <input
                 type="search"
                 value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
+                onChange={(event) => {
+                  setSearchQuery(event.target.value);
+                  setPagination((prev) => ({ ...prev, pageIndex: 0 }));
+                }}
                 placeholder="Pesquisar por nome, CPF ou WhatsApp..."
                 className="h-11 w-full rounded-md border border-slate-200 bg-white py-2 pl-10 pr-3 text-sm text-slate-900 outline-none transition-all duration-200 placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
               />
@@ -436,6 +429,10 @@ export default function CobrancasPage() {
 
                 <InvoiceTable
                   data={filteredDebtors}
+                  pageCount={Math.ceil(total / pagination.pageSize)}
+                  total={total}
+                  pagination={pagination}
+                  onPaginationChange={setPagination}
                   onConfigureDebtor={openDebtorSettings}
                   onAddInvoice={openInvoiceModal}
                   onRunSelectedInvoices={(invoiceIds) => {

@@ -49,26 +49,35 @@ export class PaymentService {
     let success = 0;
     let failed = 0;
 
-    for (const invoiceId of invoiceIds) {
-      try {
-        const result = await this.createPayment(
-          invoiceId,
-          companyId,
-          billingType,
-        );
-        results.push({
-          invoiceId,
-          gatewayId: result.gatewayId,
-          paymentLink: result.paymentLink,
-        });
-        success++;
-      } catch (error) {
-        this.logger.error(
-          `Erro ao criar cobranca Efi para fatura ${invoiceId}: ${
-            error instanceof Error ? error.message : 'erro desconhecido'
-          }`,
-        );
-        failed++;
+    const CHUNK_SIZE = 10;
+    for (let i = 0; i < invoiceIds.length; i += CHUNK_SIZE) {
+      const chunk = invoiceIds.slice(i, i + CHUNK_SIZE);
+      const settled = await Promise.allSettled(
+        chunk.map((invoiceId) =>
+          this.createPayment(invoiceId, companyId, billingType).then(
+            (result) => ({
+              invoiceId,
+              gatewayId: result.gatewayId,
+              paymentLink: result.paymentLink,
+            }),
+          ),
+        ),
+      );
+
+      for (const outcome of settled) {
+        if (outcome.status === 'fulfilled') {
+          results.push(outcome.value);
+          success++;
+        } else {
+          this.logger.error(
+            `Erro ao criar cobranca Efi em lote: ${
+              outcome.reason instanceof Error
+                ? outcome.reason.message
+                : 'erro desconhecido'
+            }`,
+          );
+          failed++;
+        }
       }
     }
 

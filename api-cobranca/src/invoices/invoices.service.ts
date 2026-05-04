@@ -244,6 +244,53 @@ export class InvoicesService {
     return invoices.map((invoice) => this.mapInvoiceListItem(invoice));
   }
 
+  async findPaginated(
+    companyId: string,
+    params: {
+      page: number;
+      pageSize: number;
+      search?: string;
+      status?: string;
+    },
+  ): Promise<{
+    data: InvoiceListItem[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const where: Prisma.InvoiceWhereInput = { companyId };
+
+    if (params.status) {
+      where.status = params.status as 'PENDING' | 'PAID' | 'CANCELED';
+    }
+
+    if (params.search) {
+      where.OR = [
+        { debtor: { name: { contains: params.search, mode: 'insensitive' } } },
+        { debtor: { phoneNumber: { contains: params.search } } },
+        { debtor: { email: { contains: params.search, mode: 'insensitive' } } },
+      ];
+    }
+
+    const [data, total] = await Promise.all([
+      this.prisma.invoice.findMany({
+        where,
+        include: { debtor: true, recurringInvoice: true },
+        orderBy: { createdAt: 'desc' },
+        skip: (params.page - 1) * params.pageSize,
+        take: params.pageSize,
+      }),
+      this.prisma.invoice.count({ where }),
+    ]);
+
+    return {
+      data: data.map((invoice) => this.mapInvoiceListItem(invoice)),
+      total,
+      page: params.page,
+      pageSize: params.pageSize,
+    };
+  }
+
   async importCsv(
     companyId: string,
     rows: ImportRow[],

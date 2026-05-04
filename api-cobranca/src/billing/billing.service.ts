@@ -429,8 +429,11 @@ export class BillingService {
         },
       });
 
-      const jobs: SendMessageJob[] = [];
-      let skippedCount = 0;
+      const actionableInvoices: Array<{
+        invoice: ScheduledInvoice;
+        daysFromDueDate: number;
+      }> = [];
+      let skippedPre = 0;
 
       for (const invoice of scheduledInvoices) {
         const daysFromDueDate = this.getDaysBetween(
@@ -439,16 +442,50 @@ export class BillingService {
         );
 
         if (!scheduledOffsets.includes(daysFromDueDate)) {
-          skippedCount++;
+          skippedPre++;
           continue;
         }
 
         if (invoice.collectionLogs.length > 0) {
-          skippedCount++;
+          skippedPre++;
           continue;
         }
 
-        const paymentData = await this.ensureInvoicePayment(invoice, company);
+        actionableInvoices.push({ invoice, daysFromDueDate });
+      }
+
+      const CHUNK_SIZE = 10;
+      const paymentResults = new Map<string, PaymentMessageData | null>();
+
+      for (let i = 0; i < actionableInvoices.length; i += CHUNK_SIZE) {
+        const chunk = actionableInvoices.slice(i, i + CHUNK_SIZE);
+        const settled = await Promise.allSettled(
+          chunk.map(async ({ invoice }) => {
+            const data = await this.ensureInvoicePayment(invoice, company);
+            return { invoiceId: invoice.id, paymentData: data };
+          }),
+        );
+
+        for (const outcome of settled) {
+          if (outcome.status === 'fulfilled') {
+            paymentResults.set(
+              outcome.value.invoiceId,
+              outcome.value.paymentData,
+            );
+          } else {
+            this.logger.error(
+              'Falha ao processar pagamento em lote:',
+              outcome.reason,
+            );
+          }
+        }
+      }
+
+      const jobs: SendMessageJob[] = [];
+      let skippedCount = skippedPre;
+
+      for (const { invoice, daysFromDueDate } of actionableInvoices) {
+        const paymentData = paymentResults.get(invoice.id);
         if (!paymentData) {
           skippedCount++;
           continue;

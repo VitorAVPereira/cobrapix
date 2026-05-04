@@ -13,8 +13,6 @@ export const envSchema = z.object({
     .default('development'),
   PORT: z.coerce.number().int().positive().default(3001),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL é obrigatória'),
-  EVOLUTION_API_URL: z.string().url().optional(),
-  EVOLUTION_API_KEY: z.string().optional(),
   META_GRAPH_API_VERSION: z.string().default('v23.0'),
   META_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
   META_WEBHOOK_BASE_URL: z.string().url().optional(),

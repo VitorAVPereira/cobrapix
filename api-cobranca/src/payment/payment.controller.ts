@@ -12,6 +12,7 @@ import { InvoiceStatus } from '@prisma/client';
 import { IsArray, IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateGatewayAccountDto,
@@ -56,7 +57,7 @@ class InvoiceStatusDto {
 }
 
 @Controller('payments')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ThrottleGuard)
 export class PaymentController {
   constructor(
     private readonly paymentService: PaymentService,

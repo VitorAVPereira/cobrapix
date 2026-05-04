@@ -409,8 +409,27 @@ class ApiClient {
   }
 
   // Invoices
-  async getInvoices(): Promise<InvoiceListItem[]> {
-    return this.fetch<InvoiceListItem[]>("/invoices");
+  async getInvoices(
+    params: {
+      page?: number;
+      pageSize?: number;
+      search?: string;
+      status?: string;
+    } = {},
+  ): Promise<{ data: InvoiceListItem[]; total: number; page: number; pageSize: number }> {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set("page", String(params.page));
+    if (params.pageSize) qs.set("pageSize", String(params.pageSize));
+    if (params.search) qs.set("search", params.search);
+    if (params.status) qs.set("status", params.status);
+
+    const qsStr = qs.toString();
+    return this.fetch<{
+      data: InvoiceListItem[];
+      total: number;
+      page: number;
+      pageSize: number;
+    }>(`/invoices${qsStr ? `?${qsStr}` : ""}`);
   }
 
   async importInvoices(data: ReadonlyArray<unknown>): Promise<unknown> {

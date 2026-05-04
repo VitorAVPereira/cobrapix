@@ -10,6 +10,7 @@ import {
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { LocalAuthGuard } from './guards/local-auth.guard';
+import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { LoginDto } from './dto/login.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { GetUser } from './decorators/get-user.decorator';
@@ -18,7 +19,7 @@ import { GetUser } from './decorators/get-user.decorator';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  @UseGuards(LocalAuthGuard)
+  @UseGuards(ThrottleGuard, LocalAuthGuard)
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(

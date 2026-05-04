@@ -7,9 +7,11 @@ import {
   Param,
   Post,
   Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { normalizeWhatsAppNumber } from '../common/whatsapp-number';
 import { DebtorSettingsResponse, InvoicesService } from './invoices.service';
@@ -46,13 +48,31 @@ interface ValidImportRow {
 }
 
 @Controller('invoices')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ThrottleGuard)
 export class InvoicesController {
   constructor(private readonly invoicesService: InvoicesService) {}
 
   @Get()
-  async findAll(@GetUser() user: AuthenticatedUser): Promise<unknown> {
-    return this.invoicesService.findAll(user.companyId);
+  async findAll(
+    @GetUser() user: AuthenticatedUser,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+  ): Promise<unknown> {
+    const pageNum = this.parsePositiveInt(page, 1);
+    const size = Math.min(
+      Math.max(this.parsePositiveInt(pageSize, 20), 1),
+      100,
+    );
+    const normalizedStatus = this.normalizeInvoiceStatus(status);
+
+    return this.invoicesService.findPaginated(user.companyId, {
+      page: pageNum,
+      pageSize: size,
+      search: search?.trim() || undefined,
+      status: normalizedStatus,
+    });
   }
 
   @Post()
@@ -374,5 +394,23 @@ export class InvoicesController {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       value,
     );
+  }
+
+  private parsePositiveInt(
+    value: string | undefined,
+    fallback: number,
+  ): number {
+    if (value === undefined) return fallback;
+    const num = parseInt(value, 10);
+    return Number.isInteger(num) && num > 0 ? num : fallback;
+  }
+
+  private normalizeInvoiceStatus(raw: string | undefined): string | undefined {
+    if (!raw) return undefined;
+    const upper = raw.toUpperCase();
+    if (upper === 'PENDING' || upper === 'PAID' || upper === 'CANCELED') {
+      return upper;
+    }
+    return undefined;
   }
 }

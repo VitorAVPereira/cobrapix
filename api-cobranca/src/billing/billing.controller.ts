@@ -13,6 +13,7 @@ import { IsArray, IsUUID } from 'class-validator';
 import { BillingService } from './billing.service';
 import { UpdateBillingSettingsDto } from './dto/update-billing-settings.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -27,7 +28,7 @@ class RunSelectedBillingDto {
 }
 
 @Controller('billing')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ThrottleGuard)
 export class BillingController {
   constructor(
     private readonly billingService: BillingService,

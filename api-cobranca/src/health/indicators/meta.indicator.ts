@@ -3,14 +3,13 @@ import { ConfigService } from '@nestjs/config';
 import type { HealthCheckResult } from '../types';
 
 /**
- * Mantem o nome da classe por compatibilidade interna, mas o check principal
- * agora acompanha a configuracao da Meta Cloud API.
+ * Verifica a configuracao da Meta Cloud API (webhook, Graph API).
  */
 @Injectable()
-export class EvolutionHealthIndicator {
+export class MetaHealthIndicator {
   constructor(private readonly config: ConfigService) {}
 
-  async check(): Promise<HealthCheckResult> {
+  check(): HealthCheckResult {
     const verifyToken = this.config.get<string>('META_WEBHOOK_VERIFY_TOKEN');
     const appSecret = this.config.get<string>('META_APP_SECRET');
     const graphVersion = this.config.get<string>(

@@ -1,6 +1,6 @@
 import { HealthService } from './health.service';
 import type { DatabaseHealthIndicator } from './indicators/database.indicator';
-import type { EvolutionHealthIndicator } from './indicators/evolution.indicator';
+import type { MetaHealthIndicator } from './indicators/meta.indicator';
 import type { HealthCheckResult, HealthStatus } from './types';
 
 /**
@@ -11,7 +11,7 @@ import type { HealthCheckResult, HealthStatus } from './types';
 describe('HealthService', () => {
   const buildService = (
     dbStatus: HealthStatus,
-    evoStatus: HealthStatus,
+    metaStatus: HealthStatus,
   ): HealthService => {
     const db: Pick<DatabaseHealthIndicator, 'check'> = {
       check: jest.fn().mockResolvedValue({
@@ -20,16 +20,16 @@ describe('HealthService', () => {
         message: 'mock',
       } satisfies HealthCheckResult),
     };
-    const evo: Pick<EvolutionHealthIndicator, 'check'> = {
-      check: jest.fn().mockResolvedValue({
+    const meta: Pick<MetaHealthIndicator, 'check'> = {
+      check: jest.fn().mockReturnValue({
         service: 'Meta Cloud API',
-        status: evoStatus,
+        status: metaStatus,
         message: 'mock',
       } satisfies HealthCheckResult),
     };
     return new HealthService(
       db as DatabaseHealthIndicator,
-      evo as EvolutionHealthIndicator,
+      meta as MetaHealthIndicator,
     );
   };
 

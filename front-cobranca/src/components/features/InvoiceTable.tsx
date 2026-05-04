@@ -4,9 +4,10 @@ import { useMemo, useState } from "react";
 import {
   useReactTable,
   getCoreRowModel,
-  getPaginationRowModel,
   flexRender,
   ColumnDef,
+  type PaginationState,
+  type OnChangeFn,
 } from "@tanstack/react-table";
 import type { ParsedDebtor } from "./UploadCSV";
 import { formatWhatsAppNumber } from "@/lib/whatsapp-number";
@@ -28,6 +29,10 @@ import {
 
 interface InvoiceTableProps {
   data: ParsedDebtor[];
+  pageCount: number;
+  total: number;
+  pagination: PaginationState;
+  onPaginationChange: OnChangeFn<PaginationState>;
   onConfigureDebtor: (debtor: ParsedDebtor) => void;
   onAddInvoice: (debtor: ParsedDebtor) => void;
   onRunSelectedInvoices: (invoiceIds: string[]) => void;
@@ -36,6 +41,10 @@ interface InvoiceTableProps {
 
 export function InvoiceTable({
   data,
+  pageCount,
+  total,
+  pagination,
+  onPaginationChange,
   onConfigureDebtor,
   onAddInvoice,
   onRunSelectedInvoices,
@@ -428,22 +437,19 @@ export function InvoiceTable({
     },
   ];
 
-  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 10 });
-
-  // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({
     data,
     columns,
     getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    onPaginationChange: setPagination,
+    manualPagination: true,
+    pageCount: pageCount || 1,
+    onPaginationChange,
     state: { pagination },
   });
 
   const { pageIndex, pageSize } = pagination;
-  const totalRows = data.length;
-  const rangeStart = totalRows === 0 ? 0 : pageIndex * pageSize + 1;
-  const rangeEnd = Math.min((pageIndex + 1) * pageSize, totalRows);
+  const rangeStart = total === 0 ? 0 : (pageIndex) * pageSize + 1;
+  const rangeEnd = Math.min((pageIndex + 1) * pageSize, total);
   const totalPages = table.getPageCount();
 
   return (
@@ -512,13 +518,31 @@ export function InvoiceTable({
 
       {/* Pagination */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-5 py-3.5 border-t border-slate-200 bg-slate-50/50">
-        <p className="text-sm text-slate-500">
-          <span className="font-medium text-slate-700">
-            {rangeStart}-{rangeEnd}
-          </span>{" "}
-          de <span className="font-medium text-slate-700">{totalRows}</span>{" "}
-          registros
-        </p>
+        <div className="flex items-center gap-3">
+          <p className="text-sm text-slate-500">
+            <span className="font-medium text-slate-700">
+              {rangeStart}-{rangeEnd}
+            </span>{" "}
+            de <span className="font-medium text-slate-700">{total}</span>{" "}
+            registros
+          </p>
+          <select
+            value={pageSize}
+            onChange={(e) =>
+              onPaginationChange({
+                pageIndex: 0,
+                pageSize: Number(e.target.value),
+              })
+            }
+            className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600"
+          >
+            {[10, 20, 50].map((size) => (
+              <option key={size} value={size}>
+                {size} / pagina
+              </option>
+            ))}
+          </select>
+        </div>
 
         <div className="flex items-center gap-1.5">
           <button

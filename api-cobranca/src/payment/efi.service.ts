@@ -657,6 +657,10 @@ export class EfiService {
       return null;
     }
 
+    if (this.isPixExpired(invoice.pixExpiresAt)) {
+      return null;
+    }
+
     return {
       gatewayId: invoice.efiTxid,
       txid: invoice.efiTxid,
@@ -673,6 +677,10 @@ export class EfiService {
       return null;
     }
 
+    if (this.isPixExpired(invoice.pixExpiresAt)) {
+      return null;
+    }
+
     return {
       gatewayId: invoice.efiChargeId,
       chargeId: invoice.efiChargeId,
@@ -682,6 +690,11 @@ export class EfiService {
       expiresAt: invoice.pixExpiresAt ?? invoice.dueDate,
       paymentLink: invoice.boletoLink ?? '',
     };
+  }
+
+  private isPixExpired(expiresAt: Date | null): boolean {
+    if (!expiresAt) return false;
+    return new Date() > expiresAt;
   }
 
   private resolveDiscountSettings(
@@ -780,9 +793,7 @@ export class EfiService {
       });
     }
 
-    return this.prisma.gatewayAccount.findFirst({
-      where: { provider: 'EFI', status: 'ACTIVE' },
-    });
+    return null;
   }
 
   private createSdkClient(gatewayAccount: GatewayAccount): EfiPay {
