@@ -200,6 +200,20 @@ interface WhatsAppStatusResponse {
   templatesRequired?: boolean;
 }
 
+export interface WhatsAppUsageResponse {
+  tier: string;
+  dailyLimit: number;
+  dailyUsage: number;
+  remaining: number;
+  interactions: {
+    outbound: number;
+    delivered: number;
+    read: number;
+    inbound: number;
+    failed: number;
+  };
+}
+
 export interface MessageTemplate {
   id: string;
   name: string;
@@ -471,6 +485,10 @@ class ApiClient {
 
   async getWhatsappStatus(): Promise<WhatsAppStatusResponse> {
     return this.fetch<WhatsAppStatusResponse>("/whatsapp/status");
+  }
+
+  async getWhatsappUsage(): Promise<WhatsAppUsageResponse> {
+    return this.fetch<WhatsAppUsageResponse>("/whatsapp/usage");
   }
 
   async disconnectWhatsapp(): Promise<{ success: boolean }> {

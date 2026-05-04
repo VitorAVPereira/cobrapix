@@ -12,6 +12,7 @@ import { PaymentService } from '../../payment/payment.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { WhatsappService } from '../../whatsapp/whatsapp.service';
 import { RateLimitService } from '../services/rate-limit.service';
+import { MessagingLimitService } from '../services/messaging-limit.service';
 import { SpintaxService } from '../services/spintax.service';
 import {
   InitialChargeJob,
@@ -101,6 +102,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     private configService: ConfigService,
     private prisma: PrismaService,
     private rateLimitService: RateLimitService,
+    private messagingLimitService: MessagingLimitService,
     private paymentService: PaymentService,
     private spintaxService: SpintaxService,
     private messageQueue: MessageQueueService,
@@ -124,10 +126,10 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
           port: redisPort,
           password: redisPassword,
         },
-        concurrency: 1,
+        concurrency: 20,
         limiter: {
-          max: 1,
-          duration: 10_000,
+          max: 60,
+          duration: 1_000,
         },
       },
     );
@@ -137,7 +139,12 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     });
 
     this.worker.on('failed', (job, err) => {
-      this.logger.error(`Job ${job?.id} falhou: ${err.message}`);
+      this.logger.error(
+        `Job ${job?.id ?? 'desconhecido'} (${job?.name ?? '?'}) falhou: ${err.message}` +
+          (job?.attemptsMade != null
+            ? ` (tentativa ${job.attemptsMade}/${job.opts.attempts})`
+            : ''),
+      );
     });
 
     this.worker.on('error', (err) => {
@@ -195,6 +202,16 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     if (!hasOptIn) {
       return;
     }
+
+    const dailyLimit = await this.messagingLimitService.canSend(companyId);
+    if (!dailyLimit.allowed) {
+      const delayMs = Math.max(dailyLimit.resetAt - Date.now(), 60_000);
+      this.logger.warn(
+        `Limite diario do WABA atingido para ${companyId} (${dailyLimit.usage}/${dailyLimit.limit}). Adiando em ${delayMs}ms`,
+      );
+      throw new Error(`Daily limit reached: retry after ${delayMs}ms`);
+    }
+
     await this.enforceRateLimits(senderKey, phoneNumber);
 
     try {
@@ -204,6 +221,15 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         templateName,
         languageCode: templateLanguage,
         bodyParameters: templateParameters,
+      });
+
+      await this.messagingLimitService.trackSend(companyId, phoneNumber);
+      await this.messagingLimitService.recordInteraction({
+        companyId,
+        phoneNumber,
+        direction: 'OUTBOUND',
+        status: response.status ?? 'sent',
+        messageId: response.messageId,
       });
 
       await this.prisma.collectionLog.create({
@@ -239,9 +265,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async processInitialChargeJob(
-    data: InitialChargeJob,
-  ): Promise<void> {
+  private async processInitialChargeJob(data: InitialChargeJob): Promise<void> {
     const invoice = await this.loadInitialChargeInvoice(data);
 
     if (!invoice) {
@@ -401,7 +425,9 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  private shouldAutoGenerateFirstCharge(invoice: InitialChargeInvoice): boolean {
+  private shouldAutoGenerateFirstCharge(
+    invoice: InitialChargeInvoice,
+  ): boolean {
     if (!invoice.debtor.useGlobalBillingSettings) {
       return invoice.debtor.autoGenerateFirstCharge ?? true;
     }
@@ -587,15 +613,15 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     if (billingType === 'PIX') {
       return Boolean(
         invoice.gatewayId &&
-          invoice.efiTxid &&
-          (invoice.pixPayload || invoice.efiPixCopiaECola),
+        invoice.efiTxid &&
+        (invoice.pixPayload || invoice.efiPixCopiaECola),
       );
     }
 
     return Boolean(
       invoice.gatewayId &&
-        invoice.efiChargeId &&
-        (invoice.boletoLink || invoice.boletoLinhaDigitavel),
+      invoice.efiChargeId &&
+      (invoice.boletoLink || invoice.boletoLinhaDigitavel),
     );
   }
 
@@ -872,5 +898,4 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
   private isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
   }
-
 }

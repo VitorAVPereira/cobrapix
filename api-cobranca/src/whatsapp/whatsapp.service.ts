@@ -62,7 +62,8 @@ const TEMPLATE_EXAMPLES: Record<string, string> = {
   metodo_pagamento: 'PIX',
   payment_link: '00020101021226860014br.gov.bcb.pix2564qrcodepix.example',
   pix_copia_e_cola: '00020101021226860014br.gov.bcb.pix2564qrcodepix.example',
-  boleto_linha_digitavel: '34191.79001 01043.510047 91020.150008 1 98760000015050',
+  boleto_linha_digitavel:
+    '34191.79001 01043.510047 91020.150008 1 98760000015050',
   boleto_link: 'https://cobranca.exemplo/boleto',
   boleto_pdf: 'https://cobranca.exemplo/boleto.pdf',
 };
@@ -316,7 +317,9 @@ export class WhatsappService {
   ): string[] {
     const variableNames = this.extractTemplateVariableNames(templateContent);
 
-    return variableNames.map((variableName) => replacements[variableName] ?? '');
+    return variableNames.map(
+      (variableName) => replacements[variableName] ?? '',
+    );
   }
 
   buildMetaTemplateName(slug: string): string {
@@ -340,7 +343,8 @@ export class WhatsappService {
     );
 
     return {
-      name: template.metaTemplateName ?? this.buildMetaTemplateName(template.slug),
+      name:
+        template.metaTemplateName ?? this.buildMetaTemplateName(template.slug),
       language: template.metaLanguage,
       category: template.category,
       text,

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import {
+  Activity,
   AlertCircle,
   CheckCircle2,
   KeyRound,
@@ -13,6 +14,7 @@ import {
   Webhook,
   WifiOff,
 } from "lucide-react";
+import type { WhatsAppUsageResponse } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 
 type ConnectionStatus = "LOADING" | "CONNECTED" | "DISCONNECTED" | "SAVING";
@@ -61,6 +63,7 @@ export default function WhatsappConfigPage() {
   const [webhookUrl, setWebhookUrl] = useState<string>("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [usage, setUsage] = useState<WhatsAppUsageResponse | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -92,7 +95,17 @@ export default function WhatsappConfigPage() {
       }
     }
 
+    async function loadUsage(): Promise<void> {
+      try {
+        const data = await apiClient.getWhatsappUsage();
+        if (active) setUsage(data);
+      } catch {
+        // nao critico
+      }
+    }
+
     void loadStatus();
+    void loadUsage();
 
     return () => {
       active = false;
@@ -337,6 +350,48 @@ export default function WhatsappConfigPage() {
               <p>Respostas STOP, SAIR, PARAR ou CANCELAR revogam o opt-in.</p>
             </div>
           </section>
+
+          {usage && (
+            <section className="rounded-md border border-blue-200 bg-white p-5 shadow-sm">
+              <div className="mb-3 flex items-center gap-2">
+                <Activity size={18} className="text-blue-600" />
+                <h3 className="text-sm font-semibold text-slate-900">
+                  Consumo Diario
+                </h3>
+              </div>
+              <div className="mb-2 flex items-baseline justify-between">
+                <span className="text-xl font-bold text-slate-900">
+                  {usage.dailyUsage}
+                </span>
+                <span className="text-xs text-slate-400">
+                  / {usage.dailyLimit} clientes
+                </span>
+              </div>
+              <div className="mb-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className={`h-full rounded-full ${
+                    usage.remaining === 0
+                      ? "bg-rose-500"
+                      : usage.dailyUsage / usage.dailyLimit > 0.8
+                        ? "bg-amber-500"
+                        : "bg-emerald-500"
+                  }`}
+                  style={{
+                    width: `${Math.min(
+                      100,
+                      (usage.dailyUsage / usage.dailyLimit) * 100,
+                    )}%`,
+                  }}
+                />
+              </div>
+              <p className="text-xs text-slate-500">
+                Tier: {usage.tier.replace("TIER_", "")}
+                {usage.remaining > 0
+                  ? ` — ${usage.remaining} restantes`
+                  : " — esgotado"}
+              </p>
+            </section>
+          )}
 
           <section className="rounded-md border border-amber-200 bg-amber-50 p-4">
             <div className="flex items-start gap-3">

@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { EfiService } from '../payment/efi.service';
+import { MessagingLimitService } from '../queue/services/messaging-limit.service';
 import { getWhatsAppNumberLookupCandidates } from '../common/whatsapp-number';
 
 interface EvolutionWebhookPayload {
@@ -28,19 +29,26 @@ interface MetaWebhookEntry {
   id: string;
   changes: Array<{
     field: string;
-    value: {
-      metadata?: {
-        phone_number_id?: string;
-      };
-      messages?: MetaIncomingMessage[];
-      statuses?: MetaMessageStatus[];
-    };
+    value: MetaWebhookChangeValue;
   }>;
+}
+
+interface MetaWebhookChangeValue {
+  metadata?: {
+    phone_number_id?: string;
+  };
+  messages?: MetaIncomingMessage[];
+  statuses?: MetaMessageStatus[];
+  messaging_limit?: string;
+  event?: string;
+  decision?: string;
+  reason?: string;
 }
 
 interface MetaIncomingMessage {
   from: string;
   type: string;
+  id?: string;
   text?: {
     body?: string;
   };
@@ -61,6 +69,7 @@ export class WebhooksService {
     private configService: ConfigService,
     private prisma: PrismaService,
     private readonly efiService: EfiService,
+    private readonly messagingLimitService: MessagingLimitService,
   ) {}
 
   async handleEvolutionWebhook(
@@ -177,6 +186,8 @@ export class WebhooksService {
     processed: boolean;
     statuses: number;
     optOuts: number;
+    tierUpdates: number;
+    accountUpdates: number;
   }> {
     this.verifyMetaSignature(signature, rawBody);
 
@@ -187,13 +198,11 @@ export class WebhooksService {
 
     let statuses = 0;
     let optOuts = 0;
+    let tierUpdates = 0;
+    let accountUpdates = 0;
 
     for (const entry of payload.entry) {
       for (const change of entry.changes) {
-        if (change.field !== 'messages') {
-          continue;
-        }
-
         const phoneNumberId = change.value.metadata?.phone_number_id;
         if (!phoneNumberId) {
           continue;
@@ -204,7 +213,7 @@ export class WebhooksService {
             whatsappProvider: 'META_CLOUD',
             metaPhoneNumberId: phoneNumberId,
           },
-          select: { id: true },
+          select: { id: true, metaPhoneNumberId: true },
         });
 
         if (!company) {
@@ -214,26 +223,135 @@ export class WebhooksService {
           continue;
         }
 
-        for (const status of change.value.statuses ?? []) {
-          statuses++;
-          this.logger.log(
-            `Webhook Meta status ${status.status} para ${status.recipient_id ?? 'destinatario desconhecido'} (${status.id})`,
-          );
-        }
+        switch (change.field) {
+          case 'messages':
+            for (const status of change.value.statuses ?? []) {
+              statuses++;
+              this.logger.log(
+                `Webhook Meta status ${status.status} para ${status.recipient_id ?? 'desconhecido'} (${status.id})`,
+              );
+              await this.recordMessageInteraction(company.id, status);
+            }
 
-        for (const message of change.value.messages ?? []) {
-          if (this.isOptOutMessage(message)) {
-            const updated = await this.revokeDebtorOptIn(
+            for (const message of change.value.messages ?? []) {
+              await this.recordInboundInteraction(company.id, message);
+
+              if (this.isOptOutMessage(message)) {
+                const updated = await this.revokeDebtorOptIn(
+                  company.id,
+                  message.from,
+                );
+                optOuts += updated;
+              }
+            }
+            break;
+
+          case 'messaging_limit':
+            tierUpdates += await this.handleMessagingLimitUpdate(
               company.id,
-              message.from,
+              change.value,
             );
-            optOuts += updated;
-          }
+            break;
+
+          case 'account_review_update':
+            this.logger.log(
+              `Webhook Meta account_review_update para ${company.id}: ${JSON.stringify(change.value)}`,
+            );
+            break;
+
+          case 'account_update':
+            accountUpdates += await this.handleAccountUpdate(
+              company.id,
+              change.value,
+            );
+            break;
+
+          default:
+            this.logger.debug(
+              `Webhook Meta: campo nao tratado "${change.field}" para ${company.id}`,
+            );
         }
       }
     }
 
-    return { processed: true, statuses, optOuts };
+    return { processed: true, statuses, optOuts, tierUpdates, accountUpdates };
+  }
+
+  private async recordMessageInteraction(
+    companyId: string,
+    status: MetaMessageStatus,
+  ): Promise<void> {
+    try {
+      await this.messagingLimitService.recordInteraction({
+        companyId,
+        phoneNumber: status.recipient_id ?? 'unknown',
+        direction: 'OUTBOUND',
+        status: status.status,
+        messageId: status.id,
+        rawPayload: status,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Falha ao registrar interacao de mensagem: ${String(error)}`,
+      );
+    }
+  }
+
+  private async recordInboundInteraction(
+    companyId: string,
+    message: MetaIncomingMessage,
+  ): Promise<void> {
+    try {
+      await this.messagingLimitService.recordInteraction({
+        companyId,
+        phoneNumber: message.from,
+        direction: 'INBOUND',
+        status: 'received',
+        messageId: message.id,
+        rawPayload: message,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Falha ao registrar interacao inbound: ${String(error)}`,
+      );
+    }
+  }
+
+  private async handleMessagingLimitUpdate(
+    companyId: string,
+    value: MetaWebhookChangeValue,
+  ): Promise<number> {
+    const rawTier = value.messaging_limit ?? value.event;
+    if (!rawTier) return 0;
+
+    const tier = this.messagingLimitService.normalizeTier(rawTier);
+    if (!tier) {
+      this.logger.warn(
+        `Tier de mensagens desconhecido para ${companyId}: ${rawTier}`,
+      );
+      return 0;
+    }
+
+    await this.messagingLimitService.updateTierFromWebhook(companyId, tier);
+    return 1;
+  }
+
+  private async handleAccountUpdate(
+    companyId: string,
+    value: MetaWebhookChangeValue,
+  ): Promise<number> {
+    if (value.event === 'RESTRICTED' || value.event === 'DISABLED') {
+      await this.prisma.company.update({
+        where: { id: companyId },
+        data: { whatsappStatus: 'DISCONNECTED' },
+      });
+      this.logger.warn(
+        `WABA da empresa ${companyId} ${value.event}: ${value.reason ?? 'sem motivo especificado'}`,
+      );
+      return 1;
+    }
+
+    return 0;
   }
 
   private verifyMetaSignature(
@@ -311,8 +429,13 @@ export class WebhooksService {
     );
   }
 
-  private isMetaWebhookPayload(payload: unknown): payload is MetaWebhookPayload {
-    if (!this.isRecord(payload) || payload.object !== 'whatsapp_business_account') {
+  private isMetaWebhookPayload(
+    payload: unknown,
+  ): payload is MetaWebhookPayload {
+    if (
+      !this.isRecord(payload) ||
+      payload.object !== 'whatsapp_business_account'
+    ) {
       return false;
     }
 

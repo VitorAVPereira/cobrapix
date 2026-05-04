@@ -10,10 +10,13 @@ import {
   MessageCircle,
   Percent,
   Send,
+  Smartphone,
+  TrendingDown,
+  TrendingUp,
   WalletCards,
   type LucideIcon,
 } from "lucide-react";
-import type { BillingMetrics, DashboardPeriod } from "@/lib/api-client";
+import type { BillingMetrics, DashboardPeriod, WhatsAppUsageResponse } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 
 type Period = "Hoje" | "7 Dias" | "30 Dias" | "Este Ano";
@@ -63,6 +66,7 @@ export default function DashboardPage() {
   const apiClient = useApiClient();
   const [selectedPeriod, setSelectedPeriod] = useState<Period>("30 Dias");
   const [metrics, setMetrics] = useState<BillingMetrics>(emptyMetrics);
+  const [usage, setUsage] = useState<WhatsAppUsageResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -89,6 +93,19 @@ export default function DashboardPage() {
 
     void fetchMetrics();
   }, [apiClient, selectedPeriod]);
+
+  useEffect(() => {
+    async function fetchUsage(): Promise<void> {
+      try {
+        const data = await apiClient.getWhatsappUsage();
+        setUsage(data);
+      } catch {
+        // consumo nao critico - nao mostra erro
+      }
+    }
+
+    void fetchUsage();
+  }, [apiClient]);
 
   const cards: MetricCard[] = [
     {
@@ -243,11 +260,11 @@ export default function DashboardPage() {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="font-semibold text-slate-900">
-                Performance do período
+                Performance do periodo
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Métricas alimentadas por faturas, logs da fila e webhooks da
-                Efí no período selecionado.
+                Metricas alimentadas por faturas, logs da fila e webhooks da
+                Efi no periodo selecionado.
               </p>
             </div>
             <div className="rounded-md bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
@@ -255,6 +272,129 @@ export default function DashboardPage() {
             </div>
           </div>
         </section>
+
+        {usage && (
+          <section className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+            <article className="rounded-md border border-slate-200 bg-white p-5">
+              <div className="mb-4 flex items-center gap-2">
+                <div className="flex h-10 w-10 items-center justify-center rounded-md bg-blue-50 text-blue-600">
+                  <Smartphone size={20} />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-slate-500">
+                    Limite Diario WhatsApp
+                  </p>
+                  <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+                    {usage.tier.replace("TIER_", "Tier ")}
+                  </span>
+                </div>
+              </div>
+
+              <div className="mb-3">
+                <div className="flex items-baseline justify-between">
+                  <strong className="block text-2xl font-bold tracking-tight text-slate-900">
+                    {usage.dailyUsage.toLocaleString("pt-BR")}
+                  </strong>
+                  <span className="text-sm text-slate-400">
+                    / {usage.dailyLimit.toLocaleString("pt-BR")}
+                  </span>
+                </div>
+                <p className="text-sm text-slate-500">clientes unicos hoje</p>
+              </div>
+
+              <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className={`h-full rounded-full transition-all ${
+                    usage.remaining === 0
+                      ? "bg-rose-500"
+                      : usage.dailyUsage / usage.dailyLimit > 0.8
+                        ? "bg-amber-500"
+                        : "bg-emerald-500"
+                  }`}
+                  style={{
+                    width: `${Math.min(
+                      100,
+                      (usage.dailyUsage / usage.dailyLimit) * 100,
+                    )}%`,
+                  }}
+                />
+              </div>
+              <p className="mt-2 text-xs text-slate-400">
+                {usage.remaining > 0
+                  ? `${usage.remaining} envios restantes hoje`
+                  : "Limite diario esgotado"}
+              </p>
+            </article>
+
+            <article className="rounded-md border border-slate-200 bg-white p-5">
+              <div className="mb-4 flex items-center gap-2">
+                <div className="flex h-10 w-10 items-center justify-center rounded-md bg-emerald-50 text-emerald-600">
+                  <Send size={20} />
+                </div>
+                <p className="text-sm font-medium text-slate-500">
+                  Envios Hoje
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <span className="text-2xl font-bold text-slate-900">
+                    {usage.interactions.outbound.toLocaleString("pt-BR")}
+                  </span>
+                  <p className="text-xs text-slate-400">enviados</p>
+                </div>
+                <div>
+                  <span className="text-2xl font-bold text-emerald-700">
+                    {usage.interactions.delivered.toLocaleString("pt-BR")}
+                  </span>
+                  <p className="text-xs text-slate-400">entregues</p>
+                </div>
+                <div>
+                  <span className="text-2xl font-bold text-blue-700">
+                    {usage.interactions.read.toLocaleString("pt-BR")}
+                  </span>
+                  <p className="text-xs text-slate-400">lidos</p>
+                </div>
+                <div>
+                  <span className="text-2xl font-bold text-rose-700">
+                    {usage.interactions.failed.toLocaleString("pt-BR")}
+                  </span>
+                  <p className="text-xs text-slate-400">falhas</p>
+                </div>
+              </div>
+            </article>
+
+            <article className="rounded-md border border-slate-200 bg-white p-5">
+              <div className="mb-4 flex items-center gap-2">
+                <div className="flex h-10 w-10 items-center justify-center rounded-md bg-violet-50 text-violet-600">
+                  {usage.interactions.inbound > 0 ? (
+                    <TrendingUp size={20} />
+                  ) : (
+                    <TrendingDown size={20} />
+                  )}
+                </div>
+                <p className="text-sm font-medium text-slate-500">
+                  Interacoes Hoje
+                </p>
+              </div>
+
+              <span className="text-2xl font-bold text-violet-700">
+                {usage.interactions.inbound.toLocaleString("pt-BR")}
+              </span>
+              <p className="text-sm text-slate-500">
+                respostas de clientes
+              </p>
+
+              <div className="mt-4 rounded-md bg-slate-50 p-3">
+                <p className="text-xs leading-relaxed text-slate-500">
+                  Clientes que respondem as mensagens ajudam a melhorar a
+                  qualidade do seu numero e podem aumentar seu limite de envios
+                  na Meta.
+                </p>
+              </div>
+            </article>
+          </section>
+        )}
       </div>
     </main>
   );

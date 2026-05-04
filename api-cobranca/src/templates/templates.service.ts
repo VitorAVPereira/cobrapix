@@ -115,7 +115,9 @@ export class TemplatesService {
         ...(dto.metaTemplateName !== undefined && {
           metaTemplateName: dto.metaTemplateName,
         }),
-        ...(dto.metaLanguage !== undefined && { metaLanguage: dto.metaLanguage }),
+        ...(dto.metaLanguage !== undefined && {
+          metaLanguage: dto.metaLanguage,
+        }),
         ...(dto.category !== undefined && { category: dto.category }),
         ...(dto.content !== undefined && {
           metaStatus: 'LOCAL',

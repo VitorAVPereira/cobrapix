@@ -48,6 +48,20 @@ enum RecurringInvoiceStatus {
   PAUSED
 }
 
+enum MessagingLimitTier {
+  TIER_50
+  TIER_250
+  TIER_1K
+  TIER_10K
+  TIER_100K
+  TIER_UNLIMITED
+}
+
+enum WhatsAppInteractionDirection {
+  INBOUND
+  OUTBOUND
+}
+
 model Company {
   id                           String         @id @default(uuid())
   corporateName                String
@@ -87,6 +101,8 @@ model Company {
   metaBusinessPhoneNumber      String?
   metaAccessTokenEncrypted     String?        @db.Text
   metaDefaultLanguage          String         @default("pt_BR")
+  messagingLimitTier           MessagingLimitTier?
+  messagingLimitUpdatedAt      DateTime?
 
   templates           MessageTemplate[]
   users               User[]
@@ -97,6 +113,8 @@ model Company {
   subscription        Subscription?
   paymentGateway      GatewayAccount?
   originalBankAccount OriginalBankAccount?
+  messagingUsage      MessagingUsage[]
+  whatsappInteractions WhatsAppInteraction[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -314,4 +332,30 @@ model MessageTemplate {
   updatedAt DateTime @updatedAt
 
   @@unique([companyId, slug])
+}
+
+model MessagingUsage {
+  id          String   @id @default(uuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id])
+  phoneNumber String
+  sentAt      DateTime @default(now())
+
+  @@unique([companyId, phoneNumber])
+  @@index([companyId, sentAt])
+}
+
+model WhatsAppInteraction {
+  id          String                         @id @default(uuid())
+  companyId   String
+  company     Company                        @relation(fields: [companyId], references: [id])
+  phoneNumber String
+  direction   WhatsAppInteractionDirection
+  status      String?
+  messageId   String?
+  rawPayload  Json?
+  receivedAt  DateTime                       @default(now())
+
+  @@index([companyId, receivedAt])
+  @@index([companyId, phoneNumber])
 }

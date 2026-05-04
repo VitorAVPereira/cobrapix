@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { MessagingLimitService } from '../queue/services/messaging-limit.service';
 import { ConfigureMetaWhatsappDto } from './dto/configure-meta-whatsapp.dto';
 import { WhatsappService } from './whatsapp.service';
 
@@ -19,7 +20,10 @@ interface AuthenticatedUser {
 @Controller('whatsapp')
 @UseGuards(JwtAuthGuard)
 export class WhatsappController {
-  constructor(private readonly whatsappService: WhatsappService) {}
+  constructor(
+    private readonly whatsappService: WhatsappService,
+    private readonly messagingLimitService: MessagingLimitService,
+  ) {}
 
   @Post('meta')
   async configureMeta(
@@ -60,5 +64,37 @@ export class WhatsappController {
   ): Promise<{ success: boolean }> {
     await this.whatsappService.disconnect(user.companyId);
     return { success: true };
+  }
+
+  @Get('usage')
+  async getUsage(@GetUser() user: AuthenticatedUser) {
+    const [dailyStatus, interactions] = await Promise.all([
+      this.messagingLimitService.canSend(user.companyId),
+      this.messagingLimitService.getInteractionStats(user.companyId),
+    ]);
+
+    return {
+      tier: dailyStatus.tier,
+      dailyLimit: dailyStatus.limit,
+      dailyUsage: dailyStatus.usage,
+      remaining: dailyStatus.remaining,
+      interactions,
+    };
+  }
+
+  @Post('sync-tier')
+  async syncTier(@GetUser() user: AuthenticatedUser) {
+    const tier = await this.messagingLimitService.syncTierFromMeta(
+      user.companyId,
+    );
+
+    if (!tier) {
+      throw new HttpException(
+        'Nao foi possivel sincronizar o tier com a Meta',
+        HttpStatus.BAD_GATEWAY,
+      );
+    }
+
+    return { tier };
   }
 }

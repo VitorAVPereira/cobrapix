@@ -5,9 +5,7 @@ import {
 
 describe('whatsapp-number', () => {
   it('usa +55 quando o codigo do pais nao foi informado', () => {
-    expect(normalizeWhatsAppNumber('(11) 99999-9999')).toBe(
-      '+5511999999999',
-    );
+    expect(normalizeWhatsAppNumber('(11) 99999-9999')).toBe('+5511999999999');
   });
 
   it('preserva codigo do pais informado explicitamente', () => {

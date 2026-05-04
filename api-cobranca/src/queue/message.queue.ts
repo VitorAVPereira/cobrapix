@@ -2,10 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 
-const SAFE_SINGLE_MIN_DELAY_MS = 15_000;
-const SAFE_SINGLE_MAX_DELAY_MS = 45_000;
-const SAFE_BULK_INTERVAL_MS = 30_000;
-const SAFE_BULK_JITTER_MS = 15_000;
+const SAFE_SINGLE_MIN_DELAY_MS = 1_000;
+const SAFE_SINGLE_MAX_DELAY_MS = 3_000;
+const SAFE_BULK_INTERVAL_MS = 500;
+const SAFE_BULK_JITTER_MS = 1_000;
 
 export interface SendMessageJob {
   invoiceId: string;
@@ -45,7 +45,7 @@ export class MessageQueueService {
 
   async addBulkSendMessageJobs(jobs: SendMessageJob[]): Promise<void> {
     const bulkJobs = jobs.map((job, index) => ({
-      name: 'send-message',
+      name: 'send-message' as const,
       data: job,
       opts: {
         delay: this.buildSafeDelay(index),

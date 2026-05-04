@@ -848,8 +848,7 @@ export class BillingService {
         settings.collectionReminderDays,
       ),
       autoGenerateFirstCharge:
-        settings.autoGenerateFirstCharge ??
-        DEFAULT_AUTO_GENERATE_FIRST_CHARGE,
+        settings.autoGenerateFirstCharge ?? DEFAULT_AUTO_GENERATE_FIRST_CHARGE,
       autoDiscountEnabled: true,
       autoDiscountDaysAfterDue: this.normalizeDiscountDays(
         settings.autoDiscountDaysAfterDue,
@@ -1122,9 +1121,7 @@ export class BillingService {
       templateContent.matchAll(/\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g),
     )
       .map((match) => match[1])
-      .filter((variableName): variableName is string =>
-        Boolean(variableName),
-      )
+      .filter((variableName): variableName is string => Boolean(variableName))
       .map((variableName) => replacements[variableName] ?? '');
   }
 
