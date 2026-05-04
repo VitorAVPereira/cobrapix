@@ -39,6 +39,20 @@ interface InvoiceTableProps {
   isRunningSelected: boolean;
 }
 
+const PROFILE_LABELS: Record<string, string> = {
+  NEW: "Novo",
+  GOOD: "Bom",
+  DOUBTFUL: "Duvidoso",
+  BAD: "Ruim",
+};
+
+const PROFILE_COLORS: Record<string, string> = {
+  NEW: "border-blue-200 bg-blue-50 text-blue-700",
+  GOOD: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  DOUBTFUL: "border-amber-200 bg-amber-50 text-amber-700",
+  BAD: "border-red-200 bg-red-50 text-red-700",
+};
+
 export function InvoiceTable({
   data,
   pageCount,
@@ -289,6 +303,28 @@ export function InvoiceTable({
           <span className="text-slate-600">{email}</span>
         ) : (
           <span className="text-slate-300 text-xs">-</span>
+        );
+      },
+    },
+    {
+      accessorKey: "collectionProfile",
+      header: "Perfil",
+      cell: (info) => {
+        const profile = info.getValue() as ParsedDebtor["collectionProfile"];
+
+        if (!profile) {
+          return <span className="text-xs text-slate-300">-</span>;
+        }
+
+        return (
+          <span
+            className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${
+              PROFILE_COLORS[profile.profileType] ??
+              "border-slate-200 bg-slate-50 text-slate-500"
+            }`}
+          >
+            {PROFILE_LABELS[profile.profileType] ?? profile.name}
+          </span>
         );
       },
     },

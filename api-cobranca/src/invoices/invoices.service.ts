@@ -66,6 +66,11 @@ interface InvoiceListItem {
     dueDay: number;
     status: RecurringInvoiceStatus;
   };
+  collectionProfile?: {
+    id: string;
+    name: string;
+    profileType: string;
+  } | null;
 }
 
 interface InvoicePaymentSummary {
@@ -141,6 +146,11 @@ interface InvoiceWithRelations {
     phoneNumber: string;
     email: string | null;
     whatsappOptIn: boolean;
+    collectionProfile?: {
+      id: string;
+      name: string;
+      profileType: string;
+    } | null;
   };
   originalAmount: { toNumber(): number };
   dueDate: Date;
@@ -237,7 +247,10 @@ export class InvoicesService {
   async findAll(companyId: string): Promise<InvoiceListItem[]> {
     const invoices = await this.prisma.invoice.findMany({
       where: { companyId },
-      include: { debtor: true, recurringInvoice: true },
+      include: {
+        debtor: { include: { collectionProfile: true } },
+        recurringInvoice: true,
+      },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -275,7 +288,10 @@ export class InvoicesService {
     const [data, total] = await Promise.all([
       this.prisma.invoice.findMany({
         where,
-        include: { debtor: true, recurringInvoice: true },
+        include: {
+          debtor: { include: { collectionProfile: true } },
+          recurringInvoice: true,
+        },
         orderBy: { createdAt: 'desc' },
         skip: (params.page - 1) * params.pageSize,
         take: params.pageSize,
@@ -289,6 +305,31 @@ export class InvoicesService {
       page: params.page,
       pageSize: params.pageSize,
     };
+  }
+
+  async getCollectionAttempts(companyId: string, invoiceId: string) {
+    return this.prisma.collectionAttempt.findMany({
+      where: { companyId, invoiceId },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        channel: true,
+        status: true,
+        externalMessageId: true,
+        errorDetails: true,
+        createdAt: true,
+        ruleStep: {
+          select: {
+            stepOrder: true,
+            channel: true,
+            delayDays: true,
+            profile: {
+              select: { name: true },
+            },
+          },
+        },
+      },
+    });
   }
 
   async importCsv(
@@ -350,7 +391,10 @@ export class InvoicesService {
           recurringInvoiceId: recurrence.recurrenceId,
           recurrencePeriod: recurrence.lastGeneratedPeriod ?? undefined,
         },
-        include: { debtor: true, recurringInvoice: true },
+        include: {
+          debtor: { include: { collectionProfile: true } },
+          recurringInvoice: true,
+        },
         orderBy: { createdAt: 'desc' },
       });
 
@@ -393,7 +437,10 @@ export class InvoicesService {
           dueDate,
           billingType: input.billing_type,
         },
-        include: { debtor: true, recurringInvoice: true },
+        include: {
+          debtor: { include: { collectionProfile: true } },
+          recurringInvoice: true,
+        },
       });
     });
 
@@ -802,6 +849,13 @@ export class InvoicesService {
               status: invoice.recurringInvoice?.status ?? 'ACTIVE',
             }
           : undefined,
+      collectionProfile: invoice.debtor.collectionProfile
+        ? {
+            id: invoice.debtor.collectionProfile.id,
+            name: invoice.debtor.collectionProfile.name,
+            profileType: invoice.debtor.collectionProfile.profileType,
+          }
+        : null,
     };
   }
 

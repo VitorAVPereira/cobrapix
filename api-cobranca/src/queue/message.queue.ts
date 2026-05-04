@@ -19,6 +19,7 @@ export interface SendMessageJob {
   message?: string;
   debtorName: string;
   retryCount?: number;
+  ruleStepId?: string;
 }
 
 export interface InitialChargeJob {
@@ -39,7 +40,7 @@ export class MessageQueueService {
   async addSendMessageJob(job: SendMessageJob): Promise<void> {
     await this.whatsappQueue.add('send-message', job, {
       delay: this.buildSafeDelay(0),
-      ...this.buildJobOptions(`send-message:${job.companyId}:${job.invoiceId}`),
+      ...this.buildJobOptions(this.buildSendMessageJobId(job)),
     });
   }
 
@@ -49,9 +50,7 @@ export class MessageQueueService {
       data: job,
       opts: {
         delay: this.buildSafeDelay(index),
-        ...this.buildJobOptions(
-          `send-message:${job.companyId}:${job.invoiceId}`,
-        ),
+        ...this.buildJobOptions(this.buildSendMessageJobId(job)),
       },
     }));
 
@@ -108,6 +107,12 @@ export class MessageQueueService {
     const jitter = this.randomBetween(0, SAFE_BULK_JITTER_MS);
 
     return baseDelay + index * SAFE_BULK_INTERVAL_MS + jitter;
+  }
+
+  private buildSendMessageJobId(job: SendMessageJob): string {
+    const stepKey = job.ruleStepId ?? 'initial';
+
+    return `send-message:${job.companyId}:${job.invoiceId}:${stepKey}:WHATSAPP`;
   }
 
   private buildJobOptions(jobId: string): {

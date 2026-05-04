@@ -1,6 +1,7 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { GatewayAccount, InvoiceStatus } from '@prisma/client';
+import { randomBytes } from 'crypto';
 import EfiPay from 'sdk-node-apis-efi';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateGatewayAccountDto } from './dto/gateway-account.dto';
@@ -345,7 +346,9 @@ export class EfiService {
     this.ensurePixCertificate(gatewayAccount);
 
     const client = this.createSdkClient(gatewayAccount);
-    const txid = invoice.efiTxid ?? this.generateTxid(invoice.id);
+    const txid = this.isPixExpired(invoice.pixExpiresAt)
+      ? this.generateRenewedTxid(invoice.id)
+      : (invoice.efiTxid ?? this.generateTxid(invoice.id));
     const dueDate = this.formatDate(invoice.dueDate);
     const amount = this.formatAmount(invoice.originalAmount);
     const debtorDocument = this.onlyDigits(invoice.debtor.document ?? '');
@@ -1046,6 +1049,10 @@ export class EfiService {
 
   private generateTxid(invoiceId: string): string {
     return invoiceId.replace(/-/g, '').slice(0, 32);
+  }
+
+  private generateRenewedTxid(invoiceId: string): string {
+    return `${invoiceId.replace(/-/g, '').slice(0, 24)}${randomBytes(4).toString('hex')}`;
   }
 
   private formatDate(date: Date): string {

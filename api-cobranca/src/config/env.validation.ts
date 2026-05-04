@@ -39,6 +39,8 @@ export const envSchema = z.object({
     .string()
     .min(32, 'EFI_WEBHOOK_SECRET deve ter pelo menos 32 caracteres'),
   PAYMENT_SECRET_KEY: z.string().min(32).optional(),
+  RESEND_FROM_EMAIL: z.string().email().optional(),
+  RESEND_WEBHOOK_SECRET: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

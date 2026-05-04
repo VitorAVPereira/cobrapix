@@ -279,6 +279,17 @@ export class InvoicesController {
     return settings;
   }
 
+  @Get(':invoiceId/attempts')
+  async getAttempts(
+    @GetUser() user: AuthenticatedUser,
+    @Param('invoiceId') invoiceId: string,
+  ): Promise<unknown> {
+    return this.invoicesService.getCollectionAttempts(
+      user.companyId,
+      invoiceId,
+    );
+  }
+
   @Post('import')
   async importCsv(
     @GetUser() user: AuthenticatedUser,

@@ -5,7 +5,12 @@ import {
   OnModuleDestroy,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { BillingMethod } from '@prisma/client';
+import {
+  BillingMethod,
+  CollectionAttemptStatus,
+  CollectionChannel,
+  Prisma,
+} from '@prisma/client';
 import { Worker, Job } from 'bullmq';
 import { normalizeWhatsAppNumberForTransport } from '../../common/whatsapp-number';
 import { PaymentService } from '../../payment/payment.service';
@@ -14,6 +19,8 @@ import { WhatsappService } from '../../whatsapp/whatsapp.service';
 import { RateLimitService } from '../services/rate-limit.service';
 import { MessagingLimitService } from '../services/messaging-limit.service';
 import { SpintaxService } from '../services/spintax.service';
+import { EmailQueueService } from '../../email/email.queue';
+import { EmailService } from '../../email/email.service';
 import {
   InitialChargeJob,
   MessageQueueService,
@@ -45,6 +52,7 @@ interface InitialChargeInvoice {
   dueDate: Date;
   gatewayId: string | null;
   pixPayload: string | null;
+  pixExpiresAt: Date | null;
   efiTxid: string | null;
   efiChargeId: string | null;
   efiPixCopiaECola: string | null;
@@ -77,6 +85,7 @@ interface InitialChargePaymentInvoice {
   companyId: string;
   gatewayId: string | null;
   pixPayload: string | null;
+  pixExpiresAt: Date | null;
   efiTxid: string | null;
   efiChargeId: string | null;
   efiPixCopiaECola: string | null;
@@ -107,6 +116,8 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     private spintaxService: SpintaxService,
     private messageQueue: MessageQueueService,
     private whatsappService: WhatsappService,
+    private emailQueue: EmailQueueService,
+    private emailService: EmailService,
   ) {}
 
   onModuleInit() {
@@ -200,6 +211,13 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       debtorName,
     );
     if (!hasOptIn) {
+      await this.recordCollectionAttemptFailed(
+        companyId,
+        invoiceId,
+        data.ruleStepId,
+        'WHATSAPP',
+        'Opt-in WhatsApp ausente.',
+      );
       return;
     }
 
@@ -242,6 +260,14 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         },
       });
 
+      await this.recordCollectionAttempt(
+        companyId,
+        invoiceId,
+        data.ruleStepId,
+        'WHATSAPP',
+        response.messageId,
+      );
+
       this.logger.log(`Mensagem enviada com sucesso para ${phoneNumber}`);
     } catch (error) {
       const errorMessage =
@@ -257,11 +283,193 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         },
       });
 
+      await this.recordCollectionAttemptFailed(
+        companyId,
+        invoiceId,
+        data.ruleStepId,
+        'WHATSAPP',
+        errorMessage,
+      );
+
+      await this.tryEmailFallback(data, errorMessage);
+
       this.logger.error(
         `Erro ao enviar mensagem para ${phoneNumber}:`,
         errorMessage,
       );
       throw error;
+    }
+  }
+
+  private async tryEmailFallback(
+    data: SendMessageJob,
+    errorMessage: string,
+  ): Promise<void> {
+    try {
+      const debtor = await this.prisma.debtor.findFirst({
+        where: { id: data.debtorId, companyId: data.companyId },
+        select: { email: true },
+      });
+
+      if (!debtor?.email) {
+        this.logger.debug(
+          `Fallback email descartado: devedor sem email (${data.invoiceId})`,
+        );
+        return;
+      }
+
+      const invoice = await this.prisma.invoice.findFirst({
+        where: { id: data.invoiceId, companyId: data.companyId },
+        select: {
+          originalAmount: true,
+          dueDate: true,
+          efiPixCopiaECola: true,
+          boletoLinhaDigitavel: true,
+          boletoLink: true,
+          billingType: true,
+          debtor: { select: { name: true } },
+          company: { select: { corporateName: true } },
+        },
+      });
+
+      if (!invoice) return;
+
+      const amount = new Intl.NumberFormat('pt-BR', {
+        style: 'currency',
+        currency: 'BRL',
+      }).format(Number(invoice.originalAmount));
+      const dueDate = new Intl.DateTimeFormat('pt-BR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        timeZone: 'America/Sao_Paulo',
+      }).format(invoice.dueDate);
+      const method = invoice.billingType === 'BOLETO' ? 'BOLETO' : 'PIX';
+      const paymentLink =
+        invoice.efiPixCopiaECola ??
+        invoice.boletoLink ??
+        invoice.boletoLinhaDigitavel ??
+        '';
+
+      const html = this.emailService.buildCollectionEmailHtml({
+        debtorName: invoice.debtor.name,
+        companyName: invoice.company.corporateName,
+        amount,
+        dueDate,
+        paymentMethod: method,
+        paymentLink,
+        pixCopyPaste: invoice.efiPixCopiaECola ?? '',
+        boletoLine: invoice.boletoLinhaDigitavel ?? '',
+      });
+
+      if (!data.ruleStepId) {
+        return;
+      }
+
+      const attemptCreated = await this.createQueuedFallbackAttempt(
+        data.companyId,
+        data.invoiceId,
+        data.ruleStepId,
+        'EMAIL',
+      );
+
+      if (!attemptCreated) {
+        return;
+      }
+
+      await this.emailQueue.addJob({
+        companyId: data.companyId,
+        invoiceId: data.invoiceId,
+        debtorId: data.debtorId,
+        debtorName: data.debtorName,
+        email: debtor.email,
+        subject: `[${invoice.company.corporateName}] Cobranca pendente`,
+        html,
+        ruleStepId: data.ruleStepId,
+      });
+
+      this.logger.log(
+        `Fallback email enfileirado para ${data.invoiceId} (WhatsApp falhou: ${errorMessage.slice(0, 80)})`,
+      );
+    } catch (fallbackError) {
+      this.logger.error(
+        `Falha ao enfileirar fallback de email para ${data.invoiceId}:`,
+        fallbackError,
+      );
+    }
+  }
+
+  private async recordCollectionAttempt(
+    companyId: string,
+    invoiceId: string,
+    ruleStepId: string | undefined,
+    channel: string,
+    externalMessageId: string,
+  ): Promise<void> {
+    if (!ruleStepId) {
+      return;
+    }
+
+    await this.prisma.collectionAttempt.upsert({
+      where: {
+        companyId_invoiceId_ruleStepId_channel: {
+          companyId,
+          invoiceId,
+          ruleStepId,
+          channel: channel as CollectionChannel,
+        },
+      },
+      create: {
+        companyId,
+        invoiceId,
+        ruleStepId,
+        channel: channel as CollectionChannel,
+        status: 'SENT' as CollectionAttemptStatus,
+        externalMessageId,
+      },
+      update: {
+        status: 'SENT' as CollectionAttemptStatus,
+        externalMessageId,
+      },
+    });
+  }
+
+  private async recordCollectionAttemptFailed(
+    companyId: string,
+    invoiceId: string,
+    ruleStepId: string | undefined,
+    channel: string,
+    errorDetails: string,
+  ): Promise<void> {
+    if (!ruleStepId) {
+      return;
+    }
+
+    try {
+      await this.prisma.collectionAttempt.upsert({
+        where: {
+          companyId_invoiceId_ruleStepId_channel: {
+            companyId,
+            invoiceId,
+            ruleStepId,
+            channel: channel as CollectionChannel,
+          },
+        },
+        create: {
+          companyId,
+          invoiceId,
+          ruleStepId,
+          channel: channel as CollectionChannel,
+          status: 'FAILED' as CollectionAttemptStatus,
+          errorDetails,
+        },
+        update: {
+          status: 'FAILED' as CollectionAttemptStatus,
+          errorDetails,
+        },
+      });
+    } catch {
+      // non-critical
     }
   }
 
@@ -386,6 +594,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         dueDate: true,
         gatewayId: true,
         pixPayload: true,
+        pixExpiresAt: true,
         efiTxid: true,
         efiChargeId: true,
         efiPixCopiaECola: true,
@@ -457,6 +666,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
           companyId: true,
           gatewayId: true,
           pixPayload: true,
+          pixExpiresAt: true,
           efiTxid: true,
           efiChargeId: true,
           efiPixCopiaECola: true,
@@ -611,6 +821,10 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     billingType: BillingMethod,
   ): boolean {
     if (billingType === 'PIX') {
+      if (invoice.pixExpiresAt && invoice.pixExpiresAt <= new Date()) {
+        return false;
+      }
+
       return Boolean(
         invoice.gatewayId &&
         invoice.efiTxid &&
@@ -853,6 +1067,36 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         status,
       },
     });
+  }
+
+  private async createQueuedFallbackAttempt(
+    companyId: string,
+    invoiceId: string,
+    ruleStepId: string,
+    channel: CollectionChannel,
+  ): Promise<boolean> {
+    try {
+      await this.prisma.collectionAttempt.create({
+        data: {
+          companyId,
+          invoiceId,
+          ruleStepId,
+          channel,
+          status: 'QUEUED',
+        },
+      });
+
+      return true;
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        return false;
+      }
+
+      throw error;
+    }
   }
 
   private isBillingMethod(value: unknown): value is BillingMethod {

@@ -4,6 +4,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { EfiService } from '../payment/efi.service';
 import { MessagingLimitService } from '../queue/services/messaging-limit.service';
+import { WhatsAppConversationService } from '../whatsapp/conversation.service';
 import { getWhatsAppNumberLookupCandidates } from '../common/whatsapp-number';
 
 interface MetaWebhookPayload {
@@ -35,6 +36,7 @@ interface MetaIncomingMessage {
   from: string;
   type: string;
   id?: string;
+  timestamp?: string;
   text?: {
     body?: string;
   };
@@ -56,6 +58,7 @@ export class WebhooksService {
     private prisma: PrismaService,
     private readonly efiService: EfiService,
     private readonly messagingLimitService: MessagingLimitService,
+    private readonly conversationService: WhatsAppConversationService,
   ) {}
 
   async handleEfiPixWebhook(payload: unknown): Promise<{
@@ -229,6 +232,16 @@ export class WebhooksService {
         status: 'received',
         messageId: message.id,
         rawPayload: message,
+      });
+
+      const content = message.text?.body ?? '(midia/sem texto)';
+
+      await this.conversationService.handleInboundMessage({
+        companyId,
+        phoneNumber: message.from,
+        messageId: message.id,
+        content,
+        timestamp: message.timestamp,
       });
     } catch (error) {
       this.logger.error(

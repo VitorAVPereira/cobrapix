@@ -10,6 +10,7 @@ import { MessagingLimitService } from './services/messaging-limit.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { PaymentModule } from '../payment/payment.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
+import { EmailModule } from '../email/email.module';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { WhatsappModule } from '../whatsapp/whatsapp.module';
     }),
     PaymentModule,
     forwardRef(() => WhatsappModule),
+    EmailModule,
   ],
   controllers: [QueueController],
   providers: [

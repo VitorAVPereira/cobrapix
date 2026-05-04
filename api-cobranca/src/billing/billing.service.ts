@@ -1,11 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { BillingMethod, Prisma } from '@prisma/client';
+import { BillingMethod, Prisma, CollectionChannel } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentService } from '../payment/payment.service';
 import { MessageQueueService, SendMessageJob } from '../queue/message.queue';
 import { SpintaxService } from '../queue/services/spintax.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { CollectionRuleEngine } from './collection-rule-engine';
+import { EmailQueueService } from '../email/email.queue';
+import { EmailService } from '../email/email.service';
 
 const DEFAULT_COLLECTION_REMINDER_DAYS = [0];
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -85,6 +88,7 @@ interface ScheduledInvoice {
     id: string;
     name: string;
     phoneNumber: string;
+    email?: string | null;
     whatsappOptIn: boolean;
     useGlobalBillingSettings: boolean;
     preferredBillingMethod: BillingMethod | null;
@@ -112,6 +116,9 @@ export class BillingService {
     private messageQueue: MessageQueueService,
     private spintaxService: SpintaxService,
     private paymentService: PaymentService,
+    private ruleEngine: CollectionRuleEngine,
+    private emailQueue: EmailQueueService,
+    private emailService: EmailService,
     private whatsappService?: WhatsappService,
   ) {}
 
@@ -141,8 +148,7 @@ export class BillingService {
       try {
         const companies = await this.prisma.company.findMany({
           where: {
-            whatsappStatus: 'CONNECTED',
-            whatsappInstanceId: { not: null },
+            collectionProfiles: { some: { isActive: true } },
           },
         });
 
@@ -374,91 +380,76 @@ export class BillingService {
         where: { id: companyId },
       });
 
-      if (
-        !company ||
-        company.whatsappStatus !== 'CONNECTED' ||
-        !company.whatsappInstanceId
-      ) {
-        this.logger.log(`Empresa ${companyId} nao esta pronta para cobrancas`);
-        return { queued: 0, skipped: 0 };
-      }
-
-      const scheduledOffsets = this.normalizeReminderDays(
-        company.collectionReminderDays,
-      );
-      const templateSlugs = this.getTemplateSlugsForOffsets(scheduledOffsets);
-      const templates = await this.prisma.messageTemplate.findMany({
-        where: {
-          companyId,
-          slug: { in: templateSlugs },
-          isActive: true,
-        },
-      });
-      const templatesBySlug = new Map(
-        templates.map((template) => [template.slug, template]),
-      );
-      const fallbackTemplate =
-        templatesBySlug.get('vencimento-hoje') ?? templates[0];
-
-      if (!fallbackTemplate) {
-        this.logger.warn(
-          `Nenhum template de cobranca ativo para empresa ${companyId}`,
-        );
+      if (!company) {
         return { queued: 0, skipped: 0 };
       }
 
       const startOfToday = this.startOfDay(new Date());
-      const dueDateWindows = scheduledOffsets.map((offset) =>
-        this.getDueDateWindow(startOfToday, offset),
-      );
-
-      const scheduledInvoices = await this.prisma.invoice.findMany({
+      const pendingInvoices = await this.prisma.invoice.findMany({
         where: {
           companyId: company.id,
           status: 'PENDING',
-          OR: dueDateWindows,
         },
         include: {
-          debtor: true,
+          debtor: {
+            include: {
+              collectionProfile: {
+                include: {
+                  steps: {
+                    where: { isActive: true },
+                    orderBy: { stepOrder: 'asc' },
+                  },
+                },
+              },
+            },
+          },
           collectionLogs: {
             where: {
               createdAt: { gte: startOfToday },
-              actionType: { in: ['WHATSAPP_QUEUED', 'WHATSAPP_SENT'] },
+              actionType: {
+                in: ['WHATSAPP_QUEUED', 'WHATSAPP_SENT', 'EMAIL_SENT'],
+              },
             },
           },
         },
       });
 
-      const actionableInvoices: Array<{
+      interface ResolvedInvoice {
         invoice: ScheduledInvoice;
-        daysFromDueDate: number;
-      }> = [];
+        ruleStepId: string;
+        channel: CollectionChannel;
+        templateId: string | null;
+        delayDays: number;
+      }
+
+      const resolved: ResolvedInvoice[] = [];
       let skippedPre = 0;
 
-      for (const invoice of scheduledInvoices) {
-        const daysFromDueDate = this.getDaysBetween(
-          startOfToday,
-          this.startOfDay(invoice.dueDate),
-        );
-
-        if (!scheduledOffsets.includes(daysFromDueDate)) {
+      for (const invoice of pendingInvoices) {
+        const nextStep = await this.ruleEngine.getNextStep(invoice);
+        if (!nextStep) {
           skippedPre++;
           continue;
         }
 
-        if (invoice.collectionLogs.length > 0) {
-          skippedPre++;
-          continue;
-        }
+        resolved.push({
+          invoice: invoice as never,
+          ruleStepId: nextStep.ruleStepId,
+          channel: nextStep.channel,
+          templateId: nextStep.templateId,
+          delayDays: nextStep.delayDays,
+        });
+      }
 
-        actionableInvoices.push({ invoice, daysFromDueDate });
+      if (resolved.length === 0) {
+        return { queued: 0, skipped: skippedPre };
       }
 
       const CHUNK_SIZE = 10;
       const paymentResults = new Map<string, PaymentMessageData | null>();
 
-      for (let i = 0; i < actionableInvoices.length; i += CHUNK_SIZE) {
-        const chunk = actionableInvoices.slice(i, i + CHUNK_SIZE);
+      for (let i = 0; i < resolved.length; i += CHUNK_SIZE) {
+        const chunk = resolved.slice(i, i + CHUNK_SIZE);
         const settled = await Promise.allSettled(
           chunk.map(async ({ invoice }) => {
             const data = await this.ensureInvoicePayment(invoice, company);
@@ -481,75 +472,165 @@ export class BillingService {
         }
       }
 
-      const jobs: SendMessageJob[] = [];
+      const whatsAppJobs: SendMessageJob[] = [];
+      const emailJobs: Array<{
+        companyId: string;
+        invoiceId: string;
+        debtorId: string;
+        debtorName: string;
+        email: string;
+        subject: string;
+        html: string;
+        ruleStepId: string;
+      }> = [];
       let skippedCount = skippedPre;
 
-      for (const { invoice, daysFromDueDate } of actionableInvoices) {
+      for (const { invoice, ruleStepId, channel, templateId } of resolved) {
         const paymentData = paymentResults.get(invoice.id);
         if (!paymentData) {
           skippedCount++;
           continue;
         }
 
-        let phone = invoice.debtor.phoneNumber;
-        if (!phone.startsWith('55')) {
-          phone = `55${phone}`;
+        if (channel === 'WHATSAPP') {
+          const template = await this.resolveTemplate(company.id, templateId);
+          if (!template) {
+            skippedCount++;
+            continue;
+          }
+
+          const attemptCreated = await this.createQueuedAttempt(
+            company.id,
+            invoice.id,
+            ruleStepId,
+            'WHATSAPP',
+          );
+          if (!attemptCreated) {
+            skippedCount++;
+            continue;
+          }
+
+          let phone = invoice.debtor.phoneNumber;
+          if (!phone.startsWith('55')) {
+            phone = `55${phone}`;
+          }
+
+          const replacements = this.buildTemplateReplacements({
+            debtorName: invoice.debtor.name,
+            originalAmount: Number(invoice.originalAmount),
+            dueDate: invoice.dueDate,
+            companyName: company.corporateName,
+            paymentData,
+          });
+          const templateParameters = this.whatsappService
+            ?.buildTemplateParameters
+            ? this.whatsappService.buildTemplateParameters(
+                template.content,
+                replacements,
+              )
+            : this.buildTemplateParameters(template.content, replacements);
+          const templateName =
+            template.metaTemplateName ??
+            this.whatsappService?.buildMetaTemplateName(template.slug) ??
+            template.slug;
+          const message = this.buildMessageFromTemplate(template.content, {
+            debtorName: invoice.debtor.name,
+            originalAmount: Number(invoice.originalAmount),
+            dueDate: invoice.dueDate,
+            companyName: company.corporateName,
+            paymentData,
+          });
+
+          whatsAppJobs.push({
+            invoiceId: invoice.id,
+            companyId: company.id,
+            debtorId: invoice.debtor.id,
+            phoneNumber: phone,
+            senderKey: company.whatsappInstanceId ?? 'unknown',
+            templateName,
+            templateLanguage: template.metaLanguage,
+            templateParameters,
+            message,
+            debtorName: invoice.debtor.name,
+            ruleStepId,
+          });
+        } else if (channel === 'EMAIL') {
+          const debtorEmail = invoice.debtor.email as string | undefined;
+          if (!debtorEmail) {
+            skippedCount++;
+            continue;
+          }
+
+          const template = await this.resolveTemplate(company.id, templateId);
+          const attemptCreated = await this.createQueuedAttempt(
+            company.id,
+            invoice.id,
+            ruleStepId,
+            'EMAIL',
+          );
+          if (!attemptCreated) {
+            skippedCount++;
+            continue;
+          }
+
+          const templateBody = template
+            ? this.buildMessageFromTemplate(template.content, {
+                debtorName: invoice.debtor.name,
+                originalAmount: Number(invoice.originalAmount),
+                dueDate: invoice.dueDate,
+                companyName: company.corporateName,
+                paymentData,
+              })
+            : undefined;
+
+          const html = this.emailService.buildCollectionEmailHtml({
+            debtorName: invoice.debtor.name,
+            companyName: company.corporateName,
+            amount: new Intl.NumberFormat('pt-BR', {
+              style: 'currency',
+              currency: 'BRL',
+            }).format(Number(invoice.originalAmount)),
+            dueDate: new Intl.DateTimeFormat('pt-BR', {
+              day: '2-digit',
+              month: '2-digit',
+              year: 'numeric',
+              timeZone: 'America/Sao_Paulo',
+            }).format(invoice.dueDate),
+            paymentMethod: paymentData.billingTypeLabel,
+            paymentLink: paymentData.paymentLink,
+            pixCopyPaste: paymentData.pixCopiaECola,
+            boletoLine: paymentData.boletoLinhaDigitavel,
+            bodyText: templateBody,
+          });
+
+          emailJobs.push({
+            companyId: company.id,
+            invoiceId: invoice.id,
+            debtorId: invoice.debtor.id,
+            debtorName: invoice.debtor.name,
+            email: debtorEmail,
+            subject: `[${company.corporateName}] Cobranca pendente`,
+            html,
+            ruleStepId,
+          });
         }
-
-        const templateSlug = this.getTemplateSlugForOffset(daysFromDueDate);
-        const template = templatesBySlug.get(templateSlug) ?? fallbackTemplate;
-        const replacements = this.buildTemplateReplacements({
-          debtorName: invoice.debtor.name,
-          originalAmount: Number(invoice.originalAmount),
-          dueDate: invoice.dueDate,
-          companyName: company.corporateName,
-          paymentData,
-        });
-        const templateParameters = this.whatsappService?.buildTemplateParameters
-          ? this.whatsappService.buildTemplateParameters(
-              template.content,
-              replacements,
-            )
-          : this.buildTemplateParameters(template.content, replacements);
-        const templateName =
-          template.metaTemplateName ??
-          this.whatsappService?.buildMetaTemplateName(template.slug) ??
-          this.buildMetaTemplateName(template.slug);
-        const message = this.buildMessageFromTemplate(template.content, {
-          debtorName: invoice.debtor.name,
-          originalAmount: Number(invoice.originalAmount),
-          dueDate: invoice.dueDate,
-          companyName: company.corporateName,
-          paymentData,
-        });
-
-        jobs.push({
-          invoiceId: invoice.id,
-          companyId: company.id,
-          debtorId: invoice.debtor.id,
-          phoneNumber: phone,
-          senderKey: company.whatsappInstanceId,
-          templateName,
-          templateLanguage: template.metaLanguage,
-          templateParameters,
-          message,
-          debtorName: invoice.debtor.name,
-        });
       }
 
-      if (jobs.length > 0) {
-        await this.messageQueue.addBulkSendMessageJobs(jobs);
-        await this.logQueuedMessages(jobs);
-        this.logger.log(
-          `Empresa ${company.corporateName}: ${jobs.length} mensagens enfileiradas, ${skippedCount} puladas`,
-        );
-      } else {
-        this.logger.log(
-          `Empresa ${company.corporateName}: nenhuma mensagem para enviar, ${skippedCount} puladas`,
-        );
+      if (whatsAppJobs.length > 0) {
+        await this.messageQueue.addBulkSendMessageJobs(whatsAppJobs);
+        await this.logQueuedMessages(whatsAppJobs);
       }
 
-      return { queued: jobs.length, skipped: skippedCount };
+      if (emailJobs.length > 0) {
+        await this.emailQueue.addBulk(emailJobs);
+      }
+
+      const totalQueued = whatsAppJobs.length + emailJobs.length;
+      this.logger.log(
+        `Empresa ${company.corporateName}: ${totalQueued} mensagens enfileiradas (${whatsAppJobs.length} WhatsApp + ${emailJobs.length} email), ${skippedCount} puladas`,
+      );
+
+      return { queued: totalQueued, skipped: skippedCount };
     } catch (error) {
       this.logger.error(
         `Erro ao executar cobrancas para empresa ${companyId}:`,
@@ -557,6 +638,43 @@ export class BillingService {
       );
       return { queued: 0, skipped: 0 };
     }
+  }
+
+  private async resolveTemplate(
+    companyId: string,
+    templateId: string | null,
+  ): Promise<{
+    id: string;
+    slug: string;
+    content: string;
+    metaTemplateName: string | null;
+    metaLanguage: string;
+  } | null> {
+    if (templateId) {
+      const template = await this.prisma.messageTemplate.findFirst({
+        where: { id: templateId, companyId, isActive: true },
+        select: {
+          id: true,
+          slug: true,
+          content: true,
+          metaTemplateName: true,
+          metaLanguage: true,
+        },
+      });
+      if (template) return template;
+    }
+
+    return this.prisma.messageTemplate.findFirst({
+      where: { companyId, isActive: true },
+      select: {
+        id: true,
+        slug: true,
+        content: true,
+        metaTemplateName: true,
+        metaLanguage: true,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
   }
 
   private async ensureInvoicePayment(
@@ -677,12 +795,17 @@ export class BillingService {
       efiTxid: string | null;
       efiChargeId: string | null;
       efiPixCopiaECola: string | null;
+      pixExpiresAt?: Date | null;
       boletoLinhaDigitavel: string | null;
       boletoLink: string | null;
     },
     billingType: BillingMethod,
   ): boolean {
     if (billingType === 'PIX') {
+      if (invoice.pixExpiresAt && invoice.pixExpiresAt <= new Date()) {
+        return false;
+      }
+
       return Boolean(
         invoice.gatewayId &&
         invoice.efiTxid &&
@@ -773,6 +896,40 @@ export class BillingService {
           'QUEUED',
         ),
       ),
+    );
+  }
+
+  private async createQueuedAttempt(
+    companyId: string,
+    invoiceId: string,
+    ruleStepId: string,
+    channel: CollectionChannel,
+  ): Promise<boolean> {
+    try {
+      await this.prisma.collectionAttempt.create({
+        data: {
+          companyId,
+          invoiceId,
+          ruleStepId,
+          channel,
+          status: 'QUEUED',
+        },
+      });
+
+      return true;
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return false;
+      }
+
+      throw error;
+    }
+  }
+
+  private isUniqueConstraintError(error: unknown): boolean {
+    return (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === 'P2002'
     );
   }
 

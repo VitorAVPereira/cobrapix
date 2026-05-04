@@ -106,6 +106,11 @@ export interface InvoiceListItem {
     dueDay: number;
     status: RecurringInvoiceStatus;
   };
+  collectionProfile?: {
+    id: string;
+    name: string;
+    profileType: "NEW" | "GOOD" | "DOUBTFUL" | "BAD";
+  } | null;
 }
 
 export interface CreateInvoiceInput {
@@ -212,6 +217,76 @@ export interface WhatsAppUsageResponse {
     inbound: number;
     failed: number;
   };
+}
+
+export interface CollectionRuleStep {
+  id: string;
+  profileId: string;
+  stepOrder: number;
+  channel: "EMAIL" | "WHATSAPP";
+  templateId: string | null;
+  template?: { id: string; name: string } | null;
+  delayDays: number;
+  sendTimeStart: string | null;
+  sendTimeEnd: string | null;
+  isActive: boolean;
+}
+
+export interface CollectionRuleProfile {
+  id: string;
+  companyId: string;
+  name: string;
+  profileType: "NEW" | "GOOD" | "DOUBTFUL" | "BAD";
+  isDefault: boolean;
+  isActive: boolean;
+  daysOverdueMin: number | null;
+  daysOverdueMax: number | null;
+  steps: CollectionRuleStep[];
+  _count?: { debtors: number };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CollectionAttempt {
+  id: string;
+  channel: "EMAIL" | "WHATSAPP";
+  status: string;
+  externalMessageId: string | null;
+  errorDetails: string | null;
+  createdAt: string;
+  ruleStep?: {
+    stepOrder: number;
+    channel: string;
+    delayDays: number;
+  } | null;
+}
+
+export type ConversationStatus = "NEW" | "IN_PROGRESS" | "CLOSED";
+
+export interface WhatsAppConversationItem {
+  id: string;
+  phoneNumber: string;
+  status: ConversationStatus;
+  debtorName: string | null;
+  debtorId: string | null;
+  assignee: { id: string; name: string | null } | null;
+  lastMessagePreview: string | null;
+  unreadCount: number;
+  serviceWindowExpiresAt: string | null;
+  lastInboundAt: string | null;
+  messageCount: number;
+  updatedAt: string;
+  createdAt: string;
+}
+
+export interface WhatsAppConversationMessage {
+  id: string;
+  direction: "INBOUND" | "OUTBOUND";
+  content: string;
+  messageId: string | null;
+  status: string | null;
+  readAt: string | null;
+  createdAt: string;
 }
 
 export interface MessageTemplate {
@@ -516,6 +591,22 @@ class ApiClient {
     });
   }
 
+  // Email
+  async getEmailStats(
+    period: string = "30d",
+  ): Promise<{
+    period: string;
+    sent: number;
+    delivered: number;
+    opened: number;
+    clicked: number;
+    bounced: number;
+    complained: number;
+    failed: number;
+  }> {
+    return this.fetch(`/email/stats?period=${period}`);
+  }
+
   // Billing
   async runBilling(): Promise<BillingResponse> {
     return this.fetch<BillingResponse>("/billing/run", {
@@ -536,6 +627,148 @@ class ApiClient {
 
   async getBillingSettings(): Promise<BillingSettings> {
     return this.fetch<BillingSettings>("/billing/settings");
+  }
+
+  // Collection Rules
+  async getRules(): Promise<CollectionRuleProfile[]> {
+    return this.fetch<CollectionRuleProfile[]>("/billing/rules");
+  }
+
+  async createRule(data: {
+    name: string;
+    profileType: "NEW" | "GOOD" | "DOUBTFUL" | "BAD";
+    isDefault?: boolean;
+    daysOverdueMin?: number;
+    daysOverdueMax?: number;
+  }): Promise<CollectionRuleProfile> {
+    return this.fetch<CollectionRuleProfile>("/billing/rules", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateRule(
+    profileId: string,
+    data: {
+      name?: string;
+      profileType?: "NEW" | "GOOD" | "DOUBTFUL" | "BAD";
+      isDefault?: boolean;
+      daysOverdueMin?: number;
+      daysOverdueMax?: number;
+    },
+  ): Promise<CollectionRuleProfile> {
+    return this.fetch<CollectionRuleProfile>(`/billing/rules/${profileId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteRule(profileId: string): Promise<unknown> {
+    return this.fetch(`/billing/rules/${profileId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async setRuleSteps(
+    profileId: string,
+    steps: Array<{
+      stepOrder: number;
+      channel: "EMAIL" | "WHATSAPP";
+      templateId?: string;
+      delayDays: number;
+      sendTimeStart?: string;
+      sendTimeEnd?: string;
+    }>,
+  ): Promise<CollectionRuleStep[]> {
+    return this.fetch<CollectionRuleStep[]>(
+      `/billing/rules/${profileId}/steps`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ steps }),
+      },
+    );
+  }
+
+  async classifyDebtors(): Promise<{ success: boolean }> {
+    return this.fetch<{ success: boolean }>("/billing/classify-debtors", {
+      method: "POST",
+    });
+  }
+
+  // Inbox WhatsApp
+  async getConversations(params: {
+    status?: string;
+    search?: string;
+    page?: number;
+    pageSize?: number;
+  } = {}): Promise<{
+    data: WhatsAppConversationItem[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set("status", params.status);
+    if (params.search) qs.set("search", params.search);
+    if (params.page) qs.set("page", String(params.page));
+    if (params.pageSize) qs.set("pageSize", String(params.pageSize));
+    const qsStr = qs.toString();
+    return this.fetch<{
+      data: WhatsAppConversationItem[];
+      total: number;
+      page: number;
+      pageSize: number;
+    }>(`/whatsapp/conversations${qsStr ? `?${qsStr}` : ""}`);
+  }
+
+  async getConversationMessages(
+    conversationId: string,
+  ): Promise<WhatsAppConversationMessage[]> {
+    return this.fetch<WhatsAppConversationMessage[]>(
+      `/whatsapp/conversations/${conversationId}/messages`,
+    );
+  }
+
+  async replyToConversation(
+    conversationId: string,
+    content: string,
+  ): Promise<{ success: boolean }> {
+    return this.fetch<{ success: boolean }>(
+      `/whatsapp/conversations/${conversationId}/reply`,
+      { method: "POST", body: JSON.stringify({ content }) },
+    );
+  }
+
+  async updateConversationStatus(
+    conversationId: string,
+    status: ConversationStatus,
+  ): Promise<{ success: boolean }> {
+    return this.fetch<{ success: boolean }>(
+      `/whatsapp/conversations/${conversationId}/status`,
+      { method: "PUT", body: JSON.stringify({ status }) },
+    );
+  }
+
+  async updateConversationAssignee(
+    conversationId: string,
+    assigneeId: string | null,
+  ): Promise<{ success: boolean }> {
+    return this.fetch<{ success: boolean }>(
+      `/whatsapp/conversations/${conversationId}/assignee`,
+      { method: "PUT", body: JSON.stringify({ assigneeId }) },
+    );
+  }
+
+  async getInboxUnreadCount(): Promise<{ count: number }> {
+    return this.fetch<{ count: number }>("/whatsapp/unread-count");
+  }
+
+  async getInvoiceAttempts(
+    invoiceId: string,
+  ): Promise<CollectionAttempt[]> {
+    return this.fetch<CollectionAttempt[]>(
+      `/invoices/${invoiceId}/attempts`,
+    );
   }
 
   async updateBillingSettings(

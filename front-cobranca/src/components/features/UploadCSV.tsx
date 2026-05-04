@@ -37,6 +37,11 @@ export interface ParsedDebtor {
     dueDay: number;
     status: "ACTIVE" | "PAUSED";
   };
+  collectionProfile?: {
+    id: string;
+    name: string;
+    profileType: "NEW" | "GOOD" | "DOUBTFUL" | "BAD";
+  } | null;
 }
 
 interface UploadCSVProps {

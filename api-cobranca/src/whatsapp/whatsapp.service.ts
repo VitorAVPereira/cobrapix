@@ -38,6 +38,12 @@ interface SendTemplateMessageInput {
   bodyParameters: string[];
 }
 
+interface SendTextMessageInput {
+  companyId: string;
+  phoneNumber: string;
+  text: string;
+}
+
 interface CreateOfficialTemplateInput {
   companyId: string;
   template: Pick<
@@ -238,6 +244,54 @@ export class WhatsappService {
       {
         method: 'POST',
         body: JSON.stringify(body),
+      },
+    );
+
+    const message = response.messages[0];
+    if (!message) {
+      throw new Error('Meta Cloud API nao retornou ID da mensagem.');
+    }
+
+    return {
+      messageId: message.id,
+      status: message.message_status ?? null,
+    };
+  }
+
+  async sendTextMessage(
+    input: SendTextMessageInput,
+  ): Promise<{ messageId: string; status: string | null }> {
+    const company = await this.prisma.company.findFirst({
+      where: {
+        id: input.companyId,
+        whatsappProvider: 'META_CLOUD',
+        whatsappStatus: 'CONNECTED',
+      },
+      select: {
+        metaPhoneNumberId: true,
+        metaAccessTokenEncrypted: true,
+      },
+    });
+
+    if (!company?.metaPhoneNumberId || !company.metaAccessTokenEncrypted) {
+      throw new Error('Meta Cloud API nao configurada para esta empresa.');
+    }
+
+    const response = await this.graphFetch<MetaMessageResponse>(
+      `/${company.metaPhoneNumberId}/messages`,
+      this.crypto.decrypt(company.metaAccessTokenEncrypted),
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: input.phoneNumber,
+          type: 'text',
+          text: {
+            preview_url: false,
+            body: input.text,
+          },
+        }),
       },
     );
 

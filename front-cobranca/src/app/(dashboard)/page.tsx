@@ -7,7 +7,10 @@ import {
   ArrowUpRight,
   CircleDollarSign,
   Loader2,
+  Mail,
+  MailOpen,
   MessageCircle,
+  MousePointerClick,
   Percent,
   Send,
   Smartphone,
@@ -67,6 +70,12 @@ export default function DashboardPage() {
   const [selectedPeriod, setSelectedPeriod] = useState<Period>("30 Dias");
   const [metrics, setMetrics] = useState<BillingMetrics>(emptyMetrics);
   const [usage, setUsage] = useState<WhatsAppUsageResponse | null>(null);
+  const [emailStats, setEmailStats] = useState<{
+    sent: number;
+    delivered: number;
+    opened: number;
+    clicked: number;
+  } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -104,7 +113,22 @@ export default function DashboardPage() {
       }
     }
 
+    async function fetchEmailStats(): Promise<void> {
+      try {
+        const data = await apiClient.getEmailStats();
+        setEmailStats({
+          sent: data.sent,
+          delivered: data.delivered,
+          opened: data.opened,
+          clicked: data.clicked,
+        });
+      } catch {
+        // nao critico
+      }
+    }
+
     void fetchUsage();
+    void fetchEmailStats();
   }, [apiClient]);
 
   const cards: MetricCard[] = [
@@ -255,6 +279,46 @@ export default function DashboardPage() {
             );
           })}
         </section>
+
+        {emailStats && (
+          <section className="rounded-md border border-slate-200 bg-white p-5">
+            <div className="mb-4 flex items-center gap-2">
+              <div className="flex h-10 w-10 items-center justify-center rounded-md bg-rose-50 text-rose-600">
+                <Mail size={20} />
+              </div>
+              <p className="text-sm font-medium text-slate-500">
+                E-mails de Cobranca (30d)
+              </p>
+            </div>
+
+            <div className="grid grid-cols-4 gap-3">
+              <div>
+                <span className="text-2xl font-bold text-slate-900">
+                  {emailStats.sent.toLocaleString("pt-BR")}
+                </span>
+                <p className="text-xs text-slate-400">enviados</p>
+              </div>
+              <div>
+                <span className="text-2xl font-bold text-emerald-700">
+                  {emailStats.delivered.toLocaleString("pt-BR")}
+                </span>
+                <p className="text-xs text-slate-400">entregues</p>
+              </div>
+              <div>
+                <span className="text-2xl font-bold text-blue-700">
+                  {emailStats.opened.toLocaleString("pt-BR")}
+                </span>
+                <p className="text-xs text-slate-400">abertos</p>
+              </div>
+              <div>
+                <span className="text-2xl font-bold text-violet-700">
+                  {emailStats.clicked.toLocaleString("pt-BR")}
+                </span>
+                <p className="text-xs text-slate-400">cliques</p>
+              </div>
+            </div>
+          </section>
+        )}
 
         <section className="rounded-md border border-slate-200 bg-white p-5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

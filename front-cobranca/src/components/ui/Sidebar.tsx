@@ -13,7 +13,9 @@ import {
   LogOut,
   MessageCircle,
   MessageSquareText,
+  MessageSquare,
   Settings,
+  SlidersHorizontal,
   X,
 } from "lucide-react";
 
@@ -26,13 +28,18 @@ const dashboardItem = {
 const mainItems = [
   {
     href: "/cobrancas",
-    label: "Cobranças",
+    label: "Cobrancas",
     icon: HandCoins,
   },
   {
     href: "/devedores-recorrentes",
     label: "Recorrentes",
     icon: CalendarClock,
+  },
+  {
+    href: "/inbox",
+    label: "Inbox WhatsApp",
+    icon: MessageSquare,
   },
 ];
 
@@ -43,6 +50,11 @@ const settingsItems = [
     icon: CalendarClock,
   },
   { href: "/configuracoes/whatsapp", label: "WhatsApp", icon: MessageCircle },
+  {
+    href: "/configuracoes/regua",
+    label: "Regua de Cobranca",
+    icon: SlidersHorizontal,
+  },
   {
     href: "/configuracoes/templates",
     label: "Templates",

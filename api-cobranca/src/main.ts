@@ -13,7 +13,7 @@ async function bootstrap(): Promise<void> {
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Hub-Signature-256'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Hub-Signature-256', 'svix-id', 'svix-timestamp', 'svix-signature'],
   });
 
   // Necessário para que PrismaService.onModuleDestroy seja chamado em SIGINT/SIGTERM

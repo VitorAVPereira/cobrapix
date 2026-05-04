@@ -4,6 +4,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PaymentService } from '../payment/payment.service';
 import { MessageQueueService, SendMessageJob } from '../queue/message.queue';
 import { SpintaxService } from '../queue/services/spintax.service';
+import { CollectionRuleEngine } from './collection-rule-engine';
+import { EmailQueueService } from '../email/email.queue';
+import { EmailService } from '../email/email.service';
 
 function decimal(value: number): { toNumber(): number; valueOf(): number } {
   return { toNumber: () => value, valueOf: () => value };
@@ -103,6 +106,25 @@ function createService(input: {
       findUnique: jest.fn().mockResolvedValue(company),
     },
     messageTemplate: {
+      findFirst: jest.fn().mockResolvedValue({
+        id: 'template-1',
+        slug: 'vencimento-hoje',
+        content:
+          input.templateContent ??
+          [
+            'Ola {{nome_devedor}}, sua cobranca de {{valor}} vence em {{data_vencimento}}.',
+            '',
+            'Forma de pagamento: {{metodo_pagamento}}',
+            'Acesse/pague por aqui: {{payment_link}}',
+            'Pix copia e cola: {{pix_copia_e_cola}}',
+            'Linha digitavel: {{boleto_linha_digitavel}}',
+            'Boleto: {{boleto_link}}',
+            'PDF do boleto: {{boleto_pdf}}',
+          ].join('\n'),
+        isActive: true,
+        metaTemplateName: null,
+        metaLanguage: 'pt_BR',
+      }),
       findMany: jest.fn().mockResolvedValue([
         {
           id: 'template-1',
@@ -130,6 +152,9 @@ function createService(input: {
     collectionLog: {
       create: jest.fn().mockResolvedValue({ id: 'log-1' }),
     },
+    collectionAttempt: {
+      create: jest.fn().mockResolvedValue({ id: 'attempt-1' }),
+    },
   } as unknown as PrismaService;
 
   const messageQueue = {
@@ -144,12 +169,32 @@ function createService(input: {
     createPayment,
   } as unknown as PaymentService;
 
+  const ruleEngine = {
+    getNextStep: jest.fn().mockResolvedValue({
+      ruleStepId: 'step-1',
+      channel: 'WHATSAPP',
+      templateId: 'template-1',
+      delayDays: 0,
+    }),
+  } as unknown as CollectionRuleEngine;
+
+  const emailQueue = {
+    addBulk: jest.fn().mockResolvedValue(undefined),
+  } as unknown as EmailQueueService;
+
+  const emailService = {
+    buildCollectionEmailHtml: jest.fn().mockReturnValue('<html></html>'),
+  } as unknown as EmailService;
+
   return {
     service: new BillingService(
       prisma,
       messageQueue,
       spintaxService,
       paymentService,
+      ruleEngine,
+      emailQueue,
+      emailService,
     ),
     prisma: prisma as unknown as {
       collectionLog: { create: jest.Mock };
