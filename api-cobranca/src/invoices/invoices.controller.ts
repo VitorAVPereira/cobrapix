@@ -269,6 +269,7 @@ export class InvoicesController {
         autoDiscountEnabled: dto.autoDiscountEnabled,
         autoDiscountDaysAfterDue: dto.autoDiscountDaysAfterDue,
         autoDiscountPercentage: dto.autoDiscountPercentage,
+        collectionProfileId: dto.collectionProfileId,
       },
     );
 

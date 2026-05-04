@@ -1,6 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { BillingMethod, Prisma, RecurringInvoiceStatus } from '@prisma/client';
+import {
+  BillingMethod,
+  CollectionProfileType,
+  Prisma,
+  RecurringInvoiceStatus,
+} from '@prisma/client';
 import {
   getWhatsAppNumberLookupCandidates,
   normalizeWhatsAppNumber,
@@ -204,6 +209,11 @@ export interface DebtorSettingsResponse {
   whatsappOptIn: boolean;
   whatsappOptInAt: string | null;
   whatsappOptInSource: string | null;
+  collectionProfile: {
+    id: string;
+    name: string;
+    profileType: CollectionProfileType;
+  } | null;
   useGlobalBillingSettings: boolean;
   customPreferredBillingMethod: BillingMethod | null;
   customCollectionReminderDays: number[];
@@ -217,7 +227,7 @@ export interface DebtorSettingsResponse {
 }
 
 export interface UpdateDebtorSettingsInput {
-  useGlobalBillingSettings: boolean;
+  useGlobalBillingSettings?: boolean;
   whatsappOptIn?: boolean;
   preferredBillingMethod?: BillingMethod | null;
   collectionReminderDays?: number[] | null;
@@ -225,6 +235,7 @@ export interface UpdateDebtorSettingsInput {
   autoDiscountEnabled?: boolean | null;
   autoDiscountDaysAfterDue?: number | null;
   autoDiscountPercentage?: number | null;
+  collectionProfileId?: string | null;
 }
 
 @Injectable()
@@ -548,6 +559,13 @@ export class InvoicesService {
     const debtor = await this.prisma.debtor.findFirst({
       where: { id: debtorId, companyId },
       include: {
+        collectionProfile: {
+          select: {
+            id: true,
+            name: true,
+            profileType: true,
+          },
+        },
         company: {
           select: {
             preferredBillingMethod: true,
@@ -584,6 +602,13 @@ export class InvoicesService {
       whatsappOptIn: debtor.whatsappOptIn,
       whatsappOptInAt: debtor.whatsappOptInAt?.toISOString() ?? null,
       whatsappOptInSource: debtor.whatsappOptInSource,
+      collectionProfile: debtor.collectionProfile
+        ? {
+            id: debtor.collectionProfile.id,
+            name: debtor.collectionProfile.name,
+            profileType: debtor.collectionProfile.profileType,
+          }
+        : null,
       useGlobalBillingSettings: debtor.useGlobalBillingSettings,
       customPreferredBillingMethod: debtor.preferredBillingMethod,
       customCollectionReminderDays: this.normalizeReminderDays(
@@ -616,56 +641,99 @@ export class InvoicesService {
       return null;
     }
 
-    const useGlobalBillingSettings = input.useGlobalBillingSettings;
-    const normalizedSettings = useGlobalBillingSettings
-      ? {
-          preferredBillingMethod: null,
-          collectionReminderDays: [],
-          autoGenerateFirstCharge: null,
-          autoDiscountEnabled: null,
-          autoDiscountDaysAfterDue: null,
-          autoDiscountPercentage: null,
-        }
-      : this.buildEffectiveCustomSettings({
-          preferredBillingMethod: input.preferredBillingMethod ?? 'PIX',
-          collectionReminderDays: input.collectionReminderDays ?? [],
-          autoGenerateFirstCharge: input.autoGenerateFirstCharge ?? true,
-          autoDiscountEnabled: input.autoDiscountEnabled ?? false,
-          autoDiscountDaysAfterDue: input.autoDiscountDaysAfterDue ?? null,
-          autoDiscountPercentage: input.autoDiscountPercentage ?? null,
-        });
+    const updateData: Prisma.DebtorUpdateInput = {};
 
-    await this.prisma.debtor.updateMany({
-      where: { id: debtorId, companyId },
-      data: {
-        useGlobalBillingSettings,
-        preferredBillingMethod: useGlobalBillingSettings
-          ? null
-          : normalizedSettings.preferredBillingMethod,
-        collectionReminderDays: normalizedSettings.collectionReminderDays,
-        autoGenerateFirstCharge: useGlobalBillingSettings
-          ? null
-          : normalizedSettings.autoGenerateFirstCharge,
-        autoDiscountEnabled: useGlobalBillingSettings
-          ? null
-          : normalizedSettings.autoDiscountEnabled,
-        autoDiscountDaysAfterDue: useGlobalBillingSettings
-          ? null
-          : normalizedSettings.autoDiscountDaysAfterDue,
-        autoDiscountPercentage: useGlobalBillingSettings
-          ? null
-          : normalizedSettings.autoDiscountPercentage,
-        ...(input.whatsappOptIn !== undefined && {
-          whatsappOptIn: input.whatsappOptIn,
-          whatsappOptInAt: input.whatsappOptIn ? new Date() : null,
-          whatsappOptInSource: input.whatsappOptIn
-            ? 'debtor_settings'
-            : 'debtor_settings_revoked',
-        }),
-      },
-    });
+    if (input.useGlobalBillingSettings !== undefined) {
+      const useGlobalBillingSettings = input.useGlobalBillingSettings;
+      const normalizedSettings = useGlobalBillingSettings
+        ? {
+            preferredBillingMethod: null,
+            collectionReminderDays: [],
+            autoGenerateFirstCharge: null,
+            autoDiscountEnabled: null,
+            autoDiscountDaysAfterDue: null,
+            autoDiscountPercentage: null,
+          }
+        : this.buildEffectiveCustomSettings({
+            preferredBillingMethod: input.preferredBillingMethod ?? 'PIX',
+            collectionReminderDays: input.collectionReminderDays ?? [],
+            autoGenerateFirstCharge: input.autoGenerateFirstCharge ?? true,
+            autoDiscountEnabled: input.autoDiscountEnabled ?? false,
+            autoDiscountDaysAfterDue: input.autoDiscountDaysAfterDue ?? null,
+            autoDiscountPercentage: input.autoDiscountPercentage ?? null,
+          });
+
+      updateData.useGlobalBillingSettings = useGlobalBillingSettings;
+      updateData.preferredBillingMethod = useGlobalBillingSettings
+        ? null
+        : normalizedSettings.preferredBillingMethod;
+      updateData.collectionReminderDays =
+        normalizedSettings.collectionReminderDays;
+      updateData.autoGenerateFirstCharge = useGlobalBillingSettings
+        ? null
+        : normalizedSettings.autoGenerateFirstCharge;
+      updateData.autoDiscountEnabled = useGlobalBillingSettings
+        ? null
+        : normalizedSettings.autoDiscountEnabled;
+      updateData.autoDiscountDaysAfterDue = useGlobalBillingSettings
+        ? null
+        : normalizedSettings.autoDiscountDaysAfterDue;
+      updateData.autoDiscountPercentage = useGlobalBillingSettings
+        ? null
+        : normalizedSettings.autoDiscountPercentage;
+    }
+
+    if (input.collectionProfileId !== undefined) {
+      const collectionProfileId = await this.resolveCollectionProfileId(
+        companyId,
+        input.collectionProfileId,
+      );
+      updateData.collectionProfile =
+        collectionProfileId === null
+          ? { disconnect: true }
+          : { connect: { id: collectionProfileId } };
+    }
+
+    if (input.whatsappOptIn !== undefined) {
+      updateData.whatsappOptIn = input.whatsappOptIn;
+      updateData.whatsappOptInAt = input.whatsappOptIn ? new Date() : null;
+      updateData.whatsappOptInSource = input.whatsappOptIn
+        ? 'debtor_settings'
+        : 'debtor_settings_revoked';
+    }
+
+    if (Object.keys(updateData).length > 0) {
+      await this.prisma.debtor.update({
+        where: { id: debtorId },
+        data: updateData,
+      });
+    }
 
     return this.getDebtorSettings(companyId, debtorId);
+  }
+
+  private async resolveCollectionProfileId(
+    companyId: string,
+    collectionProfileId: string | null,
+  ): Promise<string | null> {
+    if (collectionProfileId === null) {
+      return null;
+    }
+
+    const profile = await this.prisma.collectionProfile.findFirst({
+      where: {
+        id: collectionProfileId,
+        companyId,
+        isActive: true,
+      },
+      select: { id: true },
+    });
+
+    if (!profile) {
+      throw new BadRequestException('Perfil de cobranca invalido.');
+    }
+
+    return profile.id;
   }
 
   private async queueInitialChargeJobs(

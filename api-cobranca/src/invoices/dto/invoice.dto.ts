@@ -10,6 +10,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Length,
   Matches,
   Max,
@@ -104,18 +105,19 @@ export class UpdateRecurringInvoiceDto {
 }
 
 export class UpdateDebtorSettingsDto {
+  @IsOptional()
   @IsBoolean()
-  useGlobalBillingSettings!: boolean;
+  useGlobalBillingSettings?: boolean;
 
   @IsOptional()
   @IsBoolean()
   whatsappOptIn?: boolean;
 
-  @ValidateIf((dto: UpdateDebtorSettingsDto) => !dto.useGlobalBillingSettings)
+  @IsOptional()
   @IsIn(['PIX', 'BOLETO', 'BOLIX'])
   preferredBillingMethod?: BillingType;
 
-  @ValidateIf((dto: UpdateDebtorSettingsDto) => !dto.useGlobalBillingSettings)
+  @IsOptional()
   @IsArray()
   @ArrayMinSize(1)
   @ArrayMaxSize(12)
@@ -125,17 +127,19 @@ export class UpdateDebtorSettingsDto {
   @Max(365, { each: true })
   collectionReminderDays?: number[];
 
-  @ValidateIf((dto: UpdateDebtorSettingsDto) => !dto.useGlobalBillingSettings)
+  @IsOptional()
   @IsBoolean()
   autoGenerateFirstCharge?: boolean;
 
-  @ValidateIf((dto: UpdateDebtorSettingsDto) => !dto.useGlobalBillingSettings)
+  @IsOptional()
   @IsBoolean()
   autoDiscountEnabled?: boolean;
 
   @ValidateIf(
     (dto: UpdateDebtorSettingsDto) =>
-      !dto.useGlobalBillingSettings && dto.autoDiscountEnabled === true,
+      dto.autoDiscountEnabled === true ||
+      (dto.autoDiscountDaysAfterDue !== undefined &&
+        dto.autoDiscountDaysAfterDue !== null),
   )
   @IsInt()
   @Min(0)
@@ -144,10 +148,16 @@ export class UpdateDebtorSettingsDto {
 
   @ValidateIf(
     (dto: UpdateDebtorSettingsDto) =>
-      !dto.useGlobalBillingSettings && dto.autoDiscountEnabled === true,
+      dto.autoDiscountEnabled === true ||
+      (dto.autoDiscountPercentage !== undefined &&
+        dto.autoDiscountPercentage !== null),
   )
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)
   @Max(100)
   autoDiscountPercentage?: number;
+
+  @IsOptional()
+  @IsUUID('4')
+  collectionProfileId?: string | null;
 }

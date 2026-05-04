@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import Papa from "papaparse";
 import { AlertCircle, Download, FileType, UploadCloud } from "lucide-react";
+import type { CollectionProfileType } from "@/lib/api-client";
 import { normalizeWhatsAppNumber } from "@/lib/whatsapp-number";
 
 export type PaymentMethod = "PIX" | "BOLETO" | "BOLIX";
@@ -40,7 +41,7 @@ export interface ParsedDebtor {
   collectionProfile?: {
     id: string;
     name: string;
-    profileType: "NEW" | "GOOD" | "DOUBTFUL" | "BAD";
+    profileType: CollectionProfileType;
   } | null;
 }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -50,7 +50,11 @@ function getErrorMessage(
   return fallback;
 }
 
-function estimateFee(method: BillingMethod, amount: number, settings: BillingSettings): string {
+function estimateFee(
+  method: BillingMethod,
+  amount: number,
+  settings: BillingSettings,
+): string {
   const tariff = settings.tariffs[method];
 
   if (tariff.efiKind === "percentage") {
@@ -162,7 +166,9 @@ export default function BillingSettingsPage() {
         collectionReminderDays: settings?.collectionReminderDays ?? [0],
         autoGenerateFirstCharge,
         autoDiscountEnabled,
-        autoDiscountDaysAfterDue: autoDiscountEnabled ? parsedDiscountDays : null,
+        autoDiscountDaysAfterDue: autoDiscountEnabled
+          ? parsedDiscountDays
+          : null,
         autoDiscountPercentage: autoDiscountEnabled
           ? Number(parsedDiscountPercentage.toFixed(2))
           : null,
@@ -173,9 +179,7 @@ export default function BillingSettingsPage() {
       setAutoGenerateFirstCharge(saved.autoGenerateFirstCharge);
       setAutoDiscountEnabled(saved.autoDiscountEnabled);
       setAutoDiscountDaysAfterDue(String(saved.autoDiscountDaysAfterDue ?? 0));
-      setAutoDiscountPercentage(
-        saved.autoDiscountPercentage?.toString() ?? "",
-      );
+      setAutoDiscountPercentage(saved.autoDiscountPercentage?.toString() ?? "");
       setSuccess("Configuracoes de cobranca salvas.");
     } catch (saveError) {
       setError(getErrorMessage(saveError));
@@ -197,7 +201,10 @@ export default function BillingSettingsPage() {
       setSuccess(null);
     } catch (runError) {
       setBillingRunError(
-        getErrorMessage(runError, "Nao foi possivel executar a regua de cobranca."),
+        getErrorMessage(
+          runError,
+          "Nao foi possivel executar a regua de cobranca.",
+        ),
       );
     } finally {
       setRunningBilling(false);
@@ -213,7 +220,8 @@ export default function BillingSettingsPage() {
               Agenda de cobranca
             </h1>
             <p className="mt-1 text-sm text-slate-600">
-              Escolha o metodo global de cobranca e deixe as tarifas visiveis para a tomada de decisao.
+              Escolha o metodo global de cobranca e deixe as tarifas visiveis
+              para a tomada de decisao.
             </p>
           </div>
 
@@ -254,7 +262,8 @@ export default function BillingSettingsPage() {
                   Executar regua agora
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Enfileire manualmente as cobrancas elegiveis de acordo com os perfis e etapas configurados.
+                  Enfileire manualmente as cobrancas elegiveis de acordo com os
+                  perfis e etapas configurados.
                 </p>
               </div>
             </div>
@@ -286,7 +295,9 @@ export default function BillingSettingsPage() {
               <div className="space-y-4">
                 <div className="flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
                   <CheckCircle2 className="mt-0.5 shrink-0" size={18} />
-                  <span>{billingRunMessage ?? "Regua de cobranca executada."}</span>
+                  <span>
+                    {billingRunMessage ?? "Regua de cobranca executada."}
+                  </span>
                 </div>
 
                 <div className="grid gap-3 sm:grid-cols-3">
@@ -328,7 +339,8 @@ export default function BillingSettingsPage() {
                 Primeira cobrança
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Gere e enfileire a primeira cobrança assim que uma fatura for cadastrada.
+                Gere e enfileire a primeira cobrança assim que uma fatura for
+                cadastrada.
               </p>
             </div>
           </div>
@@ -364,7 +376,8 @@ export default function BillingSettingsPage() {
                 Metodo de pagamento
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                A tarifa da Efí é apenas informativa e sempre recebe o adicional fixo de R$ 0,50 da plataforma.
+                A tarifa da Efí é apenas informativa e sempre recebe o adicional
+                fixo de R$ 0,50 da plataforma.
               </p>
             </div>
           </div>
@@ -432,8 +445,9 @@ export default function BillingSettingsPage() {
           <div className="p-5">
             <p className="text-sm text-slate-500">
               Os dias de cobranca agora sao gerenciados por perfis de pagador na
-              tela de Regua de Cobranca. La voce pode configurar multiplos canais
-              (WhatsApp e e-mail), delays e janelas de envio para cada perfil.
+              tela de Regua de Cobranca. La voce pode configurar multiplos
+              canais (WhatsApp e e-mail), delays e janelas de envio para cada
+              perfil.
             </p>
           </div>
         </section>
@@ -446,7 +460,8 @@ export default function BillingSettingsPage() {
                 Desconto automatico
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Defina um desconto global para pagamentos feitos apos o vencimento.
+                Defina um desconto global para pagamentos feitos apos o
+                vencimento.
               </p>
             </div>
           </div>
@@ -468,7 +483,8 @@ export default function BillingSettingsPage() {
                     Ativar desconto automatico
                   </p>
                   <p className="mt-1 text-sm text-slate-500">
-                    Quando ativo, novas cobrancas passam a sair com a regra de desconto configurada.
+                    Quando ativo, novas cobrancas passam a sair com a regra de
+                    desconto configurada.
                   </p>
                 </div>
               </label>
@@ -527,7 +543,8 @@ export default function BillingSettingsPage() {
                 Metodo atual: {getMethodLabel(preferredBillingMethod)}
               </p>
               <p className="mt-2 text-sm text-slate-600">
-                Tarifa aplicada: {settings?.tariffs[preferredBillingMethod].combinedLabel ?? "-"}
+                Tarifa aplicada:{" "}
+                {settings?.tariffs[preferredBillingMethod].combinedLabel ?? "-"}
               </p>
               <p className="mt-3 text-sm text-slate-600">
                 {autoDiscountEnabled

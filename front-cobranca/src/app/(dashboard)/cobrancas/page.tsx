@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import type { PaginationState } from "@tanstack/react-table";
 import {
@@ -23,10 +23,7 @@ import type {
 } from "@/components/features/UploadCSV";
 import type { BillingSettings } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
-import {
-  formatWhatsAppNumber,
-  normalizeWhatsAppNumber,
-} from "@/lib/whatsapp-number";
+import { normalizeWhatsAppNumber } from "@/lib/whatsapp-number";
 
 interface ApiErrorData {
   details?: string[];
@@ -105,7 +102,9 @@ export default function CobrancasPage() {
     pageIndex: 0,
     pageSize: 20,
   });
-  const [selectedDebtor, setSelectedDebtor] = useState<ParsedDebtor | null>(null);
+  const [selectedDebtor, setSelectedDebtor] = useState<ParsedDebtor | null>(
+    null,
+  );
   const [invoiceTargetDebtor, setInvoiceTargetDebtor] =
     useState<ParsedDebtor | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -181,7 +180,9 @@ export default function CobrancasPage() {
     }
   }
 
-  async function handleRunSelectedInvoices(invoiceIds: string[]): Promise<void> {
+  async function handleRunSelectedInvoices(
+    invoiceIds: string[],
+  ): Promise<void> {
     setErrorMsg(null);
     setSuccessMsg(null);
     setIsRunningSelected(true);
@@ -470,9 +471,7 @@ export default function CobrancasPage() {
           <div className="w-full max-w-lg rounded-md bg-white shadow-xl transition-all duration-200">
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
               <div>
-                <h2 className="font-semibold text-slate-900">
-                  {modalTitle}
-                </h2>
+                <h2 className="font-semibold text-slate-900">{modalTitle}</h2>
                 <p className="mt-1 text-sm text-slate-500">
                   {invoiceTargetDebtor
                     ? "Preencha os dados da nova fatura deste devedor."
@@ -545,7 +544,10 @@ export default function CobrancasPage() {
                         type="checkbox"
                         checked={manualForm.whatsappOptIn}
                         onChange={(event) =>
-                          updateManualForm("whatsappOptIn", event.target.checked)
+                          updateManualForm(
+                            "whatsappOptIn",
+                            event.target.checked,
+                          )
                         }
                         className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                       />
@@ -663,7 +665,9 @@ export default function CobrancasPage() {
                   disabled={isSavingInvoice}
                   className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {isSavingInvoice && <Loader2 size={16} className="animate-spin" />}
+                  {isSavingInvoice && (
+                    <Loader2 size={16} className="animate-spin" />
+                  )}
                   Salvar Cobrança
                 </button>
               </div>
@@ -677,6 +681,7 @@ export default function CobrancasPage() {
           debtorId={selectedDebtor.debtorId}
           debtorName={selectedDebtor.name}
           onClose={() => setSelectedDebtor(null)}
+          onSaved={fetchInvoices}
         />
       )}
     </main>

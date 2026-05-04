@@ -2,14 +2,10 @@
 
 import { useEffect, useState } from "react";
 import {
-  AlertCircle,
   ArrowDown,
   ArrowUp,
   CheckCircle2,
-  Globe,
   Loader2,
-  Mail,
-  MessageCircle,
   Plus,
   Save,
   SlidersHorizontal,
@@ -17,7 +13,10 @@ import {
   X,
   Users,
 } from "lucide-react";
-import type { CollectionRuleProfile, CollectionRuleStep } from "@/lib/api-client";
+import type {
+  CollectionRuleProfile,
+  CollectionRuleStep,
+} from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 
 function getErrorMessage(error: unknown): string {
@@ -37,16 +36,6 @@ const PROFILE_TYPE_COLORS: Record<string, string> = {
   GOOD: "bg-emerald-100 text-emerald-700",
   DOUBTFUL: "bg-amber-100 text-amber-700",
   BAD: "bg-red-100 text-red-700",
-};
-
-const CHANNEL_LABELS: Record<string, string> = {
-  WHATSAPP: "WhatsApp",
-  EMAIL: "E-mail",
-};
-
-const CHANNEL_ICONS: Record<string, typeof MessageCircle> = {
-  WHATSAPP: MessageCircle,
-  EMAIL: Mail,
 };
 
 interface NewProfileForm {
@@ -114,7 +103,9 @@ export default function ReguaPage() {
       }
     }
     void load();
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, [apiClient]);
 
   useEffect(() => {
@@ -153,7 +144,10 @@ export default function ReguaPage() {
   }
 
   async function deleteProfile(profileId: string) {
-    if (!confirm("Remover este perfil? Devedores migrarao para o perfil padrao.")) return;
+    if (
+      !confirm("Remover este perfil? Devedores migrarao para o perfil padrao.")
+    )
+      return;
     setSaving(true);
     try {
       await apiClient.deleteRule(profileId);
@@ -175,7 +169,9 @@ export default function ReguaPage() {
       const steps = await apiClient.setRuleSteps(selectedId, stepForms);
       setProfiles((prev) =>
         prev.map((p) =>
-          p.id === selectedId ? { ...p, steps: steps as unknown as CollectionRuleStep[] } : p,
+          p.id === selectedId
+            ? { ...p, steps: steps as unknown as CollectionRuleStep[] }
+            : p,
         ),
       );
       setHasStepChanges(false);
@@ -199,7 +195,11 @@ export default function ReguaPage() {
     }
   }
 
-  function updateStep(index: number, field: keyof StepForm, value: string | number) {
+  function updateStep(
+    index: number,
+    field: keyof StepForm,
+    value: string | number,
+  ) {
     setStepForms((prev) =>
       prev.map((s, i) => (i === index ? { ...s, [field]: value } : s)),
     );
@@ -212,7 +212,8 @@ export default function ReguaPage() {
       {
         ...EMPTY_STEP,
         stepOrder: prev.length,
-        delayDays: prev.length > 0 ? (prev[prev.length - 1]?.delayDays ?? 0) + 3 : 0,
+        delayDays:
+          prev.length > 0 ? (prev[prev.length - 1]?.delayDays ?? 0) + 3 : 0,
       },
     ]);
     setHasStepChanges(true);
@@ -220,7 +221,9 @@ export default function ReguaPage() {
 
   function removeStep(index: number) {
     setStepForms((prev) =>
-      prev.filter((_, i) => i !== index).map((s, i) => ({ ...s, stepOrder: i })),
+      prev
+        .filter((_, i) => i !== index)
+        .map((s, i) => ({ ...s, stepOrder: i })),
     );
     setHasStepChanges(true);
   }
@@ -248,7 +251,9 @@ export default function ReguaPage() {
     <div className="mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
       <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Regua de Cobranca</h1>
+          <h1 className="text-2xl font-bold text-slate-900">
+            Regua de Cobranca
+          </h1>
           <p className="mt-1 text-sm text-slate-500">
             Configure perfis e etapas de cobranca multicanal.
           </p>
@@ -288,12 +293,16 @@ export default function ReguaPage() {
 
       {showNewProfile && (
         <div className="mb-6 rounded-md border border-slate-200 bg-white p-5">
-          <h3 className="mb-3 text-sm font-semibold text-slate-900">Novo perfil</h3>
+          <h3 className="mb-3 text-sm font-semibold text-slate-900">
+            Novo perfil
+          </h3>
           <div className="flex flex-wrap gap-3">
             <input
               type="text"
               value={newProfile.name}
-              onChange={(e) => setNewProfile((p) => ({ ...p, name: e.target.value }))}
+              onChange={(e) =>
+                setNewProfile((p) => ({ ...p, name: e.target.value }))
+              }
               placeholder="Nome do perfil"
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
@@ -308,14 +317,18 @@ export default function ReguaPage() {
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
               {Object.entries(PROFILE_TYPE_LABELS).map(([type, label]) => (
-                <option key={type} value={type}>{label}</option>
+                <option key={type} value={type}>
+                  {label}
+                </option>
               ))}
             </select>
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
                 checked={newProfile.isDefault}
-                onChange={(e) => setNewProfile((p) => ({ ...p, isDefault: e.target.checked }))}
+                onChange={(e) =>
+                  setNewProfile((p) => ({ ...p, isDefault: e.target.checked }))
+                }
               />
               Padrao
             </label>
@@ -349,14 +362,21 @@ export default function ReguaPage() {
                 key={profile.id}
                 onClick={() => setSelectedId(profile.id)}
                 className={`w-full px-4 py-3 text-left transition hover:bg-slate-50 ${
-                  selectedId === profile.id ? "bg-emerald-50 border-l-2 border-emerald-500" : ""
+                  selectedId === profile.id
+                    ? "bg-emerald-50 border-l-2 border-emerald-500"
+                    : ""
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-slate-900">{profile.name}</span>
+                  <span className="text-sm font-semibold text-slate-900">
+                    {profile.name}
+                  </span>
                   <div className="flex items-center gap-1">
-                    <span className={`inline-flex rounded px-2 py-0.5 text-xs font-semibold ${PROFILE_TYPE_COLORS[profile.profileType] ?? "bg-slate-100 text-slate-600"}`}>
-                      {PROFILE_TYPE_LABELS[profile.profileType] ?? profile.profileType}
+                    <span
+                      className={`inline-flex rounded px-2 py-0.5 text-xs font-semibold ${PROFILE_TYPE_COLORS[profile.profileType] ?? "bg-slate-100 text-slate-600"}`}
+                    >
+                      {PROFILE_TYPE_LABELS[profile.profileType] ??
+                        profile.profileType}
                     </span>
                     {profile.isDefault && (
                       <CheckCircle2 size={14} className="text-emerald-500" />
@@ -365,7 +385,8 @@ export default function ReguaPage() {
                 </div>
                 <div className="mt-1 flex items-center gap-3 text-xs text-slate-400">
                   <span className="flex items-center gap-1">
-                    {profile.steps.length} etapa{profile.steps.length !== 1 ? "s" : ""}
+                    {profile.steps.length} etapa
+                    {profile.steps.length !== 1 ? "s" : ""}
                   </span>
                   {profile._count && (
                     <span className="flex items-center gap-1">
@@ -393,7 +414,8 @@ export default function ReguaPage() {
                     Etapas — {selected.name}
                   </h2>
                   <p className="mt-1 text-xs text-slate-500">
-                    As etapas sao executadas em ordem. Cada etapa so dispara se a anterior ja foi concluida ou o delay ja passou.
+                    As etapas sao executadas em ordem. Cada etapa so dispara se
+                    a anterior ja foi concluida ou o delay ja passou.
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -426,87 +448,95 @@ export default function ReguaPage() {
               <div className="divide-y divide-slate-100">
                 {stepForms.length === 0 && (
                   <p className="px-5 py-12 text-center text-sm text-slate-400">
-                    Nenhuma etapa configurada. Clique em "+ Etapa" para adicionar.
+                    Nenhuma etapa configurada. Clique em &quot;+ Etapa&quot;
+                    para adicionar.
                   </p>
                 )}
-                {stepForms.map((step, index) => {
-                  const ChannelIcon = CHANNEL_ICONS[step.channel] ?? Globe;
-                  return (
-                    <div key={index} className="flex items-start gap-3 px-5 py-3">
-                      <div className="mt-2 flex flex-col items-center gap-0.5">
-                        <button
-                          onClick={() => moveStep(index, "up")}
-                          disabled={index === 0}
-                          className="rounded p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-30"
-                        >
-                          <ArrowUp size={12} />
-                        </button>
-                        <span className="text-xs font-bold text-slate-500">{index + 1}</span>
-                        <button
-                          onClick={() => moveStep(index, "down")}
-                          disabled={index === stepForms.length - 1}
-                          className="rounded p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-30"
-                        >
-                          <ArrowDown size={12} />
-                        </button>
-                      </div>
-
-                      <div className="flex flex-1 flex-wrap items-center gap-2">
-                        <select
-                          value={step.channel}
-                          onChange={(e) =>
-                            updateStep(index, "channel", e.target.value)
-                          }
-                          className="rounded-md border border-slate-300 px-2 py-1.5 text-xs"
-                        >
-                          <option value="WHATSAPP">WhatsApp</option>
-                          <option value="EMAIL">E-mail</option>
-                        </select>
-
-                        <div className="flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5">
-                          <span className="text-xs text-slate-500">Delay:</span>
-                          <input
-                            type="number"
-                            value={step.delayDays}
-                            onChange={(e) =>
-                              updateStep(index, "delayDays", parseInt(e.target.value) || 0)
-                            }
-                            className="w-14 border-0 bg-transparent text-xs font-semibold text-slate-700 outline-none"
-                            min={-30}
-                            max={365}
-                          />
-                          <span className="text-xs text-slate-400">dias</span>
-                        </div>
-
-                        <div className="flex items-center gap-1 text-xs text-slate-500">
-                          <span>Janela:</span>
-                          <input
-                            type="time"
-                            value={step.sendTimeStart}
-                            onChange={(e) => updateStep(index, "sendTimeStart", e.target.value)}
-                            className="w-28 rounded border border-slate-200 px-1.5 py-1 text-xs"
-                            placeholder="09:00"
-                          />
-                          <span>—</span>
-                          <input
-                            type="time"
-                            value={step.sendTimeEnd}
-                            onChange={(e) => updateStep(index, "sendTimeEnd", e.target.value)}
-                            className="w-28 rounded border border-slate-200 px-1.5 py-1 text-xs"
-                            placeholder="18:00"
-                          />
-                        </div>
-
-                        <button
-                          onClick={() => removeStep(index)}
-                          className="ml-auto rounded p-1 text-slate-300 hover:text-red-500"
-                        >
-                          <X size={14} />
-                        </button>
-                      </div>
+                {stepForms.map((step, index) => (
+                  <div key={index} className="flex items-start gap-3 px-5 py-3">
+                    <div className="mt-2 flex flex-col items-center gap-0.5">
+                      <button
+                        onClick={() => moveStep(index, "up")}
+                        disabled={index === 0}
+                        className="rounded p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-30"
+                      >
+                        <ArrowUp size={12} />
+                      </button>
+                      <span className="text-xs font-bold text-slate-500">
+                        {index + 1}
+                      </span>
+                      <button
+                        onClick={() => moveStep(index, "down")}
+                        disabled={index === stepForms.length - 1}
+                        className="rounded p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-30"
+                      >
+                        <ArrowDown size={12} />
+                      </button>
                     </div>
-                  );
-                })}
+
+                    <div className="flex flex-1 flex-wrap items-center gap-2">
+                      <select
+                        value={step.channel}
+                        onChange={(e) =>
+                          updateStep(index, "channel", e.target.value)
+                        }
+                        className="rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+                      >
+                        <option value="WHATSAPP">WhatsApp</option>
+                        <option value="EMAIL">E-mail</option>
+                      </select>
+
+                      <div className="flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5">
+                        <span className="text-xs text-slate-500">Delay:</span>
+                        <input
+                          type="number"
+                          value={step.delayDays}
+                          onChange={(e) =>
+                            updateStep(
+                              index,
+                              "delayDays",
+                              parseInt(e.target.value) || 0,
+                            )
+                          }
+                          className="w-14 border-0 bg-transparent text-xs font-semibold text-slate-700 outline-none"
+                          min={-30}
+                          max={365}
+                        />
+                        <span className="text-xs text-slate-400">dias</span>
+                      </div>
+
+                      <div className="flex items-center gap-1 text-xs text-slate-500">
+                        <span>Janela:</span>
+                        <input
+                          type="time"
+                          value={step.sendTimeStart}
+                          onChange={(e) =>
+                            updateStep(index, "sendTimeStart", e.target.value)
+                          }
+                          className="w-28 rounded border border-slate-200 px-1.5 py-1 text-xs"
+                          placeholder="09:00"
+                        />
+                        <span>—</span>
+                        <input
+                          type="time"
+                          value={step.sendTimeEnd}
+                          onChange={(e) =>
+                            updateStep(index, "sendTimeEnd", e.target.value)
+                          }
+                          className="w-28 rounded border border-slate-200 px-1.5 py-1 text-xs"
+                          placeholder="18:00"
+                        />
+                      </div>
+
+                      <button
+                        onClick={() => removeStep(index)}
+                        className="ml-auto rounded p-1 text-slate-300 hover:text-red-500"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             </>
           ) : (

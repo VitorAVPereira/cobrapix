@@ -59,6 +59,7 @@ export interface UpdateBillingSettingsInput {
 export type BillingMethod = "PIX" | "BOLETO" | "BOLIX";
 export type RecurringInvoiceStatus = "ACTIVE" | "PAUSED";
 export type DashboardPeriod = "today" | "7d" | "30d" | "year";
+export type CollectionProfileType = "NEW" | "GOOD" | "DOUBTFUL" | "BAD";
 
 export interface BillingMetrics {
   period: DashboardPeriod;
@@ -109,7 +110,7 @@ export interface InvoiceListItem {
   collectionProfile?: {
     id: string;
     name: string;
-    profileType: "NEW" | "GOOD" | "DOUBTFUL" | "BAD";
+    profileType: CollectionProfileType;
   } | null;
 }
 
@@ -162,6 +163,11 @@ export interface DebtorBillingSettings {
   whatsappOptIn: boolean;
   whatsappOptInAt: string | null;
   whatsappOptInSource: string | null;
+  collectionProfile: {
+    id: string;
+    name: string;
+    profileType: CollectionProfileType;
+  } | null;
   useGlobalBillingSettings: boolean;
   customPreferredBillingMethod: BillingMethod | null;
   customCollectionReminderDays: number[];
@@ -175,7 +181,7 @@ export interface DebtorBillingSettings {
 }
 
 export interface UpdateDebtorBillingSettingsInput {
-  useGlobalBillingSettings: boolean;
+  useGlobalBillingSettings?: boolean;
   whatsappOptIn?: boolean;
   preferredBillingMethod?: BillingMethod | null;
   collectionReminderDays?: number[] | null;
@@ -183,6 +189,7 @@ export interface UpdateDebtorBillingSettingsInput {
   autoDiscountEnabled?: boolean | null;
   autoDiscountDaysAfterDue?: number | null;
   autoDiscountPercentage?: number | null;
+  collectionProfileId?: string | null;
 }
 
 export interface ConfigureMetaWhatsappInput {
@@ -236,7 +243,7 @@ export interface CollectionRuleProfile {
   id: string;
   companyId: string;
   name: string;
-  profileType: "NEW" | "GOOD" | "DOUBTFUL" | "BAD";
+  profileType: CollectionProfileType;
   isDefault: boolean;
   isActive: boolean;
   daysOverdueMin: number | null;
@@ -491,7 +498,12 @@ class ApiClient {
       search?: string;
       status?: string;
     } = {},
-  ): Promise<{ data: InvoiceListItem[]; total: number; page: number; pageSize: number }> {
+  ): Promise<{
+    data: InvoiceListItem[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
     const qs = new URLSearchParams();
     if (params.page) qs.set("page", String(params.page));
     if (params.pageSize) qs.set("pageSize", String(params.pageSize));
@@ -592,9 +604,7 @@ class ApiClient {
   }
 
   // Email
-  async getEmailStats(
-    period: string = "30d",
-  ): Promise<{
+  async getEmailStats(period: string = "30d"): Promise<{
     period: string;
     sent: number;
     delivered: number;
@@ -636,7 +646,7 @@ class ApiClient {
 
   async createRule(data: {
     name: string;
-    profileType: "NEW" | "GOOD" | "DOUBTFUL" | "BAD";
+    profileType: CollectionProfileType;
     isDefault?: boolean;
     daysOverdueMin?: number;
     daysOverdueMax?: number;
@@ -651,7 +661,7 @@ class ApiClient {
     profileId: string,
     data: {
       name?: string;
-      profileType?: "NEW" | "GOOD" | "DOUBTFUL" | "BAD";
+      profileType?: CollectionProfileType;
       isDefault?: boolean;
       daysOverdueMin?: number;
       daysOverdueMax?: number;
@@ -696,12 +706,14 @@ class ApiClient {
   }
 
   // Inbox WhatsApp
-  async getConversations(params: {
-    status?: string;
-    search?: string;
-    page?: number;
-    pageSize?: number;
-  } = {}): Promise<{
+  async getConversations(
+    params: {
+      status?: string;
+      search?: string;
+      page?: number;
+      pageSize?: number;
+    } = {},
+  ): Promise<{
     data: WhatsAppConversationItem[];
     total: number;
     page: number;
@@ -763,12 +775,8 @@ class ApiClient {
     return this.fetch<{ count: number }>("/whatsapp/unread-count");
   }
 
-  async getInvoiceAttempts(
-    invoiceId: string,
-  ): Promise<CollectionAttempt[]> {
-    return this.fetch<CollectionAttempt[]>(
-      `/invoices/${invoiceId}/attempts`,
-    );
+  async getInvoiceAttempts(invoiceId: string): Promise<CollectionAttempt[]> {
+    return this.fetch<CollectionAttempt[]>(`/invoices/${invoiceId}/attempts`);
   }
 
   async updateBillingSettings(
