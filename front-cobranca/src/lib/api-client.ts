@@ -26,6 +26,51 @@ export interface BillingResponse {
   message: string;
 }
 
+export interface CreatePaymentInput {
+  invoiceId: string;
+  billingType?: BillingMethod;
+}
+
+export interface CreatePaymentResponse {
+  success: boolean;
+  invoiceId: string;
+  billingType: BillingMethod;
+  gateway: "efi";
+  gatewayId?: string | null;
+  txid?: string | null;
+  chargeId?: string | null;
+  pixPayload?: string | null;
+  pixCopyPaste?: string | null;
+  pixExpiresAt?: string | null;
+  expiresAt?: string | null;
+  boletoCode?: string | null;
+  boletoLink?: string | null;
+  boletoPdf?: string | null;
+  paymentLink?: string | null;
+}
+
+export interface InvoicePaymentStatusResponse {
+  invoiceId: string;
+  status: string;
+  gateway: "efi";
+  gatewayId: string | null;
+  txid: string | null;
+  chargeId: string | null;
+  pixPayload: string | null;
+  pixCopyPaste: string | null;
+  pixExpiresAt: string | null;
+  boletoCode: string | null;
+  boletoLink: string | null;
+  boletoPdf: string | null;
+  gatewayStatusRaw: unknown;
+  originalAmount: number | string;
+  dueDate: string;
+  paidAt: string | null;
+  studentName: string | null;
+  studentEnrollment: string | null;
+  studentGroup: string | null;
+}
+
 export interface BillingSettings {
   preferredBillingMethod: BillingMethod;
   collectionReminderDays: number[];
@@ -33,6 +78,9 @@ export interface BillingSettings {
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue: number | null;
   autoDiscountPercentage: number | null;
+  businessSegment: BusinessSegment;
+  paymentNotificationEnabled: boolean;
+  paymentNotificationEmails: string[];
   tariffs: Record<
     BillingMethod,
     {
@@ -54,12 +102,18 @@ export interface UpdateBillingSettingsInput {
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue: number | null;
   autoDiscountPercentage: number | null;
+  businessSegment?: BusinessSegment;
+  paymentNotificationEnabled?: boolean;
+  paymentNotificationEmails?: string[];
 }
 
 export type BillingMethod = "PIX" | "BOLETO" | "BOLIX";
+export type BusinessSegment = "GENERAL" | "EDUCATION";
+export type PaymentNotificationStatus = "PENDING" | "SENT" | "FAILED" | "READ";
 export type RecurringInvoiceStatus = "ACTIVE" | "PAUSED";
 export type DashboardPeriod = "today" | "7d" | "30d" | "year";
 export type CollectionProfileType = "NEW" | "GOOD" | "DOUBTFUL" | "BAD";
+export type PaymentTimeliness = "EARLY" | "ON_DUE_DATE" | "OVERDUE" | "UNKNOWN";
 
 export interface BillingMetrics {
   period: DashboardPeriod;
@@ -99,6 +153,10 @@ export interface InvoiceListItem {
   gatewayId: string | null;
   pixPayload: string | null;
   billing_type: BillingMethod;
+  studentName: string | null;
+  studentEnrollment: string | null;
+  studentGroup: string | null;
+  paidAt: string | null;
   payment: InvoicePaymentSummary;
   createdAt: string;
   recurrence?: {
@@ -125,6 +183,9 @@ export interface CreateInvoiceInput {
   billing_type: BillingMethod;
   recurring?: boolean;
   due_day?: number;
+  studentName?: string;
+  studentEnrollment?: string;
+  studentGroup?: string;
 }
 
 export interface RecurringInvoice {
@@ -157,6 +218,32 @@ export interface UpdateRecurringInvoiceInput {
   dueDay: number;
 }
 
+export interface PaymentNotificationItem {
+  id: string;
+  invoiceId: string;
+  status: PaymentNotificationStatus;
+  recipientEmails: string[];
+  errorMessage: string | null;
+  debtorName: string;
+  debtorEmail: string | null;
+  amount: number;
+  billingType: string;
+  dueDate: string;
+  paidAt: string | null;
+  studentName: string | null;
+  studentEnrollment: string | null;
+  studentGroup: string | null;
+  sentAt: string | null;
+  readAt: string | null;
+  createdAt: string;
+  summary: unknown;
+}
+
+export interface PaymentNotificationListResponse {
+  data: PaymentNotificationItem[];
+  unreadCount: number;
+}
+
 export interface DebtorBillingSettings {
   debtorId: string;
   debtorName: string;
@@ -178,6 +265,46 @@ export interface DebtorBillingSettings {
   globalSettings: BillingSettings;
   effectiveSettings: BillingSettings;
   updatedAt: string;
+}
+
+export interface DebtorPaymentHistoryItem {
+  invoiceId: string;
+  amount: number;
+  billingType: string;
+  dueDate: string;
+  paidAt: string | null;
+  paidDate: string | null;
+  paidOnOrBeforeDueDate: boolean | null;
+  timeliness: PaymentTimeliness;
+  daysFromDueDate: number | null;
+  daysAfterDue: number | null;
+  daysBeforeDue: number | null;
+  gatewayId: string | null;
+  studentName: string | null;
+  studentEnrollment: string | null;
+  studentGroup: string | null;
+}
+
+export interface DebtorPaymentHistoryResponse {
+  debtor: {
+    debtorId: string;
+    name: string;
+    phone_number: string;
+    email?: string;
+  };
+  summary: {
+    totalPaidInvoices: number;
+    totalPaidAmount: number;
+    paidOnOrBeforeDueDate: number;
+    paidEarly: number;
+    paidOnDueDate: number;
+    paidOverdue: number;
+    unknownTiming: number;
+    averageDaysAfterDue: number;
+    maxDaysAfterDue: number;
+    lastPaymentAt: string | null;
+  };
+  payments: DebtorPaymentHistoryItem[];
 }
 
 export interface UpdateDebtorBillingSettingsInput {
@@ -631,6 +758,23 @@ class ApiClient {
     });
   }
 
+  async createPayment(
+    data: CreatePaymentInput,
+  ): Promise<CreatePaymentResponse> {
+    return this.fetch<CreatePaymentResponse>("/payments/create", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getInvoicePaymentStatus(
+    invoiceId: string,
+  ): Promise<InvoicePaymentStatusResponse> {
+    return this.fetch<InvoicePaymentStatusResponse>(
+      `/payments/invoice/${invoiceId}`,
+    );
+  }
+
   async getBillingMetrics(period: DashboardPeriod): Promise<BillingMetrics> {
     return this.fetch<BillingMetrics>(`/billing/metrics?period=${period}`);
   }
@@ -788,11 +932,34 @@ class ApiClient {
     });
   }
 
+  async getPaymentNotifications(): Promise<PaymentNotificationListResponse> {
+    return this.fetch<PaymentNotificationListResponse>(
+      "/payment-notifications",
+    );
+  }
+
+  async markPaymentNotificationAsRead(
+    notificationId: string,
+  ): Promise<PaymentNotificationItem> {
+    return this.fetch<PaymentNotificationItem>(
+      `/payment-notifications/${notificationId}/read`,
+      { method: "POST" },
+    );
+  }
+
   async getDebtorBillingSettings(
     debtorId: string,
   ): Promise<DebtorBillingSettings> {
     return this.fetch<DebtorBillingSettings>(
       `/invoices/debtors/${debtorId}/settings`,
+    );
+  }
+
+  async getDebtorPaymentHistory(
+    debtorId: string,
+  ): Promise<DebtorPaymentHistoryResponse> {
+    return this.fetch<DebtorPaymentHistoryResponse>(
+      `/invoices/debtors/${debtorId}/payment-history`,
     );
   }
 

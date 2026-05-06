@@ -260,6 +260,9 @@ export class BillingController {
       autoDiscountEnabled: dto.autoDiscountEnabled,
       autoDiscountDaysAfterDue: dto.autoDiscountDaysAfterDue,
       autoDiscountPercentage: dto.autoDiscountPercentage,
+      businessSegment: dto.businessSegment,
+      paymentNotificationEnabled: dto.paymentNotificationEnabled,
+      paymentNotificationEmails: dto.paymentNotificationEmails,
     });
   }
 

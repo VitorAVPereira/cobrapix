@@ -1,6 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { BillingMethod, Prisma, CollectionChannel } from '@prisma/client';
+import {
+  BillingMethod,
+  BusinessSegment,
+  CollectionChannel,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentService } from '../payment/payment.service';
 import { MessageQueueService, SendMessageJob } from '../queue/message.queue';
@@ -57,6 +62,9 @@ export interface BillingSettingsResponse {
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue: number | null;
   autoDiscountPercentage: number | null;
+  businessSegment: BusinessSegment;
+  paymentNotificationEnabled: boolean;
+  paymentNotificationEmails: string[];
   tariffs: Record<BillingMethod, TariffDetails>;
 }
 
@@ -67,6 +75,18 @@ interface BillingSettingsInput {
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue?: number | null;
   autoDiscountPercentage?: number | null;
+  businessSegment?: BusinessSegment;
+  paymentNotificationEnabled?: boolean;
+  paymentNotificationEmails?: string[];
+}
+
+interface NormalizedBillingSettings {
+  preferredBillingMethod: BillingMethod;
+  collectionReminderDays: number[];
+  autoGenerateFirstCharge: boolean;
+  autoDiscountEnabled: boolean;
+  autoDiscountDaysAfterDue: number | null;
+  autoDiscountPercentage: number | null;
 }
 
 interface ScheduledInvoice {
@@ -249,7 +269,7 @@ export class BillingService {
         where: {
           companyId,
           status: 'PAID',
-          updatedAt: { gte: range.start, lte: range.end },
+          paidAt: { gte: range.start, lte: range.end },
         },
         _sum: { originalAmount: true },
       }),
@@ -257,7 +277,7 @@ export class BillingService {
         where: {
           companyId,
           status: 'PAID',
-          updatedAt: { gte: range.start, lte: range.end },
+          paidAt: { gte: range.start, lte: range.end },
         },
       }),
       this.prisma.invoice.count({
@@ -337,6 +357,9 @@ export class BillingService {
         autoDiscountEnabled: true,
         autoDiscountDaysAfterDue: true,
         autoDiscountPercentage: true,
+        businessSegment: true,
+        paymentNotificationEnabled: true,
+        paymentNotificationEmails: true,
       },
     });
 
@@ -349,16 +372,34 @@ export class BillingService {
   ): Promise<BillingSettingsResponse> {
     const normalizedSettings = this.normalizeSettingsInput(settings);
 
+    const updateData: Prisma.CompanyUpdateInput = {
+      preferredBillingMethod: normalizedSettings.preferredBillingMethod,
+      collectionReminderDays: normalizedSettings.collectionReminderDays,
+      autoGenerateFirstCharge: normalizedSettings.autoGenerateFirstCharge,
+      autoDiscountEnabled: normalizedSettings.autoDiscountEnabled,
+      autoDiscountDaysAfterDue: normalizedSettings.autoDiscountDaysAfterDue,
+      autoDiscountPercentage: normalizedSettings.autoDiscountPercentage,
+    };
+
+    if (settings.businessSegment !== undefined) {
+      updateData.businessSegment = this.normalizeBusinessSegment(
+        settings.businessSegment,
+      );
+    }
+
+    if (settings.paymentNotificationEnabled !== undefined) {
+      updateData.paymentNotificationEnabled =
+        settings.paymentNotificationEnabled;
+    }
+
+    if (settings.paymentNotificationEmails !== undefined) {
+      updateData.paymentNotificationEmails =
+        this.normalizeNotificationEmails(settings.paymentNotificationEmails);
+    }
+
     const company = await this.prisma.company.update({
       where: { id: companyId },
-      data: {
-        preferredBillingMethod: normalizedSettings.preferredBillingMethod,
-        collectionReminderDays: normalizedSettings.collectionReminderDays,
-        autoGenerateFirstCharge: normalizedSettings.autoGenerateFirstCharge,
-        autoDiscountEnabled: normalizedSettings.autoDiscountEnabled,
-        autoDiscountDaysAfterDue: normalizedSettings.autoDiscountDaysAfterDue,
-        autoDiscountPercentage: normalizedSettings.autoDiscountPercentage,
-      },
+      data: updateData,
       select: {
         preferredBillingMethod: true,
         collectionReminderDays: true,
@@ -366,6 +407,9 @@ export class BillingService {
         autoDiscountEnabled: true,
         autoDiscountDaysAfterDue: true,
         autoDiscountPercentage: true,
+        businessSegment: true,
+        paymentNotificationEnabled: true,
+        paymentNotificationEmails: true,
       },
     });
 
@@ -977,6 +1021,20 @@ export class BillingService {
     return 'PIX';
   }
 
+  private normalizeBusinessSegment(
+    value: BusinessSegment | null | undefined,
+  ): BusinessSegment {
+    return value === 'EDUCATION' ? 'EDUCATION' : 'GENERAL';
+  }
+
+  private normalizeNotificationEmails(emails: string[]): string[] {
+    const normalized = emails
+      .map((email) => email.trim().toLowerCase())
+      .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
+
+    return Array.from(new Set(normalized)).slice(0, 10);
+  }
+
   private normalizeDiscountDays(value: number | null | undefined): number {
     if (!Number.isInteger(value) || value === undefined || value === null) {
       return 0;
@@ -1013,7 +1071,7 @@ export class BillingService {
 
   private normalizeSettingsInput(
     settings: BillingSettingsInput,
-  ): Omit<BillingSettingsResponse, 'tariffs'> {
+  ): NormalizedBillingSettings {
     const autoDiscountEnabled =
       settings.autoDiscountEnabled ?? DEFAULT_AUTO_DISCOUNT_ENABLED;
 
@@ -1025,11 +1083,11 @@ export class BillingService {
         collectionReminderDays: this.normalizeReminderDays(
           settings.collectionReminderDays,
         ),
-        autoGenerateFirstCharge:
-          settings.autoGenerateFirstCharge ??
-          DEFAULT_AUTO_GENERATE_FIRST_CHARGE,
-        autoDiscountEnabled: false,
-        autoDiscountDaysAfterDue: null,
+      autoGenerateFirstCharge:
+        settings.autoGenerateFirstCharge ??
+        DEFAULT_AUTO_GENERATE_FIRST_CHARGE,
+      autoDiscountEnabled: false,
+      autoDiscountDaysAfterDue: null,
         autoDiscountPercentage: null,
       };
     }
@@ -1061,6 +1119,9 @@ export class BillingService {
       autoDiscountEnabled?: boolean | null;
       autoDiscountDaysAfterDue?: number | null;
       autoDiscountPercentage?: { toNumber(): number } | null;
+      businessSegment?: BusinessSegment | null;
+      paymentNotificationEnabled?: boolean | null;
+      paymentNotificationEmails?: string[] | null;
     } | null,
   ): BillingSettingsResponse {
     const autoDiscountEnabled = company?.autoDiscountEnabled ?? false;
@@ -1083,6 +1144,14 @@ export class BillingService {
             company?.autoDiscountPercentage?.toNumber(),
           )
         : null,
+      businessSegment: this.normalizeBusinessSegment(
+        company?.businessSegment,
+      ),
+      paymentNotificationEnabled:
+        company?.paymentNotificationEnabled ?? true,
+      paymentNotificationEmails: this.normalizeNotificationEmails(
+        company?.paymentNotificationEmails ?? [],
+      ),
       tariffs: this.buildTariffs(),
     };
   }

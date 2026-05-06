@@ -17,6 +17,7 @@ import { BillingType } from './dto/invoice.dto';
 const PLATFORM_FIXED_FEE = 0.5;
 const RECURRING_GENERATION_LOOKAHEAD_DAYS = 30;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
+const PAYMENT_HISTORY_TIME_ZONE = 'America/Sao_Paulo';
 
 interface BillingSettingsSnapshot {
   preferredBillingMethod: BillingMethod;
@@ -47,6 +48,9 @@ interface ImportRow {
   due_date: string;
   billing_type: 'PIX' | 'BOLETO' | 'BOLIX';
   whatsapp_opt_in?: boolean;
+  studentName?: string;
+  studentEnrollment?: string;
+  studentGroup?: string;
 }
 
 interface InvoiceListItem {
@@ -63,6 +67,10 @@ interface InvoiceListItem {
   gatewayId: string | null;
   pixPayload: string | null;
   billing_type: string;
+  studentName: string | null;
+  studentEnrollment: string | null;
+  studentGroup: string | null;
+  paidAt: string | null;
   payment: InvoicePaymentSummary;
   createdAt: string;
   recurrence?: {
@@ -100,6 +108,9 @@ interface CreateInvoiceInput {
   billing_type: BillingType;
   recurring?: boolean;
   due_day?: number;
+  studentName?: string;
+  studentEnrollment?: string;
+  studentGroup?: string;
 }
 
 interface RecurringInvoiceListItem {
@@ -124,6 +135,48 @@ interface RecurringInvoiceListItem {
   } | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export type PaymentTimeliness = 'EARLY' | 'ON_DUE_DATE' | 'OVERDUE' | 'UNKNOWN';
+
+export interface DebtorPaymentHistoryItem {
+  invoiceId: string;
+  amount: number;
+  billingType: string;
+  dueDate: string;
+  paidAt: string | null;
+  paidDate: string | null;
+  paidOnOrBeforeDueDate: boolean | null;
+  timeliness: PaymentTimeliness;
+  daysFromDueDate: number | null;
+  daysAfterDue: number | null;
+  daysBeforeDue: number | null;
+  gatewayId: string | null;
+  studentName: string | null;
+  studentEnrollment: string | null;
+  studentGroup: string | null;
+}
+
+export interface DebtorPaymentHistoryResponse {
+  debtor: {
+    debtorId: string;
+    name: string;
+    phone_number: string;
+    email?: string;
+  };
+  summary: {
+    totalPaidInvoices: number;
+    totalPaidAmount: number;
+    paidOnOrBeforeDueDate: number;
+    paidEarly: number;
+    paidOnDueDate: number;
+    paidOverdue: number;
+    unknownTiming: number;
+    averageDaysAfterDue: number;
+    maxDaysAfterDue: number;
+    lastPaymentAt: string | null;
+  };
+  payments: DebtorPaymentHistoryItem[];
 }
 
 interface UpdateRecurringInvoiceInput {
@@ -170,6 +223,10 @@ interface InvoiceWithRelations {
   boletoLink: string | null;
   boletoPdf: string | null;
   billingType: string;
+  studentName: string | null;
+  studentEnrollment: string | null;
+  studentGroup: string | null;
+  paidAt: Date | null;
   createdAt: Date;
   recurringInvoiceId: string | null;
   recurrencePeriod: string | null;
@@ -201,6 +258,26 @@ interface RecurringInvoiceWithRelations {
   }>;
   createdAt: Date;
   updatedAt: Date;
+}
+
+interface PaymentHistoryInvoice {
+  id: string;
+  originalAmount: { toNumber(): number };
+  dueDate: Date;
+  paidAt: Date | null;
+  gatewayId: string | null;
+  billingType: string;
+  studentName: string | null;
+  studentEnrollment: string | null;
+  studentGroup: string | null;
+}
+
+interface PaymentTimingResult {
+  timeliness: PaymentTimeliness;
+  paidOnOrBeforeDueDate: boolean | null;
+  daysFromDueDate: number | null;
+  daysAfterDue: number | null;
+  daysBeforeDue: number | null;
 }
 
 export interface DebtorSettingsResponse {
@@ -293,6 +370,9 @@ export class InvoicesService {
         { debtor: { name: { contains: params.search, mode: 'insensitive' } } },
         { debtor: { phoneNumber: { contains: params.search } } },
         { debtor: { email: { contains: params.search, mode: 'insensitive' } } },
+        { studentName: { contains: params.search, mode: 'insensitive' } },
+        { studentEnrollment: { contains: params.search, mode: 'insensitive' } },
+        { studentGroup: { contains: params.search, mode: 'insensitive' } },
       ];
     }
 
@@ -369,6 +449,11 @@ export class InvoicesService {
             originalAmount: row.original_amount,
             dueDate,
             billingType: row.billing_type,
+            studentName: this.normalizeOptionalText(row.studentName),
+            studentEnrollment: this.normalizeOptionalText(
+              row.studentEnrollment,
+            ),
+            studentGroup: this.normalizeOptionalText(row.studentGroup),
           },
         });
 
@@ -413,6 +498,30 @@ export class InvoicesService {
         throw new Error('Nao foi possivel criar a fatura recorrente.');
       }
 
+      const educationData = this.buildEducationalInvoiceData(input);
+      if (Object.keys(educationData).length > 0) {
+        await this.prisma.invoice.updateMany({
+          where: { id: invoice.id, companyId },
+          data: educationData,
+        });
+
+        const refreshedInvoice = await this.prisma.invoice.findFirst({
+          where: { id: invoice.id, companyId },
+          include: {
+            debtor: { include: { collectionProfile: true } },
+            recurringInvoice: true,
+          },
+        });
+
+        if (!refreshedInvoice) {
+          throw new Error('Nao foi possivel carregar a fatura recorrente.');
+        }
+
+        await this.queueInitialChargeJobs(companyId, [invoice.id], 'RECURRING');
+
+        return this.mapInvoiceListItem(refreshedInvoice);
+      }
+
       await this.queueInitialChargeJobs(companyId, [invoice.id], 'RECURRING');
 
       return this.mapInvoiceListItem(invoice);
@@ -447,6 +556,7 @@ export class InvoicesService {
           originalAmount: input.original_amount,
           dueDate,
           billingType: input.billing_type,
+          ...this.buildEducationalInvoiceData(input),
         },
         include: {
           debtor: { include: { collectionProfile: true } },
@@ -624,6 +734,60 @@ export class InvoicesService {
       globalSettings,
       effectiveSettings,
       updatedAt: debtor.updatedAt.toISOString(),
+    };
+  }
+
+  async getDebtorPaymentHistory(
+    companyId: string,
+    debtorId: string,
+  ): Promise<DebtorPaymentHistoryResponse | null> {
+    const debtor = await this.prisma.debtor.findFirst({
+      where: { id: debtorId, companyId },
+      select: {
+        id: true,
+        name: true,
+        phoneNumber: true,
+        email: true,
+        invoices: {
+          where: {
+            companyId,
+            status: 'PAID',
+          },
+          orderBy: [{ paidAt: 'desc' }, { dueDate: 'desc' }],
+          select: {
+            id: true,
+            originalAmount: true,
+            dueDate: true,
+            paidAt: true,
+            gatewayId: true,
+            billingType: true,
+            studentName: true,
+            studentEnrollment: true,
+            studentGroup: true,
+          },
+        },
+      },
+    });
+
+    if (!debtor) {
+      return null;
+    }
+
+    const payments = debtor.invoices
+      .map((invoice) => this.mapDebtorPaymentHistoryItem(invoice))
+      .sort((left, right) =>
+        this.comparePaymentHistoryItemsByPaymentDate(left, right),
+      );
+
+    return {
+      debtor: {
+        debtorId: debtor.id,
+        name: debtor.name,
+        phone_number: this.normalizePhoneNumberForResponse(debtor.phoneNumber),
+        email: debtor.email || undefined,
+      },
+      summary: this.buildDebtorPaymentHistorySummary(payments),
+      payments,
     };
   }
 
@@ -904,6 +1068,10 @@ export class InvoicesService {
       gatewayId: invoice.gatewayId,
       pixPayload: invoice.pixPayload,
       billing_type: invoice.billingType,
+      studentName: invoice.studentName,
+      studentEnrollment: invoice.studentEnrollment,
+      studentGroup: invoice.studentGroup,
+      paidAt: invoice.paidAt?.toISOString() ?? null,
       payment: this.buildInvoicePaymentSummary(invoice),
       createdAt: invoice.createdAt.toISOString(),
       recurrence:
@@ -925,6 +1093,37 @@ export class InvoicesService {
           }
         : null,
     };
+  }
+
+  private buildEducationalInvoiceData(input: {
+    studentName?: string;
+    studentEnrollment?: string;
+    studentGroup?: string;
+  }): {
+    studentName?: string;
+    studentEnrollment?: string;
+    studentGroup?: string;
+  } {
+    return {
+      ...(this.normalizeOptionalText(input.studentName)
+        ? { studentName: this.normalizeOptionalText(input.studentName) }
+        : {}),
+      ...(this.normalizeOptionalText(input.studentEnrollment)
+        ? {
+            studentEnrollment: this.normalizeOptionalText(
+              input.studentEnrollment,
+            ),
+          }
+        : {}),
+      ...(this.normalizeOptionalText(input.studentGroup)
+        ? { studentGroup: this.normalizeOptionalText(input.studentGroup) }
+        : {}),
+    };
+  }
+
+  private normalizeOptionalText(value?: string): string | undefined {
+    const normalized = value?.trim();
+    return normalized ? normalized : undefined;
   }
 
   private async upsertDebtor(
@@ -1101,6 +1300,134 @@ export class InvoicesService {
     };
   }
 
+  private mapDebtorPaymentHistoryItem(
+    invoice: PaymentHistoryInvoice,
+  ): DebtorPaymentHistoryItem {
+    const timing = this.calculatePaymentTiming(invoice.dueDate, invoice.paidAt);
+
+    return {
+      invoiceId: invoice.id,
+      amount: Number(invoice.originalAmount.toNumber().toFixed(2)),
+      billingType: invoice.billingType,
+      dueDate: this.formatDateInTimeZone(invoice.dueDate),
+      paidAt: invoice.paidAt?.toISOString() ?? null,
+      paidDate: invoice.paidAt
+        ? this.formatDateInTimeZone(invoice.paidAt)
+        : null,
+      paidOnOrBeforeDueDate: timing.paidOnOrBeforeDueDate,
+      timeliness: timing.timeliness,
+      daysFromDueDate: timing.daysFromDueDate,
+      daysAfterDue: timing.daysAfterDue,
+      daysBeforeDue: timing.daysBeforeDue,
+      gatewayId: invoice.gatewayId,
+      studentName: invoice.studentName,
+      studentEnrollment: invoice.studentEnrollment,
+      studentGroup: invoice.studentGroup,
+    };
+  }
+
+  private buildDebtorPaymentHistorySummary(
+    payments: DebtorPaymentHistoryItem[],
+  ): DebtorPaymentHistoryResponse['summary'] {
+    const overduePayments = payments.filter(
+      (payment) => payment.timeliness === 'OVERDUE',
+    );
+    const totalOverdueDays = overduePayments.reduce(
+      (sum, payment) => sum + (payment.daysAfterDue ?? 0),
+      0,
+    );
+    const totalPaidAmount = payments.reduce(
+      (sum, payment) => sum + payment.amount,
+      0,
+    );
+
+    return {
+      totalPaidInvoices: payments.length,
+      totalPaidAmount: Number(totalPaidAmount.toFixed(2)),
+      paidOnOrBeforeDueDate: payments.filter(
+        (payment) => payment.paidOnOrBeforeDueDate === true,
+      ).length,
+      paidEarly: payments.filter((payment) => payment.timeliness === 'EARLY')
+        .length,
+      paidOnDueDate: payments.filter(
+        (payment) => payment.timeliness === 'ON_DUE_DATE',
+      ).length,
+      paidOverdue: overduePayments.length,
+      unknownTiming: payments.filter(
+        (payment) => payment.timeliness === 'UNKNOWN',
+      ).length,
+      averageDaysAfterDue:
+        overduePayments.length > 0
+          ? Number((totalOverdueDays / overduePayments.length).toFixed(1))
+          : 0,
+      maxDaysAfterDue: Math.max(
+        0,
+        ...overduePayments.map((payment) => payment.daysAfterDue ?? 0),
+      ),
+      lastPaymentAt: payments[0]?.paidAt ?? null,
+    };
+  }
+
+  private comparePaymentHistoryItemsByPaymentDate(
+    left: DebtorPaymentHistoryItem,
+    right: DebtorPaymentHistoryItem,
+  ): number {
+    const leftTimestamp = left.paidAt ? Date.parse(left.paidAt) : 0;
+    const rightTimestamp = right.paidAt ? Date.parse(right.paidAt) : 0;
+
+    if (rightTimestamp !== leftTimestamp) {
+      return rightTimestamp - leftTimestamp;
+    }
+
+    return right.dueDate.localeCompare(left.dueDate);
+  }
+
+  private calculatePaymentTiming(
+    dueDate: Date,
+    paidAt: Date | null,
+  ): PaymentTimingResult {
+    if (!paidAt) {
+      return {
+        timeliness: 'UNKNOWN',
+        paidOnOrBeforeDueDate: null,
+        daysFromDueDate: null,
+        daysAfterDue: null,
+        daysBeforeDue: null,
+      };
+    }
+
+    const daysFromDueDate =
+      this.getDayIndexInTimeZone(paidAt) - this.getDayIndexInTimeZone(dueDate);
+
+    if (daysFromDueDate < 0) {
+      return {
+        timeliness: 'EARLY',
+        paidOnOrBeforeDueDate: true,
+        daysFromDueDate,
+        daysAfterDue: 0,
+        daysBeforeDue: Math.abs(daysFromDueDate),
+      };
+    }
+
+    if (daysFromDueDate === 0) {
+      return {
+        timeliness: 'ON_DUE_DATE',
+        paidOnOrBeforeDueDate: true,
+        daysFromDueDate,
+        daysAfterDue: 0,
+        daysBeforeDue: 0,
+      };
+    }
+
+    return {
+      timeliness: 'OVERDUE',
+      paidOnOrBeforeDueDate: false,
+      daysFromDueDate,
+      daysAfterDue: daysFromDueDate,
+      daysBeforeDue: 0,
+    };
+  }
+
   private computeInitialRecurringDueDate(dueDay: number): Date {
     const today = this.startOfDay(new Date());
     const currentMonthDate = this.getMonthlyDueDate(
@@ -1177,6 +1504,61 @@ export class InvoicesService {
 
   private formatDateOnly(date: Date): string {
     return date.toISOString().slice(0, 10);
+  }
+
+  private formatDateInTimeZone(date: Date): string {
+    const parts = this.getDatePartsInTimeZone(date);
+    const month = String(parts.month).padStart(2, '0');
+    const day = String(parts.day).padStart(2, '0');
+
+    return `${parts.year}-${month}-${day}`;
+  }
+
+  private getDayIndexInTimeZone(date: Date): number {
+    const parts = this.getDatePartsInTimeZone(date);
+
+    return Math.floor(
+      Date.UTC(parts.year, parts.month - 1, parts.day) / DAY_IN_MS,
+    );
+  }
+
+  private getDatePartsInTimeZone(date: Date): {
+    year: number;
+    month: number;
+    day: number;
+  } {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: PAYMENT_HISTORY_TIME_ZONE,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const formattedParts = formatter.formatToParts(date);
+    const partMap = new Map<string, string>();
+
+    for (const part of formattedParts) {
+      if (part.type !== 'literal') {
+        partMap.set(part.type, part.value);
+      }
+    }
+
+    const year = Number(partMap.get('year'));
+    const month = Number(partMap.get('month'));
+    const day = Number(partMap.get('day'));
+
+    if (
+      Number.isInteger(year) &&
+      Number.isInteger(month) &&
+      Number.isInteger(day)
+    ) {
+      return { year, month, day };
+    }
+
+    return {
+      year: date.getUTCFullYear(),
+      month: date.getUTCMonth() + 1,
+      day: date.getUTCDate(),
+    };
   }
 
   private normalizeReminderDays(

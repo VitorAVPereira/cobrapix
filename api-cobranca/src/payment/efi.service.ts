@@ -1,11 +1,12 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { GatewayAccount, InvoiceStatus } from '@prisma/client';
+import { GatewayAccount, InvoiceStatus, Prisma } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import EfiPay from 'sdk-node-apis-efi';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateGatewayAccountDto } from './dto/gateway-account.dto';
 import { PaymentCryptoService } from './payment-crypto.service';
+import { PaymentNotificationsService } from './payment-notifications.service';
 
 type EfiEnvironment = 'homologation' | 'production';
 type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
@@ -143,6 +144,7 @@ export class EfiService {
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
     private readonly crypto: PaymentCryptoService,
+    private readonly paymentNotifications: PaymentNotificationsService,
   ) {}
 
   async upsertManualGatewayAccount(
@@ -997,13 +999,28 @@ export class EfiService {
       notificationToken?: string;
     },
   ): Promise<void> {
+    const currentInvoice = await this.prisma.invoice.findFirst({
+      where: { id: invoiceId, companyId },
+      select: { id: true, paidAt: true },
+    });
+
+    if (!currentInvoice) {
+      return;
+    }
+
+    const data: Prisma.InvoiceUpdateManyMutationInput = {
+      status,
+      gatewayStatusRaw: context.gatewayStatusRaw,
+      notificationToken: context.notificationToken,
+    };
+
+    if (status === 'PAID') {
+      data.paidAt = currentInvoice.paidAt ?? new Date();
+    }
+
     await this.prisma.invoice.updateMany({
       where: { id: invoiceId, companyId },
-      data: {
-        status,
-        gatewayStatusRaw: context.gatewayStatusRaw,
-        notificationToken: context.notificationToken,
-      },
+      data,
     });
 
     await this.createLog(
@@ -1013,6 +1030,10 @@ export class EfiService {
       context.description,
       status,
     );
+
+    if (status === 'PAID') {
+      await this.paymentNotifications.notifyPaidInvoice(companyId, invoiceId);
+    }
   }
 
   private async createLog(

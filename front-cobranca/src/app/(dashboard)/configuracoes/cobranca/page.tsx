@@ -4,9 +4,13 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
   AlertTriangle,
+  BellRing,
+  Building2,
   CheckCircle2,
   CreditCard,
+  GraduationCap,
   Loader2,
+  Mail,
   MessageCircle,
   Play,
   Save,
@@ -16,6 +20,7 @@ import type {
   BillingMethod,
   BillingRunSummary,
   BillingSettings,
+  BusinessSegment,
 } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 
@@ -69,6 +74,25 @@ function estimateFee(
   return tariff.combinedLabel;
 }
 
+function parseNotificationEmails(value: string): {
+  emails: string[];
+  invalid: string[];
+} {
+  const entries = value
+    .split(/[\n,;]/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  const uniqueEntries = Array.from(new Set(entries));
+  const invalid = uniqueEntries.filter(
+    (email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email),
+  );
+
+  return {
+    emails: uniqueEntries.filter((email) => !invalid.includes(email)),
+    invalid,
+  };
+}
+
 export default function BillingSettingsPage() {
   const apiClient = useApiClient();
   const [settings, setSettings] = useState<BillingSettings | null>(null);
@@ -78,6 +102,12 @@ export default function BillingSettingsPage() {
   const [autoDiscountEnabled, setAutoDiscountEnabled] = useState(false);
   const [autoDiscountDaysAfterDue, setAutoDiscountDaysAfterDue] = useState("0");
   const [autoDiscountPercentage, setAutoDiscountPercentage] = useState("");
+  const [businessSegment, setBusinessSegment] =
+    useState<BusinessSegment>("GENERAL");
+  const [paymentNotificationEnabled, setPaymentNotificationEnabled] =
+    useState(true);
+  const [paymentNotificationEmails, setPaymentNotificationEmails] =
+    useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -113,6 +143,11 @@ export default function BillingSettingsPage() {
         );
         setAutoDiscountPercentage(
           response.autoDiscountPercentage?.toString() ?? "",
+        );
+        setBusinessSegment(response.businessSegment);
+        setPaymentNotificationEnabled(response.paymentNotificationEnabled);
+        setPaymentNotificationEmails(
+          response.paymentNotificationEmails.join("\n"),
         );
       } catch (loadError) {
         if (active) {
@@ -161,6 +196,14 @@ export default function BillingSettingsPage() {
     setSuccess(null);
 
     try {
+      const parsedEmails = parseNotificationEmails(paymentNotificationEmails);
+
+      if (parsedEmails.invalid.length > 0) {
+        setError(`E-mail invalido: ${parsedEmails.invalid[0]}`);
+        setSaving(false);
+        return;
+      }
+
       const saved = await apiClient.updateBillingSettings({
         preferredBillingMethod,
         collectionReminderDays: settings?.collectionReminderDays ?? [0],
@@ -172,6 +215,9 @@ export default function BillingSettingsPage() {
         autoDiscountPercentage: autoDiscountEnabled
           ? Number(parsedDiscountPercentage.toFixed(2))
           : null,
+        businessSegment,
+        paymentNotificationEnabled,
+        paymentNotificationEmails: parsedEmails.emails,
       });
 
       setSettings(saved);
@@ -180,6 +226,9 @@ export default function BillingSettingsPage() {
       setAutoDiscountEnabled(saved.autoDiscountEnabled);
       setAutoDiscountDaysAfterDue(String(saved.autoDiscountDaysAfterDue ?? 0));
       setAutoDiscountPercentage(saved.autoDiscountPercentage?.toString() ?? "");
+      setBusinessSegment(saved.businessSegment);
+      setPaymentNotificationEnabled(saved.paymentNotificationEnabled);
+      setPaymentNotificationEmails(saved.paymentNotificationEmails.join("\n"));
       setSuccess("Configuracoes de cobranca salvas.");
     } catch (saveError) {
       setError(getErrorMessage(saveError));
@@ -252,6 +301,136 @@ export default function BillingSettingsPage() {
             {success}
           </div>
         )}
+
+        <section className="rounded-md border border-slate-200 bg-white">
+          <div className="flex items-center gap-2 border-b border-slate-200 px-5 py-4">
+            <Building2 size={20} className="text-emerald-600" />
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">
+                Perfil da empresa
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Empresas de educacao liberam os campos de aluno, matricula e
+                turma nas faturas.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-4 p-5 md:grid-cols-2">
+            {[
+              {
+                value: "GENERAL" as const,
+                title: "Geral",
+                description: "Cliente, devedor e fatura no fluxo principal.",
+                icon: Building2,
+              },
+              {
+                value: "EDUCATION" as const,
+                title: "Educacao",
+                description: "Campos opcionais para aluno, matricula e turma.",
+                icon: GraduationCap,
+              },
+            ].map((segment) => {
+              const Icon = segment.icon;
+              const active = businessSegment === segment.value;
+
+              return (
+                <button
+                  key={segment.value}
+                  type="button"
+                  onClick={() => {
+                    setBusinessSegment(segment.value);
+                    setSuccess(null);
+                  }}
+                  className={`rounded-md border px-4 py-4 text-left transition ${
+                    active
+                      ? "border-emerald-300 bg-emerald-50"
+                      : "border-slate-200 bg-white hover:bg-slate-50"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Icon size={18} className="text-emerald-700" />
+                    <p className="text-sm font-semibold text-slate-900">
+                      {segment.title}
+                    </p>
+                  </div>
+                  <p className="mt-2 text-sm text-slate-500">
+                    {segment.description}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="rounded-md border border-slate-200 bg-white">
+          <div className="flex items-center gap-2 border-b border-slate-200 px-5 py-4">
+            <BellRing size={20} className="text-emerald-600" />
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">
+                Baixa de pagamento
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Defina quem recebe o aviso imediato quando uma fatura vira paga.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="space-y-4">
+              <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-4">
+                <input
+                  type="checkbox"
+                  checked={paymentNotificationEnabled}
+                  onChange={(event) => {
+                    setPaymentNotificationEnabled(event.target.checked);
+                    setSuccess(null);
+                  }}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                />
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">
+                    Enviar e-mail imediato
+                  </p>
+                  <p className="mt-1 text-sm text-slate-500">
+                    O historico de baixas continua aparecendo no sistema.
+                  </p>
+                </div>
+              </label>
+
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs font-semibold uppercase text-slate-500">
+                  Destinatarios
+                </span>
+                <textarea
+                  rows={4}
+                  value={paymentNotificationEmails}
+                  onChange={(event) => {
+                    setPaymentNotificationEmails(event.target.value);
+                    setSuccess(null);
+                  }}
+                  placeholder={"financeiro@empresa.com\nsecretaria@empresa.com"}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                />
+              </label>
+            </div>
+
+            <aside className="rounded-md border border-slate-200 bg-slate-50 p-4">
+              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-md bg-white text-emerald-700">
+                <Mail size={20} />
+              </div>
+              <p className="text-sm font-semibold text-slate-900">
+                {paymentNotificationEnabled
+                  ? "Avisos ativos"
+                  : "Avisos pausados"}
+              </p>
+              <p className="mt-2 text-sm text-slate-500">
+                Se a lista estiver vazia, o e-mail principal da empresa sera
+                usado como destino.
+              </p>
+            </aside>
+          </div>
+        </section>
 
         <section className="rounded-md border border-slate-200 bg-white">
           <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">

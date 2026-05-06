@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { CollectionChannel, CollectionProfileType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -19,6 +24,124 @@ interface CreateStepInput {
   sendTimeEnd?: string;
 }
 
+interface StandardProfileStep {
+  day: number;
+  channel: CollectionChannel;
+}
+
+interface StandardProfile {
+  name: string;
+  profileType: CollectionProfileType;
+  isDefault: boolean;
+  daysOverdueMin: number | null;
+  daysOverdueMax: number | null;
+  steps: readonly StandardProfileStep[];
+}
+
+interface ExistingProfile {
+  id: string;
+  companyId: string;
+  name: string;
+  profileType: CollectionProfileType;
+  isDefault: boolean;
+  isActive: boolean;
+  daysOverdueMin: number | null;
+  daysOverdueMax: number | null;
+  steps: Array<{ id: string }>;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const STANDARD_COLLECTION_PROFILES: readonly StandardProfile[] = [
+  {
+    name: 'Novo Cliente',
+    profileType: 'NEW',
+    isDefault: true,
+    daysOverdueMin: null,
+    daysOverdueMax: null,
+    steps: [
+      { day: -30, channel: 'EMAIL' },
+      { day: -2, channel: 'EMAIL' },
+      { day: 0, channel: 'EMAIL' },
+      { day: 0, channel: 'WHATSAPP' },
+      { day: 2, channel: 'EMAIL' },
+      { day: 4, channel: 'WHATSAPP' },
+      { day: 7, channel: 'EMAIL' },
+      { day: 10, channel: 'WHATSAPP' },
+      { day: 15, channel: 'EMAIL' },
+      { day: 20, channel: 'WHATSAPP' },
+      { day: 30, channel: 'EMAIL' },
+    ],
+  },
+  {
+    name: 'Bom Pagador',
+    profileType: 'GOOD',
+    isDefault: false,
+    daysOverdueMin: null,
+    daysOverdueMax: null,
+    steps: [
+      { day: -30, channel: 'EMAIL' },
+      { day: -2, channel: 'EMAIL' },
+      { day: 0, channel: 'EMAIL' },
+      { day: 0, channel: 'WHATSAPP' },
+      { day: 2, channel: 'WHATSAPP' },
+    ],
+  },
+  {
+    name: 'Pagador Duvidoso',
+    profileType: 'DOUBTFUL',
+    isDefault: false,
+    daysOverdueMin: 6,
+    daysOverdueMax: 60,
+    steps: [
+      { day: -30, channel: 'EMAIL' },
+      { day: -7, channel: 'WHATSAPP' },
+      { day: -2, channel: 'EMAIL' },
+      { day: 0, channel: 'EMAIL' },
+      { day: 0, channel: 'WHATSAPP' },
+      { day: 2, channel: 'WHATSAPP' },
+      { day: 7, channel: 'EMAIL' },
+      { day: 15, channel: 'WHATSAPP' },
+      { day: 20, channel: 'EMAIL' },
+      { day: 30, channel: 'WHATSAPP' },
+      { day: 45, channel: 'EMAIL' },
+      { day: 60, channel: 'EMAIL' },
+      { day: 60, channel: 'WHATSAPP' },
+      { day: 75, channel: 'EMAIL' },
+      { day: 75, channel: 'WHATSAPP' },
+      { day: 90, channel: 'EMAIL' },
+      { day: 90, channel: 'WHATSAPP' },
+    ],
+  },
+  {
+    name: 'Mau Pagador',
+    profileType: 'BAD',
+    isDefault: false,
+    daysOverdueMin: 61,
+    daysOverdueMax: null,
+    steps: [
+      { day: -30, channel: 'EMAIL' },
+      { day: -2, channel: 'EMAIL' },
+      { day: 0, channel: 'EMAIL' },
+      { day: 0, channel: 'WHATSAPP' },
+      { day: 2, channel: 'EMAIL' },
+      { day: 4, channel: 'WHATSAPP' },
+      { day: 7, channel: 'EMAIL' },
+      { day: 10, channel: 'WHATSAPP' },
+      { day: 15, channel: 'EMAIL' },
+      { day: 30, channel: 'WHATSAPP' },
+      { day: 40, channel: 'EMAIL' },
+    ],
+  },
+];
+
+const PROFILE_TYPE_ORDER: Record<CollectionProfileType, number> = {
+  NEW: 0,
+  GOOD: 1,
+  DOUBTFUL: 2,
+  BAD: 3,
+};
+
 @Injectable()
 export class CollectionProfileService {
   private readonly logger = new Logger(CollectionProfileService.name);
@@ -26,13 +149,22 @@ export class CollectionProfileService {
   constructor(private readonly prisma: PrismaService) {}
 
   async listProfiles(companyId: string) {
-    return this.prisma.collectionProfile.findMany({
+    await this.ensureStandardProfiles(companyId);
+
+    const profiles = await this.prisma.collectionProfile.findMany({
       where: { companyId, isActive: true },
       include: {
         steps: { orderBy: { stepOrder: 'asc' } },
         _count: { select: { debtors: true } },
       },
-      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+      orderBy: [{ name: 'asc' }],
+    });
+
+    return profiles.sort((a, b) => {
+      const order =
+        PROFILE_TYPE_ORDER[a.profileType] - PROFILE_TYPE_ORDER[b.profileType];
+      if (order !== 0) return order;
+      return a.name.localeCompare(b.name, 'pt-BR');
     });
   }
 
@@ -183,6 +315,8 @@ export class CollectionProfileService {
   }
 
   async classifyDebtors(companyId: string) {
+    await this.ensureStandardProfiles(companyId);
+
     const profiles = await this.prisma.collectionProfile.findMany({
       where: { companyId, isActive: true },
     });
@@ -245,10 +379,7 @@ export class CollectionProfileService {
     );
 
     const thresholdProfile = profiles.find((profile) => {
-      if (
-        profile.daysOverdueMin === null &&
-        profile.daysOverdueMax === null
-      ) {
+      if (profile.daysOverdueMin === null && profile.daysOverdueMax === null) {
         return false;
       }
 
@@ -289,6 +420,223 @@ export class CollectionProfileService {
     return profiles.find((p) => p.profileType === type) ?? null;
   }
 
+  private async ensureStandardProfiles(companyId: string): Promise<void> {
+    const profiles = await this.prisma.collectionProfile.findMany({
+      where: { companyId },
+      include: { steps: { select: { id: true } } },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    let hasDefault = profiles.some(
+      (profile) => profile.isActive && profile.isDefault,
+    );
+
+    for (const standardProfile of STANDARD_COLLECTION_PROFILES) {
+      const existingProfile = this.findReusableProfile(
+        profiles,
+        standardProfile,
+      );
+
+      if (existingProfile) {
+        const normalizedProfile = await this.normalizeStandardProfile(
+          companyId,
+          existingProfile,
+          standardProfile,
+          hasDefault,
+        );
+
+        if (normalizedProfile.isDefault) {
+          hasDefault = true;
+        }
+
+        const profileIndex = profiles.findIndex(
+          (profile) => profile.id === normalizedProfile.id,
+        );
+
+        if (profileIndex >= 0) {
+          profiles[profileIndex] = normalizedProfile;
+        }
+
+        continue;
+      }
+
+      const createdProfile = await this.prisma.collectionProfile.create({
+        data: {
+          companyId,
+          name: standardProfile.name,
+          profileType: standardProfile.profileType,
+          isDefault: standardProfile.isDefault && !hasDefault,
+          isActive: true,
+          daysOverdueMin: standardProfile.daysOverdueMin,
+          daysOverdueMax: standardProfile.daysOverdueMax,
+          steps: {
+            create: this.buildStandardStepRows(standardProfile.steps),
+          },
+        },
+        include: { steps: { select: { id: true } } },
+      });
+
+      profiles.push(createdProfile);
+
+      if (createdProfile.isDefault) {
+        hasDefault = true;
+      }
+    }
+  }
+
+  private findReusableProfile(
+    profiles: ExistingProfile[],
+    standardProfile: StandardProfile,
+  ): ExistingProfile | null {
+    return (
+      profiles.find(
+        (profile) =>
+          profile.isActive &&
+          profile.profileType === standardProfile.profileType,
+      ) ??
+      profiles.find(
+        (profile) => profile.isActive && profile.name === standardProfile.name,
+      ) ??
+      profiles.find(
+        (profile) => profile.profileType === standardProfile.profileType,
+      ) ??
+      profiles.find((profile) => profile.name === standardProfile.name) ??
+      null
+    );
+  }
+
+  private async normalizeStandardProfile(
+    companyId: string,
+    profile: ExistingProfile,
+    standardProfile: StandardProfile,
+    hasDefault: boolean,
+  ): Promise<ExistingProfile> {
+    const shouldReplaceExistingSteps = this.isLegacyDefaultProfile(profile);
+    const shouldUseStandardName =
+      shouldReplaceExistingSteps || !profile.isActive;
+
+    const data: {
+      name?: string;
+      profileType?: CollectionProfileType;
+      isDefault?: boolean;
+      isActive?: boolean;
+      daysOverdueMin?: number | null;
+      daysOverdueMax?: number | null;
+    } = {};
+
+    if (shouldUseStandardName && profile.name !== standardProfile.name) {
+      data.name = standardProfile.name;
+    }
+
+    if (profile.profileType !== standardProfile.profileType) {
+      data.profileType = standardProfile.profileType;
+    }
+
+    if (!profile.isActive) {
+      data.isActive = true;
+    }
+
+    if (!hasDefault && standardProfile.isDefault && !profile.isDefault) {
+      data.isDefault = true;
+    }
+
+    if (
+      this.shouldUseStandardThreshold(profile.daysOverdueMin) &&
+      profile.daysOverdueMin !== standardProfile.daysOverdueMin
+    ) {
+      data.daysOverdueMin = standardProfile.daysOverdueMin;
+    }
+
+    if (
+      this.shouldUseStandardThreshold(profile.daysOverdueMax) &&
+      profile.daysOverdueMax !== standardProfile.daysOverdueMax
+    ) {
+      data.daysOverdueMax = standardProfile.daysOverdueMax;
+    }
+
+    const normalizedProfile =
+      Object.keys(data).length > 0
+        ? await this.prisma.collectionProfile.update({
+            where: { id: profile.id, companyId },
+            data,
+            include: { steps: { select: { id: true } } },
+          })
+        : profile;
+
+    await this.ensureStandardSteps(
+      companyId,
+      normalizedProfile,
+      standardProfile.steps,
+      shouldReplaceExistingSteps,
+    );
+
+    return normalizedProfile;
+  }
+
+  private async ensureStandardSteps(
+    companyId: string,
+    profile: ExistingProfile,
+    standardSteps: readonly StandardProfileStep[],
+    shouldReplaceExistingSteps: boolean,
+  ): Promise<void> {
+    if (profile.steps.length > 0 && !shouldReplaceExistingSteps) {
+      return;
+    }
+
+    if (profile.steps.length > 0) {
+      const attempts = await this.prisma.collectionAttempt.count({
+        where: {
+          companyId,
+          ruleStep: { profileId: profile.id },
+        },
+      });
+
+      if (attempts > 0) {
+        return;
+      }
+
+      await this.prisma.collectionRuleStep.deleteMany({
+        where: { profileId: profile.id, profile: { companyId } },
+      });
+    }
+
+    await this.prisma.collectionRuleStep.createMany({
+      data: this.buildStandardStepRows(standardSteps).map((step) => ({
+        ...step,
+        profileId: profile.id,
+      })),
+    });
+  }
+
+  private buildStandardStepRows(steps: readonly StandardProfileStep[]): Array<{
+    stepOrder: number;
+    channel: CollectionChannel;
+    delayDays: number;
+    isActive: boolean;
+  }> {
+    let previousDay = 0;
+
+    return steps.map((step, index) => {
+      const delayDays = index === 0 ? step.day : step.day - previousDay;
+      previousDay = step.day;
+
+      return {
+        stepOrder: index,
+        channel: step.channel,
+        delayDays,
+        isActive: true,
+      };
+    });
+  }
+
+  private isLegacyDefaultProfile(profile: { name: string }): boolean {
+    return profile.name === 'Padrao' || profile.name === 'Padrão';
+  }
+
+  private shouldUseStandardThreshold(value: number | null): boolean {
+    return value === null;
+  }
+
   private async validateSteps(
     companyId: string,
     steps: CreateStepInput[],
@@ -297,7 +645,9 @@ export class CollectionProfileService {
 
     for (const step of steps) {
       if (step.delayDays < -30 || step.delayDays > 365) {
-        throw new BadRequestException('Delay da etapa fora do intervalo permitido.');
+        throw new BadRequestException(
+          'Delay da etapa fora do intervalo permitido.',
+        );
       }
 
       if (step.sendTimeStart && !this.isTime(step.sendTimeStart)) {
@@ -310,7 +660,9 @@ export class CollectionProfileService {
 
       const key = `${step.stepOrder}:${step.channel}`;
       if (seen.has(key)) {
-        throw new BadRequestException('Etapas duplicadas para a mesma ordem e canal.');
+        throw new BadRequestException(
+          'Etapas duplicadas para a mesma ordem e canal.',
+        );
       }
       seen.add(key);
     }

@@ -63,6 +63,21 @@ export class CreateInvoiceDto {
   @Min(1)
   @Max(31)
   due_day?: number;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 120)
+  studentName?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 60)
+  studentEnrollment?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 80)
+  studentGroup?: string;
 }
 
 export class CreateDebtorInvoiceDto {
@@ -87,6 +102,21 @@ export class CreateDebtorInvoiceDto {
   @Min(1)
   @Max(31)
   due_day?: number;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 120)
+  studentName?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 60)
+  studentEnrollment?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 80)
+  studentGroup?: string;
 }
 
 export class UpdateRecurringInvoiceDto {

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import {
+  BellRing,
   CalendarClock,
   ChevronDown,
   Database,
@@ -30,6 +31,11 @@ const mainItems = [
     href: "/cobrancas",
     label: "Cobrancas",
     icon: HandCoins,
+  },
+  {
+    href: "/baixas",
+    label: "Baixas",
+    icon: BellRing,
   },
   {
     href: "/devedores-recorrentes",

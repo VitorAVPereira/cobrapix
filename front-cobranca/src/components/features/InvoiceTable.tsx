@@ -18,14 +18,20 @@ import {
   AlertCircle,
   Clock,
   CheckCircle2,
+  CreditCard,
   Copy,
   Ban,
   ExternalLink,
+  History,
   Loader2,
   PlusCircle,
+  RefreshCcw,
+  SearchCheck,
   Send,
   SlidersHorizontal,
 } from "lucide-react";
+
+export type InvoiceRowAction = "generate" | "resend" | "status";
 
 interface InvoiceTableProps {
   data: ParsedDebtor[];
@@ -37,6 +43,15 @@ interface InvoiceTableProps {
   onAddInvoice: (debtor: ParsedDebtor) => void;
   onRunSelectedInvoices: (invoiceIds: string[]) => void;
   isRunningSelected: boolean;
+  onGeneratePayment: (invoice: ParsedDebtor) => void;
+  onResendInvoice: (invoice: ParsedDebtor) => void;
+  onCheckPaymentStatus: (invoice: ParsedDebtor) => void;
+  onViewPaymentHistory: (invoice: ParsedDebtor) => void;
+  runningInvoiceAction: {
+    invoiceId: string;
+    action: InvoiceRowAction;
+  } | null;
+  showEducationFields?: boolean;
 }
 
 const PROFILE_LABELS: Record<string, string> = {
@@ -53,6 +68,18 @@ const PROFILE_COLORS: Record<string, string> = {
   BAD: "border-red-200 bg-red-50 text-red-700",
 };
 
+function getInvoiceId(invoice: ParsedDebtor): string | null {
+  return invoice.invoiceId ?? invoice.id ?? null;
+}
+
+function isInvoiceSelectable(invoice: ParsedDebtor): boolean {
+  return Boolean(
+    getInvoiceId(invoice) &&
+    invoice.status !== "PAID" &&
+    invoice.status !== "CANCELED",
+  );
+}
+
 export function InvoiceTable({
   data,
   pageCount,
@@ -63,6 +90,12 @@ export function InvoiceTable({
   onAddInvoice,
   onRunSelectedInvoices,
   isRunningSelected,
+  onGeneratePayment,
+  onResendInvoice,
+  onCheckPaymentStatus,
+  onViewPaymentHistory,
+  runningInvoiceAction,
+  showEducationFields = false,
 }: InvoiceTableProps) {
   const [copiedPaymentAction, setCopiedPaymentAction] = useState<string | null>(
     null,
@@ -89,18 +122,6 @@ export function InvoiceTable({
   const allSelectableSelected =
     selectableInvoiceIds.length > 0 &&
     selectedIds.length === selectableInvoiceIds.length;
-
-  function getInvoiceId(invoice: ParsedDebtor): string | null {
-    return invoice.invoiceId ?? invoice.id ?? null;
-  }
-
-  function isInvoiceSelectable(invoice: ParsedDebtor): boolean {
-    return Boolean(
-      getInvoiceId(invoice) &&
-        invoice.status !== "PAID" &&
-        invoice.status !== "CANCELED",
-    );
-  }
 
   function toggleInvoiceSelection(invoice: ParsedDebtor): void {
     const invoiceId = getInvoiceId(invoice);
@@ -242,6 +263,39 @@ export function InvoiceTable({
       : defaultLabel;
   };
 
+  const educationColumns: ColumnDef<ParsedDebtor>[] = showEducationFields
+    ? [
+        {
+          id: "student",
+          header: "Aluno",
+          cell: (info) => {
+            const invoice = info.row.original;
+
+            if (
+              !invoice.studentName &&
+              !invoice.studentEnrollment &&
+              !invoice.studentGroup
+            ) {
+              return <span className="text-xs text-slate-300">-</span>;
+            }
+
+            return (
+              <div className="min-w-44 whitespace-normal">
+                <p className="font-medium text-slate-900">
+                  {invoice.studentName ?? "Aluno nao informado"}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {[invoice.studentEnrollment, invoice.studentGroup]
+                    .filter((item): item is string => Boolean(item))
+                    .join(" / ") || "-"}
+                </p>
+              </div>
+            );
+          },
+        },
+      ]
+    : [];
+
   const columns: ColumnDef<ParsedDebtor>[] = [
     {
       id: "select",
@@ -274,13 +328,16 @@ export function InvoiceTable({
     },
     {
       accessorKey: "name",
-      header: "Cliente / Devedor",
+      header: showEducationFields
+        ? "Responsavel / Devedor"
+        : "Cliente / Devedor",
       cell: (info) => (
         <span className="font-medium text-slate-900">
           {info.getValue() as string}
         </span>
       ),
     },
+    ...educationColumns,
     {
       accessorKey: "phone_number",
       header: "WhatsApp",
@@ -401,6 +458,7 @@ export function InvoiceTable({
       header: () => <span className="block text-center">Ações</span>,
       cell: (info) => {
         const invoice = info.row.original;
+        const invoiceId = getInvoiceId(invoice);
         const payment = invoice.payment;
         const pixCopyPaste =
           payment?.generated === true ? payment.pixCopyPaste : null;
@@ -408,9 +466,58 @@ export function InvoiceTable({
           payment?.generated === true ? payment.boletoUrl : null;
         const boletoLine =
           payment?.generated === true ? payment.boletoLine : null;
+        const isClosed =
+          invoice.status === "PAID" || invoice.status === "CANCELED";
+        const activeAction =
+          runningInvoiceAction?.invoiceId === invoiceId
+            ? runningInvoiceAction.action
+            : null;
+        const isBusy = activeAction !== null;
 
         return (
           <div className="flex flex-wrap justify-center gap-2">
+            <button
+              type="button"
+              onClick={() => onGeneratePayment(invoice)}
+              disabled={!invoiceId || isClosed || isBusy}
+              className="inline-flex min-w-36 items-center justify-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+              title="Gerar cobrança no gateway"
+            >
+              {activeAction === "generate" ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <CreditCard size={14} />
+              )}
+              Gerar cobrança
+            </button>
+            <button
+              type="button"
+              onClick={() => onResendInvoice(invoice)}
+              disabled={!invoiceId || isClosed || isBusy}
+              className="inline-flex min-w-36 items-center justify-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+              title="Reenviar cobrança"
+            >
+              {activeAction === "resend" ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <RefreshCcw size={14} />
+              )}
+              Reenviar cobrança
+            </button>
+            <button
+              type="button"
+              onClick={() => onCheckPaymentStatus(invoice)}
+              disabled={!invoiceId || isBusy}
+              className="inline-flex min-w-36 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+              title="Consultar status da fatura"
+            >
+              {activeAction === "status" ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <SearchCheck size={14} />
+              )}
+              Consultar status
+            </button>
             {pixCopyPaste && (
               <button
                 type="button"
@@ -460,6 +567,15 @@ export function InvoiceTable({
             </button>
             <button
               type="button"
+              onClick={() => onViewPaymentHistory(invoice)}
+              disabled={!invoice.debtorId}
+              className="inline-flex items-center gap-2 rounded-md border border-sky-200 bg-white px-3 py-2 text-xs font-semibold text-sky-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <History size={14} />
+              Histórico
+            </button>
+            <button
+              type="button"
               onClick={() => onConfigureDebtor(invoice)}
               disabled={!invoice.debtorId}
               className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
@@ -484,7 +600,7 @@ export function InvoiceTable({
   });
 
   const { pageIndex, pageSize } = pagination;
-  const rangeStart = total === 0 ? 0 : (pageIndex) * pageSize + 1;
+  const rangeStart = total === 0 ? 0 : pageIndex * pageSize + 1;
   const rangeEnd = Math.min((pageIndex + 1) * pageSize, total);
   const totalPages = table.getPageCount();
 

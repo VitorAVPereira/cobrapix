@@ -11,6 +11,9 @@ function buildInvoice(overrides: {
   companyId?: string;
   debtorId?: string;
   dueDate?: Date;
+  paidAt?: Date | null;
+  status?: string;
+  amount?: number;
   recurringInvoiceId?: string | null;
   recurrencePeriod?: string | null;
 }) {
@@ -25,10 +28,12 @@ function buildInvoice(overrides: {
       name: 'Maria Silva',
       phoneNumber: '11999999999',
       email: 'maria@email.com',
+      whatsappOptIn: false,
+      collectionProfile: null,
     },
-    originalAmount: decimal(199.9),
+    originalAmount: decimal(overrides.amount ?? 199.9),
     dueDate,
-    status: 'PENDING',
+    status: overrides.status ?? 'PENDING',
     gatewayId: null,
     pixPayload: null,
     pixExpiresAt: null,
@@ -39,6 +44,10 @@ function buildInvoice(overrides: {
     boletoLink: null,
     boletoPdf: null,
     billingType: 'PIX',
+    studentName: null,
+    studentEnrollment: null,
+    studentGroup: null,
+    paidAt: overrides.paidAt ?? null,
     createdAt: new Date('2026-04-25T12:00:00.000Z'),
     updatedAt: new Date('2026-04-25T12:00:00.000Z'),
     recurringInvoiceId: overrides.recurringInvoiceId ?? null,
@@ -208,6 +217,91 @@ describe('InvoicesService', () => {
         companyId: 'company-1',
         source: 'CSV',
       },
+    ]);
+  });
+
+  it('monta historico de pagamentos do devedor com pontualidade', async () => {
+    const paidEarly = buildInvoice({
+      id: 'invoice-early',
+      amount: 100,
+      dueDate: new Date('2026-05-10T12:00:00.000Z'),
+      paidAt: new Date('2026-05-08T15:00:00.000Z'),
+      status: 'PAID',
+    });
+    const paidOnDueDate = buildInvoice({
+      id: 'invoice-on-due-date',
+      amount: 150,
+      dueDate: new Date('2026-05-10T12:00:00.000Z'),
+      paidAt: new Date('2026-05-10T20:00:00.000Z'),
+      status: 'PAID',
+    });
+    const paidOverdue = buildInvoice({
+      id: 'invoice-overdue',
+      amount: 200,
+      dueDate: new Date('2026-05-10T12:00:00.000Z'),
+      paidAt: new Date('2026-05-13T14:00:00.000Z'),
+      status: 'PAID',
+    });
+    const debtorFindFirst = jest.fn().mockResolvedValue({
+      id: 'debtor-1',
+      name: 'Maria Silva',
+      phoneNumber: '11999999999',
+      email: 'maria@email.com',
+      invoices: [paidOverdue, paidOnDueDate, paidEarly],
+    });
+    const prisma = {
+      debtor: {
+        findFirst: debtorFindFirst,
+      },
+    } as unknown as PrismaService;
+
+    const service = new InvoicesService(prisma, buildMessageQueue());
+    const result = await service.getDebtorPaymentHistory(
+      'company-1',
+      'debtor-1',
+    );
+
+    expect(debtorFindFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'debtor-1', companyId: 'company-1' },
+        select: expect.objectContaining({
+          invoices: expect.objectContaining({
+            where: { companyId: 'company-1', status: 'PAID' },
+          }) as unknown,
+        }) as unknown,
+      }),
+    );
+    expect(result?.summary).toEqual({
+      totalPaidInvoices: 3,
+      totalPaidAmount: 450,
+      paidOnOrBeforeDueDate: 2,
+      paidEarly: 1,
+      paidOnDueDate: 1,
+      paidOverdue: 1,
+      unknownTiming: 0,
+      averageDaysAfterDue: 3,
+      maxDaysAfterDue: 3,
+      lastPaymentAt: '2026-05-13T14:00:00.000Z',
+    });
+    expect(result?.payments).toEqual([
+      expect.objectContaining({
+        invoiceId: 'invoice-overdue',
+        timeliness: 'OVERDUE',
+        paidOnOrBeforeDueDate: false,
+        daysAfterDue: 3,
+      }),
+      expect.objectContaining({
+        invoiceId: 'invoice-on-due-date',
+        timeliness: 'ON_DUE_DATE',
+        paidOnOrBeforeDueDate: true,
+        daysAfterDue: 0,
+      }),
+      expect.objectContaining({
+        invoiceId: 'invoice-early',
+        timeliness: 'EARLY',
+        paidOnOrBeforeDueDate: true,
+        daysBeforeDue: 2,
+      }),
     ]);
   });
 

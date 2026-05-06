@@ -22,6 +22,10 @@ export interface ParsedDebtor {
   status?: string;
   debtorId?: string;
   whatsapp_opt_in?: boolean;
+  studentName?: string | null;
+  studentEnrollment?: string | null;
+  studentGroup?: string | null;
+  paidAt?: string | null;
   payment?: {
     generated: boolean;
     method: PaymentMethod;
@@ -47,6 +51,7 @@ export interface ParsedDebtor {
 
 interface UploadCSVProps {
   onUploadSuccess: (data: ParsedDebtor[]) => void;
+  showEducationFields?: boolean;
 }
 
 function normalizePaymentMethod(value: string): PaymentMethod | null {
@@ -71,13 +76,17 @@ function normalizePaymentMethod(value: string): PaymentMethod | null {
   return null;
 }
 
-export function UploadCSV({ onUploadSuccess }: UploadCSVProps) {
+export function UploadCSV({
+  onUploadSuccess,
+  showEducationFields = false,
+}: UploadCSVProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const downloadTemplate = (): void => {
-    const templateContent =
-      "Nome,WhatsApp,Email,Valor,Vencimento,Forma de Pagamento,Opt-in WhatsApp\nJoao Silva,+5511999999999,joao@email.com,150.50,2026-12-01,BOLIX,SIM";
+    const templateContent = showEducationFields
+      ? "Nome,WhatsApp,Email,Valor,Vencimento,Forma de Pagamento,Opt-in WhatsApp,Aluno,Matricula,Turma/Curso\nResponsavel Silva,+5511999999999,responsavel@email.com,150.50,2026-12-01,BOLIX,SIM,Joao Silva,2026-001,7A"
+      : "Nome,WhatsApp,Email,Valor,Vencimento,Forma de Pagamento,Opt-in WhatsApp\nJoao Silva,+5511999999999,joao@email.com,150.50,2026-12-01,BOLIX,SIM";
     const blob = new Blob([templateContent], {
       type: "text/csv;charset=utf-8;",
     });
@@ -129,6 +138,27 @@ export function UploadCSV({ onUploadSuccess }: UploadCSVProps) {
                 row.opt_in_whatsapp?.trim() ||
                 row.whatsapp_opt_in?.trim() ||
                 "";
+              const studentName =
+                row.Aluno?.trim() ||
+                row.aluno?.trim() ||
+                row.studentName?.trim() ||
+                row.student_name?.trim() ||
+                "";
+              const studentEnrollment =
+                row.Matricula?.trim() ||
+                row.matricula?.trim() ||
+                row.studentEnrollment?.trim() ||
+                row.student_enrollment?.trim() ||
+                "";
+              const studentGroup =
+                row["Turma/Curso"]?.trim() ||
+                row.Turma?.trim() ||
+                row.turma?.trim() ||
+                row.Curso?.trim() ||
+                row.curso?.trim() ||
+                row.studentGroup?.trim() ||
+                row.student_group?.trim() ||
+                "";
 
               if (!nome || !zap || !emailRaw || !valorRaw || !vencimento) {
                 throw new Error(
@@ -174,6 +204,9 @@ export function UploadCSV({ onUploadSuccess }: UploadCSVProps) {
                 whatsapp_opt_in: ["SIM", "TRUE", "1", "YES"].includes(
                   optInRaw.toUpperCase(),
                 ),
+                studentName: studentName || undefined,
+                studentEnrollment: studentEnrollment || undefined,
+                studentGroup: studentGroup || undefined,
               };
             });
 

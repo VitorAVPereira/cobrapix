@@ -14,14 +14,22 @@ import {
   Search,
   X,
 } from "lucide-react";
+import { DebtorPaymentHistoryModal } from "@/components/features/DebtorPaymentHistoryModal";
 import { DebtorSettingsModal } from "@/components/features/DebtorSettingsModal";
-import { InvoiceTable } from "@/components/features/InvoiceTable";
+import {
+  InvoiceTable,
+  type InvoiceRowAction,
+} from "@/components/features/InvoiceTable";
 import { UploadCSV } from "@/components/features/UploadCSV";
 import type {
   ParsedDebtor,
   PaymentMethod,
 } from "@/components/features/UploadCSV";
-import type { BillingSettings } from "@/lib/api-client";
+import type {
+  BillingSettings,
+  CreatePaymentResponse,
+  InvoicePaymentStatusResponse,
+} from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 import { normalizeWhatsAppNumber } from "@/lib/whatsapp-number";
 
@@ -40,6 +48,14 @@ interface ManualChargeForm {
   billingType: PaymentMethod;
   recurring: boolean;
   dueDay: string;
+  studentName: string;
+  studentEnrollment: string;
+  studentGroup: string;
+}
+
+interface RunningInvoiceAction {
+  invoiceId: string;
+  action: InvoiceRowAction;
 }
 
 const initialManualChargeForm: ManualChargeForm = {
@@ -52,6 +68,9 @@ const initialManualChargeForm: ManualChargeForm = {
   billingType: "PIX",
   recurring: false,
   dueDay: "10",
+  studentName: "",
+  studentEnrollment: "",
+  studentGroup: "",
 };
 
 function isParsedDebtorArray(data: unknown): data is ParsedDebtor[] {
@@ -94,6 +113,99 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+function getInvoiceId(invoice: ParsedDebtor): string | null {
+  return invoice.invoiceId ?? invoice.id ?? null;
+}
+
+function getPaymentMethodLabel(method: PaymentMethod): string {
+  if (method === "BOLIX") {
+    return "Bolix";
+  }
+
+  if (method === "BOLETO") {
+    return "Boleto";
+  }
+
+  return "Pix";
+}
+
+function getInvoiceStatusLabel(status: string): string {
+  if (status === "PAID") {
+    return "Pago";
+  }
+
+  if (status === "CANCELED") {
+    return "Cancelado";
+  }
+
+  if (status === "PENDING") {
+    return "Pendente";
+  }
+
+  return status;
+}
+
+function formatDateBR(dateString: string): string {
+  if (!dateString) {
+    return "";
+  }
+
+  const date = new Date(dateString);
+
+  if (Number.isNaN(date.getTime())) {
+    return dateString;
+  }
+
+  return new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" }).format(date);
+}
+
+function buildPaymentCreatedMessage(
+  invoice: ParsedDebtor,
+  response: CreatePaymentResponse,
+): string {
+  const method = getPaymentMethodLabel(response.billingType);
+  const reference =
+    response.txid ??
+    response.chargeId ??
+    response.gatewayId ??
+    response.invoiceId;
+  const availableData = [
+    response.pixCopyPaste ? "Pix copia e cola disponivel" : null,
+    response.boletoLink || response.boletoCode ? "boleto disponivel" : null,
+  ].filter((item): item is string => Boolean(item));
+  const details =
+    availableData.length > 0 ? ` ${availableData.join(" e ")}.` : "";
+
+  return `Cobrança ${method} gerada para ${invoice.name}. Referencia ${reference}.${details}`;
+}
+
+function buildPaymentStatusMessage(
+  invoice: ParsedDebtor,
+  response: InvoicePaymentStatusResponse,
+): string {
+  const status = getInvoiceStatusLabel(response.status);
+  const dueDate = formatDateBR(response.dueDate);
+  const gatewayReference =
+    response.txid ??
+    response.chargeId ??
+    response.gatewayId ??
+    "sem referencia";
+  const paymentData = [
+    response.pixCopyPaste || response.pixPayload ? "Pix gerado" : null,
+    response.boletoLink || response.boletoCode || response.boletoPdf
+      ? "boleto gerado"
+      : null,
+  ].filter((item): item is string => Boolean(item));
+  const paymentSummary =
+    paymentData.length > 0 ? paymentData.join(" e ") : "sem cobrança gerada";
+
+  return [
+    `Status de ${invoice.name}: ${status}.`,
+    `Vencimento ${dueDate}.`,
+    `Gateway Efí: ${gatewayReference}; ${paymentSummary}.`,
+  ].join(" ");
+}
+
 export default function CobrancasPage() {
   const apiClient = useApiClient();
   const [debtors, setDebtors] = useState<ParsedDebtor[]>([]);
@@ -105,6 +217,8 @@ export default function CobrancasPage() {
   const [selectedDebtor, setSelectedDebtor] = useState<ParsedDebtor | null>(
     null,
   );
+  const [historyTargetDebtor, setHistoryTargetDebtor] =
+    useState<ParsedDebtor | null>(null);
   const [invoiceTargetDebtor, setInvoiceTargetDebtor] =
     useState<ParsedDebtor | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -112,6 +226,8 @@ export default function CobrancasPage() {
   const [isUploadingCSV, setIsUploadingCSV] = useState(false);
   const [isSavingInvoice, setIsSavingInvoice] = useState(false);
   const [isRunningSelected, setIsRunningSelected] = useState(false);
+  const [runningInvoiceAction, setRunningInvoiceAction] =
+    useState<RunningInvoiceAction | null>(null);
   const [billingSettings, setBillingSettings] =
     useState<BillingSettings | null>(null);
   const [manualForm, setManualForm] = useState<ManualChargeForm>(
@@ -163,6 +279,7 @@ export default function CobrancasPage() {
   }, [apiClient]);
 
   const filteredDebtors = debtors;
+  const isEducationSegment = billingSettings?.businessSegment === "EDUCATION";
 
   async function handleUploadSuccess(
     importedDebtors: ParsedDebtor[],
@@ -200,6 +317,92 @@ export default function CobrancasPage() {
     }
   }
 
+  async function handleGeneratePayment(invoice: ParsedDebtor): Promise<void> {
+    const invoiceId = getInvoiceId(invoice);
+
+    if (!invoiceId) {
+      setSuccessMsg(null);
+      setErrorMsg("Nao foi possivel identificar a fatura desta cobranca.");
+      return;
+    }
+
+    const billingType =
+      invoice.payment?.method ?? invoice.billing_type ?? "PIX";
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setRunningInvoiceAction({ invoiceId, action: "generate" });
+
+    try {
+      const response = await apiClient.createPayment({
+        invoiceId,
+        billingType,
+      });
+
+      await fetchInvoices();
+      setSuccessMsg(buildPaymentCreatedMessage(invoice, response));
+    } catch (error: unknown) {
+      setErrorMsg(getErrorMessage(error, "Nao foi possivel gerar a cobranca."));
+    } finally {
+      setRunningInvoiceAction(null);
+    }
+  }
+
+  async function handleResendInvoice(invoice: ParsedDebtor): Promise<void> {
+    const invoiceId = getInvoiceId(invoice);
+
+    if (!invoiceId) {
+      setSuccessMsg(null);
+      setErrorMsg("Nao foi possivel identificar a fatura desta cobranca.");
+      return;
+    }
+
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setRunningInvoiceAction({ invoiceId, action: "resend" });
+
+    try {
+      const response = await apiClient.runSelectedBilling([invoiceId]);
+
+      await fetchInvoices();
+      setSuccessMsg(
+        `Reenvio iniciado para ${invoice.name}. ${response.message}`,
+      );
+    } catch (error: unknown) {
+      setErrorMsg(
+        getErrorMessage(error, "Nao foi possivel reenviar a cobranca."),
+      );
+    } finally {
+      setRunningInvoiceAction(null);
+    }
+  }
+
+  async function handleCheckPaymentStatus(
+    invoice: ParsedDebtor,
+  ): Promise<void> {
+    const invoiceId = getInvoiceId(invoice);
+
+    if (!invoiceId) {
+      setSuccessMsg(null);
+      setErrorMsg("Nao foi possivel identificar a fatura desta cobranca.");
+      return;
+    }
+
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setRunningInvoiceAction({ invoiceId, action: "status" });
+
+    try {
+      const response = await apiClient.getInvoicePaymentStatus(invoiceId);
+      setSuccessMsg(buildPaymentStatusMessage(invoice, response));
+    } catch (error: unknown) {
+      setErrorMsg(
+        getErrorMessage(error, "Nao foi possivel consultar o status."),
+      );
+    } finally {
+      setRunningInvoiceAction(null);
+    }
+  }
+
   function updateManualForm<Field extends keyof ManualChargeForm>(
     field: Field,
     value: ManualChargeForm[Field],
@@ -220,6 +423,15 @@ export default function CobrancasPage() {
     }
 
     setSelectedDebtor(debtor);
+  }
+
+  function openPaymentHistory(debtor: ParsedDebtor): void {
+    if (!debtor.debtorId) {
+      setErrorMsg("Nao foi possivel identificar o devedor desta cobranca.");
+      return;
+    }
+
+    setHistoryTargetDebtor(debtor);
   }
 
   function openInvoiceModal(debtor: ParsedDebtor): void {
@@ -270,6 +482,14 @@ export default function CobrancasPage() {
           billing_type: manualForm.billingType,
           recurring: manualForm.recurring,
           due_day: manualForm.recurring ? dueDay : undefined,
+          ...(isEducationSegment
+            ? {
+                studentName: manualForm.studentName.trim() || undefined,
+                studentEnrollment:
+                  manualForm.studentEnrollment.trim() || undefined,
+                studentGroup: manualForm.studentGroup.trim() || undefined,
+              }
+            : {}),
         });
       } else {
         await apiClient.createInvoice({
@@ -282,6 +502,14 @@ export default function CobrancasPage() {
           billing_type: manualForm.billingType,
           recurring: manualForm.recurring,
           due_day: manualForm.recurring ? dueDay : undefined,
+          ...(isEducationSegment
+            ? {
+                studentName: manualForm.studentName.trim() || undefined,
+                studentEnrollment:
+                  manualForm.studentEnrollment.trim() || undefined,
+                studentGroup: manualForm.studentGroup.trim() || undefined,
+              }
+            : {}),
         });
       }
 
@@ -301,7 +529,7 @@ export default function CobrancasPage() {
 
   return (
     <main className="min-h-full bg-slate-50">
-      <div className="mx-auto flex max-w-7xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
+      <div className="mx-auto flex flex-col gap-6 p-4 sm:p-4 lg:p-8">
         <header className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">
@@ -326,7 +554,11 @@ export default function CobrancasPage() {
                   setSearchQuery(event.target.value);
                   setPagination((prev) => ({ ...prev, pageIndex: 0 }));
                 }}
-                placeholder="Pesquisar por nome, CPF ou WhatsApp..."
+                placeholder={
+                  isEducationSegment
+                    ? "Pesquisar por responsavel, aluno, matricula ou WhatsApp..."
+                    : "Pesquisar por nome, CPF ou WhatsApp..."
+                }
                 className="h-11 w-full rounded-md border border-slate-200 bg-white py-2 pl-10 pr-3 text-sm text-slate-900 outline-none transition-all duration-200 placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
               />
             </div>
@@ -405,6 +637,7 @@ export default function CobrancasPage() {
             )}
 
             <UploadCSV
+              showEducationFields={isEducationSegment}
               onUploadSuccess={(importedDebtors) => {
                 void handleUploadSuccess(importedDebtors);
               }}
@@ -440,6 +673,18 @@ export default function CobrancasPage() {
                     void handleRunSelectedInvoices(invoiceIds);
                   }}
                   isRunningSelected={isRunningSelected}
+                  onGeneratePayment={(invoice) => {
+                    void handleGeneratePayment(invoice);
+                  }}
+                  onResendInvoice={(invoice) => {
+                    void handleResendInvoice(invoice);
+                  }}
+                  onCheckPaymentStatus={(invoice) => {
+                    void handleCheckPaymentStatus(invoice);
+                  }}
+                  onViewPaymentHistory={openPaymentHistory}
+                  runningInvoiceAction={runningInvoiceAction}
+                  showEducationFields={isEducationSegment}
                 />
 
                 {searchQuery && filteredDebtors.length === 0 && (
@@ -468,7 +713,7 @@ export default function CobrancasPage() {
 
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 transition-all duration-200">
-          <div className="w-full max-w-lg rounded-md bg-white shadow-xl transition-all duration-200">
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-md bg-white shadow-xl transition-all duration-200">
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
               <div>
                 <h2 className="font-semibold text-slate-900">{modalTitle}</h2>
@@ -611,6 +856,55 @@ export default function CobrancasPage() {
                   />
                 </label>
 
+                {isEducationSegment && (
+                  <>
+                    <label className="flex flex-col gap-1.5 sm:col-span-2">
+                      <span className="text-xs font-semibold uppercase text-slate-500">
+                        Nome do Aluno
+                      </span>
+                      <input
+                        type="text"
+                        value={manualForm.studentName}
+                        onChange={(event) =>
+                          updateManualForm("studentName", event.target.value)
+                        }
+                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-1.5">
+                      <span className="text-xs font-semibold uppercase text-slate-500">
+                        Matricula
+                      </span>
+                      <input
+                        type="text"
+                        value={manualForm.studentEnrollment}
+                        onChange={(event) =>
+                          updateManualForm(
+                            "studentEnrollment",
+                            event.target.value,
+                          )
+                        }
+                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-1.5">
+                      <span className="text-xs font-semibold uppercase text-slate-500">
+                        Turma/Curso
+                      </span>
+                      <input
+                        type="text"
+                        value={manualForm.studentGroup}
+                        onChange={(event) =>
+                          updateManualForm("studentGroup", event.target.value)
+                        }
+                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                      />
+                    </label>
+                  </>
+                )}
+
                 <label className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 sm:col-span-2">
                   <input
                     type="checkbox"
@@ -682,6 +976,14 @@ export default function CobrancasPage() {
           debtorName={selectedDebtor.name}
           onClose={() => setSelectedDebtor(null)}
           onSaved={fetchInvoices}
+        />
+      )}
+
+      {historyTargetDebtor?.debtorId && (
+        <DebtorPaymentHistoryModal
+          debtorId={historyTargetDebtor.debtorId}
+          debtorName={historyTargetDebtor.name}
+          onClose={() => setHistoryTargetDebtor(null)}
         />
       )}
     </main>

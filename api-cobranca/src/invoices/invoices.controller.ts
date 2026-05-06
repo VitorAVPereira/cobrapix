@@ -14,7 +14,11 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { normalizeWhatsAppNumber } from '../common/whatsapp-number';
-import { DebtorSettingsResponse, InvoicesService } from './invoices.service';
+import {
+  DebtorPaymentHistoryResponse,
+  DebtorSettingsResponse,
+  InvoicesService,
+} from './invoices.service';
 import {
   BillingType,
   CreateDebtorInvoiceDto,
@@ -35,6 +39,12 @@ interface ImportRowInput {
   due_date?: unknown;
   billing_type?: unknown;
   whatsapp_opt_in?: unknown;
+  studentName?: unknown;
+  student_name?: unknown;
+  studentEnrollment?: unknown;
+  student_enrollment?: unknown;
+  studentGroup?: unknown;
+  student_group?: unknown;
 }
 
 interface ValidImportRow {
@@ -45,6 +55,9 @@ interface ValidImportRow {
   due_date: string;
   billing_type: BillingType;
   whatsapp_opt_in?: boolean;
+  studentName?: string;
+  studentEnrollment?: string;
+  studentGroup?: string;
 }
 
 @Controller('invoices')
@@ -96,6 +109,9 @@ export class InvoicesController {
         billing_type: dto.billing_type,
         recurring: dto.recurring,
         due_day: dto.due_day,
+        studentName: dto.studentName,
+        studentEnrollment: dto.studentEnrollment,
+        studentGroup: dto.studentGroup,
       });
     } catch (error) {
       throw new HttpException(
@@ -214,6 +230,9 @@ export class InvoicesController {
           billing_type: dto.billing_type,
           recurring: dto.recurring,
           due_day: dto.due_day,
+          studentName: dto.studentName,
+          studentEnrollment: dto.studentEnrollment,
+          studentGroup: dto.studentGroup,
         },
       );
     } catch (error) {
@@ -245,6 +264,27 @@ export class InvoicesController {
     }
 
     return settings;
+  }
+
+  @Get('debtors/:debtorId/payment-history')
+  async getDebtorPaymentHistory(
+    @GetUser() user: AuthenticatedUser,
+    @Param('debtorId') debtorId: string,
+  ): Promise<DebtorPaymentHistoryResponse> {
+    if (!this.isUuid(debtorId)) {
+      throw new HttpException('Devedor invalido.', HttpStatus.BAD_REQUEST);
+    }
+
+    const history = await this.invoicesService.getDebtorPaymentHistory(
+      user.companyId,
+      debtorId,
+    );
+
+    if (!history) {
+      throw new HttpException('Devedor nao encontrado.', HttpStatus.NOT_FOUND);
+    }
+
+    return history;
   }
 
   @Put('debtors/:debtorId/settings')
@@ -334,6 +374,15 @@ export class InvoicesController {
             typeof row.whatsapp_opt_in === 'boolean'
               ? row.whatsapp_opt_in
               : false,
+          studentName: this.normalizeOptionalText(
+            row.studentName ?? row.student_name,
+          ),
+          studentEnrollment: this.normalizeOptionalText(
+            row.studentEnrollment ?? row.student_enrollment,
+          ),
+          studentGroup: this.normalizeOptionalText(
+            row.studentGroup ?? row.student_group,
+          ),
         });
       }
     }
@@ -387,6 +436,15 @@ export class InvoicesController {
     }
 
     return null;
+  }
+
+  private normalizeOptionalText(value: unknown): string | undefined {
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : undefined;
   }
 
   private isBillingType(value: unknown): value is BillingType {
