@@ -258,7 +258,7 @@ describe('BillingService', () => {
         data: expect.objectContaining({
           actionType: 'PAYMENT_GENERATED',
           status: 'PENDING',
-        }),
+        }) as unknown,
       }),
     );
     expect(prisma.collectionLog.create).toHaveBeenCalledWith(
@@ -266,7 +266,7 @@ describe('BillingService', () => {
         data: expect.objectContaining({
           actionType: 'WHATSAPP_QUEUED',
           status: 'QUEUED',
-        }),
+        }) as unknown,
       }),
     );
   });
@@ -418,7 +418,7 @@ describe('BillingService', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           actionType: 'PAYMENT_REUSED',
-        }),
+        }) as unknown,
       }),
     );
   });
@@ -445,7 +445,7 @@ describe('BillingService', () => {
           description: expect.stringContaining(
             'gateway indisponivel',
           ) as string,
-        }),
+        }) as unknown,
       }),
     );
   });

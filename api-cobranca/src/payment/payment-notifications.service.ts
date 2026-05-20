@@ -339,9 +339,7 @@ export class PaymentNotificationsService {
   }
 
   private buildEmailSubject(invoice: PaidInvoiceRecord): string {
-    const studentLabel = invoice.studentName
-      ? ` - ${invoice.studentName}`
-      : '';
+    const studentLabel = invoice.studentName ? ` - ${invoice.studentName}` : '';
 
     return `[CobraPix] Pagamento confirmado${studentLabel}`;
   }
@@ -439,7 +437,8 @@ export class PaymentNotificationsService {
     configuredEmails: string[],
     fallbackEmail: string,
   ): string[] {
-    const source = configuredEmails.length > 0 ? configuredEmails : [fallbackEmail];
+    const source =
+      configuredEmails.length > 0 ? configuredEmails : [fallbackEmail];
     const emails = source
       .map((email) => email.trim().toLowerCase())
       .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));

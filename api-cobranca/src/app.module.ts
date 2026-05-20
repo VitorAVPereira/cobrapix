@@ -14,6 +14,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
 import { PaymentModule } from './payment/payment.module';
 import { TemplatesModule } from './templates/templates.module';
 import { EmailModule } from './email/email.module';
+import { AdminModule } from './admin/admin.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { EmailModule } from './email/email.module';
     PaymentModule,
     TemplatesModule,
     EmailModule,
+    AdminModule,
   ],
   providers: [
     {

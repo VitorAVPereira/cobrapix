@@ -478,6 +478,7 @@ export class InvoicesService {
     input: CreateInvoiceInput,
   ): Promise<InvoiceListItem> {
     const debtorId = input.debtorId;
+    await this.ensureBillingMethodEnabled(companyId, input.billing_type);
 
     if (input.recurring === true) {
       const recurrence = await this.createRecurringInvoice(companyId, input);
@@ -1649,6 +1650,24 @@ export class InvoicesService {
         : null,
       tariffs: this.buildTariffs(),
     };
+  }
+
+  private async ensureBillingMethodEnabled(
+    companyId: string,
+    billingType: BillingType,
+  ): Promise<void> {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { enabledBillingMethods: true },
+    });
+
+    if (!company) {
+      throw new Error('Empresa nao encontrada.');
+    }
+
+    if (!company.enabledBillingMethods.includes(billingType)) {
+      throw new Error('Metodo de cobranca nao habilitado para esta empresa.');
+    }
   }
 
   private buildEffectiveCustomSettings(input: {

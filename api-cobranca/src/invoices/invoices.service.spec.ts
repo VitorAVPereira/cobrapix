@@ -94,6 +94,12 @@ describe('InvoicesService', () => {
         }),
     );
     const prisma = {
+      company: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'company-1',
+          enabledBillingMethods: ['PIX', 'BOLETO', 'BOLIX'],
+        }),
+      },
       $transaction: transaction,
     } as unknown as PrismaService;
 
@@ -116,6 +122,12 @@ describe('InvoicesService', () => {
     const debtorCreate = jest.fn().mockResolvedValue({ id: 'debtor-new' });
     const invoiceCreate = jest.fn().mockResolvedValue(invoice);
     const prisma = {
+      company: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'company-1',
+          enabledBillingMethods: ['PIX', 'BOLETO', 'BOLIX'],
+        }),
+      },
       $transaction: jest.fn(
         async (
           callback: (tx: {
@@ -160,6 +172,33 @@ describe('InvoicesService', () => {
         }) as unknown,
       }),
     );
+  });
+
+  it('bloqueia criacao de fatura com metodo nao habilitado para a empresa', async () => {
+    const transaction = jest.fn();
+    const prisma = {
+      company: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'company-1',
+          enabledBillingMethods: ['PIX'],
+        }),
+      },
+      $transaction: transaction,
+    } as unknown as PrismaService;
+
+    const service = new InvoicesService(prisma, buildMessageQueue());
+
+    await expect(
+      service.createInvoice('company-1', {
+        name: 'Maria Silva',
+        phone_number: '11999999999',
+        email: 'maria@email.com',
+        original_amount: 199.9,
+        due_date: '2026-05-10',
+        billing_type: 'BOLETO',
+      }),
+    ).rejects.toThrow('Metodo de cobranca nao habilitado');
+    expect(transaction).not.toHaveBeenCalled();
   });
 
   it('enfileira primeira cobranca apos importacao CSV', async () => {
@@ -211,7 +250,11 @@ describe('InvoicesService', () => {
         }) as unknown,
       }),
     );
-    expect(messageQueue.addInitialChargeJobs).toHaveBeenCalledWith([
+    const messageQueueMock = messageQueue as unknown as {
+      addInitialChargeJobs: jest.Mock;
+    };
+    const { addInitialChargeJobs } = messageQueueMock;
+    expect(addInitialChargeJobs).toHaveBeenCalledWith([
       {
         invoiceId: 'invoice-1',
         companyId: 'company-1',
@@ -328,6 +371,12 @@ describe('InvoicesService', () => {
     });
     const invoiceUpsert = jest.fn().mockResolvedValue(invoice);
     const prisma = {
+      company: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'company-1',
+          enabledBillingMethods: ['PIX', 'BOLETO', 'BOLIX'],
+        }),
+      },
       debtor: {
         findFirst: jest.fn().mockResolvedValue({ id: 'debtor-1' }),
       },

@@ -30,6 +30,7 @@ import type {
   CreatePaymentResponse,
   InvoicePaymentStatusResponse,
 } from "@/lib/api-client";
+import { formatBillingMethodRateLabel } from "@/lib/billing-fees";
 import { useApiClient } from "@/lib/use-api-client";
 import { normalizeWhatsAppNumber } from "@/lib/whatsapp-number";
 
@@ -270,6 +271,11 @@ export default function CobrancasPage() {
       try {
         const settings = await apiClient.getBillingSettings();
         setBillingSettings(settings);
+        setManualForm((current) => {
+          const enabled = settings.enabledBillingMethods;
+          if (enabled.includes(current.billingType)) return current;
+          return { ...current, billingType: enabled[0] ?? "PIX" };
+        });
       } catch {
         setBillingSettings(null);
       }
@@ -441,9 +447,14 @@ export default function CobrancasPage() {
     }
 
     setInvoiceTargetDebtor(debtor);
+    const enabledMethods = billingSettings?.enabledBillingMethods ?? ["PIX"];
+    const currentBillingType = debtor.billing_type ?? "PIX";
+    const billingType = enabledMethods.includes(currentBillingType)
+      ? currentBillingType
+      : (enabledMethods[0] ?? "PIX");
     setManualForm({
       ...initialManualChargeForm,
-      billingType: debtor.billing_type ?? "PIX",
+      billingType,
     });
     setIsModalOpen(true);
   }
@@ -522,27 +533,30 @@ export default function CobrancasPage() {
     }
   }
 
-  const paymentMethods: PaymentMethod[] = ["PIX", "BOLETO", "BOLIX"];
+  const paymentMethods: PaymentMethod[] =
+    billingSettings?.enabledBillingMethods.length
+      ? billingSettings.enabledBillingMethods
+      : ["PIX"];
   const modalTitle = invoiceTargetDebtor
     ? `Nova fatura para ${invoiceTargetDebtor.name}`
     : "Adicionar cobrança manual";
 
   return (
     <main className="min-h-full bg-slate-50">
-      <div className="mx-auto flex flex-col gap-6 p-4 sm:p-4 lg:p-8">
-        <header className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div>
+      <div className="mx-auto flex flex-col gap-5 p-4 lg:p-8">
+        <header className="flex flex-col gap-4 2xl:flex-row 2xl:items-center 2xl:justify-between">
+          <div className="min-w-0">
             <h1 className="text-2xl font-bold text-slate-900">
               Gestão de Cobranças
             </h1>
             <p className="mt-1 text-sm text-slate-500">
-              Gira os devedores, adicione novas faturas ou importe listas em
+              Gerencie devedores, adicione novas faturas ou importe listas em
               lote.
             </p>
           </div>
 
-          <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
-            <div className="relative w-full lg:w-80">
+          <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center 2xl:w-auto">
+            <div className="relative min-w-0 flex-1 2xl:w-[28rem] 2xl:flex-none">
               <Search
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
                 size={18}
@@ -556,8 +570,8 @@ export default function CobrancasPage() {
                 }}
                 placeholder={
                   isEducationSegment
-                    ? "Pesquisar por responsavel, aluno, matricula ou WhatsApp..."
-                    : "Pesquisar por nome, CPF ou WhatsApp..."
+                    ? "Buscar por responsável, aluno ou WhatsApp"
+                    : "Buscar por nome, CPF ou WhatsApp"
                 }
                 className="h-11 w-full rounded-md border border-slate-200 bg-white py-2 pl-10 pr-3 text-sm text-slate-900 outline-none transition-all duration-200 placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
               />
@@ -569,7 +583,7 @@ export default function CobrancasPage() {
                 setImportError(null);
                 setIsUploadingCSV(true);
               }}
-              className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-all duration-200 hover:bg-slate-100 hover:text-slate-900"
+              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-all duration-200 hover:bg-slate-100 hover:text-slate-900"
             >
               <FileUp size={17} />
               Importar CSV
@@ -582,7 +596,7 @@ export default function CobrancasPage() {
                 setManualForm(initialManualChargeForm);
                 setIsModalOpen(true);
               }}
-              className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:bg-emerald-700"
+              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:bg-emerald-700"
             >
               <Plus size={17} />
               Adicionar Manual
@@ -652,15 +666,6 @@ export default function CobrancasPage() {
               </div>
             ) : debtors.length > 0 ? (
               <>
-                <div className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
-                  <span>
-                    <strong className="font-semibold text-slate-900">
-                      {filteredDebtors.length}
-                    </strong>{" "}
-                    de {debtors.length} cobranças
-                  </span>
-                </div>
-
                 <InvoiceTable
                   data={filteredDebtors}
                   pageCount={Math.ceil(total / pagination.pageSize)}
@@ -820,19 +825,12 @@ export default function CobrancasPage() {
                     className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                   >
                     {paymentMethods.map((method) => {
-                      const tariff = billingSettings?.tariffs[method];
-                      const label =
-                        method === "BOLETO"
-                          ? "Boleto"
-                          : method === "BOLIX"
-                            ? "Bolix"
-                            : "PIX";
-
                       return (
                         <option key={method} value={method}>
-                          {tariff
-                            ? `${label} - ${tariff.combinedLabel}`
-                            : label}
+                          {formatBillingMethodRateLabel(
+                            method,
+                            billingSettings,
+                          )}
                         </option>
                       );
                     })}

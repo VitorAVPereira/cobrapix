@@ -1,5 +1,6 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { EfiPaymentResult, EfiService } from './efi.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
 
@@ -7,7 +8,10 @@ type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
 export class PaymentService {
   private readonly logger = new Logger(PaymentService.name);
 
-  constructor(private readonly efiService: EfiService) {}
+  constructor(
+    private readonly efiService: EfiService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   async createPayment(
     invoiceId: string,
@@ -24,6 +28,8 @@ export class PaymentService {
         HttpStatus.BAD_REQUEST,
       );
     }
+
+    await this.ensureBillingMethodEnabled(companyId, billingType);
 
     return this.efiService.createPayment(invoiceId, companyId, billingType);
   }
@@ -122,5 +128,26 @@ export class PaymentService {
 
   isConfigured(): boolean {
     return this.efiService.isConfigured();
+  }
+
+  private async ensureBillingMethodEnabled(
+    companyId: string,
+    billingType: BillingType,
+  ): Promise<void> {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { enabledBillingMethods: true },
+    });
+
+    if (!company) {
+      throw new HttpException('Empresa nao encontrada.', HttpStatus.NOT_FOUND);
+    }
+
+    if (!company.enabledBillingMethods.includes(billingType)) {
+      throw new HttpException(
+        'Metodo de cobranca nao habilitado para esta empresa.',
+        HttpStatus.FORBIDDEN,
+      );
+    }
   }
 }

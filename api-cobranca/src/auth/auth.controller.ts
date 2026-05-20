@@ -14,6 +14,7 @@ import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { LoginDto } from './dto/login.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { GetUser } from './decorators/get-user.decorator';
+import type { AuthenticatedUser } from './auth.types';
 
 @Controller('auth')
 export class AuthController {
@@ -25,7 +26,7 @@ export class AuthController {
   async login(
     @Body() loginDto: LoginDto,
     @Res({ passthrough: true }) res: Response,
-  ) {
+  ): Promise<unknown> {
     const { access_token, user } = await this.authService.login(loginDto);
 
     // Set cookie para compatibilidade com NextAuth
@@ -45,7 +46,7 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  async logout(@Res({ passthrough: true }) res: Response) {
+  logout(@Res({ passthrough: true }) res: Response): { message: string } {
     res.clearCookie('next-auth.session-token');
     return { message: 'Logout realizado com sucesso' };
   }
@@ -53,13 +54,14 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @Post('session')
   @HttpCode(HttpStatus.OK)
-  async getSession(@GetUser() user: any) {
+  getSession(@GetUser() user: AuthenticatedUser): unknown {
     return {
       user: {
         id: user.userId,
         email: user.email,
         name: user.name,
         companyId: user.companyId,
+        role: user.role,
       },
     };
   }

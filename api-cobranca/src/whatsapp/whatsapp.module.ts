@@ -8,7 +8,12 @@ import { WhatsappController } from './whatsapp.controller';
 import { WhatsAppConversationService } from './conversation.service';
 
 @Module({
-  imports: [ConfigModule, PrismaModule, PaymentModule, forwardRef(() => QueueModule)],
+  imports: [
+    ConfigModule,
+    PrismaModule,
+    PaymentModule,
+    forwardRef(() => QueueModule),
+  ],
   controllers: [WhatsappController],
   providers: [WhatsappService, WhatsAppConversationService],
   exports: [WhatsappService, WhatsAppConversationService],

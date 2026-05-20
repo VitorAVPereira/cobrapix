@@ -73,11 +73,14 @@ export interface InvoicePaymentStatusResponse {
 
 export interface BillingSettings {
   preferredBillingMethod: BillingMethod;
+  enabledBillingMethods: BillingMethod[];
   collectionReminderDays: number[];
   autoGenerateFirstCharge: boolean;
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue: number | null;
   autoDiscountPercentage: number | null;
+  onTimeSplitPercentageBps: number;
+  overdueSplitPercentageBps: number;
   businessSegment: BusinessSegment;
   paymentNotificationEnabled: boolean;
   paymentNotificationEmails: string[];
@@ -108,6 +111,8 @@ export interface UpdateBillingSettingsInput {
 }
 
 export type BillingMethod = "PIX" | "BOLETO" | "BOLIX";
+export type UserRole = "PLATFORM_ADMIN" | "COMPANY_ADMIN";
+export type CompanyStatus = "ACTIVE" | "INACTIVE" | "SUSPENDED";
 export type BusinessSegment = "GENERAL" | "EDUCATION";
 export type PaymentNotificationStatus = "PENDING" | "SENT" | "FAILED" | "READ";
 export type RecurringInvoiceStatus = "ACTIVE" | "PAUSED";
@@ -484,6 +489,7 @@ export interface GatewayAccountInput {
   efiPixKey: string;
   efiCertificatePath: string;
   efiCertificatePassword: string;
+  efiCertificateBase64?: string;
   gatewayStatus: "PENDING" | "ACTIVE" | "REJECTED" | "DISABLED";
 }
 
@@ -527,6 +533,82 @@ export interface GatewayAccountStatus {
     accountDigit: string | null;
     pixKey: string | null;
     hasCertificate: boolean;
+  };
+}
+
+export interface AdminClient {
+  id: string;
+  corporateName: string;
+  document: string;
+  email: string;
+  phoneNumber: string;
+  status: CompanyStatus;
+  enabledBillingMethods: BillingMethod[];
+  preferredBillingMethod: BillingMethod;
+  onTimeSplitPercentageBps: number;
+  overdueSplitPercentageBps: number;
+  gatewayStatus: string;
+  whatsappStatus: string;
+  firstUser: {
+    id: string;
+    email: string;
+    name: string | null;
+    role: UserRole;
+  } | null;
+  efi: {
+    configured: boolean;
+    status: string | null;
+    environment: string | null;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateAdminClientInput {
+  company: {
+    corporateName: string;
+    document: string;
+    email: string;
+    phoneNumber: string;
+    status?: CompanyStatus;
+  };
+  firstUser: {
+    name: string;
+    email: string;
+    password: string;
+  };
+  billing: {
+    enabledBillingMethods: BillingMethod[];
+    preferredBillingMethod: BillingMethod;
+    onTimeSplitPercentageBps: number;
+    overdueSplitPercentageBps: number;
+  };
+  meta?: ConfigureMetaWhatsappInput;
+  efi?: GatewayAccountInput;
+}
+
+function normalizeGatewayAccountPayload(
+  data: GatewayAccountInput,
+): GatewayAccountInput {
+  return {
+    ...data,
+    efiCertificatePath: data.efiCertificateBase64
+      ? ""
+      : data.efiCertificatePath,
+    efiCertificateBase64: data.efiCertificateBase64 || undefined,
+  };
+}
+
+function normalizeCreateAdminClientPayload(
+  data: CreateAdminClientInput,
+): CreateAdminClientInput {
+  if (!data.efi) {
+    return data;
+  }
+
+  return {
+    ...data,
+    efi: normalizeGatewayAccountPayload(data.efi),
   };
 }
 
@@ -1017,10 +1099,37 @@ class ApiClient {
   async createGatewayAccount(
     data: GatewayAccountInput,
   ): Promise<GatewayAccountStatus> {
+    const payload = normalizeGatewayAccountPayload(data);
+
     return this.fetch<GatewayAccountStatus>("/payments/gateway-account", {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify(payload),
     });
+  }
+
+  // Admin
+  async getAdminClients(): Promise<AdminClient[]> {
+    return this.fetch<AdminClient[]>("/admin/clients");
+  }
+
+  async createAdminClient(
+    data: CreateAdminClientInput,
+  ): Promise<AdminClient> {
+    const payload = normalizeCreateAdminClientPayload(data);
+
+    return this.fetch<AdminClient>("/admin/clients", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async resetAdminClientPassword(
+    clientId: string,
+  ): Promise<{ userId: string; temporaryPassword: string }> {
+    return this.fetch<{ userId: string; temporaryPassword: string }>(
+      `/admin/clients/${clientId}/reset-password`,
+      { method: "POST", body: JSON.stringify({}) },
+    );
   }
 
   // Health

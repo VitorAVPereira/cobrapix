@@ -54,6 +54,22 @@ enum BillingMethod {
   BOLIX
 }
 
+enum UserRole {
+  PLATFORM_ADMIN
+  COMPANY_ADMIN
+}
+
+enum CompanyStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum SplitAppliedCategory {
+  ON_TIME
+  OVERDUE
+}
+
 enum RecurringInvoiceStatus {
   ACTIVE
   PAUSED
@@ -154,6 +170,10 @@ model Company {
   businessSegment              BusinessSegment     @default(GENERAL)
   paymentNotificationEnabled   Boolean             @default(true)
   paymentNotificationEmails    String[]            @default([])
+  status                       CompanyStatus       @default(ACTIVE)
+  enabledBillingMethods        BillingMethod[]     @default([PIX, BOLETO, BOLIX])
+  onTimeSplitPercentageBps     Int                 @default(0)
+  overdueSplitPercentageBps    Int                 @default(0)
 
   templates            MessageTemplate[]
   users                User[]
@@ -266,31 +286,33 @@ model Invoice {
   recurringInvoiceId String?
   recurringInvoice   RecurringInvoice? @relation(fields: [recurringInvoiceId], references: [id])
 
-  originalAmount       Decimal       @db.Decimal(10, 2)
-  dueDate              DateTime
-  status               InvoiceStatus @default(PENDING)
-  gatewayId            String?       @unique
-  pixPayload           String?       @db.Text
-  pixExpiresAt         DateTime?
-  efiTxid              String?       @unique
-  efiChargeId          String?       @unique
-  efiLocId             String?
-  efiPixCopiaECola     String?       @db.Text
-  boletoLinhaDigitavel String?
-  boletoLink           String?       @db.Text
-  boletoPdf            String?       @db.Text
-  splitConfigId        String?
-  notificationToken    String?
-  gatewayStatusRaw     String?
-  discountApplied      Decimal?      @db.Decimal(10, 2)
-  billingType          String        @default("PIX")
-  recurrencePeriod     String?
-  externalInvoiceId    String?
-  externalRef          String?
-  studentName          String?
-  studentEnrollment    String?
-  studentGroup         String?
-  paidAt               DateTime?
+  originalAmount            Decimal               @db.Decimal(10, 2)
+  dueDate                   DateTime
+  status                    InvoiceStatus         @default(PENDING)
+  gatewayId                 String?               @unique
+  pixPayload                String?               @db.Text
+  pixExpiresAt              DateTime?
+  efiTxid                   String?               @unique
+  efiChargeId               String?               @unique
+  efiLocId                  String?
+  efiPixCopiaECola          String?               @db.Text
+  boletoLinhaDigitavel      String?
+  boletoLink                String?               @db.Text
+  boletoPdf                 String?               @db.Text
+  splitConfigId             String?
+  notificationToken         String?
+  gatewayStatusRaw          String?
+  discountApplied           Decimal?              @db.Decimal(10, 2)
+  splitAppliedPercentageBps Int?
+  splitAppliedCategory      SplitAppliedCategory?
+  billingType               String                @default("PIX")
+  recurrencePeriod          String?
+  externalInvoiceId         String?
+  externalRef               String?
+  studentName               String?
+  studentEnrollment         String?
+  studentGroup              String?
+  paidAt                    DateTime?
 
   collectionLogs       CollectionLog[]
   collectionAttempts   CollectionAttempt[]
@@ -377,6 +399,7 @@ model User {
   name                  String?
   companyId             String
   company               Company                @relation(fields: [companyId], references: [id])
+  role                  UserRole               @default(COMPANY_ADMIN)
   assignedConversations WhatsAppConversation[]
   auditLogs             AuditLog[]
 

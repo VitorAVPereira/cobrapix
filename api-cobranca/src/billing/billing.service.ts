@@ -57,11 +57,14 @@ interface TariffDetails {
 
 export interface BillingSettingsResponse {
   preferredBillingMethod: BillingMethod;
+  enabledBillingMethods: BillingMethod[];
   collectionReminderDays: number[];
   autoGenerateFirstCharge: boolean;
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue: number | null;
   autoDiscountPercentage: number | null;
+  onTimeSplitPercentageBps: number;
+  overdueSplitPercentageBps: number;
   businessSegment: BusinessSegment;
   paymentNotificationEnabled: boolean;
   paymentNotificationEmails: string[];
@@ -352,11 +355,14 @@ export class BillingService {
       where: { id: companyId },
       select: {
         preferredBillingMethod: true,
+        enabledBillingMethods: true,
         collectionReminderDays: true,
         autoGenerateFirstCharge: true,
         autoDiscountEnabled: true,
         autoDiscountDaysAfterDue: true,
         autoDiscountPercentage: true,
+        onTimeSplitPercentageBps: true,
+        overdueSplitPercentageBps: true,
         businessSegment: true,
         paymentNotificationEnabled: true,
         paymentNotificationEmails: true,
@@ -371,6 +377,22 @@ export class BillingService {
     settings: BillingSettingsInput,
   ): Promise<BillingSettingsResponse> {
     const normalizedSettings = this.normalizeSettingsInput(settings);
+    const currentCompany = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { enabledBillingMethods: true },
+    });
+
+    if (!currentCompany) {
+      throw new Error('Empresa nao encontrada.');
+    }
+
+    if (
+      !currentCompany.enabledBillingMethods.includes(
+        normalizedSettings.preferredBillingMethod,
+      )
+    ) {
+      throw new Error('Metodo de cobranca nao habilitado para esta empresa.');
+    }
 
     const updateData: Prisma.CompanyUpdateInput = {
       preferredBillingMethod: normalizedSettings.preferredBillingMethod,
@@ -393,8 +415,9 @@ export class BillingService {
     }
 
     if (settings.paymentNotificationEmails !== undefined) {
-      updateData.paymentNotificationEmails =
-        this.normalizeNotificationEmails(settings.paymentNotificationEmails);
+      updateData.paymentNotificationEmails = this.normalizeNotificationEmails(
+        settings.paymentNotificationEmails,
+      );
     }
 
     const company = await this.prisma.company.update({
@@ -402,11 +425,14 @@ export class BillingService {
       data: updateData,
       select: {
         preferredBillingMethod: true,
+        enabledBillingMethods: true,
         collectionReminderDays: true,
         autoGenerateFirstCharge: true,
         autoDiscountEnabled: true,
         autoDiscountDaysAfterDue: true,
         autoDiscountPercentage: true,
+        onTimeSplitPercentageBps: true,
+        overdueSplitPercentageBps: true,
         businessSegment: true,
         paymentNotificationEnabled: true,
         paymentNotificationEmails: true,
@@ -832,6 +858,16 @@ export class BillingService {
     return value === 'PIX' || value === 'BOLETO' || value === 'BOLIX';
   }
 
+  private normalizeEnabledBillingMethods(
+    methods: BillingMethod[] | null | undefined,
+  ): BillingMethod[] {
+    const enabled = (methods ?? []).filter((method) =>
+      this.isBillingMethod(method),
+    );
+
+    return enabled.length > 0 ? enabled : ['PIX'];
+  }
+
   private hasValidPaymentData(
     invoice: {
       gatewayId: string | null;
@@ -1083,11 +1119,11 @@ export class BillingService {
         collectionReminderDays: this.normalizeReminderDays(
           settings.collectionReminderDays,
         ),
-      autoGenerateFirstCharge:
-        settings.autoGenerateFirstCharge ??
-        DEFAULT_AUTO_GENERATE_FIRST_CHARGE,
-      autoDiscountEnabled: false,
-      autoDiscountDaysAfterDue: null,
+        autoGenerateFirstCharge:
+          settings.autoGenerateFirstCharge ??
+          DEFAULT_AUTO_GENERATE_FIRST_CHARGE,
+        autoDiscountEnabled: false,
+        autoDiscountDaysAfterDue: null,
         autoDiscountPercentage: null,
       };
     }
@@ -1114,11 +1150,14 @@ export class BillingService {
   private buildBillingSettingsResponse(
     company: {
       preferredBillingMethod?: BillingMethod | null;
+      enabledBillingMethods?: BillingMethod[] | null;
       collectionReminderDays?: number[] | null;
       autoGenerateFirstCharge?: boolean | null;
       autoDiscountEnabled?: boolean | null;
       autoDiscountDaysAfterDue?: number | null;
       autoDiscountPercentage?: { toNumber(): number } | null;
+      onTimeSplitPercentageBps?: number | null;
+      overdueSplitPercentageBps?: number | null;
       businessSegment?: BusinessSegment | null;
       paymentNotificationEnabled?: boolean | null;
       paymentNotificationEmails?: string[] | null;
@@ -1129,6 +1168,9 @@ export class BillingService {
     return {
       preferredBillingMethod: this.normalizeBillingMethod(
         company?.preferredBillingMethod,
+      ),
+      enabledBillingMethods: this.normalizeEnabledBillingMethods(
+        company?.enabledBillingMethods,
       ),
       collectionReminderDays: this.normalizeReminderDays(
         company?.collectionReminderDays,
@@ -1144,11 +1186,10 @@ export class BillingService {
             company?.autoDiscountPercentage?.toNumber(),
           )
         : null,
-      businessSegment: this.normalizeBusinessSegment(
-        company?.businessSegment,
-      ),
-      paymentNotificationEnabled:
-        company?.paymentNotificationEnabled ?? true,
+      onTimeSplitPercentageBps: company?.onTimeSplitPercentageBps ?? 0,
+      overdueSplitPercentageBps: company?.overdueSplitPercentageBps ?? 0,
+      businessSegment: this.normalizeBusinessSegment(company?.businessSegment),
+      paymentNotificationEnabled: company?.paymentNotificationEnabled ?? true,
       paymentNotificationEmails: this.normalizeNotificationEmails(
         company?.paymentNotificationEmails ?? [],
       ),

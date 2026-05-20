@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import {
   BellRing,
+  Building2,
   CalendarClock,
   ChevronDown,
   Database,
@@ -73,6 +74,14 @@ const settingsItems = [
   },
 ];
 
+const adminItems = [
+  {
+    href: "/admin/clientes",
+    label: "Clientes",
+    icon: Building2,
+  },
+];
+
 interface SidebarProps {
   open: boolean;
   onClose: () => void;
@@ -87,6 +96,14 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const { data: session } = useSession();
   const [settingsOpen, setSettingsOpen] = useState(true);
   const DashboardIcon = dashboardItem.icon;
+  const isPlatformAdmin = session?.user.role === "PLATFORM_ADMIN";
+  const visibleSettingsItems = isPlatformAdmin
+    ? settingsItems
+    : settingsItems.filter(
+        (item) =>
+          item.href !== "/configuracoes/whatsapp" &&
+          item.href !== "/configuracoes/conecte-seu-banco",
+      );
 
   return (
     <>
@@ -156,6 +173,36 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           </div>
 
           <div className="mt-5">
+            {isPlatformAdmin && (
+              <div className="mb-5">
+                <p className="px-3 pb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Admin
+                </p>
+                <div className="space-y-1">
+                  {adminItems.map((item) => {
+                    const Icon = item.icon;
+                    const isActive = isCurrentPath(pathname, item.href);
+
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        onClick={onClose}
+                        className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
+                          isActive
+                            ? "bg-emerald-500/15 text-emerald-400 font-semibold border-l-[3px] border-emerald-400 pl-[9px]"
+                            : "hover:bg-slate-800 hover:text-white"
+                        }`}
+                      >
+                        <Icon size={18} />
+                        <span>{item.label}</span>
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <button
               type="button"
               onClick={() => setSettingsOpen((current) => !current)}
@@ -176,7 +223,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
             {settingsOpen && (
               <div className="mt-1 ml-4 space-y-1 border-l border-slate-800 pl-3">
-                {settingsItems.map((item) => {
+                {visibleSettingsItems.map((item) => {
                   const Icon = item.icon;
                   const isActive = isCurrentPath(pathname, item.href);
 

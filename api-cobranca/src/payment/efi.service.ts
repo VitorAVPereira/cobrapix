@@ -1,6 +1,11 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { GatewayAccount, InvoiceStatus, Prisma } from '@prisma/client';
+import {
+  GatewayAccount,
+  InvoiceStatus,
+  Prisma,
+  SplitAppliedCategory,
+} from '@prisma/client';
 import { randomBytes } from 'crypto';
 import EfiPay from 'sdk-node-apis-efi';
 import { PrismaService } from '../prisma/prisma.service';
@@ -114,6 +119,8 @@ interface PaymentInvoice {
     autoDiscountEnabled: boolean;
     autoDiscountDaysAfterDue: number | null;
     autoDiscountPercentage: { toNumber(): number } | null;
+    onTimeSplitPercentageBps: number;
+    overdueSplitPercentageBps: number;
   };
 }
 
@@ -121,6 +128,19 @@ interface ResolvedDiscountSettings {
   enabled: boolean;
   daysAfterDue: number | null;
   percentage: number | null;
+}
+
+interface SplitSettingsInput {
+  dueDate: Date;
+  company: {
+    onTimeSplitPercentageBps: number;
+    overdueSplitPercentageBps: number;
+  };
+}
+
+interface ResolvedSplitSettings {
+  percentageBps: number;
+  category: SplitAppliedCategory;
 }
 
 export interface EfiPaymentResult {
@@ -154,11 +174,14 @@ export class EfiService {
     const environment = this.getEnvironment(dto.environment);
     const encryptedClientId = this.crypto.encrypt(dto.efiClientId);
     const encryptedClientSecret = this.crypto.encrypt(dto.efiClientSecret);
-    const encryptedCertificatePassword = dto.efiCertificatePassword
-      ? this.crypto.encrypt(dto.efiCertificatePassword)
+    const certificateBase64 = dto.efiCertificateBase64?.trim() ?? '';
+    const certificatePath = dto.efiCertificatePath?.trim() ?? '';
+    const certificatePassword = dto.efiCertificatePassword ?? '';
+    const encryptedCertificatePassword = certificatePassword
+      ? this.crypto.encrypt(certificatePassword)
       : null;
-    const encryptedCertificate = dto.efiCertificateBase64
-      ? this.crypto.encrypt(dto.efiCertificateBase64)
+    const encryptedCertificate = certificateBase64
+      ? this.crypto.encrypt(certificateBase64)
       : null;
 
     await this.prisma.gatewayAccount.upsert({
@@ -175,7 +198,7 @@ export class EfiService {
         encryptedClientId,
         encryptedClientSecret,
         encryptedCertificate,
-        certificatePath: dto.efiCertificatePath,
+        certificatePath: certificateBase64 ? null : certificatePath || null,
         encryptedCertificatePassword,
       },
       update: {
@@ -188,9 +211,14 @@ export class EfiService {
         pixKey: dto.efiPixKey,
         encryptedClientId,
         encryptedClientSecret,
-        encryptedCertificate,
-        certificatePath: dto.efiCertificatePath,
-        encryptedCertificatePassword,
+        ...(encryptedCertificate
+          ? { encryptedCertificate, certificatePath: null }
+          : certificatePath
+            ? { encryptedCertificate: null, certificatePath }
+            : {}),
+        ...(encryptedCertificatePassword
+          ? { encryptedCertificatePassword }
+          : {}),
         lastError: null,
       },
     });
@@ -396,7 +424,9 @@ export class EfiService {
       client,
       gatewayAccount,
       txid,
+      this.resolveSplitSettings(invoice).percentageBps,
     );
+    const splitSettings = this.resolveSplitSettings(invoice);
 
     if (splitConfigId) {
       await this.runEfiRequest(
@@ -427,6 +457,8 @@ export class EfiService {
         efiLocId: detail.loc?.id?.toString(),
         efiPixCopiaECola: pixCopyPaste,
         splitConfigId,
+        splitAppliedPercentageBps: splitSettings.percentageBps,
+        splitAppliedCategory: splitSettings.category,
         gatewayStatusRaw: detail.status,
         discountApplied: this.calculateDiscountAmount(
           invoice.originalAmount,
@@ -466,8 +498,11 @@ export class EfiService {
     const client = this.createSdkClient(gatewayAccount);
     const webhookUrl = this.buildWebhookUrl('/webhooks/efi/cobrancas');
     const customer = this.buildBoletoCustomer(invoice);
-    const marketplaceRepasses =
-      this.buildBoletoMarketplaceRepasses(gatewayAccount);
+    const splitSettings = this.resolveSplitSettings(invoice);
+    const marketplaceRepasses = this.buildBoletoMarketplaceRepasses(
+      gatewayAccount,
+      splitSettings.percentageBps,
+    );
     const discountSettings = this.resolveDiscountSettings(invoice);
     const boletoDiscount =
       discountSettings.enabled && discountSettings.percentage !== null
@@ -541,6 +576,8 @@ export class EfiService {
         boletoLink,
         boletoPdf,
         efiPixCopiaECola: chargeData?.pix?.qrcode,
+        splitAppliedPercentageBps: splitSettings.percentageBps,
+        splitAppliedCategory: splitSettings.category,
         gatewayStatusRaw: chargeData?.status,
         discountApplied: this.calculateDiscountAmount(
           invoice.originalAmount,
@@ -576,11 +613,12 @@ export class EfiService {
     client: EfiPay,
     gatewayAccount: GatewayAccount,
     txid: string,
+    platformPercentage: number,
   ): Promise<string | null> {
     const platformPayeeCode = this.config.get<string>(
       'EFI_PLATFORM_PAYEE_CODE',
     );
-    const platformPercentage = this.getPlatformSplitPercentage();
+    this.ensureValidSplitPercentage(platformPercentage);
 
     if (
       platformPercentage === 0 ||
@@ -633,11 +671,12 @@ export class EfiService {
 
   private buildBoletoMarketplaceRepasses(
     gatewayAccount: GatewayAccount,
+    platformPercentage: number,
   ): Array<{ payee_code: string; percentage: number }> {
     const platformPayeeCode = this.config.get<string>(
       'EFI_PLATFORM_PAYEE_CODE',
     );
-    const platformPercentage = this.getPlatformSplitPercentage();
+    this.ensureValidSplitPercentage(platformPercentage);
 
     if (
       platformPercentage === 0 ||
@@ -653,6 +692,21 @@ export class EfiService {
         percentage: platformPercentage,
       },
     ];
+  }
+
+  resolveSplitSettings(input: SplitSettingsInput): ResolvedSplitSettings {
+    const today = this.formatDate(new Date());
+    const dueDate = this.formatDate(input.dueDate);
+    const category: SplitAppliedCategory =
+      dueDate < today ? 'OVERDUE' : 'ON_TIME';
+
+    return {
+      category,
+      percentageBps:
+        category === 'OVERDUE'
+          ? input.company.overdueSplitPercentageBps
+          : input.company.onTimeSplitPercentageBps,
+    };
   }
 
   private buildExistingPixResult(
@@ -1141,23 +1195,17 @@ export class EfiService {
     return target;
   }
 
-  private getPlatformSplitPercentage(): number {
-    const percentage = Number(
-      this.config.get<string>('EFI_PLATFORM_SPLIT_PERCENTAGE') ?? '0',
-    );
-
+  private ensureValidSplitPercentage(percentage: number): void {
     if (
       !Number.isInteger(percentage) ||
       percentage < 0 ||
       percentage >= 10000
     ) {
       throw new HttpException(
-        'EFI_PLATFORM_SPLIT_PERCENTAGE deve estar entre 0 e 9999.',
+        'Percentual de split da empresa deve estar entre 0 e 9999.',
         HttpStatus.SERVICE_UNAVAILABLE,
       );
     }
-
-    return percentage;
   }
 
   private formatBasisPointsAsPercent(value: number): string {

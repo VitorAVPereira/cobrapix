@@ -22,26 +22,25 @@ import type {
   BillingSettings,
   BusinessSegment,
 } from "@/lib/api-client";
+import {
+  formatPercentageBps,
+  formatPlatformRateSummary,
+  getBillingMethodLabel,
+} from "@/lib/billing-fees";
 import { useApiClient } from "@/lib/use-api-client";
 
 const BILLING_METHODS: BillingMethod[] = ["PIX", "BOLETO", "BOLIX"];
 
-function getMethodLabel(method: BillingMethod): string {
-  if (method === "PIX") return "Pix";
-  if (method === "BOLETO") return "Boleto";
-  return "Bolix";
-}
-
 function getMethodDescription(method: BillingMethod): string {
   if (method === "PIX") {
-    return "Cobrança Pix com tarifa Efí percentual e nossa taxa fixa por transação.";
+    return "Cobrança Pix com tarifa Efí percentual e taxa percentual da plataforma.";
   }
 
   if (method === "BOLETO") {
-    return "Cobrança por boleto com tarifa fixa da Efí somada à taxa fixa da plataforma.";
+    return "Cobrança por boleto com tarifa fixa da Efí e taxa percentual da plataforma.";
   }
 
-  return "Cobrança Bolix com tarifa fixa da Efí somada à taxa fixa da plataforma.";
+  return "Cobrança Bolix com tarifa fixa da Efí e taxa percentual da plataforma.";
 }
 
 function getErrorMessage(
@@ -53,25 +52,6 @@ function getErrorMessage(
   }
 
   return fallback;
-}
-
-function estimateFee(
-  method: BillingMethod,
-  amount: number,
-  settings: BillingSettings,
-): string {
-  const tariff = settings.tariffs[method];
-
-  if (tariff.efiKind === "percentage") {
-    const efiAmount = (amount * tariff.efiValue) / 100;
-    const total = efiAmount + tariff.platformFixedFee;
-    return new Intl.NumberFormat("pt-BR", {
-      style: "currency",
-      currency: "BRL",
-    }).format(total);
-  }
-
-  return tariff.combinedLabel;
 }
 
 function parseNotificationEmails(value: string): {
@@ -135,7 +115,11 @@ export default function BillingSettingsPage() {
         }
 
         setSettings(response);
-        setPreferredBillingMethod(response.preferredBillingMethod);
+        setPreferredBillingMethod(
+          response.enabledBillingMethods.includes(response.preferredBillingMethod)
+            ? response.preferredBillingMethod
+            : (response.enabledBillingMethods[0] ?? "PIX"),
+        );
         setAutoGenerateFirstCharge(response.autoGenerateFirstCharge);
         setAutoDiscountEnabled(response.autoDiscountEnabled);
         setAutoDiscountDaysAfterDue(
@@ -221,7 +205,11 @@ export default function BillingSettingsPage() {
       });
 
       setSettings(saved);
-      setPreferredBillingMethod(saved.preferredBillingMethod);
+      setPreferredBillingMethod(
+        saved.enabledBillingMethods.includes(saved.preferredBillingMethod)
+          ? saved.preferredBillingMethod
+          : (saved.enabledBillingMethods[0] ?? "PIX"),
+      );
       setAutoGenerateFirstCharge(saved.autoGenerateFirstCharge);
       setAutoDiscountEnabled(saved.autoDiscountEnabled);
       setAutoDiscountDaysAfterDue(String(saved.autoDiscountDaysAfterDue ?? 0));
@@ -259,6 +247,10 @@ export default function BillingSettingsPage() {
       setRunningBilling(false);
     }
   }
+
+  const enabledBillingMethods = settings?.enabledBillingMethods.length
+    ? settings.enabledBillingMethods
+    : ["PIX"];
 
   return (
     <main className="min-h-full bg-slate-50">
@@ -555,8 +547,8 @@ export default function BillingSettingsPage() {
                 Metodo de pagamento
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                A tarifa da Efí é apenas informativa e sempre recebe o adicional
-                fixo de R$ 0,50 da plataforma.
+                A tarifa da Efí é informativa; a taxa da plataforma usa os
+                percentuais configurados para este cliente.
               </p>
             </div>
           </div>
@@ -565,44 +557,59 @@ export default function BillingSettingsPage() {
             {BILLING_METHODS.map((method) => {
               const active = preferredBillingMethod === method;
               const tariff = settings?.tariffs[method];
+              const enabled = enabledBillingMethods.includes(method);
 
               return (
                 <button
                   key={method}
                   type="button"
+                  disabled={!enabled}
                   onClick={() => {
+                    if (!enabled) return;
                     setPreferredBillingMethod(method);
                     setSuccess(null);
                   }}
                   className={`rounded-md border px-4 py-4 text-left transition ${
                     active
                       ? "border-emerald-300 bg-emerald-50"
-                      : "border-slate-200 bg-white hover:bg-slate-50"
+                      : enabled
+                        ? "border-slate-200 bg-white hover:bg-slate-50"
+                        : "border-slate-200 bg-slate-50 opacity-60"
                   }`}
                 >
                   <p className="text-sm font-semibold text-slate-900">
-                    {getMethodLabel(method)}
+                    {getBillingMethodLabel(method)}
                   </p>
                   <p className="mt-2 text-sm text-slate-600">
                     Efí: {tariff?.efiLabel ?? "-"}
                   </p>
                   <p className="mt-1 text-sm text-slate-600">
-                    Plataforma: {tariff?.platformLabel ?? "-"}
+                    Plataforma:{" "}
+                    {settings ? formatPlatformRateSummary(settings) : "-"}
                   </p>
-                  <p className="mt-1 text-sm font-semibold text-slate-900">
-                    Total: {tariff?.combinedLabel ?? "-"}
-                  </p>
-                  {settings && (
-                    <p className="mt-2 text-xs text-slate-500">
-                      Exemplo em R$ 100,00: {estimateFee(method, 100, settings)}
-                    </p>
-                  )}
                   <p className="mt-3 text-xs text-slate-500">
-                    {getMethodDescription(method)}
+                    {enabled ? getMethodDescription(method) : "Nao liberado"}
                   </p>
                 </button>
               );
             })}
+          </div>
+          <div className="border-t border-slate-200 px-5 py-4">
+            <p className="text-sm text-slate-600">
+              Taxa no prazo:{" "}
+              <span className="font-semibold text-slate-900">
+                {settings
+                  ? formatPercentageBps(settings.onTimeSplitPercentageBps)
+                  : "-"}
+              </span>
+              <span className="mx-3 text-slate-300">|</span>
+              Taxa recuperada:{" "}
+              <span className="font-semibold text-slate-900">
+                {settings
+                  ? formatPercentageBps(settings.overdueSplitPercentageBps)
+                  : "-"}
+              </span>
+            </p>
           </div>
         </section>
 
@@ -719,11 +726,11 @@ export default function BillingSettingsPage() {
             <aside className="rounded-md border border-slate-200 bg-slate-50 p-4">
               <h3 className="text-sm font-semibold text-slate-900">Resumo</h3>
               <p className="mt-3 text-sm text-slate-600">
-                Metodo atual: {getMethodLabel(preferredBillingMethod)}
+                Metodo atual: {getBillingMethodLabel(preferredBillingMethod)}
               </p>
               <p className="mt-2 text-sm text-slate-600">
-                Tarifa aplicada:{" "}
-                {settings?.tariffs[preferredBillingMethod].combinedLabel ?? "-"}
+                Taxas da plataforma:{" "}
+                {settings ? formatPlatformRateSummary(settings) : "-"}
               </p>
               <p className="mt-3 text-sm text-slate-600">
                 {autoDiscountEnabled

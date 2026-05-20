@@ -386,10 +386,7 @@ export class EmailService {
       },
     });
 
-    if (
-      existing?.externalMessageId &&
-      existing.status !== 'FAILED'
-    ) {
+    if (existing?.externalMessageId && existing.status !== 'FAILED') {
       return existing.externalMessageId;
     }
 
@@ -500,9 +497,14 @@ export class EmailService {
   }
 
   private canUpdateAttempt(eventType: string): boolean {
-    return ['sent', 'delivered', 'opened', 'clicked', 'bounced', 'failed'].includes(
-      eventType,
-    );
+    return [
+      'sent',
+      'delivered',
+      'opened',
+      'clicked',
+      'bounced',
+      'failed',
+    ].includes(eventType);
   }
 
   private decodeSvixSecret(secret: string): Buffer {

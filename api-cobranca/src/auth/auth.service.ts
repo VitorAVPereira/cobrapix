@@ -1,8 +1,17 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { UserRole } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
+
+interface ValidatedUser {
+  id: string;
+  email: string;
+  name: string | null;
+  companyId: string;
+  role: UserRole;
+}
 
 @Injectable()
 export class AuthService {
@@ -11,7 +20,7 @@ export class AuthService {
     private jwtService: JwtService,
   ) {}
 
-  async validateUser(email: string, password: string): Promise<any> {
+  async validateUser(email: string, password: string): Promise<ValidatedUser> {
     const user = await this.prisma.user.findUnique({
       where: { email },
       include: { company: true },
@@ -26,12 +35,19 @@ export class AuthService {
       throw new UnauthorizedException('Credenciais inválidas');
     }
 
-    // Remove password do retorno
-    const { password: _, ...result } = user;
-    return result;
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      companyId: user.companyId,
+      role: user.role,
+    };
   }
 
-  async login(loginDto: LoginDto) {
+  async login(loginDto: LoginDto): Promise<{
+    access_token: string;
+    user: ValidatedUser;
+  }> {
     const user = await this.validateUser(loginDto.email, loginDto.password);
 
     const payload = {
@@ -40,6 +56,7 @@ export class AuthService {
       userId: user.id,
       companyId: user.companyId,
       name: user.name,
+      role: user.role,
     };
 
     const access_token = this.jwtService.sign(payload, {
@@ -53,6 +70,7 @@ export class AuthService {
         email: user.email,
         name: user.name,
         companyId: user.companyId,
+        role: user.role,
       },
     };
   }

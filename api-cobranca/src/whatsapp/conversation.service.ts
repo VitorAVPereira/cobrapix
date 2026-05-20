@@ -77,7 +77,8 @@ export class WhatsAppConversationService {
           : null,
         lastMessagePreview: conv.lastMessagePreview,
         unreadCount: conv.unreadCount,
-        serviceWindowExpiresAt: conv.serviceWindowExpiresAt?.toISOString() ?? null,
+        serviceWindowExpiresAt:
+          conv.serviceWindowExpiresAt?.toISOString() ?? null,
         lastInboundAt: conv.lastInboundAt?.toISOString() ?? null,
         messageCount: conv._count.messages,
         updatedAt: conv.updatedAt.toISOString(),
@@ -111,7 +112,8 @@ export class WhatsAppConversationService {
         : null,
       lastMessagePreview: conv.lastMessagePreview,
       unreadCount: conv.unreadCount,
-      serviceWindowExpiresAt: conv.serviceWindowExpiresAt?.toISOString() ?? null,
+      serviceWindowExpiresAt:
+        conv.serviceWindowExpiresAt?.toISOString() ?? null,
       lastInboundAt: conv.lastInboundAt?.toISOString() ?? null,
       updatedAt: conv.updatedAt.toISOString(),
       createdAt: conv.createdAt.toISOString(),
@@ -251,7 +253,10 @@ export class WhatsAppConversationService {
       throw new Error('Conversa nao encontrada.');
     }
 
-    if (!conv.serviceWindowExpiresAt || new Date() > conv.serviceWindowExpiresAt) {
+    if (
+      !conv.serviceWindowExpiresAt ||
+      new Date() > conv.serviceWindowExpiresAt
+    ) {
       throw new Error(
         'A janela de 24h expirou. Nao e mais possivel responder gratuitamente.',
       );

@@ -30,8 +30,7 @@ function buildPaidInvoice(overrides?: {
     company: {
       corporateName: 'Escola Teste',
       email: 'financeiro@escola.com',
-      paymentNotificationEnabled:
-        overrides?.paymentNotificationEnabled ?? true,
+      paymentNotificationEnabled: overrides?.paymentNotificationEnabled ?? true,
       paymentNotificationEmails: ['tesouraria@escola.com'],
       resendApiKeyEncrypted: overrides?.resendApiKeyEncrypted ?? null,
       resendFromEmail: null,
@@ -78,9 +77,11 @@ describe('PaymentNotificationsService', () => {
         updateMany,
       },
       invoice: {
-        findFirst: jest.fn().mockResolvedValue(
-          buildPaidInvoice({ paymentNotificationEnabled: false }),
-        ),
+        findFirst: jest
+          .fn()
+          .mockResolvedValue(
+            buildPaidInvoice({ paymentNotificationEnabled: false }),
+          ),
       },
     } as unknown as PrismaService;
 

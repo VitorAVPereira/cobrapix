@@ -41,14 +41,11 @@ export class EmailController {
       request.rawBody ?? Buffer.from(JSON.stringify(payload), 'utf8');
 
     try {
-      const result = await this.emailService.handleWebhookEvent(
-        rawBody,
-        {
-          id: svixId,
-          timestamp: svixTimestamp,
-          signature: svixSignature,
-        },
-      );
+      const result = await this.emailService.handleWebhookEvent(rawBody, {
+        id: svixId,
+        timestamp: svixTimestamp,
+        signature: svixSignature,
+      });
       return result;
     } catch (error) {
       if (error instanceof Error && error.message.includes('assinatura')) {
