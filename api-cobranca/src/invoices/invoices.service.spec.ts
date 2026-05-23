@@ -26,6 +26,7 @@ function buildInvoice(overrides: {
     debtor: {
       id: overrides.debtorId ?? 'debtor-1',
       name: 'Maria Silva',
+      document: '12345678909',
       phoneNumber: '11999999999',
       email: 'maria@email.com',
       whatsappOptIn: false,
@@ -85,6 +86,7 @@ describe('InvoicesService', () => {
           debtor: {
             findFirst: jest.fn().mockResolvedValue({
               id: 'debtor-1',
+              document: '12345678909',
               name: 'Maria Silva',
             }),
           },
@@ -116,7 +118,7 @@ describe('InvoicesService', () => {
     expect(tx).toBeDefined();
   });
 
-  it('cria devedor novo com fatura manual', async () => {
+  it('cria devedor novo com documento normalizado na fatura manual', async () => {
     const invoice = buildInvoice({ debtorId: 'debtor-new' });
     const debtorFindMany = jest.fn().mockResolvedValue([]);
     const debtorCreate = jest.fn().mockResolvedValue({ id: 'debtor-new' });
@@ -148,6 +150,7 @@ describe('InvoicesService', () => {
     const service = new InvoicesService(prisma, buildMessageQueue());
     const result = await service.createInvoice('company-1', {
       name: 'Maria Silva',
+      document: '123.456.789-09',
       phone_number: '11999999999',
       email: 'maria@email.com',
       original_amount: 199.9,
@@ -160,6 +163,7 @@ describe('InvoicesService', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           companyId: 'company-1',
+          document: '12345678909',
           phoneNumber: '+5511999999999',
         }) as unknown,
       }),
@@ -172,6 +176,75 @@ describe('InvoicesService', () => {
         }) as unknown,
       }),
     );
+  });
+
+  it('bloqueia fatura manual para novo devedor sem CPF ou CNPJ', async () => {
+    const transaction = jest.fn();
+    const prisma = {
+      company: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'company-1',
+          enabledBillingMethods: ['PIX', 'BOLETO', 'BOLIX'],
+        }),
+      },
+      $transaction: transaction,
+    } as unknown as PrismaService;
+
+    const service = new InvoicesService(prisma, buildMessageQueue());
+
+    await expect(
+      service.createInvoice('company-1', {
+        name: 'Maria Silva',
+        phone_number: '11999999999',
+        email: 'maria@email.com',
+        original_amount: 199.9,
+        due_date: '2026-05-10',
+        billing_type: 'PIX',
+      }),
+    ).rejects.toThrow('CPF/CNPJ do devedor');
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it('bloqueia nova fatura para devedor existente sem CPF ou CNPJ salvo', async () => {
+    const transaction = jest.fn(
+      async (
+        callback: (tx: {
+          debtor: { findFirst: jest.Mock };
+          invoice: { create: jest.Mock };
+        }) => Promise<unknown>,
+      ) =>
+        callback({
+          debtor: {
+            findFirst: jest.fn().mockResolvedValue({
+              id: 'debtor-1',
+              document: null,
+            }),
+          },
+          invoice: {
+            create: jest.fn(),
+          },
+        }),
+    );
+    const prisma = {
+      company: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'company-1',
+          enabledBillingMethods: ['PIX', 'BOLETO', 'BOLIX'],
+        }),
+      },
+      $transaction: transaction,
+    } as unknown as PrismaService;
+
+    const service = new InvoicesService(prisma, buildMessageQueue());
+
+    await expect(
+      service.createInvoice('company-1', {
+        debtorId: 'debtor-1',
+        original_amount: 199.9,
+        due_date: '2026-05-10',
+        billing_type: 'PIX',
+      }),
+    ).rejects.toThrow('CPF/CNPJ do devedor');
   });
 
   it('bloqueia criacao de fatura com metodo nao habilitado para a empresa', async () => {
@@ -191,6 +264,7 @@ describe('InvoicesService', () => {
     await expect(
       service.createInvoice('company-1', {
         name: 'Maria Silva',
+        document: '123.456.789-09',
         phone_number: '11999999999',
         email: 'maria@email.com',
         original_amount: 199.9,
@@ -230,6 +304,7 @@ describe('InvoicesService', () => {
     const result = await service.importCsv('company-1', [
       {
         name: 'Maria Silva',
+        document: '123.456.789-09',
         phone_number: '11999999999',
         email: 'maria@email.com',
         original_amount: 199.9,
@@ -246,6 +321,7 @@ describe('InvoicesService', () => {
     expect(debtorCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
+          document: '12345678909',
           phoneNumber: '+5511999999999',
         }) as unknown,
       }),
@@ -378,7 +454,10 @@ describe('InvoicesService', () => {
         }),
       },
       debtor: {
-        findFirst: jest.fn().mockResolvedValue({ id: 'debtor-1' }),
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'debtor-1',
+          document: '12345678909',
+        }),
       },
       recurringInvoice: {
         create: jest.fn().mockResolvedValue(recurrence),
@@ -391,6 +470,7 @@ describe('InvoicesService', () => {
           debtor: {
             id: 'debtor-1',
             name: 'Maria Silva',
+            document: '12345678909',
             phoneNumber: '11999999999',
             email: 'maria@email.com',
           },

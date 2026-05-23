@@ -8,6 +8,7 @@ import { PaymentModule } from '../payment/payment.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { EmailModule } from '../email/email.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { TemplatesModule } from '../templates/templates.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     PaymentModule,
     WhatsappModule,
     EmailModule,
+    TemplatesModule,
   ],
   controllers: [BillingController],
   providers: [BillingService, CollectionProfileService, CollectionRuleEngine],

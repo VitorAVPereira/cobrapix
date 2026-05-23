@@ -1,4 +1,9 @@
-import { ApiClient, type AdminClient, type CreateAdminClientInput } from "../api-client";
+import {
+  ApiClient,
+  type AdminClient,
+  type CreateAdminClientInput,
+  type UpdateAdminClientInput,
+} from "../api-client";
 
 const mockFetch = jest.fn() as jest.MockedFunction<typeof fetch>;
 
@@ -112,5 +117,32 @@ describe("ApiClient admin clients", () => {
     expect(payload.efi?.efiCertificatePath).toBe("");
     expect(payload.efi?.efiCertificateBase64).toBe("Y2VydGlmaWNhZG8=");
     expect(payload.efi?.efiCertificatePassword).toBe("senha-certificado");
+  });
+
+  it("updates an admin client using PUT and normalizes Efi certificate base64", async () => {
+    const apiClient = new ApiClient("http://api.test", "token");
+    const input: UpdateAdminClientInput = {
+      company: {
+        corporateName: "Empresa Editada",
+      },
+      efi: {
+        efiCertificatePath: "/tmp/certificado-antigo.p12",
+        efiCertificateBase64: "Y2VydA==",
+      },
+    };
+
+    await apiClient.updateAdminClient("company-1", input);
+
+    const request = mockFetch.mock.calls[0];
+    expect(request?.[0]).toBe("http://api.test/admin/clients/company-1");
+    expect(request?.[1]?.method).toBe("PUT");
+
+    const body = request?.[1]?.body;
+    expect(typeof body).toBe("string");
+
+    const payload = JSON.parse(body as string) as UpdateAdminClientInput;
+    expect(payload.company?.corporateName).toBe("Empresa Editada");
+    expect(payload.efi?.efiCertificatePath).toBe("");
+    expect(payload.efi?.efiCertificateBase64).toBe("Y2VydA==");
   });
 });

@@ -10,6 +10,10 @@ import {
   getWhatsAppNumberLookupCandidates,
   normalizeWhatsAppNumber,
 } from '../common/whatsapp-number';
+import {
+  normalizeDebtorDocument,
+  validateDebtorDocument,
+} from '../common/debtor-document';
 import { PrismaService } from '../prisma/prisma.service';
 import { InitialChargeJob, MessageQueueService } from '../queue/message.queue';
 import { BillingType } from './dto/invoice.dto';
@@ -42,6 +46,7 @@ interface BillingSettingsSnapshot {
 
 interface ImportRow {
   name: string;
+  document: string;
   phone_number: string;
   email?: string;
   original_amount: number;
@@ -57,6 +62,7 @@ interface InvoiceListItem {
   id: string;
   invoiceId: string;
   name: string;
+  document?: string;
   phone_number: string;
   email?: string;
   original_amount: number;
@@ -100,6 +106,7 @@ interface InvoicePaymentSummary {
 interface CreateInvoiceInput {
   debtorId?: string;
   name?: string;
+  document?: string;
   phone_number?: string;
   email?: string;
   whatsappOptIn?: boolean;
@@ -118,6 +125,7 @@ interface RecurringInvoiceListItem {
   debtor: {
     debtorId: string;
     name: string;
+    document?: string;
     phone_number: string;
     email?: string;
   };
@@ -187,6 +195,7 @@ interface UpdateRecurringInvoiceInput {
 
 interface DebtorUpsertInput {
   name: string;
+  document: string;
   phoneNumber: string;
   email?: string | null;
   whatsappOptIn?: boolean;
@@ -194,6 +203,7 @@ interface DebtorUpsertInput {
 
 interface DebtorIdentity {
   id: string;
+  document: string;
 }
 
 interface InvoiceWithRelations {
@@ -201,6 +211,7 @@ interface InvoiceWithRelations {
   debtor: {
     id: string;
     name: string;
+    document: string | null;
     phoneNumber: string;
     email: string | null;
     whatsappOptIn: boolean;
@@ -241,6 +252,7 @@ interface RecurringInvoiceWithRelations {
   debtor: {
     id: string;
     name: string;
+    document: string | null;
     phoneNumber: string;
     email: string | null;
   };
@@ -283,6 +295,7 @@ interface PaymentTimingResult {
 export interface DebtorSettingsResponse {
   debtorId: string;
   debtorName: string;
+  document: string | null;
   whatsappOptIn: boolean;
   whatsappOptInAt: string | null;
   whatsappOptInSource: string | null;
@@ -304,6 +317,7 @@ export interface DebtorSettingsResponse {
 }
 
 export interface UpdateDebtorSettingsInput {
+  document?: string | null;
   useGlobalBillingSettings?: boolean;
   whatsappOptIn?: boolean;
   preferredBillingMethod?: BillingMethod | null;
@@ -368,6 +382,7 @@ export class InvoicesService {
     if (params.search) {
       where.OR = [
         { debtor: { name: { contains: params.search, mode: 'insensitive' } } },
+        { debtor: { document: { contains: params.search } } },
         { debtor: { phoneNumber: { contains: params.search } } },
         { debtor: { email: { contains: params.search, mode: 'insensitive' } } },
         { studentName: { contains: params.search, mode: 'insensitive' } },
@@ -434,6 +449,7 @@ export class InvoicesService {
       for (const row of rows) {
         const debtor = await this.upsertDebtor(tx, companyId, {
           name: row.name,
+          document: row.document,
           phoneNumber: row.phone_number,
           email: row.email || null,
           whatsappOptIn: row.whatsapp_opt_in ?? false,
@@ -479,6 +495,10 @@ export class InvoicesService {
   ): Promise<InvoiceListItem> {
     const debtorId = input.debtorId;
     await this.ensureBillingMethodEnabled(companyId, input.billing_type);
+
+    const newDebtorDocument = debtorId
+      ? null
+      : this.normalizeRequiredDebtorDocument(input.document);
 
     if (input.recurring === true) {
       const recurrence = await this.createRecurringInvoice(companyId, input);
@@ -537,10 +557,11 @@ export class InvoicesService {
       const debtor = debtorId
         ? await tx.debtor.findFirst({
             where: { id: debtorId, companyId },
-            select: { id: true },
+            select: { id: true, document: true },
           })
         : await this.upsertDebtor(tx, companyId, {
             name: input.name ?? '',
+            document: newDebtorDocument ?? '',
             phoneNumber: input.phone_number ?? '',
             email: input.email ?? null,
             whatsappOptIn: input.whatsappOptIn ?? false,
@@ -549,6 +570,8 @@ export class InvoicesService {
       if (!debtor) {
         throw new Error('Devedor nao encontrado.');
       }
+
+      this.ensureDebtorDocumentReady(debtor.document);
 
       return tx.invoice.create({
         data: {
@@ -710,6 +733,7 @@ export class InvoicesService {
     return {
       debtorId: debtor.id,
       debtorName: debtor.name,
+      document: debtor.document,
       whatsappOptIn: debtor.whatsappOptIn,
       whatsappOptInAt: debtor.whatsappOptInAt?.toISOString() ?? null,
       whatsappOptInSource: debtor.whatsappOptInSource,
@@ -807,6 +831,12 @@ export class InvoicesService {
     }
 
     const updateData: Prisma.DebtorUpdateInput = {};
+
+    if (input.document !== undefined) {
+      updateData.document = this.normalizeRequiredDebtorDocument(
+        input.document,
+      );
+    }
 
     if (input.useGlobalBillingSettings !== undefined) {
       const useGlobalBillingSettings = input.useGlobalBillingSettings;
@@ -931,13 +961,17 @@ export class InvoicesService {
       throw new Error('Dia de vencimento recorrente invalido.');
     }
 
+    const newDebtorDocument = input.debtorId
+      ? null
+      : this.normalizeRequiredDebtorDocument(input.document);
     const debtor = input.debtorId
       ? await this.prisma.debtor.findFirst({
           where: { id: input.debtorId, companyId },
-          select: { id: true },
+          select: { id: true, document: true },
         })
       : await this.upsertDebtor(this.prisma, companyId, {
           name: input.name ?? '',
+          document: newDebtorDocument ?? '',
           phoneNumber: input.phone_number ?? '',
           email: input.email ?? null,
           whatsappOptIn: input.whatsappOptIn ?? false,
@@ -946,6 +980,8 @@ export class InvoicesService {
     if (!debtor) {
       throw new Error('Devedor nao encontrado.');
     }
+
+    this.ensureDebtorDocumentReady(debtor.document);
 
     const nextDueDate = this.computeInitialRecurringDueDate(input.due_day);
     const recurrence = await this.prisma.recurringInvoice.create({
@@ -1057,6 +1093,7 @@ export class InvoicesService {
       id: invoice.id,
       invoiceId: invoice.id,
       name: invoice.debtor.name,
+      document: invoice.debtor.document ?? undefined,
       phone_number: this.normalizePhoneNumberForResponse(
         invoice.debtor.phoneNumber,
       ),
@@ -1127,11 +1164,32 @@ export class InvoicesService {
     return normalized ? normalized : undefined;
   }
 
+  private normalizeRequiredDebtorDocument(
+    value: string | null | undefined,
+  ): string {
+    const result = validateDebtorDocument(value);
+
+    if (!result.valid) {
+      throw new Error('CPF/CNPJ do devedor deve ter 11 ou 14 digitos validos.');
+    }
+
+    return result.normalized;
+  }
+
+  private ensureDebtorDocumentReady(value: string | null | undefined): void {
+    const normalized = normalizeDebtorDocument(value ?? '');
+
+    if (!validateDebtorDocument(normalized).valid) {
+      throw new Error('CPF/CNPJ do devedor deve ter 11 ou 14 digitos validos.');
+    }
+  }
+
   private async upsertDebtor(
     client: Pick<Prisma.TransactionClient, 'debtor'>,
     companyId: string,
     input: DebtorUpsertInput,
   ): Promise<DebtorIdentity> {
+    const document = this.normalizeRequiredDebtorDocument(input.document);
     const phoneNumber = normalizeWhatsAppNumber(input.phoneNumber);
     const lookupCandidates = getWhatsAppNumberLookupCandidates(phoneNumber);
     const existingDebtors = await client.debtor.findMany({
@@ -1141,6 +1199,7 @@ export class InvoicesService {
       },
       select: {
         id: true,
+        document: true,
         phoneNumber: true,
       },
     });
@@ -1154,6 +1213,7 @@ export class InvoicesService {
         where: { id: existingDebtor.id, companyId },
         data: {
           name: input.name,
+          document,
           phoneNumber,
           email: input.email || null,
           ...(input.whatsappOptIn === true && {
@@ -1164,13 +1224,14 @@ export class InvoicesService {
         },
       });
 
-      return { id: existingDebtor.id };
+      return { id: existingDebtor.id, document };
     }
 
-    return client.debtor.create({
+    const createdDebtor = await client.debtor.create({
       data: {
         companyId,
         name: input.name,
+        document,
         phoneNumber,
         email: input.email || null,
         whatsappOptIn: input.whatsappOptIn === true,
@@ -1180,6 +1241,8 @@ export class InvoicesService {
       },
       select: { id: true },
     });
+
+    return { id: createdDebtor.id, document };
   }
 
   private normalizePhoneNumberForResponse(phoneNumber: string): string {
@@ -1275,6 +1338,7 @@ export class InvoicesService {
       debtor: {
         debtorId: recurrence.debtor.id,
         name: recurrence.debtor.name,
+        document: recurrence.debtor.document ?? undefined,
         phone_number: this.normalizePhoneNumberForResponse(
           recurrence.debtor.phoneNumber,
         ),

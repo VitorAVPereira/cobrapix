@@ -13,6 +13,10 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { GetUser } from '../auth/decorators/get-user.decorator';
+import {
+  normalizeDebtorDocument,
+  validateDebtorDocument,
+} from '../common/debtor-document';
 import { normalizeWhatsAppNumber } from '../common/whatsapp-number';
 import {
   DebtorPaymentHistoryResponse,
@@ -33,6 +37,10 @@ interface AuthenticatedUser {
 
 interface ImportRowInput {
   name?: unknown;
+  'CPF/CNPJ'?: unknown;
+  document?: unknown;
+  cpf_cnpj?: unknown;
+  cpfCnpj?: unknown;
   phone_number?: unknown;
   email?: unknown;
   original_amount?: unknown;
@@ -49,6 +57,7 @@ interface ImportRowInput {
 
 interface ValidImportRow {
   name: string;
+  document: string;
   phone_number: string;
   email?: string;
   original_amount: number;
@@ -101,6 +110,7 @@ export class InvoicesController {
       return await this.invoicesService.createInvoice(user.companyId, {
         debtorId: dto.debtorId,
         name: dto.name,
+        document: dto.document,
         phone_number: dto.phone_number,
         email: dto.email,
         whatsappOptIn: dto.whatsappOptIn,
@@ -301,6 +311,7 @@ export class InvoicesController {
       user.companyId,
       debtorId,
       {
+        document: dto.document,
         useGlobalBillingSettings: dto.useGlobalBillingSettings,
         whatsappOptIn: dto.whatsappOptIn,
         preferredBillingMethod: dto.preferredBillingMethod,
@@ -360,6 +371,9 @@ export class InvoicesController {
       } else {
         validRows.push({
           name: (row.name as string).trim(),
+          document: normalizeDebtorDocument(
+            this.getImportRowDocument(row) as string,
+          ),
           phone_number: normalizeWhatsAppNumber(
             (row.phone_number as string).trim(),
           ),
@@ -404,6 +418,15 @@ export class InvoicesController {
       return `Linha ${i}: Nome invalido ou ausente.`;
     }
 
+    const document = this.getImportRowDocument(row);
+    if (typeof document !== 'string' || document.trim() === '') {
+      return `Linha ${i}: CPF/CNPJ ausente.`;
+    }
+
+    if (!validateDebtorDocument(document).valid) {
+      return `Linha ${i}: CPF/CNPJ deve ter 11 ou 14 digitos validos.`;
+    }
+
     if (
       typeof row.phone_number !== 'string' ||
       !this.isValidWhatsAppNumber(row.phone_number)
@@ -445,6 +468,10 @@ export class InvoicesController {
 
     const normalized = value.trim();
     return normalized.length > 0 ? normalized : undefined;
+  }
+
+  private getImportRowDocument(row: ImportRowInput): unknown {
+    return row.document ?? row.cpf_cnpj ?? row.cpfCnpj ?? row['CPF/CNPJ'];
   }
 
   private isBillingType(value: unknown): value is BillingType {

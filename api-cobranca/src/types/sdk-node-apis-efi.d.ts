@@ -126,8 +126,12 @@ declare module 'sdk-node-apis-efi' {
               };
         };
         customer: {
-          name: string;
+          name?: string;
           cpf?: string;
+          juridical_person?: {
+            corporate_name: string;
+            cnpj: string;
+          };
           email?: string;
           phone_number?: string;
           address: {

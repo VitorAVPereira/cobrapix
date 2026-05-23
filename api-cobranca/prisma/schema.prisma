@@ -121,6 +121,12 @@ enum MessageDirection {
   OUTBOUND
 }
 
+enum MessageTemplateCopyCodeSource {
+  AUTO
+  PIX_COPY_PASTE
+  BOLETO_LINE_DIGITABLE
+}
+
 model Company {
   id                           String              @id @default(uuid())
   corporateName                String
@@ -432,22 +438,27 @@ model Subscription {
 }
 
 model MessageTemplate {
-  id                 String                   @id @default(uuid())
-  name               String // Nome para o lojista (ex: "Aviso de Vencimento")
-  slug               String // Identificador interno (ex: "vencimento-hoje", "atraso-5-dias")
-  content            String                   @db.Text // O texto com Spintax e variáveis
-  isActive           Boolean                  @default(true)
-  metaTemplateName   String?
-  metaLanguage       String                   @default("pt_BR")
-  category           WhatsAppTemplateCategory @default(UTILITY)
-  metaStatus         String                   @default("LOCAL")
-  metaRejectedReason String?                  @db.Text
-  lastMetaSyncAt     DateTime?
-  companyId          String
-  company            Company                  @relation(fields: [companyId], references: [id])
-  ruleSteps          CollectionRuleStep[]
-  createdAt          DateTime                 @default(now())
-  updatedAt          DateTime                 @updatedAt
+  id                    String                        @id @default(uuid())
+  name                  String // Nome para o lojista (ex: "Aviso de Vencimento")
+  slug                  String // Identificador interno (ex: "vencimento-hoje", "atraso-5-dias")
+  content               String                        @db.Text // O texto com Spintax e variáveis
+  footerText            String?                       @db.Text
+  paymentButtonEnabled  Boolean                       @default(true)
+  paymentButtonLabel    String                        @default("Abrir pagamento")
+  copyCodeButtonEnabled Boolean                       @default(false)
+  copyCodeSource        MessageTemplateCopyCodeSource @default(AUTO)
+  isActive              Boolean                       @default(true)
+  metaTemplateName      String?
+  metaLanguage          String                        @default("pt_BR")
+  category              WhatsAppTemplateCategory      @default(UTILITY)
+  metaStatus            String                        @default("LOCAL")
+  metaRejectedReason    String?                       @db.Text
+  lastMetaSyncAt        DateTime?
+  companyId             String
+  company               Company                       @relation(fields: [companyId], references: [id])
+  ruleSteps             CollectionRuleStep[]
+  createdAt             DateTime                      @default(now())
+  updatedAt             DateTime                      @updatedAt
 
   @@unique([companyId, slug])
 }

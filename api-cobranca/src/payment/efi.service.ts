@@ -8,6 +8,7 @@ import {
 } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import EfiPay from 'sdk-node-apis-efi';
+import { validateDebtorDocument } from '../common/debtor-document';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateGatewayAccountDto } from './dto/gateway-account.dto';
 import { PaymentCryptoService } from './payment-crypto.service';
@@ -15,6 +16,7 @@ import { PaymentNotificationsService } from './payment-notifications.service';
 
 type EfiEnvironment = 'homologation' | 'production';
 type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
+type PixCreateDueChargeBody = Parameters<EfiPay['pixCreateDueCharge']>[1];
 
 interface EfiCredentials {
   clientId: string;
@@ -82,6 +84,27 @@ interface EfiErrorResponse {
   error_description?: string;
   title?: string;
   detail?: string;
+  violacoes?: Array<{
+    razao?: string;
+    propriedade?: string;
+  }>;
+}
+
+interface PixCobvDebtorAddress {
+  logradouro: string;
+  cidade: string;
+  uf: string;
+  cep: string;
+}
+
+interface PixCobvDebtorPayload {
+  nome: string;
+  cpf?: string;
+  cnpj?: string;
+  logradouro?: string;
+  cidade?: string;
+  uf?: string;
+  cep?: string;
 }
 
 interface PaymentInvoice {
@@ -381,20 +404,13 @@ export class EfiService {
       : (invoice.efiTxid ?? this.generateTxid(invoice.id));
     const dueDate = this.formatDate(invoice.dueDate);
     const amount = this.formatAmount(invoice.originalAmount);
-    const debtorDocument = this.onlyDigits(invoice.debtor.document ?? '');
     const discountSettings = this.resolveDiscountSettings(invoice);
     const cobvPayload = {
       calendario: {
         dataDeVencimento: dueDate,
         validadeAposVencimento: 30,
       },
-      devedor: {
-        ...this.buildPixDebtorAddress(invoice),
-        nome: invoice.debtor.name,
-        ...(debtorDocument.length === 14
-          ? { cnpj: debtorDocument }
-          : { cpf: debtorDocument || '00000000000' }),
-      },
+      devedor: this.buildPixDebtorPayload(invoice),
       valor: {
         original: amount,
         ...(discountSettings.enabled
@@ -411,7 +427,11 @@ export class EfiService {
     };
 
     await this.runEfiRequest(
-      () => client.pixCreateDueCharge({ txid }, cobvPayload),
+      () =>
+        client.pixCreateDueCharge(
+          { txid },
+          cobvPayload as unknown as PixCreateDueChargeBody,
+        ),
       'criar Pix CobV',
     );
 
@@ -931,15 +951,17 @@ export class EfiService {
 
     if (this.isRecord(error)) {
       const efiError = error as EfiErrorResponse;
-      return (
+      const message =
         efiError.error_description ??
         efiError.detail ??
         efiError.mensagem ??
         efiError.message ??
         efiError.error ??
         efiError.title ??
-        'erro desconhecido'
-      );
+        'erro desconhecido';
+      const violations = this.formatEfiViolations(efiError.violacoes);
+
+      return violations ? `${message} ${violations}` : message;
     }
 
     if (error instanceof Error) {
@@ -949,23 +971,72 @@ export class EfiService {
     return 'erro desconhecido';
   }
 
-  private buildPixDebtorAddress(invoice: PaymentInvoice): {
-    logradouro: string;
-    cidade: string;
-    uf: string;
-    cep: string;
-  } {
+  private formatEfiViolations(
+    violations: EfiErrorResponse['violacoes'],
+  ): string {
+    if (!violations || violations.length === 0) {
+      return '';
+    }
+
+    const details = violations
+      .map((violation) => {
+        const property = violation.propriedade?.trim();
+        const reason = violation.razao?.trim();
+
+        if (property && reason) {
+          return `${property}: ${reason}`;
+        }
+
+        return reason ?? property ?? null;
+      })
+      .filter((violation): violation is string => violation !== null);
+
+    return details.length > 0 ? `Violacoes: ${details.join(' | ')}` : '';
+  }
+
+  private buildPixDebtorAddress(
+    invoice: PaymentInvoice,
+  ): PixCobvDebtorAddress | null {
+    const logradouro = invoice.company.addressStreet?.trim();
+    const cidade = invoice.company.addressCity?.trim();
+    const uf = invoice.company.addressState?.trim().toUpperCase();
+    const cep = this.onlyDigits(invoice.company.addressPostalCode ?? '');
+
+    if (!logradouro || !cidade || !uf || cep.length !== 8) {
+      return null;
+    }
+
     return {
-      logradouro: invoice.company.addressStreet ?? 'Nao informado',
-      cidade: invoice.company.addressCity ?? 'Sao Paulo',
-      uf: invoice.company.addressState ?? 'SP',
-      cep: this.onlyDigits(invoice.company.addressPostalCode ?? '00000000'),
+      logradouro,
+      cidade,
+      uf,
+      cep,
+    };
+  }
+
+  private buildPixDebtorPayload(invoice: PaymentInvoice): PixCobvDebtorPayload {
+    const debtorDocument = this.normalizeRequiredDebtorDocument(
+      invoice.debtor.document,
+    );
+
+    const address = this.buildPixDebtorAddress(invoice);
+
+    return {
+      ...(address ?? {}),
+      nome: invoice.debtor.name,
+      ...(debtorDocument.length === 14
+        ? { cnpj: debtorDocument }
+        : { cpf: debtorDocument }),
     };
   }
 
   private buildBoletoCustomer(invoice: PaymentInvoice): {
-    name: string;
+    name?: string;
     cpf?: string;
+    juridical_person?: {
+      corporate_name: string;
+      cnpj: string;
+    };
     email?: string;
     phone_number?: string;
     address: {
@@ -977,9 +1048,10 @@ export class EfiService {
       state: string;
     };
   } {
-    return {
-      name: invoice.debtor.name,
-      cpf: this.onlyDigits(invoice.debtor.document ?? '00000000000'),
+    const debtorDocument = this.normalizeRequiredDebtorDocument(
+      invoice.debtor.document,
+    );
+    const customer = {
       email: invoice.debtor.email ?? undefined,
       phone_number: this.onlyDigits(invoice.debtor.phoneNumber),
       address: {
@@ -992,6 +1064,22 @@ export class EfiService {
         city: invoice.company.addressCity ?? 'Sao Paulo',
         state: invoice.company.addressState ?? 'SP',
       },
+    };
+
+    if (debtorDocument.length === 14) {
+      return {
+        ...customer,
+        juridical_person: {
+          corporate_name: invoice.debtor.name,
+          cnpj: debtorDocument,
+        },
+      };
+    }
+
+    return {
+      ...customer,
+      name: invoice.debtor.name,
+      cpf: debtorDocument,
     };
   }
 
@@ -1214,6 +1302,19 @@ export class EfiService {
 
   private onlyDigits(value: string): string {
     return value.replace(/\D/g, '');
+  }
+
+  private normalizeRequiredDebtorDocument(value: string | null): string {
+    const result = validateDebtorDocument(value);
+
+    if (!result.valid) {
+      throw new HttpException(
+        'CPF/CNPJ do devedor obrigatorio para emitir cobrancas Efi.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    return result.normalized;
   }
 
   private isRecord(value: unknown): value is Record<string, unknown> {

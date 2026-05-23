@@ -114,6 +114,15 @@ export type BillingMethod = "PIX" | "BOLETO" | "BOLIX";
 export type UserRole = "PLATFORM_ADMIN" | "COMPANY_ADMIN";
 export type CompanyStatus = "ACTIVE" | "INACTIVE" | "SUSPENDED";
 export type BusinessSegment = "GENERAL" | "EDUCATION";
+export type WhatsappProvider = "META_CLOUD";
+export type WhatsappStatus = "CONNECTED" | "DISCONNECTED" | "PENDING";
+export type MessagingLimitTier =
+  | "TIER_50"
+  | "TIER_250"
+  | "TIER_1K"
+  | "TIER_10K"
+  | "TIER_100K"
+  | "TIER_UNLIMITED";
 export type PaymentNotificationStatus = "PENDING" | "SENT" | "FAILED" | "READ";
 export type RecurringInvoiceStatus = "ACTIVE" | "PAUSED";
 export type DashboardPeriod = "today" | "7d" | "30d" | "year";
@@ -148,6 +157,7 @@ export interface InvoiceListItem {
   id: string;
   invoiceId: string;
   name: string;
+  document?: string;
   phone_number: string;
   email?: string;
   original_amount: number;
@@ -180,6 +190,7 @@ export interface InvoiceListItem {
 export interface CreateInvoiceInput {
   debtorId?: string;
   name?: string;
+  document?: string;
   phone_number?: string;
   email?: string;
   whatsappOptIn?: boolean;
@@ -198,6 +209,7 @@ export interface RecurringInvoice {
   debtor: {
     debtorId: string;
     name: string;
+    document?: string;
     phone_number: string;
     email?: string;
   };
@@ -252,6 +264,7 @@ export interface PaymentNotificationListResponse {
 export interface DebtorBillingSettings {
   debtorId: string;
   debtorName: string;
+  document: string | null;
   whatsappOptIn: boolean;
   whatsappOptInAt: string | null;
   whatsappOptInSource: string | null;
@@ -313,6 +326,7 @@ export interface DebtorPaymentHistoryResponse {
 }
 
 export interface UpdateDebtorBillingSettingsInput {
+  document?: string | null;
   useGlobalBillingSettings?: boolean;
   whatsappOptIn?: boolean;
   preferredBillingMethod?: BillingMethod | null;
@@ -433,6 +447,11 @@ export interface MessageTemplate {
   name: string;
   slug: string;
   content: string;
+  footerText: string | null;
+  paymentButtonEnabled: boolean;
+  paymentButtonLabel: string;
+  copyCodeButtonEnabled: boolean;
+  copyCodeSource: MessageTemplateCopyCodeSource;
   isActive: boolean;
   metaTemplateName: string | null;
   metaLanguage: string;
@@ -445,16 +464,28 @@ export interface MessageTemplate {
   updatedAt: string;
 }
 
+export type MessageTemplateCopyCodeSource =
+  | "AUTO"
+  | "PIX_COPY_PASTE"
+  | "BOLETO_LINE_DIGITABLE";
+
 export type MessageTemplateSlug =
+  | "cobranca-emissao"
   | "vencimento-hoje"
   | "pre-vencimento"
   | "atraso-primeiro-aviso"
-  | "atraso-recorrente";
+  | "atraso-recorrente"
+  | "atraso-critico";
 
 export interface SaveMessageTemplateInput {
   name: string;
   slug: MessageTemplateSlug;
   content: string;
+  footerText?: string | null;
+  paymentButtonEnabled?: boolean;
+  paymentButtonLabel?: string;
+  copyCodeButtonEnabled?: boolean;
+  copyCodeSource?: MessageTemplateCopyCodeSource;
   isActive?: boolean;
   metaTemplateName?: string;
   metaLanguage?: string;
@@ -543,12 +574,53 @@ export interface AdminClient {
   email: string;
   phoneNumber: string;
   status: CompanyStatus;
+  gatewayProvider?: string;
   enabledBillingMethods: BillingMethod[];
   preferredBillingMethod: BillingMethod;
+  maxDiscountsPerDebtor?: number;
+  discountTriggerDay?: number;
+  collectionReminderDays?: number[];
+  autoGenerateFirstCharge?: boolean;
+  autoDiscountEnabled?: boolean;
+  autoDiscountDaysAfterDue?: number | null;
+  autoDiscountPercentage?: number | null;
   onTimeSplitPercentageBps: number;
   overdueSplitPercentageBps: number;
+  businessSegment?: BusinessSegment;
+  paymentNotificationEnabled?: boolean;
+  paymentNotificationEmails?: string[];
   gatewayStatus: string;
+  legalRepresentative?: string | null;
+  legalRepresentativeCpf?: string | null;
+  legalRepresentativeBirthDate?: string | null;
+  addressPostalCode?: string | null;
+  addressStreet?: string | null;
+  addressNumber?: string | null;
+  addressDistrict?: string | null;
+  addressCity?: string | null;
+  addressState?: string | null;
+  bankName?: string | null;
+  bankAgency?: string | null;
+  bankAccount?: string | null;
+  whatsappProvider?: WhatsappProvider;
+  whatsappInstanceId?: string | null;
   whatsappStatus: string;
+  metaPhoneNumberId?: string | null;
+  metaBusinessAccountId?: string | null;
+  metaBusinessPhoneNumber?: string | null;
+  metaDefaultLanguage?: string;
+  messagingLimitTier?: MessagingLimitTier | null;
+  messagingLimitUpdatedAt?: string | null;
+  resendFromEmail?: string | null;
+  erpWebhookUrl?: string | null;
+  erpEnabledEvents?: string[];
+  hasMetaAccessToken?: boolean;
+  hasResendApiKey?: boolean;
+  hasErpApiKey?: boolean;
+  hasEfiClientId?: boolean;
+  hasEfiClientSecret?: boolean;
+  hasEfiCertificate?: boolean;
+  hasEfiCertificatePassword?: boolean;
   firstUser: {
     id: string;
     email: string;
@@ -557,8 +629,15 @@ export interface AdminClient {
   } | null;
   efi: {
     configured: boolean;
+    provider?: string | null;
     status: string | null;
     environment: string | null;
+    payeeCode?: string | null;
+    accountNumber?: string | null;
+    accountDigit?: string | null;
+    pixKey?: string | null;
+    certificatePath?: string | null;
+    lastError?: string | null;
   };
   createdAt: string;
   updatedAt: string;
@@ -587,9 +666,70 @@ export interface CreateAdminClientInput {
   efi?: GatewayAccountInput;
 }
 
-function normalizeGatewayAccountPayload(
-  data: GatewayAccountInput,
-): GatewayAccountInput {
+export interface UpdateAdminClientInput {
+  company?: {
+    corporateName?: string;
+    document?: string;
+    email?: string;
+    phoneNumber?: string;
+    status?: CompanyStatus;
+    gatewayProvider?: string;
+    gatewayStatus?: string;
+    legalRepresentative?: string | null;
+    legalRepresentativeCpf?: string | null;
+    legalRepresentativeBirthDate?: string | null;
+    addressPostalCode?: string | null;
+    addressStreet?: string | null;
+    addressNumber?: string | null;
+    addressDistrict?: string | null;
+    addressCity?: string | null;
+    addressState?: string | null;
+    bankName?: string | null;
+    bankAgency?: string | null;
+    bankAccount?: string | null;
+  };
+  billing?: {
+    enabledBillingMethods?: BillingMethod[];
+    preferredBillingMethod?: BillingMethod;
+    onTimeSplitPercentageBps?: number;
+    overdueSplitPercentageBps?: number;
+    maxDiscountsPerDebtor?: number;
+    discountTriggerDay?: number;
+    collectionReminderDays?: number[];
+    autoGenerateFirstCharge?: boolean;
+    autoDiscountEnabled?: boolean;
+    autoDiscountDaysAfterDue?: number | null;
+    autoDiscountPercentage?: number | null;
+  };
+  notifications?: {
+    businessSegment?: BusinessSegment;
+    paymentNotificationEnabled?: boolean;
+    paymentNotificationEmails?: string[];
+  };
+  whatsapp?: {
+    whatsappProvider?: WhatsappProvider;
+    whatsappInstanceId?: string | null;
+    whatsappStatus?: WhatsappStatus;
+    metaPhoneNumberId?: string | null;
+    metaBusinessAccountId?: string | null;
+    metaBusinessPhoneNumber?: string | null;
+    metaDefaultLanguage?: string;
+    messagingLimitTier?: MessagingLimitTier | null;
+    metaAccessToken?: string;
+  };
+  integrations?: {
+    resendApiKey?: string;
+    resendFromEmail?: string | null;
+    erpApiKey?: string;
+    erpWebhookUrl?: string | null;
+    erpEnabledEvents?: string[];
+  };
+  efi?: Partial<GatewayAccountInput>;
+}
+
+function normalizeGatewayAccountPayload<T extends Partial<GatewayAccountInput>>(
+  data: T,
+): T {
   return {
     ...data,
     efiCertificatePath: data.efiCertificateBase64
@@ -602,6 +742,19 @@ function normalizeGatewayAccountPayload(
 function normalizeCreateAdminClientPayload(
   data: CreateAdminClientInput,
 ): CreateAdminClientInput {
+  if (!data.efi) {
+    return data;
+  }
+
+  return {
+    ...data,
+    efi: normalizeGatewayAccountPayload(data.efi),
+  };
+}
+
+function normalizeUpdateAdminClientPayload(
+  data: UpdateAdminClientInput,
+): UpdateAdminClientInput {
   if (!data.efi) {
     return data;
   }
@@ -746,7 +899,7 @@ class ApiClient {
     debtorId: string,
     data: Omit<
       CreateInvoiceInput,
-      "debtorId" | "name" | "phone_number" | "email"
+      "debtorId" | "name" | "document" | "phone_number" | "email"
     >,
   ): Promise<InvoiceListItem> {
     return this.fetch<InvoiceListItem>(
@@ -1112,13 +1265,23 @@ class ApiClient {
     return this.fetch<AdminClient[]>("/admin/clients");
   }
 
-  async createAdminClient(
-    data: CreateAdminClientInput,
-  ): Promise<AdminClient> {
+  async createAdminClient(data: CreateAdminClientInput): Promise<AdminClient> {
     const payload = normalizeCreateAdminClientPayload(data);
 
     return this.fetch<AdminClient>("/admin/clients", {
       method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateAdminClient(
+    clientId: string,
+    data: UpdateAdminClientInput,
+  ): Promise<AdminClient> {
+    const payload = normalizeUpdateAdminClientPayload(data);
+
+    return this.fetch<AdminClient>(`/admin/clients/${clientId}`, {
+      method: "PUT",
       body: JSON.stringify(payload),
     });
   }

@@ -97,13 +97,11 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const [settingsOpen, setSettingsOpen] = useState(true);
   const DashboardIcon = dashboardItem.icon;
   const isPlatformAdmin = session?.user.role === "PLATFORM_ADMIN";
-  const visibleSettingsItems = isPlatformAdmin
-    ? settingsItems
-    : settingsItems.filter(
-        (item) =>
-          item.href !== "/configuracoes/whatsapp" &&
-          item.href !== "/configuracoes/conecte-seu-banco",
-      );
+  const visibleSettingsItems = settingsItems.filter(
+    (item) =>
+      item.href !== "/configuracoes/whatsapp" &&
+      item.href !== "/configuracoes/conecte-seu-banco",
+  );
 
   return (
     <>
@@ -136,94 +134,13 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         </div>
 
         <nav className="flex-1 px-3 py-6 overflow-y-auto">
-          <div className="space-y-1">
-            <Link
-              href={dashboardItem.href}
-              onClick={onClose}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
-                isCurrentPath(pathname, dashboardItem.href)
-                  ? "bg-emerald-500/15 text-emerald-400 font-semibold border-l-[3px] border-emerald-400 pl-[9px]"
-                  : "hover:bg-slate-800 hover:text-white"
-              }`}
-            >
-              <DashboardIcon size={18} />
-              <span>{dashboardItem.label}</span>
-            </Link>
-
-            {mainItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = isCurrentPath(pathname, item.href);
-
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={onClose}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
-                    isActive
-                      ? "bg-emerald-500/15 text-emerald-400 font-semibold border-l-[3px] border-emerald-400 pl-[9px]"
-                      : "hover:bg-slate-800 hover:text-white"
-                  }`}
-                >
-                  <Icon size={18} />
-                  <span>{item.label}</span>
-                </Link>
-              );
-            })}
-          </div>
-
-          <div className="mt-5">
-            {isPlatformAdmin && (
-              <div className="mb-5">
-                <p className="px-3 pb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Admin
-                </p>
-                <div className="space-y-1">
-                  {adminItems.map((item) => {
-                    const Icon = item.icon;
-                    const isActive = isCurrentPath(pathname, item.href);
-
-                    return (
-                      <Link
-                        key={item.href}
-                        href={item.href}
-                        onClick={onClose}
-                        className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
-                          isActive
-                            ? "bg-emerald-500/15 text-emerald-400 font-semibold border-l-[3px] border-emerald-400 pl-[9px]"
-                            : "hover:bg-slate-800 hover:text-white"
-                        }`}
-                      >
-                        <Icon size={18} />
-                        <span>{item.label}</span>
-                      </Link>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setSettingsOpen((current) => !current)}
-              aria-expanded={settingsOpen}
-              className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500 transition-colors hover:bg-slate-800 hover:text-slate-300"
-            >
-              <span className="flex items-center gap-2">
-                <Settings size={15} />
-                Configuracoes
-              </span>
-              <ChevronDown
-                size={15}
-                className={`transition-transform ${
-                  settingsOpen ? "rotate-0" : "-rotate-90"
-                }`}
-              />
-            </button>
-
-            {settingsOpen && (
-              <div className="mt-1 ml-4 space-y-1 border-l border-slate-800 pl-3">
-                {visibleSettingsItems.map((item) => {
+          {isPlatformAdmin ? (
+            <div>
+              <p className="px-3 pb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                Admin
+              </p>
+              <div className="space-y-1">
+                {adminItems.map((item) => {
                   const Icon = item.icon;
                   const isActive = isCurrentPath(pathname, item.href);
 
@@ -232,20 +149,103 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                       key={item.href}
                       href={item.href}
                       onClick={onClose}
-                      className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-sm ${
+                      className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
                         isActive
-                          ? "bg-emerald-500/15 text-emerald-400 font-semibold"
+                          ? "bg-emerald-500/15 text-emerald-400 font-semibold border-l-[3px] border-emerald-400 pl-[9px]"
                           : "hover:bg-slate-800 hover:text-white"
                       }`}
                     >
-                      <Icon size={17} />
+                      <Icon size={18} />
                       <span>{item.label}</span>
                     </Link>
                   );
                 })}
               </div>
-            )}
-          </div>
+            </div>
+          ) : (
+            <>
+              <div className="space-y-1">
+                <Link
+                  href={dashboardItem.href}
+                  onClick={onClose}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
+                    isCurrentPath(pathname, dashboardItem.href)
+                      ? "bg-emerald-500/15 text-emerald-400 font-semibold border-l-[3px] border-emerald-400 pl-[9px]"
+                      : "hover:bg-slate-800 hover:text-white"
+                  }`}
+                >
+                  <DashboardIcon size={18} />
+                  <span>{dashboardItem.label}</span>
+                </Link>
+
+                {mainItems.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = isCurrentPath(pathname, item.href);
+
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      onClick={onClose}
+                      className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
+                        isActive
+                          ? "bg-emerald-500/15 text-emerald-400 font-semibold border-l-[3px] border-emerald-400 pl-[9px]"
+                          : "hover:bg-slate-800 hover:text-white"
+                      }`}
+                    >
+                      <Icon size={18} />
+                      <span>{item.label}</span>
+                    </Link>
+                  );
+                })}
+              </div>
+
+              <div className="mt-5">
+                <button
+                  type="button"
+                  onClick={() => setSettingsOpen((current) => !current)}
+                  aria-expanded={settingsOpen}
+                  className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500 transition-colors hover:bg-slate-800 hover:text-slate-300"
+                >
+                  <span className="flex items-center gap-2">
+                    <Settings size={15} />
+                    Configuracoes
+                  </span>
+                  <ChevronDown
+                    size={15}
+                    className={`transition-transform ${
+                      settingsOpen ? "rotate-0" : "-rotate-90"
+                    }`}
+                  />
+                </button>
+
+                {settingsOpen && (
+                  <div className="mt-1 ml-4 space-y-1 border-l border-slate-800 pl-3">
+                    {visibleSettingsItems.map((item) => {
+                      const Icon = item.icon;
+                      const isActive = isCurrentPath(pathname, item.href);
+
+                      return (
+                        <Link
+                          key={item.href}
+                          href={item.href}
+                          onClick={onClose}
+                          className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-sm ${
+                            isActive
+                              ? "bg-emerald-500/15 text-emerald-400 font-semibold"
+                              : "hover:bg-slate-800 hover:text-white"
+                          }`}
+                        >
+                          <Icon size={17} />
+                          <span>{item.label}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </nav>
 
         <div className="p-4 border-t border-slate-800 space-y-3 shrink-0">

@@ -1,6 +1,10 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { MessageTemplate, WhatsAppTemplateCategory } from '@prisma/client';
+import type {
+  MessageTemplate,
+  MessageTemplateCopyCodeSource,
+  WhatsAppTemplateCategory,
+} from '@prisma/client';
 import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfigureMetaWhatsappDto } from './dto/configure-meta-whatsapp.dto';
@@ -36,6 +40,7 @@ interface SendTemplateMessageInput {
   templateName: string;
   languageCode: string;
   bodyParameters: string[];
+  buttonUrlSuffix?: string | null;
 }
 
 interface SendTextMessageInput {
@@ -49,15 +54,72 @@ interface CreateOfficialTemplateInput {
   template: Pick<
     MessageTemplate,
     'id' | 'slug' | 'content' | 'metaTemplateName' | 'metaLanguage' | 'category'
-  >;
+  > &
+    Partial<
+      Pick<
+        MessageTemplate,
+        | 'footerText'
+        | 'paymentButtonEnabled'
+        | 'paymentButtonLabel'
+        | 'copyCodeButtonEnabled'
+        | 'copyCodeSource'
+      >
+    >;
 }
 
 interface OfficialTemplatePayload {
   name: string;
   language: string;
   category: WhatsAppTemplateCategory;
+  components: WhatsAppTemplateComponent[];
+}
+
+interface WhatsAppBodyComponent {
+  type: 'BODY';
   text: string;
-  examples: string[];
+  example?: { body_text: string[][] };
+}
+
+interface WhatsAppFooterComponent {
+  type: 'FOOTER';
+  text: string;
+}
+
+interface WhatsAppButtonsComponent {
+  type: 'BUTTONS';
+  buttons: WhatsAppTemplateButton[];
+}
+
+type WhatsAppTemplateComponent =
+  | WhatsAppBodyComponent
+  | WhatsAppFooterComponent
+  | WhatsAppButtonsComponent;
+
+type WhatsAppTemplateButton = UrlTemplateButton | CopyCodeTemplateButton;
+
+interface UrlTemplateButton {
+  type: 'URL';
+  text: string;
+  url: string;
+  example: string[];
+}
+
+interface CopyCodeTemplateButton {
+  type: 'COPY_CODE';
+  example: string;
+}
+
+interface MetaGraphErrorData {
+  details?: string;
+}
+
+interface MetaGraphError {
+  message?: string;
+  error_user_title?: string;
+  error_user_msg?: string;
+  error_data?: MetaGraphErrorData;
+  error_subcode?: number | string;
+  fbtrace_id?: string;
 }
 
 const TEMPLATE_EXAMPLES: Record<string, string> = {
@@ -73,6 +135,9 @@ const TEMPLATE_EXAMPLES: Record<string, string> = {
   boleto_link: 'https://cobranca.exemplo/boleto',
   boleto_pdf: 'https://cobranca.exemplo/boleto.pdf',
 };
+
+const COPY_CODE_MAX_LENGTH = 15;
+const PAYMENT_BUTTON_EXAMPLE_TOKEN = 'exemplo-token';
 
 @Injectable()
 export class WhatsappService {
@@ -213,6 +278,35 @@ export class WhatsappService {
       throw new Error('Meta Cloud API nao configurada para esta empresa.');
     }
 
+    const components = [
+      ...(input.bodyParameters.length > 0
+        ? [
+            {
+              type: 'body',
+              parameters: input.bodyParameters.map((parameter) => ({
+                type: 'text',
+                text: parameter,
+              })),
+            },
+          ]
+        : []),
+      ...(input.buttonUrlSuffix
+        ? [
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [
+                {
+                  type: 'text',
+                  text: input.buttonUrlSuffix,
+                },
+              ],
+            },
+          ]
+        : []),
+    ];
+
     const body = {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
@@ -223,18 +317,7 @@ export class WhatsappService {
         language: {
           code: input.languageCode,
         },
-        components:
-          input.bodyParameters.length > 0
-            ? [
-                {
-                  type: 'body',
-                  parameters: input.bodyParameters.map((parameter) => ({
-                    type: 'text',
-                    text: parameter,
-                  })),
-                },
-              ]
-            : undefined,
+        components: components.length > 0 ? components : undefined,
       },
     };
 
@@ -338,15 +421,7 @@ export class WhatsappService {
           name: officialTemplate.name,
           language: officialTemplate.language,
           category: officialTemplate.category,
-          components: [
-            {
-              type: 'BODY',
-              text: officialTemplate.text,
-              ...(officialTemplate.examples.length > 0
-                ? { example: { body_text: [officialTemplate.examples] } }
-                : {}),
-            },
-          ],
+          components: officialTemplate.components,
         }),
       },
     );
@@ -395,17 +470,128 @@ export class WhatsappService {
         return `{{${index}}}`;
       },
     );
+    this.validateOfficialTemplateText(text);
+    const examples = variableNames.map((variableName) =>
+      this.getTemplateExample(variableName),
+    );
+    const bodyComponent: WhatsAppBodyComponent = {
+      type: 'BODY',
+      text,
+      ...(examples.length > 0 ? { example: { body_text: [examples] } } : {}),
+    };
+    const footerComponent = this.buildFooterComponent(
+      template.footerText ?? null,
+    );
+    const buttonsComponent = this.buildButtonsComponent(template);
 
     return {
       name:
         template.metaTemplateName ?? this.buildMetaTemplateName(template.slug),
       language: template.metaLanguage,
       category: template.category,
-      text,
-      examples: variableNames.map(
-        (variableName) => TEMPLATE_EXAMPLES[variableName] ?? 'exemplo',
-      ),
+      components: [
+        bodyComponent,
+        ...(footerComponent ? [footerComponent] : []),
+        ...(buttonsComponent ? [buttonsComponent] : []),
+      ],
     };
+  }
+
+  private buildFooterComponent(
+    footerText: string | null,
+  ): WhatsAppFooterComponent | null {
+    const text = this.replaceTemplateVariablesWithExamples(
+      this.normalizeOfficialTemplateText(footerText ?? ''),
+    ).trim();
+
+    if (!text) {
+      return null;
+    }
+
+    return {
+      type: 'FOOTER',
+      text,
+    };
+  }
+
+  private buildButtonsComponent(
+    template: CreateOfficialTemplateInput['template'],
+  ): WhatsAppButtonsComponent | null {
+    const buttons: WhatsAppTemplateButton[] = [];
+
+    if (template.paymentButtonEnabled) {
+      const paymentUrl = `${this.getPaymentPageBaseUrl()}/{{1}}`;
+      buttons.push({
+        type: 'URL',
+        text: template.paymentButtonLabel || 'Abrir pagamento',
+        url: paymentUrl,
+        example: [
+          `${this.getPaymentPageBaseUrl()}/${PAYMENT_BUTTON_EXAMPLE_TOKEN}`,
+        ],
+      });
+    }
+
+    if (template.copyCodeButtonEnabled) {
+      buttons.push({
+        type: 'COPY_CODE',
+        example: this.getCopyCodeExample(template.copyCodeSource ?? 'AUTO'),
+      });
+    }
+
+    return buttons.length > 0
+      ? {
+          type: 'BUTTONS',
+          buttons,
+        }
+      : null;
+  }
+
+  private getCopyCodeExample(source: MessageTemplateCopyCodeSource): string {
+    const exampleBySource: Record<MessageTemplateCopyCodeSource, string> = {
+      AUTO: this.getTemplateExample('pix_copia_e_cola'),
+      PIX_COPY_PASTE: this.getTemplateExample('pix_copia_e_cola'),
+      BOLETO_LINE_DIGITABLE: this.getTemplateExample('boleto_linha_digitavel'),
+    };
+    const example = exampleBySource[source];
+
+    if (example.length <= COPY_CODE_MAX_LENGTH) {
+      return example;
+    }
+
+    throw new HttpException(
+      'O botao COPY_CODE da Meta aceita no maximo 15 caracteres. Use o botao de pagamento para Pix copia e cola ou linha digitavel longos.',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+
+  private replaceTemplateVariablesWithExamples(content: string): string {
+    return content.replace(
+      /\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g,
+      (_match: string, variableName: string) =>
+        this.getTemplateExample(variableName),
+    );
+  }
+
+  private getTemplateExample(variableName: string): string {
+    return TEMPLATE_EXAMPLES[variableName] ?? 'exemplo';
+  }
+
+  private validateOfficialTemplateText(text: string): void {
+    const trimmedText = text.trim();
+    const startsWithVariable = /^\{\{\d+\}\}/.test(trimmedText);
+    const endsWithVariable = /\{\{\d+\}\}$/.test(trimmedText);
+    const hasFloatingVariableLine = text
+      .split(/\r?\n/)
+      .some((line) => /^\s*\{\{\d+\}\}\s*$/.test(line));
+
+    if (!startsWithVariable && !endsWithVariable && !hasFloatingVariableLine) {
+      return;
+    }
+
+    throw new HttpException(
+      'A mensagem oficial da Meta nao pode comecar, terminar ou ter uma linha composta apenas por variavel. Adicione texto fixo antes e depois de cada {{variavel}}.',
+      HttpStatus.BAD_REQUEST,
+    );
   }
 
   private normalizeOfficialTemplateText(content: string): string {
@@ -442,25 +628,76 @@ export class WhatsappService {
     });
 
     const body = await response.text();
-    const payload = body ? (JSON.parse(body) as unknown) : null;
+    const payload = this.parseGraphResponseBody(body);
 
     if (!response.ok) {
-      const message = this.extractGraphErrorMessage(payload);
-      throw new Error(
+      const message = this.formatGraphError(payload);
+      throw new HttpException(
         `Meta Cloud API: falha (${response.status})${message ? `: ${message}` : ''}`,
+        this.mapGraphErrorStatus(response.status),
       );
     }
 
     return payload as T;
   }
 
-  private extractGraphErrorMessage(payload: unknown): string | null {
+  private parseGraphResponseBody(body: string): unknown {
+    if (!body) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(body) as unknown;
+    } catch {
+      return body;
+    }
+  }
+
+  private formatGraphError(payload: unknown): string | null {
     if (!this.isRecord(payload) || !this.isRecord(payload.error)) {
       return null;
     }
 
-    const message = payload.error.message;
-    return typeof message === 'string' ? message : null;
+    const error = payload.error as MetaGraphError;
+    const parts = [
+      this.readString(error.message),
+      this.readString(error.error_user_title),
+      this.readString(error.error_user_msg),
+      this.readString(error.error_data?.details),
+      this.formatGraphSubcode(error.error_subcode),
+      this.formatGraphTrace(error.fbtrace_id),
+    ].filter((part): part is string => part !== null);
+    const uniqueParts = parts.filter(
+      (part, index) => parts.indexOf(part) === index,
+    );
+
+    return uniqueParts.length > 0 ? uniqueParts.join(' | ') : null;
+  }
+
+  private mapGraphErrorStatus(status: number): HttpStatus {
+    if (status >= 400 && status < 500) {
+      return HttpStatus.BAD_REQUEST;
+    }
+
+    return HttpStatus.BAD_GATEWAY;
+  }
+
+  private formatGraphSubcode(
+    subcode: number | string | undefined,
+  ): string | null {
+    if (subcode === undefined) {
+      return null;
+    }
+
+    return `subcode ${subcode}`;
+  }
+
+  private formatGraphTrace(traceId: string | undefined): string | null {
+    return traceId ? `fbtrace_id ${traceId}` : null;
+  }
+
+  private readString(value: string | undefined): string | null {
+    return value && value.trim() ? value.trim() : null;
   }
 
   private buildWebhookUrl(path: string): string {
@@ -470,6 +707,15 @@ export class WhatsappService {
       'http://localhost:3001';
 
     return `${baseUrl.replace(/\/$/, '')}${path}`;
+  }
+
+  private getPaymentPageBaseUrl(): string {
+    const frontendUrl = this.configService.get<string>(
+      'FRONTEND_URL',
+      'http://localhost:3000',
+    );
+
+    return `${frontendUrl.replace(/\/$/, '')}/pagar`;
   }
 
   private isRecord(value: unknown): value is Record<string, unknown> {

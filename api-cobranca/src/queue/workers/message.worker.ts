@@ -14,6 +14,7 @@ import {
 import { Worker, Job } from 'bullmq';
 import { normalizeWhatsAppNumberForTransport } from '../../common/whatsapp-number';
 import { PaymentService } from '../../payment/payment.service';
+import { PublicPaymentLinkService } from '../../payment/payment-link.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { WhatsappService } from '../../whatsapp/whatsapp.service';
 import { RateLimitService } from '../services/rate-limit.service';
@@ -39,6 +40,7 @@ interface PaymentMessageData {
   billingType: BillingMethod;
   billingTypeLabel: string;
   paymentLink: string;
+  paymentPageToken: string;
   pixCopiaECola: string;
   boletoLinhaDigitavel: string;
   boletoLink: string;
@@ -100,6 +102,7 @@ interface MessageTemplateRecord {
   metaTemplateName: string | null;
   metaLanguage: string;
   metaStatus: string;
+  paymentButtonEnabled: boolean;
 }
 
 @Injectable()
@@ -118,6 +121,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     private whatsappService: WhatsappService,
     private emailQueue: EmailQueueService,
     private emailService: EmailService,
+    private paymentLinkService: PublicPaymentLinkService,
   ) {}
 
   onModuleInit() {
@@ -239,6 +243,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         templateName,
         languageCode: templateLanguage,
         bodyParameters: templateParameters,
+        buttonUrlSuffix: data.buttonUrlSuffix,
       });
 
       await this.messagingLimitService.trackSend(companyId, phoneNumber);
@@ -527,7 +532,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         invoice.companyId,
         invoice.id,
         'INITIAL_CHARGE_SKIPPED',
-        'Nenhum template ativo para enviar a primeira cobranca.',
+        'Nenhum template Meta aprovado para enviar a primeira cobranca.',
         'SKIPPED',
       );
       return;
@@ -565,6 +570,9 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       templateName,
       templateLanguage: template.metaLanguage,
       templateParameters,
+      buttonUrlSuffix: template.paymentButtonEnabled
+        ? paymentData.paymentPageToken
+        : undefined,
       message,
       debtorName: invoice.debtor.name,
     });
@@ -723,6 +731,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         companyId: invoice.companyId,
         slug: { in: Array.from(new Set([targetSlug, 'vencimento-hoje'])) },
         isActive: true,
+        metaStatus: 'APPROVED',
       },
       select: {
         slug: true,
@@ -730,6 +739,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         metaTemplateName: true,
         metaLanguage: true,
         metaStatus: true,
+        paymentButtonEnabled: true,
       },
     });
     const templatesBySlug = new Map(
@@ -847,17 +857,16 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     const boletoLink = invoice.boletoLink ?? '';
     const boletoLinhaDigitavel = invoice.boletoLinhaDigitavel ?? '';
     const boletoPdf = invoice.boletoPdf ?? '';
+    const paymentPage = this.paymentLinkService.createInvoicePaymentPage({
+      companyId: invoice.companyId,
+      invoiceId: invoice.id,
+    });
 
     return {
       billingType,
       billingTypeLabel: this.getBillingMethodLabel(billingType),
-      paymentLink: this.resolvePaymentLink({
-        billingType,
-        pixCopiaECola,
-        boletoLinhaDigitavel,
-        boletoLink,
-        boletoPdf,
-      }),
+      paymentLink: paymentPage.url,
+      paymentPageToken: paymentPage.token,
       pixCopiaECola,
       boletoLinhaDigitavel,
       boletoLink,
@@ -1135,6 +1144,8 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       value.templateParameters.every(
         (parameter) => typeof parameter === 'string',
       ) &&
+      (value.buttonUrlSuffix === undefined ||
+        typeof value.buttonUrlSuffix === 'string') &&
       typeof value.debtorName === 'string'
     );
   }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, FormEvent } from "react";
-import { signIn } from "next-auth/react";
+import { getSession, signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { Loader2, Zap, Shield, BarChart3 } from "lucide-react";
 
@@ -23,14 +23,17 @@ export default function LoginPage() {
       redirect: false,
     });
 
-    setIsLoading(false);
-
     if (result?.error) {
+      setIsLoading(false);
       setError("E-mail ou senha incorretos.");
       return;
     }
 
-    router.push("/cobrancas");
+    const session = await getSession();
+    const nextPath =
+      session?.user.role === "PLATFORM_ADMIN" ? "/admin/clientes" : "/cobrancas";
+
+    router.push(nextPath);
   }
 
   return (

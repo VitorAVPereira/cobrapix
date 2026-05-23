@@ -2,8 +2,10 @@ import { auth } from "@/lib/auth";
 import { NextResponse } from "next/server";
 
 export default auth((req) => {
+  const pathname = req.nextUrl.pathname;
+  const isApiRoute = pathname.startsWith("/api/");
+
   if (!req.auth) {
-    const isApiRoute = req.nextUrl.pathname.startsWith("/api/");
     if (isApiRoute) {
       return NextResponse.json(
         { error: "Nao autorizado." },
@@ -14,17 +16,28 @@ export default auth((req) => {
   }
 
   const role = req.auth.user?.role;
+  const isPlatformAdmin = role === "PLATFORM_ADMIN";
+
   if (
-    req.nextUrl.pathname.startsWith("/admin") &&
-    role !== "PLATFORM_ADMIN"
+    !isApiRoute &&
+    isPlatformAdmin &&
+    pathname !== "/admin/clientes" &&
+    !pathname.startsWith("/admin/clientes/")
+  ) {
+    return NextResponse.redirect(new URL("/admin/clientes", req.url));
+  }
+
+  if (
+    pathname.startsWith("/admin") &&
+    !isPlatformAdmin
   ) {
     return NextResponse.redirect(new URL("/", req.url));
   }
 
   if (
-    role !== "PLATFORM_ADMIN" &&
-    (req.nextUrl.pathname.startsWith("/configuracoes/whatsapp") ||
-      req.nextUrl.pathname.startsWith("/configuracoes/conecte-seu-banco"))
+    !isPlatformAdmin &&
+    (pathname.startsWith("/configuracoes/whatsapp") ||
+      pathname.startsWith("/configuracoes/conecte-seu-banco"))
   ) {
     return NextResponse.redirect(new URL("/configuracoes/cobranca", req.url));
   }

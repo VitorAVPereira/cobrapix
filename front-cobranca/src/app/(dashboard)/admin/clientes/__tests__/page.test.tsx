@@ -1,8 +1,14 @@
 import "@testing-library/jest-dom";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { AdminClient, CreateAdminClientInput } from "@/lib/api-client";
+import type {
+  AdminClient,
+  CreateAdminClientInput,
+  UpdateAdminClientInput,
+} from "@/lib/api-client";
 import AdminClientsPage from "../page";
+
+jest.setTimeout(15000);
 
 const mockGetAdminClients = jest.fn() as jest.MockedFunction<
   () => Promise<AdminClient[]>
@@ -13,10 +19,14 @@ const mockCreateAdminClient = jest.fn() as jest.MockedFunction<
 const mockResetAdminClientPassword = jest.fn() as jest.MockedFunction<
   (clientId: string) => Promise<{ userId: string; temporaryPassword: string }>
 >;
+const mockUpdateAdminClient = jest.fn() as jest.MockedFunction<
+  (clientId: string, data: UpdateAdminClientInput) => Promise<AdminClient>
+>;
 
 const mockApiClient = {
   getAdminClients: mockGetAdminClients,
   createAdminClient: mockCreateAdminClient,
+  updateAdminClient: mockUpdateAdminClient,
   resetAdminClientPassword: mockResetAdminClientPassword,
 };
 
@@ -89,9 +99,14 @@ describe("AdminClientsPage", () => {
   beforeEach(() => {
     mockGetAdminClients.mockReset();
     mockCreateAdminClient.mockReset();
+    mockUpdateAdminClient.mockReset();
     mockResetAdminClientPassword.mockReset();
     mockGetAdminClients.mockResolvedValue([]);
     mockCreateAdminClient.mockResolvedValue(createAdminClientFixture());
+    mockUpdateAdminClient.mockResolvedValue({
+      ...createAdminClientFixture(),
+      corporateName: "Empresa Editada",
+    });
     mockResetAdminClientPassword.mockResolvedValue({
       userId: "user-1",
       temporaryPassword: "nova-senha",
@@ -120,5 +135,69 @@ describe("AdminClientsPage", () => {
     );
     expect(payload?.efi?.efiCertificatePassword).toBe("senha-certificado");
     expect(payload?.efi?.efiCertificatePath).toBe("");
+  });
+
+  it("shows changed fields in a confirmation modal before updating a client", async () => {
+    const user = userEvent.setup();
+    mockGetAdminClients.mockResolvedValue([createAdminClientFixture()]);
+
+    render(<AdminClientsPage />);
+
+    expect(await screen.findByText("Empresa Certificada")).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: /editar empresa certificada/i }),
+    );
+    await user.clear(screen.getByLabelText("Razao social"));
+    await user.type(screen.getByLabelText("Razao social"), "Empresa Editada");
+    await user.type(
+      screen.getByLabelText("Meta token"),
+      "novo-token-meta-com-mais-de-quarenta-caracteres",
+    );
+    await user.click(screen.getByRole("button", { name: /salvar alteracoes/i }));
+
+    expect(await screen.findByText("Confirmar alteracoes")).toBeInTheDocument();
+    expect(screen.getAllByText("Razao social").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Empresa Certificada").length).toBeGreaterThan(0);
+    expect(screen.getByText("Empresa Editada")).toBeInTheDocument();
+    expect(
+      screen.getByText("novo-token-meta-com-mais-de-quarenta-caracteres"),
+    ).toBeInTheDocument();
+    expect(mockUpdateAdminClient).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /^confirmar$/i }));
+
+    await waitFor(() => expect(mockUpdateAdminClient).toHaveBeenCalledTimes(1));
+    expect(mockUpdateAdminClient).toHaveBeenCalledWith(
+      "company-1",
+      expect.objectContaining({
+        company: expect.objectContaining({
+          corporateName: "Empresa Editada",
+        }) as unknown,
+        whatsapp: expect.objectContaining({
+          metaAccessToken: "novo-token-meta-com-mais-de-quarenta-caracteres",
+        }) as unknown,
+      }) as unknown,
+    );
+  });
+
+  it("does not update a client when the confirmation modal is cancelled", async () => {
+    const user = userEvent.setup();
+    mockGetAdminClients.mockResolvedValue([createAdminClientFixture()]);
+
+    render(<AdminClientsPage />);
+
+    expect(await screen.findByText("Empresa Certificada")).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: /editar empresa certificada/i }),
+    );
+    await user.clear(screen.getByLabelText("Razao social"));
+    await user.type(screen.getByLabelText("Razao social"), "Empresa Editada");
+    await user.click(screen.getByRole("button", { name: /salvar alteracoes/i }));
+    await user.click(screen.getByRole("button", { name: /^cancelar$/i }));
+
+    expect(mockUpdateAdminClient).not.toHaveBeenCalled();
+    expect(screen.queryByText("Confirmar alteracoes")).not.toBeInTheDocument();
   });
 });

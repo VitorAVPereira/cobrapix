@@ -9,6 +9,7 @@ import {
 import { TEMPLATE_SLUGS } from '../template-catalog';
 
 const META_TEMPLATE_CATEGORIES = ['UTILITY', 'MARKETING', 'AUTHENTICATION'];
+const COPY_CODE_SOURCES = ['AUTO', 'PIX_COPY_PASTE', 'BOLETO_LINE_DIGITABLE'];
 
 export class UpdateTemplateDto {
   @IsString()
@@ -26,6 +27,29 @@ export class UpdateTemplateDto {
   @IsOptional()
   @MaxLength(4000)
   content?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(60)
+  footerText?: string;
+
+  @IsBoolean()
+  @IsOptional()
+  paymentButtonEnabled?: boolean;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(25)
+  paymentButtonLabel?: string;
+
+  @IsBoolean()
+  @IsOptional()
+  copyCodeButtonEnabled?: boolean;
+
+  @IsString()
+  @IsOptional()
+  @IsIn(COPY_CODE_SOURCES)
+  copyCodeSource?: 'AUTO' | 'PIX_COPY_PASTE' | 'BOLETO_LINE_DIGITABLE';
 
   @IsBoolean()
   @IsOptional()

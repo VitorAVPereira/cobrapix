@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
+  FileText,
   Loader2,
   MessageCircle,
   Save,
@@ -15,6 +16,7 @@ import type {
   CollectionRuleProfile,
   DebtorBillingSettings,
 } from "@/lib/api-client";
+import { normalizeRequiredDebtorDocument } from "@/lib/debtor-document";
 import { useApiClient } from "@/lib/use-api-client";
 
 const PROFILE_TYPE_LABELS: Record<CollectionProfileType, string> = {
@@ -63,6 +65,7 @@ export function DebtorSettingsModal({
   const apiClient = useApiClient();
   const [settings, setSettings] = useState<DebtorBillingSettings | null>(null);
   const [profiles, setProfiles] = useState<CollectionRuleProfile[]>([]);
+  const [debtorDocument, setDebtorDocument] = useState("");
   const [whatsappOptIn, setWhatsappOptIn] = useState(false);
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [loading, setLoading] = useState(true);
@@ -110,6 +113,7 @@ export function DebtorSettingsModal({
         if (!active) return;
 
         setSettings(settingsResponse);
+        setDebtorDocument(settingsResponse.document ?? "");
         setProfiles(profilesResponse);
         setWhatsappOptIn(settingsResponse.whatsappOptIn);
         setSelectedProfileId(settingsResponse.collectionProfile?.id ?? "");
@@ -138,11 +142,13 @@ export function DebtorSettingsModal({
 
     try {
       const saved = await apiClient.updateDebtorBillingSettings(debtorId, {
+        document: normalizeRequiredDebtorDocument(debtorDocument),
         whatsappOptIn,
         collectionProfileId: selectedProfileId || null,
       });
 
       setSettings(saved);
+      setDebtorDocument(saved.document ?? "");
       setWhatsappOptIn(saved.whatsappOptIn);
       setSelectedProfileId(saved.collectionProfile?.id ?? "");
       setSuccess("Configuracoes do devedor salvas.");
@@ -199,6 +205,34 @@ export function DebtorSettingsModal({
             </div>
           ) : (
             <>
+              <section className="rounded-md border border-slate-200 bg-white">
+                <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3">
+                  <FileText size={18} className="text-emerald-600" />
+                  <h3 className="text-sm font-semibold text-slate-900">
+                    Dados do devedor
+                  </h3>
+                </div>
+
+                <div className="p-4">
+                  <label className="flex flex-col gap-1.5">
+                    <span className="text-xs font-semibold uppercase text-slate-500">
+                      CPF/CNPJ
+                    </span>
+                    <input
+                      required
+                      type="text"
+                      inputMode="numeric"
+                      value={debtorDocument}
+                      onChange={(event) => {
+                        setDebtorDocument(event.target.value);
+                        setSuccess(null);
+                      }}
+                      className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                    />
+                  </label>
+                </div>
+              </section>
+
               <section className="rounded-md border border-slate-200 bg-slate-50 p-4">
                 <label className="flex items-start gap-3">
                   <input

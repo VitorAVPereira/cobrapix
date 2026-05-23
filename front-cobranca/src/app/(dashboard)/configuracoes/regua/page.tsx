@@ -25,6 +25,7 @@ import type { LucideIcon } from "lucide-react";
 import type {
   CollectionProfileType,
   CollectionRuleProfile,
+  MessageTemplate,
 } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 
@@ -182,6 +183,12 @@ function sortProfiles(
     if (order !== 0) return order;
     return a.name.localeCompare(b.name, "pt-BR");
   });
+}
+
+function sortTemplates(templates: MessageTemplate[]): MessageTemplate[] {
+  return [...templates].sort((left, right) =>
+    left.name.localeCompare(right.name, "pt-BR"),
+  );
 }
 
 function getInitialProfileId(profiles: CollectionRuleProfile[]): string | null {
@@ -364,6 +371,7 @@ function formatScheduleDay(day: number): string {
 export default function ReguaPage() {
   const apiClient = useApiClient();
   const [profiles, setProfiles] = useState<CollectionRuleProfile[]>([]);
+  const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -374,6 +382,10 @@ export default function ReguaPage() {
   const [newProfile, setNewProfile] = useState<NewProfileForm>(EMPTY_PROFILE);
 
   const sortedProfiles = useMemo(() => sortProfiles(profiles), [profiles]);
+  const activeTemplates = useMemo(
+    () => sortTemplates(templates.filter((template) => template.isActive)),
+    [templates],
+  );
   const selected =
     profiles.find((profile) => profile.id === selectedId) ?? null;
   const selectedMeta = selected
@@ -418,10 +430,14 @@ export default function ReguaPage() {
       setError(null);
 
       try {
-        const data = await apiClient.getRules();
+        const [data, templateData] = await Promise.all([
+          apiClient.getRules(),
+          apiClient.getTemplates(),
+        ]);
         if (!active) return;
 
         setProfiles(data);
+        setTemplates(templateData);
         setSelectedId((current) => {
           if (current && data.some((profile) => profile.id === current)) {
             return current;
@@ -550,6 +566,17 @@ export default function ReguaPage() {
     setHasStepChanges(true);
   }
 
+  function updateStepTemplate(index: number, templateId: string): void {
+    setStepForms((prev) =>
+      prev.map((step, stepIndex) =>
+        stepIndex === index
+          ? { ...step, templateId: templateId || undefined }
+          : step,
+      ),
+    );
+    setHasStepChanges(true);
+  }
+
   function updateStepScheduleDay(index: number, value: number): void {
     setStepForms((prev) => {
       const next = [...prev];
@@ -657,6 +684,30 @@ export default function ReguaPage() {
       ]);
     });
     setHasStepChanges(true);
+  }
+
+  function updateEmissionTemplate(
+    channel: StepChannel,
+    templateId: string,
+  ): void {
+    setStepForms((prev) =>
+      buildStepFormsFromScheduledSteps(
+        getScheduledStepForms(prev).map((step) =>
+          step.scheduleDay === EMISSION_DAY && step.channel === channel
+            ? { ...step, templateId: templateId || undefined }
+            : step,
+        ),
+      ),
+    );
+    setHasStepChanges(true);
+  }
+
+  function getEmissionTemplateId(channel: StepChannel): string {
+    return (
+      getScheduledStepForms(stepForms).find(
+        (step) => step.scheduleDay === EMISSION_DAY && step.channel === channel,
+      )?.templateId ?? ""
+    );
   }
 
   function addStep(): void {
@@ -1108,6 +1159,44 @@ export default function ReguaPage() {
                       WhatsApp
                     </button>
                   </div>
+
+                  {emissionEnabled && (
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      {(["EMAIL", "WHATSAPP"] as const)
+                        .filter((channel) => emissionChannels[channel])
+                        .map((channel) => (
+                          <label
+                            key={channel}
+                            className="grid gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-2"
+                          >
+                            <span className="text-xs font-semibold text-slate-600">
+                              Template da emissao por{" "}
+                              {channel === "EMAIL" ? "E-mail" : "WhatsApp"}
+                            </span>
+                            <select
+                              aria-label={`Template da emissao por ${
+                                channel === "EMAIL" ? "E-mail" : "WhatsApp"
+                              }`}
+                              value={getEmissionTemplateId(channel)}
+                              onChange={(event) =>
+                                updateEmissionTemplate(
+                                  channel,
+                                  event.target.value,
+                                )
+                              }
+                              className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700"
+                            >
+                              <option value="">Sem template</option>
+                              {activeTemplates.map((template) => (
+                                <option key={template.id} value={template.id}>
+                                  {template.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        ))}
+                    </div>
+                  )}
                 </div>
 
                 <div className="divide-y divide-slate-100">
@@ -1126,7 +1215,7 @@ export default function ReguaPage() {
                       return (
                         <div
                           key={index}
-                          className="grid gap-3 px-5 py-4 lg:grid-cols-[56px_150px_minmax(220px,1fr)_minmax(260px,1.2fr)_36px]"
+                          className="grid gap-3 px-5 py-4 lg:grid-cols-[56px_120px_minmax(190px,0.9fr)_minmax(210px,1fr)_minmax(230px,1fr)_36px]"
                         >
                           <div className="flex items-center gap-1 lg:flex-col">
                             <button
@@ -1213,6 +1302,27 @@ export default function ReguaPage() {
                             <span className="text-[11px] font-medium text-slate-500">
                               {formatScheduleDay(scheduleDay)}
                             </span>
+                          </label>
+
+                          <label className="grid gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-2">
+                            <span className="text-xs font-semibold text-slate-600">
+                              Template
+                            </span>
+                            <select
+                              aria-label={`Template da etapa ${index + 1}`}
+                              value={step.templateId ?? ""}
+                              onChange={(event) =>
+                                updateStepTemplate(index, event.target.value)
+                              }
+                              className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700"
+                            >
+                              <option value="">Sem template</option>
+                              {activeTemplates.map((template) => (
+                                <option key={template.id} value={template.id}>
+                                  {template.name}
+                                </option>
+                              ))}
+                            </select>
                           </label>
 
                           <div className="rounded-md border border-slate-200 bg-white px-3 py-2">

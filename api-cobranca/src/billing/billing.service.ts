@@ -8,6 +8,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentService } from '../payment/payment.service';
+import { PublicPaymentLinkService } from '../payment/payment-link.service';
 import { MessageQueueService, SendMessageJob } from '../queue/message.queue';
 import { SpintaxService } from '../queue/services/spintax.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
@@ -123,6 +124,7 @@ interface PaymentMessageData {
   billingType: BillingMethod;
   billingTypeLabel: string;
   paymentLink: string;
+  paymentPageToken: string;
   pixCopiaECola: string;
   boletoLinhaDigitavel: string;
   boletoLink: string;
@@ -143,6 +145,7 @@ export class BillingService {
     private emailQueue: EmailQueueService,
     private emailService: EmailService,
     private whatsappService?: WhatsappService,
+    private paymentLinkService?: PublicPaymentLinkService,
   ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_9AM)
@@ -563,8 +566,19 @@ export class BillingService {
         }
 
         if (channel === 'WHATSAPP') {
-          const template = await this.resolveTemplate(company.id, templateId);
+          const template = await this.resolveTemplate(
+            company.id,
+            templateId,
+            true,
+          );
           if (!template) {
+            await this.createCollectionLog(
+              company.id,
+              invoice.id,
+              'WHATSAPP_TEMPLATE_NOT_APPROVED',
+              'Nenhum template Meta aprovado disponivel para esta etapa da regua.',
+              'SKIPPED',
+            );
             skippedCount++;
             continue;
           }
@@ -620,6 +634,9 @@ export class BillingService {
             templateName,
             templateLanguage: template.metaLanguage,
             templateParameters,
+            buttonUrlSuffix: template.paymentButtonEnabled
+              ? paymentData.paymentPageToken || undefined
+              : undefined,
             message,
             debtorName: invoice.debtor.name,
             ruleStepId,
@@ -631,7 +648,11 @@ export class BillingService {
             continue;
           }
 
-          const template = await this.resolveTemplate(company.id, templateId);
+          const template = await this.resolveTemplate(
+            company.id,
+            templateId,
+            false,
+          );
           const attemptCreated = await this.createQueuedAttempt(
             company.id,
             invoice.id,
@@ -713,35 +734,43 @@ export class BillingService {
   private async resolveTemplate(
     companyId: string,
     templateId: string | null,
+    requireApprovedMeta: boolean,
   ): Promise<{
     id: string;
     slug: string;
     content: string;
     metaTemplateName: string | null;
     metaLanguage: string;
+    paymentButtonEnabled: boolean;
   } | null> {
+    const approvalFilter = requireApprovedMeta
+      ? { metaStatus: 'APPROVED' }
+      : {};
+
     if (templateId) {
       const template = await this.prisma.messageTemplate.findFirst({
-        where: { id: templateId, companyId, isActive: true },
+        where: { id: templateId, companyId, isActive: true, ...approvalFilter },
         select: {
           id: true,
           slug: true,
           content: true,
           metaTemplateName: true,
           metaLanguage: true,
+          paymentButtonEnabled: true,
         },
       });
       if (template) return template;
     }
 
     return this.prisma.messageTemplate.findFirst({
-      where: { companyId, isActive: true },
+      where: { companyId, isActive: true, ...approvalFilter },
       select: {
         id: true,
         slug: true,
         content: true,
         metaTemplateName: true,
         metaLanguage: true,
+        paymentButtonEnabled: true,
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -902,6 +931,8 @@ export class BillingService {
 
   private buildPaymentMessageData(
     invoice: {
+      id: string;
+      companyId: string;
       pixPayload: string | null;
       efiPixCopiaECola: string | null;
       boletoLinhaDigitavel: string | null;
@@ -914,17 +945,24 @@ export class BillingService {
     const boletoLink = invoice.boletoLink ?? '';
     const boletoLinhaDigitavel = invoice.boletoLinhaDigitavel ?? '';
     const boletoPdf = invoice.boletoPdf ?? '';
+    const paymentPage = this.paymentLinkService?.createInvoicePaymentPage({
+      companyId: invoice.companyId,
+      invoiceId: invoice.id,
+    });
 
     return {
       billingType,
       billingTypeLabel: this.getBillingMethodLabel(billingType),
-      paymentLink: this.resolvePaymentLink({
-        billingType,
-        pixCopiaECola,
-        boletoLinhaDigitavel,
-        boletoLink,
-        boletoPdf,
-      }),
+      paymentLink:
+        paymentPage?.url ??
+        this.resolvePaymentLink({
+          billingType,
+          pixCopiaECola,
+          boletoLinhaDigitavel,
+          boletoLink,
+          boletoPdf,
+        }),
+      paymentPageToken: paymentPage?.token ?? '',
       pixCopiaECola,
       boletoLinhaDigitavel,
       boletoLink,

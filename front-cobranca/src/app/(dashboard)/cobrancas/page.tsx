@@ -31,6 +31,7 @@ import type {
   InvoicePaymentStatusResponse,
 } from "@/lib/api-client";
 import { formatBillingMethodRateLabel } from "@/lib/billing-fees";
+import { normalizeRequiredDebtorDocument } from "@/lib/debtor-document";
 import { useApiClient } from "@/lib/use-api-client";
 import { normalizeWhatsAppNumber } from "@/lib/whatsapp-number";
 
@@ -41,6 +42,7 @@ interface ApiErrorData {
 
 interface ManualChargeForm {
   customerName: string;
+  document: string;
   email: string;
   whatsapp: string;
   whatsappOptIn: boolean;
@@ -61,6 +63,7 @@ interface RunningInvoiceAction {
 
 const initialManualChargeForm: ManualChargeForm = {
   customerName: "",
+  document: "",
   email: "",
   whatsapp: "",
   whatsappOptIn: false,
@@ -468,7 +471,6 @@ export default function CobrancasPage() {
 
     const amount = Number(manualForm.amount);
     const dueDay = Number(manualForm.dueDay);
-    const phoneNumber = normalizeWhatsAppNumber(manualForm.whatsapp);
 
     try {
       if (!Number.isFinite(amount) || amount <= 0) {
@@ -503,8 +505,12 @@ export default function CobrancasPage() {
             : {}),
         });
       } else {
+        const phoneNumber = normalizeWhatsAppNumber(manualForm.whatsapp);
+        const document = normalizeRequiredDebtorDocument(manualForm.document);
+
         await apiClient.createInvoice({
           name: manualForm.customerName.trim(),
+          document,
           email: manualForm.email.trim(),
           phone_number: phoneNumber,
           whatsappOptIn: manualForm.whatsappOptIn,
@@ -571,7 +577,7 @@ export default function CobrancasPage() {
                 placeholder={
                   isEducationSegment
                     ? "Buscar por responsável, aluno ou WhatsApp"
-                    : "Buscar por nome, CPF ou WhatsApp"
+                    : "Buscar por nome, CPF/CNPJ ou WhatsApp"
                 }
                 className="h-11 w-full rounded-md border border-slate-200 bg-white py-2 pl-10 pr-3 text-sm text-slate-900 outline-none transition-all duration-200 placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
               />
@@ -753,6 +759,23 @@ export default function CobrancasPage() {
                         value={manualForm.customerName}
                         onChange={(event) =>
                           updateManualForm("customerName", event.target.value)
+                        }
+                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-1.5 sm:col-span-2">
+                      <span className="text-xs font-semibold uppercase text-slate-500">
+                        CPF/CNPJ do Devedor
+                      </span>
+                      <input
+                        required
+                        type="text"
+                        inputMode="numeric"
+                        value={manualForm.document}
+                        placeholder="CPF ou CNPJ"
+                        onChange={(event) =>
+                          updateManualForm("document", event.target.value)
                         }
                         className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                       />

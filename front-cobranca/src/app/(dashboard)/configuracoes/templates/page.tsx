@@ -4,6 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
   CirclePlus,
+  Code2,
+  ExternalLink,
+  FileText,
   Loader2,
   MessageSquareText,
   Save,
@@ -15,17 +18,25 @@ import {
 import type {
   ApiError,
   MessageTemplate,
+  MessageTemplateCopyCodeSource,
   MessageTemplateSlug,
   SaveMessageTemplateInput,
 } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 import { spin } from "@/lib/spintax";
 
+type ComponentTab = "body" | "footer" | "buttons" | "meta";
+
 interface TemplateFormState {
   id: string | null;
   name: string;
   slug: MessageTemplateSlug;
   content: string;
+  footerText: string;
+  paymentButtonEnabled: boolean;
+  paymentButtonLabel: string;
+  copyCodeButtonEnabled: boolean;
+  copyCodeSource: MessageTemplateCopyCodeSource;
   isActive: boolean;
   metaTemplateName: string;
   metaLanguage: string;
@@ -36,6 +47,8 @@ interface TemplateOption {
   name: string;
   slug: MessageTemplateSlug;
   defaultContent: string;
+  footerText: string;
+  paymentButtonLabel: string;
 }
 
 interface TemplateVariable {
@@ -47,44 +60,80 @@ interface TemplateVariable {
 
 const TEMPLATE_OPTIONS: readonly TemplateOption[] = [
   {
-    name: "Vencimento hoje",
-    slug: "vencimento-hoje",
+    name: "Cobranca na emissao",
+    slug: "cobranca-emissao",
     defaultContent:
-      "{Ola|Oi|Tudo bem}, {{nome_devedor}}. Sua cobranca de {{valor}} da {{nome_empresa}} vence hoje ({{data_vencimento}}).\n\nForma de pagamento: {{metodo_pagamento}}\nAcesse/pague por aqui: {{payment_link}}\nPix copia e cola: {{pix_copia_e_cola}}\nLinha digitavel: {{boleto_linha_digitavel}}\nBoleto: {{boleto_link}}\nPDF do boleto: {{boleto_pdf}}",
+      "{Ola|Oi}, {{nome_devedor}}. Sua cobranca de {{valor}} da {{nome_empresa}} foi emitida com vencimento em {{data_vencimento}}.\n\nForma de pagamento: {{metodo_pagamento}}\nUse o botao abaixo para abrir a pagina segura de pagamento e copiar Pix ou boleto.",
+    footerText: "Mensagem automatica da {{nome_empresa}}.",
+    paymentButtonLabel: "Abrir pagamento",
   },
   {
     name: "Lembrete antes do vencimento",
     slug: "pre-vencimento",
     defaultContent:
-      "{Ola|Oi}, {{nome_devedor}}. Passando para lembrar que a cobranca de {{valor}} da {{nome_empresa}} vence em {{data_vencimento}}.\n\nForma de pagamento: {{metodo_pagamento}}\nAcesse/pague por aqui: {{payment_link}}\nPix copia e cola: {{pix_copia_e_cola}}\nLinha digitavel: {{boleto_linha_digitavel}}\nBoleto: {{boleto_link}}\nPDF do boleto: {{boleto_pdf}}",
+      "{Ola|Oi}, {{nome_devedor}}. Passando para lembrar que a cobranca de {{valor}} da {{nome_empresa}} vence em {{data_vencimento}}.\n\nForma de pagamento: {{metodo_pagamento}}\nUse o botao abaixo para abrir a pagina segura de pagamento e copiar Pix ou boleto.",
+    footerText: "Mensagem automatica da {{nome_empresa}}.",
+    paymentButtonLabel: "Abrir pagamento",
+  },
+  {
+    name: "Vencimento hoje",
+    slug: "vencimento-hoje",
+    defaultContent:
+      "{Ola|Oi|Tudo bem}, {{nome_devedor}}. Sua cobranca de {{valor}} da {{nome_empresa}} vence hoje ({{data_vencimento}}).\n\nForma de pagamento: {{metodo_pagamento}}\nUse o botao abaixo para abrir a pagina segura de pagamento e copiar Pix ou boleto.",
+    footerText: "Mensagem automatica da {{nome_empresa}}.",
+    paymentButtonLabel: "Abrir pagamento",
   },
   {
     name: "Primeiro aviso de atraso",
     slug: "atraso-primeiro-aviso",
     defaultContent:
-      "{Ola|Oi}, {{nome_devedor}}. Identificamos uma cobranca em aberto de {{valor}} da {{nome_empresa}}, vencida em {{data_vencimento}}.\n\nForma de pagamento: {{metodo_pagamento}}\nAcesse/pague por aqui: {{payment_link}}\nPix copia e cola: {{pix_copia_e_cola}}\nLinha digitavel: {{boleto_linha_digitavel}}\nBoleto: {{boleto_link}}\nPDF do boleto: {{boleto_pdf}}",
+      "{Ola|Oi}, {{nome_devedor}}. Identificamos uma cobranca em aberto de {{valor}} da {{nome_empresa}}, vencida em {{data_vencimento}}.\n\nForma de pagamento: {{metodo_pagamento}}\nUse o botao abaixo para regularizar com seguranca e copiar Pix ou boleto.",
+    footerText: "Mensagem automatica da {{nome_empresa}}.",
+    paymentButtonLabel: "Regularizar agora",
   },
   {
     name: "Atraso recorrente",
     slug: "atraso-recorrente",
     defaultContent:
-      "{Ola|Oi}, {{nome_devedor}}. Ainda consta uma cobranca pendente de {{valor}} da {{nome_empresa}}, com vencimento em {{data_vencimento}}.\n\nForma de pagamento: {{metodo_pagamento}}\nAcesse/pague por aqui: {{payment_link}}\nPix copia e cola: {{pix_copia_e_cola}}\nLinha digitavel: {{boleto_linha_digitavel}}\nBoleto: {{boleto_link}}\nPDF do boleto: {{boleto_pdf}}",
+      "{Ola|Oi}, {{nome_devedor}}. Ainda consta uma cobranca pendente de {{valor}} da {{nome_empresa}}, com vencimento em {{data_vencimento}}.\n\nForma de pagamento: {{metodo_pagamento}}\nUse o botao abaixo para acessar a pagina de pagamento e copiar Pix ou boleto.",
+    footerText: "Mensagem automatica da {{nome_empresa}}.",
+    paymentButtonLabel: "Regularizar agora",
+  },
+  {
+    name: "Atraso critico",
+    slug: "atraso-critico",
+    defaultContent:
+      "Ola, {{nome_devedor}}. Sua cobranca de {{valor}} da {{nome_empresa}} segue pendente desde {{data_vencimento}}.\n\nForma de pagamento: {{metodo_pagamento}}\nUse o botao abaixo para acessar a pagina de pagamento e evitar novas restricoes.",
+    footerText: "Mensagem automatica da {{nome_empresa}}.",
+    paymentButtonLabel: "Regularizar agora",
   },
 ] as const;
+
+const TABS: Array<{ id: ComponentTab; label: string }> = [
+  { id: "body", label: "Corpo" },
+  { id: "footer", label: "Rodape" },
+  { id: "buttons", label: "Botoes" },
+  { id: "meta", label: "Meta" },
+];
 
 const TEMPLATE_ORDER = new Map(
   TEMPLATE_OPTIONS.map((option, index) => [option.slug, index]),
 );
-
 const DEFAULT_TEMPLATE_OPTION = TEMPLATE_OPTIONS[0];
+const COPY_CODE_LIMIT = 15;
 
 const EMPTY_FORM: TemplateFormState = {
   id: null,
   name: DEFAULT_TEMPLATE_OPTION.name,
   slug: DEFAULT_TEMPLATE_OPTION.slug,
   content: DEFAULT_TEMPLATE_OPTION.defaultContent,
+  footerText: DEFAULT_TEMPLATE_OPTION.footerText,
+  paymentButtonEnabled: true,
+  paymentButtonLabel: DEFAULT_TEMPLATE_OPTION.paymentButtonLabel,
+  copyCodeButtonEnabled: false,
+  copyCodeSource: "AUTO",
   isActive: true,
-  metaTemplateName: "cobrapix_vencimento_hoje",
+  metaTemplateName: "cobrapix_cobranca_emissao",
   metaLanguage: "pt_BR",
   category: "UTILITY",
 };
@@ -122,7 +171,7 @@ const VARIABLES: readonly TemplateVariable[] = [
   },
   {
     tag: "{{payment_link}}",
-    label: "Link de pagamento",
+    label: "Pagina de pagamento",
     preview: "https://cobrapix.com/pagar/abc123",
     group: "Pagamento",
   },
@@ -138,24 +187,32 @@ const VARIABLES: readonly TemplateVariable[] = [
     preview: "36490.00027 00000.000000 00000.000000 1 99990000015000",
     group: "Pagamento",
   },
-  {
-    tag: "{{boleto_link}}",
-    label: "Link do boleto",
-    preview: "https://cobrapix.com/boleto/abc123",
-    group: "Pagamento",
-  },
-  {
-    tag: "{{boleto_pdf}}",
-    label: "PDF do boleto",
-    preview: "https://cobrapix.com/boleto/abc123.pdf",
-    group: "Pagamento",
-  },
-] as const;
+];
 
-const VARIABLE_GROUPS = ["Cobranca", "Pagamento"] as const;
+function getTemplateOption(slug: string): TemplateOption | undefined {
+  return TEMPLATE_OPTIONS.find((option) => option.slug === slug);
+}
 
 function getVariableKey(tag: string): string {
   return tag.replace(/^\{\{\s*/, "").replace(/\s*\}\}$/, "");
+}
+
+function createPreviewRng(content: string): () => number {
+  let seed = 0x811c9dc5;
+
+  for (let index = 0; index < content.length; index += 1) {
+    seed = Math.imul(seed ^ content.charCodeAt(index), 0x01000193);
+  }
+
+  let state = seed >>> 0;
+
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 function interpolatePreviewVariables(content: string): string {
@@ -167,43 +224,20 @@ function interpolatePreviewVariables(content: string): string {
   }, content);
 }
 
-function maskUnresolvedPlaceholders(content: string): {
-  maskedContent: string;
-  placeholders: ReadonlyMap<string, string>;
-} {
-  let placeholderIndex = 0;
-  const placeholders = new Map<string, string>();
-  const maskedContent = content.replace(
-    /\{\{\s*[a-zA-Z][a-zA-Z0-9_]*\s*\}\}/g,
-    (placeholder) => {
-      const token = `__COBRAPIX_PLACEHOLDER_${placeholderIndex}__`;
-      placeholderIndex += 1;
-      placeholders.set(token, placeholder);
+function renderPreviewText(content: string): string {
+  const withVariables = interpolatePreviewVariables(content);
 
-      return token;
-    },
-  );
-
-  return { maskedContent, placeholders };
-}
-
-function restoreMaskedPlaceholders(
-  content: string,
-  placeholders: ReadonlyMap<string, string>,
-): string {
-  return Array.from(placeholders.entries()).reduce(
-    (message, [token, placeholder]) => message.replaceAll(token, placeholder),
-    content,
-  );
-}
-
-function getTemplateOption(slug: MessageTemplateSlug): TemplateOption | undefined {
-  return TEMPLATE_OPTIONS.find((option) => option.slug === slug);
+  try {
+    return spin(withVariables, createPreviewRng(withVariables));
+  } catch {
+    return withVariables;
+  }
 }
 
 function sortTemplates(templates: MessageTemplate[]): MessageTemplate[] {
   return [...templates].sort((left, right) => {
-    const leftOrder = TEMPLATE_ORDER.get(left.slug as MessageTemplateSlug) ?? 999;
+    const leftOrder =
+      TEMPLATE_ORDER.get(left.slug as MessageTemplateSlug) ?? 999;
     const rightOrder =
       TEMPLATE_ORDER.get(right.slug as MessageTemplateSlug) ?? 999;
 
@@ -212,16 +246,25 @@ function sortTemplates(templates: MessageTemplate[]): MessageTemplate[] {
 }
 
 function templateToForm(template: MessageTemplate): TemplateFormState {
-  const option = getTemplateOption(template.slug as MessageTemplateSlug);
+  const option = getTemplateOption(template.slug);
 
   return {
     id: template.id,
     name: option?.name ?? template.name,
-    slug: (option?.slug ?? DEFAULT_TEMPLATE_OPTION.slug) as MessageTemplateSlug,
+    slug: (option?.slug ?? template.slug) as MessageTemplateSlug,
     content: template.content,
+    footerText: template.footerText ?? option?.footerText ?? "",
+    paymentButtonEnabled: template.paymentButtonEnabled,
+    paymentButtonLabel:
+      template.paymentButtonLabel ||
+      option?.paymentButtonLabel ||
+      "Abrir pagamento",
+    copyCodeButtonEnabled: template.copyCodeButtonEnabled,
+    copyCodeSource: template.copyCodeSource,
     isActive: template.isActive,
     metaTemplateName:
-      template.metaTemplateName ?? `cobrapix_${template.slug.replaceAll("-", "_")}`,
+      template.metaTemplateName ??
+      `cobrapix_${template.slug.replaceAll("-", "_")}`,
     metaLanguage: template.metaLanguage,
     category: template.category,
   };
@@ -237,40 +280,19 @@ function getFirstAvailableTemplateOption(
   );
 }
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return "Nao foi possivel concluir a acao. Tente novamente.";
-}
-
-function getMetaStatusStyle(
-  status: string,
-): { backgroundColor: string; color: string } {
+function getMetaStatusStyle(status: string): {
+  backgroundColor: string;
+  color: string;
+} {
   const upper = status.toUpperCase();
 
-  if (upper === "APPROVED") {
+  if (upper === "APPROVED")
     return { backgroundColor: "#ecfdf5", color: "#065f46" };
-  }
-
-  if (
-    upper === "PENDING" ||
-    upper === "IN_REVIEW" ||
-    upper === "SUBMITTED"
-  ) {
-    return { backgroundColor: "#fffbeb", color: "#92400e" };
-  }
-
-  if (upper === "REJECTED") {
+  if (upper === "REJECTED")
     return { backgroundColor: "#fef2f2", color: "#991b1b" };
-  }
-
-  if (upper === "LOCAL") {
+  if (upper === "LOCAL")
     return { backgroundColor: "#f1f5f9", color: "#475569" };
-  }
-
-  return { backgroundColor: "#f1f5f9", color: "#475569" };
+  return { backgroundColor: "#fffbeb", color: "#92400e" };
 }
 
 function formatMetaStatus(status: string): string {
@@ -288,8 +310,7 @@ function formatSyncTime(isoDate: string | null): string | null {
   if (!isoDate) return null;
 
   const date = new Date(isoDate);
-
-  if (isNaN(date.getTime())) return null;
+  if (Number.isNaN(date.getTime())) return null;
 
   return new Intl.DateTimeFormat("pt-BR", {
     day: "2-digit",
@@ -300,52 +321,45 @@ function formatSyncTime(isoDate: string | null): string | null {
   }).format(date);
 }
 
-function createPreviewRng(content: string): () => number {
-  let seed = 0x811c9dc5;
-
-  for (let index = 0; index < content.length; index += 1) {
-    seed = Math.imul(seed ^ content.charCodeAt(index), 0x01000193);
-  }
-
-  let state = seed >>> 0;
-
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-
-    let value = state;
-    value = Math.imul(value ^ (value >>> 15), value | 1);
-    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
-
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-  };
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return "Nao foi possivel concluir a acao. Tente novamente.";
 }
 
-function renderPreview(content: string): string {
-  const withVariables = interpolatePreviewVariables(content);
-  const { maskedContent, placeholders } =
-    maskUnresolvedPlaceholders(withVariables);
-
-  try {
-    return restoreMaskedPlaceholders(
-      spin(maskedContent, createPreviewRng(maskedContent)),
-      placeholders,
-    );
-  } catch {
-    return restoreMaskedPlaceholders(maskedContent, placeholders);
+function getCopyCodePreview(source: MessageTemplateCopyCodeSource): string {
+  if (source === "BOLETO_LINE_DIGITABLE") {
+    return "36490.00027 00000.000000 00000.000000 1 99990000015000";
   }
+
+  return "00020101021226860014br.gov.bcb.pix...";
+}
+
+function isCopyCodeValid(source: MessageTemplateCopyCodeSource): boolean {
+  return getCopyCodePreview(source).length <= COPY_CODE_LIMIT;
 }
 
 export default function TemplatesPage() {
   const apiClient = useApiClient();
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [form, setForm] = useState<TemplateFormState>(EMPTY_FORM);
+  const [activeTab, setActiveTab] = useState<ComponentTab>("body");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const preview = useMemo(() => renderPreview(form.content), [form.content]);
-  const selectedTemplate = templates.find((template) => template.id === form.id);
+  const previewBody = useMemo(
+    () => renderPreviewText(form.content),
+    [form.content],
+  );
+  const previewFooter = useMemo(
+    () => renderPreviewText(form.footerText),
+    [form.footerText],
+  );
+  const selectedTemplate = templates.find(
+    (template) => template.id === form.id,
+  );
+  const copyCodeValid = isCopyCodeValid(form.copyCodeSource);
 
   useEffect(() => {
     let active = true;
@@ -356,23 +370,18 @@ export default function TemplatesPage() {
 
       try {
         const data = sortTemplates(await apiClient.getTemplates());
-        if (!active) {
-          return;
-        }
+        if (!active) return;
 
         setTemplates(data);
         const firstTemplate =
-          data.find((template) => template.slug === DEFAULT_TEMPLATE_OPTION.slug) ??
-          data[0];
+          data.find(
+            (template) => template.slug === DEFAULT_TEMPLATE_OPTION.slug,
+          ) ?? data[0];
         setForm(firstTemplate ? templateToForm(firstTemplate) : EMPTY_FORM);
       } catch (loadError) {
-        if (active) {
-          setError(getErrorMessage(loadError));
-        }
+        if (active) setError(getErrorMessage(loadError));
       } finally {
-        if (active) {
-          setLoading(false);
-        }
+        if (active) setLoading(false);
       }
     }
 
@@ -395,15 +404,15 @@ export default function TemplatesPage() {
     const option = getFirstAvailableTemplateOption(templates);
 
     setForm({
-      id: null,
+      ...EMPTY_FORM,
       name: option.name,
       slug: option.slug,
       content: option.defaultContent,
-      isActive: true,
+      footerText: option.footerText,
+      paymentButtonLabel: option.paymentButtonLabel,
       metaTemplateName: `cobrapix_${option.slug.replaceAll("-", "_")}`,
-      metaLanguage: "pt_BR",
-      category: "UTILITY",
     });
+    setActiveTab("body");
     setError(null);
     setSuccess(null);
   }
@@ -423,10 +432,7 @@ export default function TemplatesPage() {
 
   function selectTemplateType(slug: MessageTemplateSlug): void {
     const option = getTemplateOption(slug);
-
-    if (!option) {
-      return;
-    }
+    if (!option) return;
 
     setForm((current) => ({
       ...current,
@@ -436,6 +442,17 @@ export default function TemplatesPage() {
         current.id || current.content.trim()
           ? current.content
           : option.defaultContent,
+      footerText:
+        current.id || current.footerText.trim()
+          ? current.footerText
+          : option.footerText,
+      paymentButtonLabel:
+        current.id || current.paymentButtonLabel.trim()
+          ? current.paymentButtonLabel
+          : option.paymentButtonLabel,
+      metaTemplateName: current.metaTemplateName.trim()
+        ? current.metaTemplateName
+        : `cobrapix_${option.slug.replaceAll("-", "_")}`,
     }));
     setSuccess(null);
   }
@@ -446,6 +463,11 @@ export default function TemplatesPage() {
       name: option?.name ?? form.name.trim(),
       slug: option?.slug ?? form.slug,
       content: form.content.trim(),
+      footerText: form.footerText.trim(),
+      paymentButtonEnabled: form.paymentButtonEnabled,
+      paymentButtonLabel: form.paymentButtonLabel.trim() || "Abrir pagamento",
+      copyCodeButtonEnabled: form.copyCodeButtonEnabled,
+      copyCodeSource: form.copyCodeSource,
       isActive: form.isActive,
       metaTemplateName: form.metaTemplateName.trim(),
       metaLanguage: form.metaLanguage.trim(),
@@ -469,8 +491,12 @@ export default function TemplatesPage() {
         : await apiClient.createTemplate(payload);
 
       setTemplates((current) => {
-        const nextTemplates = current.some((template) => template.id === saved.id)
-          ? current.map((template) => (template.id === saved.id ? saved : template))
+        const nextTemplates = current.some(
+          (template) => template.id === saved.id,
+        )
+          ? current.map((template) =>
+              template.id === saved.id ? saved : template,
+            )
           : [...current, saved];
 
         return sortTemplates(nextTemplates);
@@ -509,7 +535,7 @@ export default function TemplatesPage() {
         ),
       );
       setForm(templateToForm(result.template));
-      setSuccess("Template enviado para aprovação na Meta.");
+      setSuccess("Template enviado para aprovacao na Meta.");
     } catch (submitError) {
       setError(getErrorMessage(submitError));
     } finally {
@@ -523,11 +549,11 @@ export default function TemplatesPage() {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl font-bold text-slate-950">
-              Regras de cobranca
+              Templates de cobranca
             </h1>
             <p className="mt-1 text-sm text-slate-600">
-              Configure jornadas de WhatsApp com Spintax e placeholders
-              suportados pelo backend.
+              Configure templates Meta por componentes, com corpo, rodape e
+              botoes.
             </p>
           </div>
 
@@ -646,8 +672,10 @@ export default function TemplatesPage() {
                       >
                         {template.isActive ? "Ativo" : "Inativo"}
                       </span>
-                      <span className="ml-2 inline-flex rounded px-2 py-0.5 text-xs font-semibold"
-                        style={getMetaStatusStyle(template.metaStatus)}>
+                      <span
+                        className="ml-2 inline-flex rounded px-2 py-0.5 text-xs font-semibold"
+                        style={getMetaStatusStyle(template.metaStatus)}
+                      >
                         {formatMetaStatus(template.metaStatus)}
                       </span>
                     </button>
@@ -659,144 +687,259 @@ export default function TemplatesPage() {
 
           <section className="rounded-md border border-slate-200 bg-white">
             <div className="border-b border-slate-200 px-5 py-4">
-              <h2 className="text-sm font-semibold text-slate-900">
-                {selectedTemplate ? "Editar template" : "Novo template"}
-              </h2>
+              <div className="flex flex-wrap gap-2">
+                {TABS.map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`rounded-md px-3 py-2 text-sm font-semibold transition ${
+                      activeTab === tab.id
+                        ? "bg-slate-950 text-white"
+                        : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="space-y-5 p-5">
-              <label className="space-y-1.5">
-                <span className="text-sm font-medium text-slate-700">
-                  Tipo de template
-                </span>
-                <select
-                  value={form.slug}
-                  onChange={(event) =>
-                    selectTemplateType(event.target.value as MessageTemplateSlug)
-                  }
-                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                >
-                  {TEMPLATE_OPTIONS.map((option) => (
-                    <option key={option.slug} value={option.slug}>
-                      {option.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <button
-                type="button"
-                onClick={() => updateForm("isActive", !form.isActive)}
-                className="mt-1.5 inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
-              >
-                {form.isActive ? (
-                  <ToggleRight className="text-emerald-600" size={22} />
-                ) : (
-                  <ToggleLeft className="text-slate-500" size={22} />
-                )}
-                {form.isActive ? "Template ativo" : "Template inativo"}
-              </button>
-
-              <div className="grid gap-4 md:grid-cols-3">
-                <label className="space-y-1.5 md:col-span-2">
-                  <span className="text-sm font-medium text-slate-700">
-                    Nome oficial na Meta
-                  </span>
-                  <input
-                    value={form.metaTemplateName}
-                    onChange={(event) =>
-                      updateForm("metaTemplateName", event.target.value)
-                    }
-                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                  />
-                </label>
-
-                <label className="space-y-1.5">
-                  <span className="text-sm font-medium text-slate-700">
-                    Idioma
-                  </span>
-                  <input
-                    value={form.metaLanguage}
-                    onChange={(event) =>
-                      updateForm("metaLanguage", event.target.value)
-                    }
-                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                  />
-                </label>
-
-                <label className="space-y-1.5 md:col-span-3">
-                  <span className="text-sm font-medium text-slate-700">
-                    Categoria
-                  </span>
-                  <select
-                    value={form.category}
-                    onChange={(event) =>
-                      updateForm(
-                        "category",
-                        event.target.value as TemplateFormState["category"],
-                      )
-                    }
-                    className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                  >
-                    <option value="UTILITY">UTILITY</option>
-                    <option value="MARKETING">MARKETING</option>
-                    <option value="AUTHENTICATION">AUTHENTICATION</option>
-                  </select>
-                </label>
-              </div>
-
-              <div className="space-y-2">
-                <span className="text-sm font-medium text-slate-700">
-                  Placeholders
-                </span>
-                <div className="space-y-3">
-                  {VARIABLE_GROUPS.map((group) => (
-                    <div key={group} className="space-y-2">
-                      <p className="text-xs font-semibold uppercase text-slate-500">
-                        {group}
-                      </p>
-                      <div className="flex flex-wrap gap-2">
-                        {VARIABLES.filter(
-                          (variable) => variable.group === group,
-                        ).map((variable) => (
-                          <button
-                            key={variable.tag}
-                            type="button"
-                            onClick={() => insertVariable(variable.tag)}
-                            title={variable.tag}
-                            className="max-w-full rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-left text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
-                          >
-                            <span className="block">{variable.label}</span>
-                            <code className="block break-all font-mono text-[11px] font-medium text-emerald-900">
-                              {variable.tag}
-                            </code>
-                          </button>
+              {activeTab === "body" && (
+                <>
+                  <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">
+                    <label className="space-y-1.5">
+                      <span className="text-sm font-medium text-slate-700">
+                        Tipo de template
+                      </span>
+                      <select
+                        value={form.slug}
+                        onChange={(event) =>
+                          selectTemplateType(
+                            event.target.value as MessageTemplateSlug,
+                          )
+                        }
+                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                      >
+                        {TEMPLATE_OPTIONS.map((option) => (
+                          <option key={option.slug} value={option.slug}>
+                            {option.name}
+                          </option>
                         ))}
-                      </div>
+                      </select>
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={() => updateForm("isActive", !form.isActive)}
+                      className="mt-6 inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
+                    >
+                      {form.isActive ? (
+                        <ToggleRight className="text-emerald-600" size={22} />
+                      ) : (
+                        <ToggleLeft className="text-slate-500" size={22} />
+                      )}
+                      {form.isActive ? "Ativo" : "Inativo"}
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <span className="text-sm font-medium text-slate-700">
+                      Placeholders
+                    </span>
+                    <div className="flex flex-wrap gap-2">
+                      {VARIABLES.map((variable) => (
+                        <button
+                          key={variable.tag}
+                          type="button"
+                          onClick={() => insertVariable(variable.tag)}
+                          title={variable.tag}
+                          className="max-w-full rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-left text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                        >
+                          <span className="block">{variable.label}</span>
+                          <code className="block break-all font-mono text-[11px] font-medium text-emerald-900">
+                            {variable.tag}
+                          </code>
+                        </button>
+                      ))}
                     </div>
-                  ))}
+                  </div>
+
+                  <label className="space-y-1.5">
+                    <span className="text-sm font-medium text-slate-700">
+                      Corpo da mensagem
+                    </span>
+                    <textarea
+                      value={form.content}
+                      onChange={(event) =>
+                        updateForm("content", event.target.value)
+                      }
+                      rows={12}
+                      className="w-full resize-none rounded-md border border-slate-300 px-3 py-3 text-sm leading-6 text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                    />
+                  </label>
+                </>
+              )}
+
+              {activeTab === "footer" && (
+                <label className="space-y-1.5">
+                  <span className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                    <FileText size={16} />
+                    Texto do rodape
+                  </span>
+                  <textarea
+                    aria-label="Texto do rodape"
+                    value={form.footerText}
+                    onChange={(event) =>
+                      updateForm("footerText", event.target.value)
+                    }
+                    rows={4}
+                    maxLength={60}
+                    className="w-full resize-none rounded-md border border-slate-300 px-3 py-3 text-sm leading-6 text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  />
+                  <span className="block text-xs text-slate-500">
+                    {form.footerText.length}/60 caracteres
+                  </span>
+                </label>
+              )}
+
+              {activeTab === "buttons" && (
+                <div className="space-y-5">
+                  <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={form.paymentButtonEnabled}
+                      onChange={(event) =>
+                        updateForm("paymentButtonEnabled", event.target.checked)
+                      }
+                      className="mt-1 h-4 w-4 rounded border-slate-300"
+                    />
+                    <span>
+                      <span className="block text-sm font-semibold text-slate-800">
+                        Abrir pagamento/copiar codigo
+                      </span>
+                      <span className="mt-1 block text-xs text-slate-500">
+                        Botao URL seguro para a pagina /pagar com Pix e boleto.
+                      </span>
+                    </span>
+                  </label>
+
+                  <label className="space-y-1.5">
+                    <span className="text-sm font-medium text-slate-700">
+                      Texto do botao de pagamento
+                    </span>
+                    <input
+                      value={form.paymentButtonLabel}
+                      onChange={(event) =>
+                        updateForm("paymentButtonLabel", event.target.value)
+                      }
+                      maxLength={25}
+                      className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                    />
+                  </label>
+
+                  <div className="rounded-md border border-amber-200 bg-amber-50 p-4">
+                    <label className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        checked={form.copyCodeButtonEnabled}
+                        onChange={(event) =>
+                          updateForm(
+                            "copyCodeButtonEnabled",
+                            event.target.checked,
+                          )
+                        }
+                        className="mt-1 h-4 w-4 rounded border-slate-300"
+                      />
+                      <span className="text-sm font-semibold text-amber-950">
+                        COPY_CODE direto
+                      </span>
+                    </label>
+
+                    <label className="mt-3 block space-y-1.5">
+                      <span className="text-sm font-medium text-amber-950">
+                        Origem do COPY_CODE
+                      </span>
+                      <select
+                        aria-label="Origem do COPY_CODE"
+                        value={form.copyCodeSource}
+                        onChange={(event) =>
+                          updateForm(
+                            "copyCodeSource",
+                            event.target.value as MessageTemplateCopyCodeSource,
+                          )
+                        }
+                        className="w-full rounded-md border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                      >
+                        <option value="AUTO">Automatico</option>
+                        <option value="PIX_COPY_PASTE">Pix copia e cola</option>
+                        <option value="BOLETO_LINE_DIGITABLE">
+                          Linha digitavel
+                        </option>
+                      </select>
+                    </label>
+
+                    {!copyCodeValid && (
+                      <p className="mt-3 text-xs font-medium text-amber-900">
+                        Pix copia e cola e linha digitavel costumam ultrapassar
+                        o limite de 15 caracteres da Meta. Use o botao de
+                        pagamento.
+                      </p>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
 
-              <label className="space-y-1.5">
-                <span className="text-sm font-medium text-slate-700">
-                  Corpo da mensagem
-                </span>
-                <textarea
-                  value={form.content}
-                  onChange={(event) => updateForm("content", event.target.value)}
-                  rows={12}
-                  className="w-full resize-none rounded-md border border-slate-300 px-3 py-3 text-sm leading-6 text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                  placeholder="{Ola|Oi}, {{nome_devedor}}. Sua cobranca de {{valor}} da {{nome_empresa}} vence hoje ({{data_vencimento}})."
-                />
-              </label>
+              {activeTab === "meta" && (
+                <div className="grid gap-4 md:grid-cols-3">
+                  <label className="space-y-1.5 md:col-span-2">
+                    <span className="text-sm font-medium text-slate-700">
+                      Nome oficial na Meta
+                    </span>
+                    <input
+                      value={form.metaTemplateName}
+                      onChange={(event) =>
+                        updateForm("metaTemplateName", event.target.value)
+                      }
+                      className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                    />
+                  </label>
 
-              <div className="rounded-md border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-                Use Spintax com pipe, como {"{Ola|Oi|Tudo bem}"}. Placeholders
-                precisam estar em double mustache, por exemplo{" "}
-                {`{{nome_devedor}}`}. Linhas com dados de pagamento vazios sao
-                removidas automaticamente no envio.
-              </div>
+                  <label className="space-y-1.5">
+                    <span className="text-sm font-medium text-slate-700">
+                      Idioma
+                    </span>
+                    <input
+                      value={form.metaLanguage}
+                      onChange={(event) =>
+                        updateForm("metaLanguage", event.target.value)
+                      }
+                      className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                    />
+                  </label>
+
+                  <label className="space-y-1.5 md:col-span-3">
+                    <span className="text-sm font-medium text-slate-700">
+                      Categoria
+                    </span>
+                    <select
+                      value={form.category}
+                      onChange={(event) =>
+                        updateForm(
+                          "category",
+                          event.target.value as TemplateFormState["category"],
+                        )
+                      }
+                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                    >
+                      <option value="UTILITY">UTILITY</option>
+                      <option value="MARKETING">MARKETING</option>
+                      <option value="AUTHENTICATION">AUTHENTICATION</option>
+                    </select>
+                  </label>
+                </div>
+              )}
             </div>
           </section>
 
@@ -818,12 +961,38 @@ export default function TemplatesPage() {
                   </div>
                 </div>
 
-                <div className="flex flex-1 items-start p-4">
-                  <div className="max-w-[92%] wrap-break-word whitespace-pre-wrap rounded-md rounded-tl-none bg-white px-3 py-2 text-sm leading-5 text-slate-900 shadow-sm">
-                    {preview || "A mensagem aparecera aqui."}
-                    <div className="mt-1 text-right text-[11px] text-slate-400">
-                      09:00
+                <div className="flex flex-1 items-start overflow-y-auto p-4">
+                  <div className="max-w-[92%] overflow-hidden rounded-md rounded-tl-none bg-white text-sm leading-5 text-slate-900 shadow-sm">
+                    <div className="wrap-break-word whitespace-pre-wrap px-3 py-2">
+                      {previewBody || "A mensagem aparecera aqui."}
+                      {previewFooter && (
+                        <div className="mt-2 border-t border-slate-100 pt-2 text-xs text-slate-500">
+                          {previewFooter}
+                        </div>
+                      )}
+                      <div className="mt-1 text-right text-[11px] text-slate-400">
+                        09:00
+                      </div>
                     </div>
+
+                    {form.paymentButtonEnabled && (
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-center gap-2 border-t border-slate-100 px-3 py-2 text-xs font-semibold text-sky-700"
+                      >
+                        <ExternalLink size={13} />
+                        {form.paymentButtonLabel || "Abrir pagamento"}
+                      </button>
+                    )}
+                    {form.copyCodeButtonEnabled && copyCodeValid && (
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-center gap-2 border-t border-slate-100 px-3 py-2 text-xs font-semibold text-sky-700"
+                      >
+                        <Code2 size={13} />
+                        Copiar codigo
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

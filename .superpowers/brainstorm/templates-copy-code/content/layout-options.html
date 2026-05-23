@@ -1,0 +1,111 @@
+<h2>Como a tela de templates deve organizar o botao de copiar codigo?</h2>
+<p class="subtitle">Clique em uma opcao visual se alguma estrutura fizer mais sentido. A pergunta aqui e sobre fluxo de configuracao, nao sobre cores finais.</p>
+
+<div class="section">
+  <div class="mockup">
+    <div class="mockup-header">Nota da documentacao Meta</div>
+    <div class="mockup-body">
+      <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">
+        <div style="border:1px solid #d1d5db;border-radius:8px;padding:12px;background:#fff">
+          <div class="label">Utility template</div>
+          <p style="margin:6px 0 0">Suporta 1 body, footer opcional e botoes opcionais.</p>
+        </div>
+        <div style="border:1px solid #d1d5db;border-radius:8px;padding:12px;background:#fff">
+          <div class="label">COPY_CODE</div>
+          <p style="margin:6px 0 0">Template pode ter apenas um botao de copiar codigo.</p>
+        </div>
+        <div style="border:1px solid #f59e0b;border-radius:8px;padding:12px;background:#fffbeb">
+          <div class="label">Risco Pix/Boleto</div>
+          <p style="margin:6px 0 0">O codigo copiado pela Meta tem limite curto. Pix copia e cola e linha digitavel sao longos.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">A. Editor atual refinado</div>
+        <div class="mockup-body">
+          <div style="display:grid;grid-template-columns:170px 1fr 150px;gap:10px">
+            <div class="placeholder" style="height:230px">Lista</div>
+            <div>
+              <input class="mock-input" value="cobrapix_vencimento_hoje">
+              <div class="placeholder" style="height:74px;margin-top:8px">Body</div>
+              <div style="border:1px solid #d1d5db;border-radius:8px;padding:10px;margin-top:8px;background:#fff">
+                <div class="label">Botao</div>
+                <div style="display:flex;gap:6px;margin-top:8px">
+                  <button class="mock-button">Copiar Pix</button>
+                  <button class="mock-button">Copiar boleto</button>
+                </div>
+              </div>
+            </div>
+            <div class="placeholder" style="height:230px">Preview</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Config simples no editor</h3>
+      <p>Menor mudanca visual. O lojista edita texto e escolhe um botao abaixo do corpo.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">B. Componentes Meta</div>
+        <div class="mockup-body">
+          <div style="display:grid;grid-template-columns:170px 1fr 170px;gap:10px">
+            <div class="placeholder" style="height:230px">Templates</div>
+            <div>
+              <div style="display:flex;gap:6px;margin-bottom:8px">
+                <button class="mock-button">Body</button>
+                <button class="mock-button">Footer</button>
+                <button class="mock-button">Botoes</button>
+              </div>
+              <div style="border:1px solid #d1d5db;border-radius:8px;padding:10px;background:#fff">
+                <div class="label">BUTTONS</div>
+                <div style="margin-top:8px;padding:8px;border:1px solid #93c5fd;border-radius:8px;background:#eff6ff">COPY_CODE: origem do codigo</div>
+                <div style="margin-top:8px;padding:8px;border:1px solid #d1d5db;border-radius:8px">URL: link de pagamento</div>
+              </div>
+            </div>
+            <div class="placeholder" style="height:230px">WhatsApp preview</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Editor por componentes</h3>
+      <p>Mais alinhado a Meta: Body, Footer e Buttons ficam separados, com regras e validacoes visiveis.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">C. Assistente de criacao</div>
+        <div class="mockup-body">
+          <div style="display:grid;grid-template-columns:1fr 170px;gap:10px">
+            <div>
+              <div style="display:flex;gap:8px;margin-bottom:10px">
+                <button class="mock-button">1 Tipo</button>
+                <button class="mock-button">2 Mensagem</button>
+                <button class="mock-button">3 Botoes</button>
+                <button class="mock-button">4 Meta</button>
+              </div>
+              <div class="placeholder" style="height:180px">Passo atual</div>
+            </div>
+            <div class="placeholder" style="height:230px">Preview</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Wizard com guardrails</h3>
+      <p>Boa para reduzir erro de aprovacao, mas aumenta o numero de cliques para quem ja sabe editar.</p>
+    </div>
+  </div>
+</div>

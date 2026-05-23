@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { CollectionChannel, CollectionProfileType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { TemplatesService } from '../templates/templates.service';
 
 interface CreateProfileInput {
   name: string;
@@ -28,6 +29,14 @@ interface StandardProfileStep {
   day: number;
   channel: CollectionChannel;
 }
+
+type DefaultTemplateSlug =
+  | 'cobranca-emissao'
+  | 'pre-vencimento'
+  | 'vencimento-hoje'
+  | 'atraso-primeiro-aviso'
+  | 'atraso-recorrente'
+  | 'atraso-critico';
 
 interface StandardProfile {
   name: string;
@@ -146,7 +155,10 @@ const PROFILE_TYPE_ORDER: Record<CollectionProfileType, number> = {
 export class CollectionProfileService {
   private readonly logger = new Logger(CollectionProfileService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly templatesService: TemplatesService,
+  ) {}
 
   async listProfiles(companyId: string) {
     await this.ensureStandardProfiles(companyId);
@@ -421,6 +433,11 @@ export class CollectionProfileService {
   }
 
   private async ensureStandardProfiles(companyId: string): Promise<void> {
+    const defaultTemplates =
+      await this.templatesService.ensureDefaultTemplates(companyId);
+    const defaultTemplateIds = new Map(
+      defaultTemplates.map((template) => [template.slug, template.id]),
+    );
     const profiles = await this.prisma.collectionProfile.findMany({
       where: { companyId },
       include: { steps: { select: { id: true } } },
@@ -443,6 +460,7 @@ export class CollectionProfileService {
           existingProfile,
           standardProfile,
           hasDefault,
+          defaultTemplateIds,
         );
 
         if (normalizedProfile.isDefault) {
@@ -470,7 +488,10 @@ export class CollectionProfileService {
           daysOverdueMin: standardProfile.daysOverdueMin,
           daysOverdueMax: standardProfile.daysOverdueMax,
           steps: {
-            create: this.buildStandardStepRows(standardProfile.steps),
+            create: this.buildStandardStepRows(
+              standardProfile.steps,
+              defaultTemplateIds,
+            ),
           },
         },
         include: { steps: { select: { id: true } } },
@@ -510,6 +531,7 @@ export class CollectionProfileService {
     profile: ExistingProfile,
     standardProfile: StandardProfile,
     hasDefault: boolean,
+    defaultTemplateIds: ReadonlyMap<string, string>,
   ): Promise<ExistingProfile> {
     const shouldReplaceExistingSteps = this.isLegacyDefaultProfile(profile);
     const shouldUseStandardName =
@@ -568,6 +590,7 @@ export class CollectionProfileService {
       normalizedProfile,
       standardProfile.steps,
       shouldReplaceExistingSteps,
+      defaultTemplateIds,
     );
 
     return normalizedProfile;
@@ -578,6 +601,7 @@ export class CollectionProfileService {
     profile: ExistingProfile,
     standardSteps: readonly StandardProfileStep[],
     shouldReplaceExistingSteps: boolean,
+    defaultTemplateIds: ReadonlyMap<string, string>,
   ): Promise<void> {
     if (profile.steps.length > 0 && !shouldReplaceExistingSteps) {
       return;
@@ -601,17 +625,23 @@ export class CollectionProfileService {
     }
 
     await this.prisma.collectionRuleStep.createMany({
-      data: this.buildStandardStepRows(standardSteps).map((step) => ({
-        ...step,
-        profileId: profile.id,
-      })),
+      data: this.buildStandardStepRows(standardSteps, defaultTemplateIds).map(
+        (step) => ({
+          ...step,
+          profileId: profile.id,
+        }),
+      ),
     });
   }
 
-  private buildStandardStepRows(steps: readonly StandardProfileStep[]): Array<{
+  private buildStandardStepRows(
+    steps: readonly StandardProfileStep[],
+    defaultTemplateIds?: ReadonlyMap<string, string>,
+  ): Array<{
     stepOrder: number;
     channel: CollectionChannel;
     delayDays: number;
+    templateId?: string;
     isActive: boolean;
   }> {
     let previousDay = 0;
@@ -619,14 +649,42 @@ export class CollectionProfileService {
     return steps.map((step, index) => {
       const delayDays = index === 0 ? step.day : step.day - previousDay;
       previousDay = step.day;
+      const templateId = defaultTemplateIds?.get(
+        this.getTemplateSlugForScheduleDay(step.day),
+      );
 
       return {
         stepOrder: index,
         channel: step.channel,
         delayDays,
+        ...(templateId ? { templateId } : {}),
         isActive: true,
       };
     });
+  }
+
+  private getTemplateSlugForScheduleDay(day: number): DefaultTemplateSlug {
+    if (day <= -30) {
+      return 'cobranca-emissao';
+    }
+
+    if (day < 0) {
+      return 'pre-vencimento';
+    }
+
+    if (day === 0) {
+      return 'vencimento-hoje';
+    }
+
+    if (day <= 2) {
+      return 'atraso-primeiro-aviso';
+    }
+
+    if (day >= 30) {
+      return 'atraso-critico';
+    }
+
+    return 'atraso-recorrente';
   }
 
   private isLegacyDefaultProfile(profile: { name: string }): boolean {

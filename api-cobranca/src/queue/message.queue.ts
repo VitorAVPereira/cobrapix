@@ -16,6 +16,7 @@ export interface SendMessageJob {
   templateName: string;
   templateLanguage: string;
   templateParameters: string[];
+  buttonUrlSuffix?: string;
   message?: string;
   debtorName: string;
   retryCount?: number;
@@ -132,7 +133,7 @@ export class MessageQueueService {
     };
   } {
     return {
-      jobId,
+      jobId: this.sanitizeJobId(jobId),
       attempts: 3,
       backoff: {
         type: 'exponential',
@@ -147,6 +148,10 @@ export class MessageQueueService {
         age: 7 * 24 * 3600,
       },
     };
+  }
+
+  private sanitizeJobId(jobId: string): string {
+    return jobId.replace(/:/g, '_');
   }
 
   private randomBetween(min: number, max: number): number {

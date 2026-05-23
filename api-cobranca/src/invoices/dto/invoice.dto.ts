@@ -31,6 +31,10 @@ export class CreateInvoiceDto {
   name?: string;
 
   @ValidateIf((dto: CreateInvoiceDto) => !dto.debtorId)
+  @IsString()
+  document?: string;
+
+  @ValidateIf((dto: CreateInvoiceDto) => !dto.debtorId)
   @Matches(/^\+?[\d\s().-]{10,24}$/)
   phone_number?: string;
 
@@ -135,6 +139,10 @@ export class UpdateRecurringInvoiceDto {
 }
 
 export class UpdateDebtorSettingsDto {
+  @IsOptional()
+  @IsString()
+  document?: string;
+
   @IsOptional()
   @IsBoolean()
   useGlobalBillingSettings?: boolean;
