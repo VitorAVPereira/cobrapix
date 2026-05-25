@@ -57,4 +57,9 @@ export class TemplatesController {
   ) {
     return this.templatesService.submitToMeta(user.companyId, id);
   }
+
+  @Post('sync-meta')
+  async syncMetaStatuses(@GetUser() user: { companyId: string }) {
+    return this.templatesService.syncMetaStatuses(user.companyId);
+  }
 }

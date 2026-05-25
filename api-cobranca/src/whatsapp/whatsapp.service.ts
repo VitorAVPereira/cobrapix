@@ -34,6 +34,24 @@ interface MetaTemplateResponse {
   category?: string;
 }
 
+interface MetaTemplateListResponse {
+  data?: MetaTemplateListItem[];
+}
+
+interface MetaTemplateListItem {
+  name?: string;
+  language?: string;
+  status?: string;
+  rejected_reason?: string;
+}
+
+export interface OfficialTemplateStatus {
+  name: string;
+  language: string;
+  status: string;
+  rejectedReason: string | null;
+}
+
 interface SendTemplateMessageInput {
   companyId: string;
   phoneNumber: string;
@@ -440,6 +458,42 @@ export class WhatsappService {
     return response;
   }
 
+  async listOfficialTemplateStatuses(
+    companyId: string,
+  ): Promise<OfficialTemplateStatus[]> {
+    const company = await this.prisma.company.findFirst({
+      where: {
+        id: companyId,
+        whatsappProvider: 'META_CLOUD',
+        whatsappStatus: 'CONNECTED',
+      },
+      select: {
+        metaBusinessAccountId: true,
+        metaAccessTokenEncrypted: true,
+      },
+    });
+
+    if (!company?.metaBusinessAccountId || !company.metaAccessTokenEncrypted) {
+      throw new HttpException(
+        'Configure a Meta Cloud API antes de sincronizar templates oficiais.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const response = await this.graphFetch<MetaTemplateListResponse>(
+      `/${company.metaBusinessAccountId}/message_templates?fields=name,language,status,rejected_reason&limit=100`,
+      this.crypto.decrypt(company.metaAccessTokenEncrypted),
+      { method: 'GET' },
+    );
+    const templates = Array.isArray(response.data) ? response.data : [];
+
+    return templates
+      .map((template) => this.mapOfficialTemplateStatus(template))
+      .filter(
+        (template): template is OfficialTemplateStatus => template !== null,
+      );
+  }
+
   buildTemplateParameters(
     templateContent: string,
     replacements: Record<string, string>,
@@ -574,6 +628,35 @@ export class WhatsappService {
 
   private getTemplateExample(variableName: string): string {
     return TEMPLATE_EXAMPLES[variableName] ?? 'exemplo';
+  }
+
+  private mapOfficialTemplateStatus(
+    template: MetaTemplateListItem,
+  ): OfficialTemplateStatus | null {
+    const name = this.readString(template.name);
+    const language = this.readString(template.language);
+    const status = this.readString(template.status);
+
+    if (!name || !language || !status) {
+      return null;
+    }
+
+    return {
+      name,
+      language,
+      status,
+      rejectedReason: this.normalizeRejectedReason(template.rejected_reason),
+    };
+  }
+
+  private normalizeRejectedReason(reason: string | undefined): string | null {
+    const normalizedReason = this.readString(reason);
+
+    if (!normalizedReason || normalizedReason.toUpperCase() === 'NONE') {
+      return null;
+    }
+
+    return normalizedReason;
   }
 
   private validateOfficialTemplateText(text: string): void {

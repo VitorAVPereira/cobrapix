@@ -1,6 +1,7 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import type { MessageTemplate, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import type { OfficialTemplateStatus } from '../whatsapp/whatsapp.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { CreateTemplateDto, UpdateTemplateDto } from './dto';
 import {
@@ -221,6 +222,38 @@ export class TemplatesService {
     return { template: updated, meta };
   }
 
+  async syncMetaStatuses(companyId: string): Promise<MessageTemplate[]> {
+    const templates = await this.prisma.messageTemplate.findMany({
+      where: {
+        companyId,
+        metaTemplateName: { not: null },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (templates.length === 0) {
+      return this.findCompanyTemplates(companyId);
+    }
+
+    const officialTemplates =
+      await this.whatsappService.listOfficialTemplateStatuses(companyId);
+    const officialTemplateByKey = new Map(
+      officialTemplates.map((template) => [
+        this.buildOfficialTemplateKey(template.name, template.language),
+        template,
+      ]),
+    );
+    const syncedAt = new Date();
+
+    await Promise.all(
+      templates.map((template) =>
+        this.syncTemplateStatus(template, officialTemplateByKey, syncedAt),
+      ),
+    );
+
+    return this.findCompanyTemplates(companyId);
+  }
+
   private validateTemplateContent(content: string): void {
     const variables = Array.from(
       content.matchAll(/\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g),
@@ -249,6 +282,49 @@ export class TemplatesService {
         .join(', ')}.`,
       HttpStatus.BAD_REQUEST,
     );
+  }
+
+  private async syncTemplateStatus(
+    template: MessageTemplate,
+    officialTemplateByKey: Map<string, OfficialTemplateStatus>,
+    syncedAt: Date,
+  ): Promise<void> {
+    if (!template.metaTemplateName) {
+      return;
+    }
+
+    const officialTemplate = officialTemplateByKey.get(
+      this.buildOfficialTemplateKey(
+        template.metaTemplateName,
+        template.metaLanguage,
+      ),
+    );
+
+    if (!officialTemplate) {
+      return;
+    }
+
+    await this.prisma.messageTemplate.updateMany({
+      where: { id: template.id, companyId: template.companyId },
+      data: {
+        metaStatus: officialTemplate.status,
+        metaRejectedReason: officialTemplate.rejectedReason,
+        lastMetaSyncAt: syncedAt,
+      },
+    });
+  }
+
+  private buildOfficialTemplateKey(name: string, language: string): string {
+    return `${name.trim().toLowerCase()}::${language.trim().toLowerCase()}`;
+  }
+
+  private async findCompanyTemplates(
+    companyId: string,
+  ): Promise<MessageTemplate[]> {
+    return this.prisma.messageTemplate.findMany({
+      where: { companyId },
+      orderBy: { createdAt: 'asc' },
+    });
   }
 
   private buildDefaultTemplateCreateInput(

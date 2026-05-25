@@ -11,7 +11,7 @@ export function useApiClient() {
   const accessToken = session?.access_token ?? null;
 
   const client = useMemo(() => {
-    const apiClient = new ApiClient(API_URL);
+    const apiClient = new ApiClient(API_URL, null, { requireAuth: true });
     if (accessToken) {
       apiClient.setToken(accessToken);
     }

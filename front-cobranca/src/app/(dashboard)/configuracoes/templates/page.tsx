@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
   CirclePlus,
@@ -9,6 +9,7 @@ import {
   FileText,
   Loader2,
   MessageSquareText,
+  RefreshCw,
   Save,
   Smartphone,
   ToggleLeft,
@@ -121,6 +122,7 @@ const TEMPLATE_ORDER = new Map(
 );
 const DEFAULT_TEMPLATE_OPTION = TEMPLATE_OPTIONS[0];
 const COPY_CODE_LIMIT = 15;
+const META_STATUS_POLL_INTERVAL_MS = 60_000;
 
 const EMPTY_FORM: TemplateFormState = {
   id: null,
@@ -306,6 +308,27 @@ function formatMetaStatus(status: string): string {
   return status;
 }
 
+function isWaitingForMetaReview(status: string): boolean {
+  const upper = status.toUpperCase();
+
+  return upper === "PENDING" || upper === "SUBMITTED" || upper === "IN_REVIEW";
+}
+
+function canSyncMetaStatus(status: string): boolean {
+  return status.toUpperCase() !== "LOCAL";
+}
+
+function getMetaStatusMessage(status: string): string {
+  const upper = status.toUpperCase();
+
+  if (upper === "APPROVED") return "Template aprovado e pronto para envio.";
+  if (upper === "REJECTED")
+    return "Template rejeitado pela Meta. Ajuste o conteudo e envie novamente.";
+  if (isWaitingForMetaReview(status))
+    return "Aguardando analise da Meta. A consulta e atualizada automaticamente.";
+  return "Template ainda nao enviado para avaliacao oficial.";
+}
+
 function formatSyncTime(isoDate: string | null): string | null {
   if (!isoDate) return null;
 
@@ -345,6 +368,7 @@ export default function TemplatesPage() {
   const [activeTab, setActiveTab] = useState<ComponentTab>("body");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [syncingMeta, setSyncingMeta] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -360,6 +384,9 @@ export default function TemplatesPage() {
     (template) => template.id === form.id,
   );
   const copyCodeValid = isCopyCodeValid(form.copyCodeSource);
+  const hasTemplatesWaitingForMeta = templates.some((template) =>
+    isWaitingForMetaReview(template.metaStatus),
+  );
 
   useEffect(() => {
     let active = true;
@@ -391,6 +418,58 @@ export default function TemplatesPage() {
       active = false;
     };
   }, [apiClient]);
+
+  const syncMetaStatuses = useCallback(
+    async (showFeedback: boolean): Promise<void> => {
+      setSyncingMeta(true);
+      if (showFeedback) {
+        setError(null);
+        setSuccess(null);
+      }
+
+      try {
+        const syncedTemplates = sortTemplates(
+          await apiClient.syncTemplateMetaStatuses(),
+        );
+        setTemplates(syncedTemplates);
+        if (showFeedback) {
+          setSuccess("Status atualizado pela Meta.");
+        }
+      } catch (syncError) {
+        if (showFeedback) {
+          setError(getErrorMessage(syncError));
+        }
+      } finally {
+        setSyncingMeta(false);
+      }
+    },
+    [apiClient],
+  );
+
+  useEffect(() => {
+    if (
+      loading ||
+      saving ||
+      syncingMeta ||
+      !hasTemplatesWaitingForMeta
+    ) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void syncMetaStatuses(false);
+    }, META_STATUS_POLL_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [
+    hasTemplatesWaitingForMeta,
+    loading,
+    saving,
+    syncingMeta,
+    syncMetaStatuses,
+  ]);
 
   function updateForm<K extends keyof TemplateFormState>(
     key: K,
@@ -535,7 +614,9 @@ export default function TemplatesPage() {
         ),
       );
       setForm(templateToForm(result.template));
-      setSuccess("Template enviado para aprovacao na Meta.");
+      setSuccess(
+        "Template enviado para aprovacao na Meta. O status sera sincronizado automaticamente.",
+      );
     } catch (submitError) {
       setError(getErrorMessage(submitError));
     } finally {
@@ -605,11 +686,28 @@ export default function TemplatesPage() {
                 Motivo: {selectedTemplate.metaRejectedReason}
               </span>
             )}
+            <span className="text-slate-600">
+              {getMetaStatusMessage(selectedTemplate.metaStatus)}
+            </span>
             {formatSyncTime(selectedTemplate.lastMetaSyncAt) && (
               <span className="text-slate-400">
-                Ultima sincronizacao:{" "}
+                Ultima consulta na Meta:{" "}
                 {formatSyncTime(selectedTemplate.lastMetaSyncAt)}
               </span>
+            )}
+            {canSyncMetaStatus(selectedTemplate.metaStatus) && (
+              <button
+                type="button"
+                onClick={() => void syncMetaStatuses(true)}
+                disabled={syncingMeta || loading || saving}
+                className="ml-auto inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <RefreshCw
+                  className={syncingMeta ? "animate-spin" : undefined}
+                  size={14}
+                />
+                {syncingMeta ? "Sincronizando" : "Sincronizar agora"}
+              </button>
             )}
           </div>
         )}

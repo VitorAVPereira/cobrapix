@@ -20,12 +20,16 @@ const mockCreateTemplate = jest.fn() as jest.MockedFunction<
   (data: SaveMessageTemplateInput) => Promise<MessageTemplate>
 >;
 const mockSubmitTemplateToMeta = jest.fn();
+const mockSyncTemplateMetaStatuses = jest.fn() as jest.MockedFunction<
+  () => Promise<MessageTemplate[]>
+>;
 
 const mockApiClient = {
   getTemplates: mockGetTemplates,
   updateTemplate: mockUpdateTemplate,
   createTemplate: mockCreateTemplate,
   submitTemplateToMeta: mockSubmitTemplateToMeta,
+  syncTemplateMetaStatuses: mockSyncTemplateMetaStatuses,
 };
 
 jest.mock("@/lib/use-api-client", () => ({
@@ -65,6 +69,7 @@ describe("TemplatesPage", () => {
     mockUpdateTemplate.mockReset();
     mockCreateTemplate.mockReset();
     mockSubmitTemplateToMeta.mockReset();
+    mockSyncTemplateMetaStatuses.mockReset();
     mockGetTemplates.mockResolvedValue([createTemplateFixture()]);
     mockUpdateTemplate.mockImplementation(async (_id, data) =>
       createTemplateFixture(data),
@@ -114,5 +119,34 @@ describe("TemplatesPage", () => {
         copyCodeSource: "PIX_COPY_PASTE",
       }),
     );
+  });
+
+  it("permite sincronizar um template pendente e mostra o status aprovado", async () => {
+    const user = userEvent.setup();
+    const pendingTemplate = createTemplateFixture({
+      metaStatus: "PENDING",
+      lastMetaSyncAt: "2026-05-23T12:00:00.000Z",
+    });
+    const approvedTemplate = createTemplateFixture({
+      metaStatus: "APPROVED",
+      lastMetaSyncAt: "2026-05-23T12:05:00.000Z",
+    });
+    mockGetTemplates.mockResolvedValue([pendingTemplate]);
+    mockSyncTemplateMetaStatuses.mockResolvedValue([approvedTemplate]);
+
+    render(<TemplatesPage />);
+
+    expect((await screen.findAllByText("Pendente")).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Aguardando analise da Meta/i)).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: /sincronizar agora/i }),
+    );
+
+    await waitFor(() =>
+      expect(mockSyncTemplateMetaStatuses).toHaveBeenCalledTimes(1),
+    );
+    expect(screen.getAllByText("Aprovado").length).toBeGreaterThan(0);
+    expect(screen.getByText(/Status atualizado pela Meta/i)).toBeInTheDocument();
   });
 });

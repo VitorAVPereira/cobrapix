@@ -14,6 +14,10 @@ interface ApiErrorBody {
   message?: string | string[];
 }
 
+interface ApiClientOptions {
+  requireAuth?: boolean;
+}
+
 export interface BillingRunSummary {
   total: number;
   queued: number;
@@ -768,10 +772,16 @@ function normalizeUpdateAdminClientPayload(
 class ApiClient {
   private baseUrl: string;
   private token: string | null;
+  private requireAuth: boolean;
 
-  constructor(baseUrl: string = API_URL, token: string | null = null) {
+  constructor(
+    baseUrl: string = API_URL,
+    token: string | null = null,
+    options: ApiClientOptions = {},
+  ) {
     this.baseUrl = baseUrl;
     this.token = token;
+    this.requireAuth = options.requireAuth ?? false;
   }
 
   setToken(token: string | null): void {
@@ -782,12 +792,23 @@ class ApiClient {
     return this.token;
   }
 
+  private buildMissingAuthError(): ApiError {
+    const error: ApiError = new Error("Sessao autenticada ainda nao carregada.");
+    error.status = 401;
+    error.data = { message: error.message };
+    return error;
+  }
+
   private async fetch<T>(
     endpoint: string,
     options: RequestInit = {},
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
     const token = this.getAuthHeader();
+
+    if (this.requireAuth && !token) {
+      throw this.buildMissingAuthError();
+    }
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -1242,6 +1263,12 @@ class ApiClient {
       `/templates/${id}/submit-meta`,
       { method: "POST" },
     );
+  }
+
+  async syncTemplateMetaStatuses(): Promise<MessageTemplate[]> {
+    return this.fetch<MessageTemplate[]>("/templates/sync-meta", {
+      method: "POST",
+    });
   }
 
   // Payment gateway

@@ -231,3 +231,57 @@ describe('WhatsappService createOfficialTemplate', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe('WhatsappService listOfficialTemplateStatuses', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('consulta a Meta e normaliza status e motivo de rejeicao dos templates', async () => {
+    const prisma = createPrismaMock();
+    const service = createService(prisma);
+    const fetchMock = jest.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              name: 'cobrapix_vencimento_hoje',
+              language: 'pt_BR',
+              status: 'APPROVED',
+              rejected_reason: 'NONE',
+            },
+            {
+              name: 'cobrapix_pre_vencimento',
+              language: 'pt_BR',
+              status: 'REJECTED',
+              rejected_reason: 'SCAM',
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    jest.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+    const statuses = await service.listOfficialTemplateStatuses('company-1');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://graph.facebook.com/v23.0/123456789/message_templates?fields=name,language,status,rejected_reason&limit=100',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(statuses).toEqual([
+      {
+        name: 'cobrapix_vencimento_hoje',
+        language: 'pt_BR',
+        status: 'APPROVED',
+        rejectedReason: null,
+      },
+      {
+        name: 'cobrapix_pre_vencimento',
+        language: 'pt_BR',
+        status: 'REJECTED',
+        rejectedReason: 'SCAM',
+      },
+    ]);
+  });
+});

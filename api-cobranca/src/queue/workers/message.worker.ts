@@ -726,10 +726,13 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       this.startOfDay(invoice.dueDate),
     );
     const targetSlug = this.getTemplateSlugForOffset(daysFromDueDate);
+    const candidateSlugs = Array.from(
+      new Set([targetSlug, 'vencimento-hoje', 'cobranca-emissao']),
+    );
     const templates = await this.prisma.messageTemplate.findMany({
       where: {
         companyId: invoice.companyId,
-        slug: { in: Array.from(new Set([targetSlug, 'vencimento-hoje'])) },
+        slug: { in: candidateSlugs },
         isActive: true,
         metaStatus: 'APPROVED',
       },
@@ -749,6 +752,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     return (
       templatesBySlug.get(targetSlug) ??
       templatesBySlug.get('vencimento-hoje') ??
+      templatesBySlug.get('cobranca-emissao') ??
       templates[0] ??
       null
     );
