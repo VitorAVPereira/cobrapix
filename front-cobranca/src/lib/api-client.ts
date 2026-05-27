@@ -468,6 +468,18 @@ export interface MessageTemplate {
   updatedAt: string;
 }
 
+export interface EmailTemplate {
+  id: string;
+  name: string;
+  slug: string;
+  subject: string;
+  content: string;
+  isActive: boolean;
+  companyId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type MessageTemplateCopyCodeSource =
   | "AUTO"
   | "PIX_COPY_PASTE"
@@ -494,6 +506,14 @@ export interface SaveMessageTemplateInput {
   metaTemplateName?: string;
   metaLanguage?: string;
   category?: "UTILITY" | "MARKETING" | "AUTHENTICATION";
+}
+
+export interface SaveEmailTemplateInput {
+  name: string;
+  slug: MessageTemplateSlug;
+  subject: string;
+  content: string;
+  isActive?: boolean;
 }
 
 export interface GatewayAccountInput {
@@ -1268,6 +1288,29 @@ class ApiClient {
   async syncTemplateMetaStatuses(): Promise<MessageTemplate[]> {
     return this.fetch<MessageTemplate[]>("/templates/sync-meta", {
       method: "POST",
+    });
+  }
+
+  async getEmailTemplates(): Promise<EmailTemplate[]> {
+    return this.fetch<EmailTemplate[]>("/email/templates");
+  }
+
+  async createEmailTemplate(
+    data: SaveEmailTemplateInput,
+  ): Promise<EmailTemplate> {
+    return this.fetch<EmailTemplate>("/email/templates", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateEmailTemplate(
+    id: string,
+    data: Partial<SaveEmailTemplateInput>,
+  ): Promise<EmailTemplate> {
+    return this.fetch<EmailTemplate>(`/email/templates/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
     });
   }
 
