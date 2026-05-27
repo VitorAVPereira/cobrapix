@@ -182,6 +182,7 @@ model Company {
   overdueSplitPercentageBps    Int                 @default(0)
 
   templates            MessageTemplate[]
+  emailTemplates       EmailTemplate[]
   users                User[]
   debtors              Debtor[]
   invoices             Invoice[]
@@ -459,6 +460,21 @@ model MessageTemplate {
   ruleSteps             CollectionRuleStep[]
   createdAt             DateTime                      @default(now())
   updatedAt             DateTime                      @updatedAt
+
+  @@unique([companyId, slug])
+}
+
+model EmailTemplate {
+  id        String  @id @default(uuid())
+  name      String
+  slug      String
+  subject   String
+  content   String  @db.Text
+  isActive  Boolean @default(true)
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([companyId, slug])
 }
