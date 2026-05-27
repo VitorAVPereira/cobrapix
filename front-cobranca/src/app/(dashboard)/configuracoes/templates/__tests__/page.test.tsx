@@ -1,8 +1,10 @@
 import "@testing-library/jest-dom";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {
+  EmailTemplate,
   MessageTemplate,
+  SaveEmailTemplateInput,
   SaveMessageTemplateInput,
 } from "@/lib/api-client";
 import TemplatesPage from "../page";
@@ -23,6 +25,18 @@ const mockSubmitTemplateToMeta = jest.fn();
 const mockSyncTemplateMetaStatuses = jest.fn() as jest.MockedFunction<
   () => Promise<MessageTemplate[]>
 >;
+const mockGetEmailTemplates = jest.fn() as jest.MockedFunction<
+  () => Promise<EmailTemplate[]>
+>;
+const mockUpdateEmailTemplate = jest.fn() as jest.MockedFunction<
+  (
+    id: string,
+    data: Partial<SaveEmailTemplateInput>,
+  ) => Promise<EmailTemplate>
+>;
+const mockCreateEmailTemplate = jest.fn() as jest.MockedFunction<
+  (data: SaveEmailTemplateInput) => Promise<EmailTemplate>
+>;
 
 const mockApiClient = {
   getTemplates: mockGetTemplates,
@@ -30,6 +44,9 @@ const mockApiClient = {
   createTemplate: mockCreateTemplate,
   submitTemplateToMeta: mockSubmitTemplateToMeta,
   syncTemplateMetaStatuses: mockSyncTemplateMetaStatuses,
+  getEmailTemplates: mockGetEmailTemplates,
+  updateEmailTemplate: mockUpdateEmailTemplate,
+  createEmailTemplate: mockCreateEmailTemplate,
 };
 
 jest.mock("@/lib/use-api-client", () => ({
@@ -63,6 +80,23 @@ function createTemplateFixture(
   };
 }
 
+function createEmailTemplateFixture(
+  overrides: Partial<EmailTemplate> = {},
+): EmailTemplate {
+  return {
+    id: "email-template-1",
+    name: "Vencimento hoje",
+    slug: "vencimento-hoje",
+    subject: "{{nome_empresa}}: sua cobranca vence hoje",
+    content: "Ola, {{nome_devedor}}. Acesse {{payment_link}}.",
+    isActive: true,
+    companyId: "company-1",
+    createdAt: "2026-05-26T00:00:00.000Z",
+    updatedAt: "2026-05-26T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
 describe("TemplatesPage", () => {
   beforeEach(() => {
     mockGetTemplates.mockReset();
@@ -70,12 +104,22 @@ describe("TemplatesPage", () => {
     mockCreateTemplate.mockReset();
     mockSubmitTemplateToMeta.mockReset();
     mockSyncTemplateMetaStatuses.mockReset();
+    mockGetEmailTemplates.mockReset();
+    mockUpdateEmailTemplate.mockReset();
+    mockCreateEmailTemplate.mockReset();
     mockGetTemplates.mockResolvedValue([createTemplateFixture()]);
+    mockGetEmailTemplates.mockResolvedValue([createEmailTemplateFixture()]);
     mockUpdateTemplate.mockImplementation(async (_id, data) =>
       createTemplateFixture(data),
     );
     mockCreateTemplate.mockImplementation(async (data) =>
       createTemplateFixture(data),
+    );
+    mockUpdateEmailTemplate.mockImplementation(async (_id, data) =>
+      createEmailTemplateFixture(data),
+    );
+    mockCreateEmailTemplate.mockImplementation(async (data) =>
+      createEmailTemplateFixture(data),
     );
   });
 
@@ -148,5 +192,45 @@ describe("TemplatesPage", () => {
     );
     expect(screen.getAllByText("Aprovado").length).toBeGreaterThan(0);
     expect(screen.getByText(/Status atualizado pela Meta/i)).toBeInTheDocument();
+  });
+
+  it("permite editar e pre-visualizar templates de email em uma aba propria", async () => {
+    const user = userEvent.setup();
+
+    render(<TemplatesPage />);
+
+    await user.click(await screen.findByRole("button", { name: "Email" }));
+
+    expect(mockGetEmailTemplates).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Assunto do email")).toHaveValue(
+      "{{nome_empresa}}: sua cobranca vence hoje",
+    );
+    expect(
+      screen.getByText("Clinica Exemplo: sua cobranca vence hoje"),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Assunto do email"), {
+      target: { value: "{{nome_empresa}}: pagamento pendente" },
+    });
+    fireEvent.change(screen.getByLabelText("Corpo do email"), {
+      target: {
+        value:
+          "Ola {{nome_devedor}}, pague {{valor}} por aqui: {{payment_link}}",
+      },
+    });
+    await user.click(screen.getByRole("button", { name: /salvar/i }));
+
+    await waitFor(() =>
+      expect(mockUpdateEmailTemplate).toHaveBeenCalledTimes(1),
+    );
+    expect(mockUpdateEmailTemplate).toHaveBeenCalledWith(
+      "email-template-1",
+      expect.objectContaining({
+        subject: "{{nome_empresa}}: pagamento pendente",
+        content:
+          "Ola {{nome_devedor}}, pague {{valor}} por aqui: {{payment_link}}",
+        isActive: true,
+      }),
+    );
   });
 });

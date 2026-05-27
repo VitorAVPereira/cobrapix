@@ -8,6 +8,7 @@ import {
   ExternalLink,
   FileText,
   Loader2,
+  Mail,
   MessageSquareText,
   RefreshCw,
   Save,
@@ -18,15 +19,18 @@ import {
 } from "lucide-react";
 import type {
   ApiError,
+  EmailTemplate,
   MessageTemplate,
   MessageTemplateCopyCodeSource,
   MessageTemplateSlug,
+  SaveEmailTemplateInput,
   SaveMessageTemplateInput,
 } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 import { spin } from "@/lib/spintax";
 
 type ComponentTab = "body" | "footer" | "buttons" | "meta";
+type ChannelTab = "whatsapp" | "email";
 
 interface TemplateFormState {
   id: string | null;
@@ -42,6 +46,15 @@ interface TemplateFormState {
   metaTemplateName: string;
   metaLanguage: string;
   category: "UTILITY" | "MARKETING" | "AUTHENTICATION";
+}
+
+interface EmailTemplateFormState {
+  id: string | null;
+  name: string;
+  slug: MessageTemplateSlug;
+  subject: string;
+  content: string;
+  isActive: boolean;
 }
 
 interface TemplateOption {
@@ -140,6 +153,16 @@ const EMPTY_FORM: TemplateFormState = {
   category: "UTILITY",
 };
 
+const EMPTY_EMAIL_FORM: EmailTemplateFormState = {
+  id: null,
+  name: DEFAULT_TEMPLATE_OPTION.name,
+  slug: DEFAULT_TEMPLATE_OPTION.slug,
+  subject: "{{nome_empresa}}: cobranca",
+  content:
+    "Ola, {{nome_devedor}}.\n\nVoce tem uma cobranca de {{valor}} com vencimento em {{data_vencimento}}.\n\nAcesse: {{payment_link}}",
+  isActive: true,
+};
+
 const VARIABLES: readonly TemplateVariable[] = [
   {
     tag: "{{nome_devedor}}",
@@ -236,7 +259,9 @@ function renderPreviewText(content: string): string {
   }
 }
 
-function sortTemplates(templates: MessageTemplate[]): MessageTemplate[] {
+function sortTemplates<T extends { slug: string; name: string }>(
+  templates: T[],
+): T[] {
   return [...templates].sort((left, right) => {
     const leftOrder =
       TEMPLATE_ORDER.get(left.slug as MessageTemplateSlug) ?? 999;
@@ -245,6 +270,21 @@ function sortTemplates(templates: MessageTemplate[]): MessageTemplate[] {
 
     return leftOrder - rightOrder || left.name.localeCompare(right.name);
   });
+}
+
+function emailTemplateToForm(
+  template: EmailTemplate,
+): EmailTemplateFormState {
+  const option = getTemplateOption(template.slug);
+
+  return {
+    id: template.id,
+    name: option?.name ?? template.name,
+    slug: (option?.slug ?? template.slug) as MessageTemplateSlug,
+    subject: template.subject,
+    content: template.content,
+    isActive: template.isActive,
+  };
 }
 
 function templateToForm(template: MessageTemplate): TemplateFormState {
@@ -364,10 +404,17 @@ function isCopyCodeValid(source: MessageTemplateCopyCodeSource): boolean {
 export default function TemplatesPage() {
   const apiClient = useApiClient();
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
+  const [emailTemplates, setEmailTemplates] = useState<EmailTemplate[]>([]);
   const [form, setForm] = useState<TemplateFormState>(EMPTY_FORM);
+  const [emailForm, setEmailForm] =
+    useState<EmailTemplateFormState>(EMPTY_EMAIL_FORM);
+  const [activeChannel, setActiveChannel] =
+    useState<ChannelTab>("whatsapp");
   const [activeTab, setActiveTab] = useState<ComponentTab>("body");
   const [loading, setLoading] = useState(true);
+  const [loadingEmail, setLoadingEmail] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingEmail, setSavingEmail] = useState(false);
   const [syncingMeta, setSyncingMeta] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -379,6 +426,22 @@ export default function TemplatesPage() {
   const previewFooter = useMemo(
     () => renderPreviewText(form.footerText),
     [form.footerText],
+  );
+  const emailPreviewSubject = useMemo(
+    () => renderPreviewText(emailForm.subject),
+    [emailForm.subject],
+  );
+  const emailPreviewBody = useMemo(
+    () => renderPreviewText(emailForm.content),
+    [emailForm.content],
+  );
+  const emailPreviewParagraphs = useMemo(
+    () =>
+      emailPreviewBody
+        .split(/\n{2,}/)
+        .map((paragraph) => paragraph.trim())
+        .filter((paragraph) => paragraph.length > 0),
+    [emailPreviewBody],
   );
   const selectedTemplate = templates.find(
     (template) => template.id === form.id,
@@ -413,6 +476,38 @@ export default function TemplatesPage() {
     }
 
     void loadTemplates();
+
+    return () => {
+      active = false;
+    };
+  }, [apiClient]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadEmailTemplates(): Promise<void> {
+      setLoadingEmail(true);
+
+      try {
+        const data = sortTemplates(await apiClient.getEmailTemplates());
+        if (!active) return;
+
+        setEmailTemplates(data);
+        const firstTemplate =
+          data.find(
+            (template) => template.slug === DEFAULT_TEMPLATE_OPTION.slug,
+          ) ?? data[0];
+        setEmailForm(
+          firstTemplate ? emailTemplateToForm(firstTemplate) : EMPTY_EMAIL_FORM,
+        );
+      } catch (loadError) {
+        if (active) setError(getErrorMessage(loadError));
+      } finally {
+        if (active) setLoadingEmail(false);
+      }
+    }
+
+    void loadEmailTemplates();
 
     return () => {
       active = false;
@@ -479,6 +574,14 @@ export default function TemplatesPage() {
     setSuccess(null);
   }
 
+  function updateEmailForm<K extends keyof EmailTemplateFormState>(
+    key: K,
+    value: EmailTemplateFormState[K],
+  ): void {
+    setEmailForm((current) => ({ ...current, [key]: value }));
+    setSuccess(null);
+  }
+
   function startNewTemplate(): void {
     const option = getFirstAvailableTemplateOption(templates);
 
@@ -502,10 +605,23 @@ export default function TemplatesPage() {
     setSuccess(null);
   }
 
+  function selectEmailTemplate(template: EmailTemplate): void {
+    setEmailForm(emailTemplateToForm(template));
+    setError(null);
+    setSuccess(null);
+  }
+
   function insertVariable(tag: string): void {
     updateForm(
       "content",
       `${form.content}${form.content.endsWith(" ") ? "" : " "}${tag}`,
+    );
+  }
+
+  function insertEmailVariable(tag: string): void {
+    updateEmailForm(
+      "content",
+      `${emailForm.content}${emailForm.content.endsWith(" ") ? "" : " "}${tag}`,
     );
   }
 
@@ -594,6 +710,50 @@ export default function TemplatesPage() {
     }
   }
 
+  async function saveEmailTemplate(): Promise<void> {
+    const option = getTemplateOption(emailForm.slug);
+    const payload: SaveEmailTemplateInput = {
+      name: option?.name ?? emailForm.name.trim(),
+      slug: option?.slug ?? emailForm.slug,
+      subject: emailForm.subject.trim(),
+      content: emailForm.content.trim(),
+      isActive: emailForm.isActive,
+    };
+
+    if (!payload.subject || !payload.content) {
+      setError("Preencha assunto e corpo do email antes de salvar.");
+      return;
+    }
+
+    setSavingEmail(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const saved = emailForm.id
+        ? await apiClient.updateEmailTemplate(emailForm.id, payload)
+        : await apiClient.createEmailTemplate(payload);
+
+      setEmailTemplates((current) => {
+        const nextTemplates = current.some(
+          (template) => template.id === saved.id,
+        )
+          ? current.map((template) =>
+              template.id === saved.id ? saved : template,
+            )
+          : [...current, saved];
+
+        return sortTemplates(nextTemplates);
+      });
+      setEmailForm(emailTemplateToForm(saved));
+      setSuccess("Template de email salvo com sucesso.");
+    } catch (saveError) {
+      setError(getErrorMessage(saveError));
+    } finally {
+      setSavingEmail(false);
+    }
+  }
+
   async function submitToMeta(): Promise<void> {
     if (!form.id) {
       setError("Salve o template antes de enviar para a Meta.");
@@ -639,40 +799,79 @@ export default function TemplatesPage() {
           </div>
 
           <div className="flex flex-wrap gap-2">
+            {activeChannel === "whatsapp" && (
+              <button
+                type="button"
+                onClick={startNewTemplate}
+                className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-100"
+              >
+                <CirclePlus size={18} />
+                Novo
+              </button>
+            )}
             <button
               type="button"
-              onClick={startNewTemplate}
-              className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-100"
-            >
-              <CirclePlus size={18} />
-              Novo
-            </button>
-            <button
-              type="button"
-              onClick={() => void saveTemplate()}
-              disabled={saving || loading}
+              onClick={() =>
+                activeChannel === "whatsapp"
+                  ? void saveTemplate()
+                  : void saveEmailTemplate()
+              }
+              disabled={
+                activeChannel === "whatsapp"
+                  ? saving || loading
+                  : savingEmail || loadingEmail
+              }
               className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {saving ? (
+              {saving || savingEmail ? (
                 <Loader2 className="animate-spin" size={18} />
               ) : (
                 <Save size={18} />
               )}
               Salvar
             </button>
-            <button
-              type="button"
-              onClick={() => void submitToMeta()}
-              disabled={saving || loading || !form.id}
-              className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <UploadCloud size={18} />
-              Enviar Meta
-            </button>
+            {activeChannel === "whatsapp" && (
+              <button
+                type="button"
+                onClick={() => void submitToMeta()}
+                disabled={saving || loading || !form.id}
+                className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <UploadCloud size={18} />
+                Enviar Meta
+              </button>
+            )}
           </div>
         </div>
 
-        {selectedTemplate && (
+        <div className="flex w-fit rounded-md border border-slate-200 bg-white p-1">
+          <button
+            type="button"
+            onClick={() => setActiveChannel("whatsapp")}
+            className={`inline-flex items-center gap-2 rounded px-3 py-2 text-sm font-semibold transition ${
+              activeChannel === "whatsapp"
+                ? "bg-slate-950 text-white"
+                : "text-slate-600 hover:bg-slate-100"
+            }`}
+          >
+            <Smartphone size={16} />
+            WhatsApp
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveChannel("email")}
+            className={`inline-flex items-center gap-2 rounded px-3 py-2 text-sm font-semibold transition ${
+              activeChannel === "email"
+                ? "bg-slate-950 text-white"
+                : "text-slate-600 hover:bg-slate-100"
+            }`}
+          >
+            <Mail size={16} />
+            Email
+          </button>
+        </div>
+
+        {activeChannel === "whatsapp" && selectedTemplate && (
           <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-slate-200 bg-white px-4 py-3 text-sm">
             <span className="text-slate-500">Status na Meta:</span>
             <span
@@ -725,7 +924,8 @@ export default function TemplatesPage() {
           </div>
         )}
 
-        <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)_340px]">
+        {activeChannel === "whatsapp" && (
+          <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)_340px]">
           <section className="rounded-md border border-slate-200 bg-white">
             <div className="border-b border-slate-200 px-4 py-3">
               <h2 className="text-sm font-semibold text-slate-900">
@@ -1095,8 +1295,220 @@ export default function TemplatesPage() {
                 </div>
               </div>
             </div>
-          </aside>
-        </div>
+            </aside>
+          </div>
+        )}
+
+        {activeChannel === "email" && (
+          <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)_420px]">
+            <section className="rounded-md border border-slate-200 bg-white">
+              <div className="border-b border-slate-200 px-4 py-3">
+                <h2 className="text-sm font-semibold text-slate-900">
+                  Emails
+                </h2>
+              </div>
+
+              <div className="max-h-155 overflow-y-auto p-2">
+                {loadingEmail ? (
+                  <div className="flex items-center gap-2 px-3 py-4 text-sm text-slate-500">
+                    <Loader2 className="animate-spin" size={16} />
+                    Carregando templates
+                  </div>
+                ) : emailTemplates.length === 0 ? (
+                  <div className="px-3 py-4 text-sm text-slate-500">
+                    Nenhum template de email salvo ainda.
+                  </div>
+                ) : (
+                  emailTemplates.map((template) => {
+                    const active = template.id === emailForm.id;
+
+                    return (
+                      <button
+                        key={template.id}
+                        type="button"
+                        onClick={() => selectEmailTemplate(template)}
+                        className={`mb-2 w-full rounded-md border px-3 py-3 text-left transition ${
+                          active
+                            ? "border-emerald-300 bg-emerald-50"
+                            : "border-slate-200 bg-white hover:bg-slate-50"
+                        }`}
+                      >
+                        <span className="block truncate text-sm font-semibold text-slate-900">
+                          {template.name}
+                        </span>
+                        <span
+                          className={`mt-2 inline-flex rounded px-2 py-0.5 text-xs font-semibold ${
+                            template.isActive
+                              ? "bg-emerald-100 text-emerald-700"
+                              : "bg-slate-100 text-slate-600"
+                          }`}
+                        >
+                          {template.isActive ? "Ativo" : "Inativo"}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </section>
+
+            <section className="rounded-md border border-slate-200 bg-white p-5">
+              <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">
+                <label className="space-y-1.5">
+                  <span className="text-sm font-medium text-slate-700">
+                    Tipo de template
+                  </span>
+                  <select
+                    value={emailForm.slug}
+                    disabled
+                    className="w-full rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700"
+                  >
+                    {TEMPLATE_OPTIONS.map((option) => (
+                      <option key={option.slug} value={option.slug}>
+                        {option.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    updateEmailForm("isActive", !emailForm.isActive)
+                  }
+                  className="mt-6 inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
+                >
+                  {emailForm.isActive ? (
+                    <ToggleRight className="text-emerald-600" size={22} />
+                  ) : (
+                    <ToggleLeft className="text-slate-500" size={22} />
+                  )}
+                  {emailForm.isActive ? "Ativo" : "Inativo"}
+                </button>
+              </div>
+
+              <label className="mt-5 block space-y-1.5">
+                <span className="text-sm font-medium text-slate-700">
+                  Assunto do email
+                </span>
+                <input
+                  aria-label="Assunto do email"
+                  value={emailForm.subject}
+                  onChange={(event) =>
+                    updateEmailForm("subject", event.target.value)
+                  }
+                  maxLength={160}
+                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                />
+              </label>
+
+              <div className="mt-5 space-y-2">
+                <span className="text-sm font-medium text-slate-700">
+                  Placeholders
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  {VARIABLES.map((variable) => (
+                    <button
+                      key={variable.tag}
+                      type="button"
+                      onClick={() => insertEmailVariable(variable.tag)}
+                      title={variable.tag}
+                      className="max-w-full rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-left text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                    >
+                      <span className="block">{variable.label}</span>
+                      <code className="block break-all font-mono text-[11px] font-medium text-emerald-900">
+                        {variable.tag}
+                      </code>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <label className="mt-5 block space-y-1.5">
+                <span className="text-sm font-medium text-slate-700">
+                  Corpo do email
+                </span>
+                <textarea
+                  aria-label="Corpo do email"
+                  value={emailForm.content}
+                  onChange={(event) =>
+                    updateEmailForm("content", event.target.value)
+                  }
+                  rows={12}
+                  className="w-full resize-none rounded-md border border-slate-300 px-3 py-3 text-sm leading-6 text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                />
+              </label>
+            </section>
+
+            <aside className="rounded-md border border-slate-200 bg-white">
+              <div className="flex items-center gap-2 border-b border-slate-200 px-5 py-4">
+                <Mail size={18} />
+                <h2 className="text-sm font-semibold text-slate-900">
+                  Preview
+                </h2>
+              </div>
+
+              <div className="bg-slate-100 p-5">
+                <div className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
+                  <div className="border-b border-slate-200 px-5 py-4">
+                    <p className="text-xs font-semibold uppercase text-slate-500">
+                      Assunto
+                    </p>
+                    <p className="mt-1 break-words text-sm font-semibold text-slate-950">
+                      {emailPreviewSubject || "O assunto aparecera aqui."}
+                    </p>
+                  </div>
+
+                  <div className="bg-emerald-600 px-5 py-5 text-white">
+                    <p className="text-lg font-bold">Clinica Exemplo</p>
+                    <p className="mt-1 text-sm text-emerald-50">
+                      Cobranca via Pix
+                    </p>
+                  </div>
+
+                  <div className="space-y-4 px-5 py-5 text-sm leading-6 text-slate-700">
+                    {emailPreviewParagraphs.length > 0 ? (
+                      emailPreviewParagraphs.map((paragraph, index) => (
+                        <p
+                          key={`${paragraph}-${index}`}
+                          className="whitespace-pre-line break-words"
+                        >
+                          {paragraph}
+                        </p>
+                      ))
+                    ) : (
+                      <p>O corpo do email aparecera aqui.</p>
+                    )}
+
+                    <div className="grid grid-cols-2 overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+                      <div className="border-r border-slate-200 p-3">
+                        <span className="text-xs text-slate-500">Valor</span>
+                        <p className="mt-1 text-lg font-bold text-emerald-700">
+                          R$ 150,00
+                        </p>
+                      </div>
+                      <div className="p-3">
+                        <span className="text-xs text-slate-500">
+                          Vencimento
+                        </span>
+                        <p className="mt-1 font-semibold text-slate-900">
+                          22/04/2026
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="w-full rounded-md bg-emerald-600 px-4 py-3 text-sm font-semibold text-white"
+                    >
+                      Pagar agora
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </aside>
+          </div>
+        )}
       </div>
     </main>
   );
