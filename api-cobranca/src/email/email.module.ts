@@ -2,10 +2,13 @@ import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { PrismaModule } from '../prisma/prisma.module';
 import { PaymentModule } from '../payment/payment.module';
+import { ResendMailerService } from '../common/resend-mailer.service';
 import { EmailService } from './email.service';
 import { EmailProcessor } from './email.processor';
 import { EmailQueueService } from './email.queue';
 import { EmailController } from './email.controller';
+import { EmailTemplatesController } from './email-templates.controller';
+import { EmailTemplatesService } from './email-templates.service';
 
 @Module({
   imports: [
@@ -19,8 +22,14 @@ import { EmailController } from './email.controller';
       },
     }),
   ],
-  controllers: [EmailController],
-  providers: [EmailService, EmailProcessor, EmailQueueService],
-  exports: [EmailService, EmailQueueService],
+  controllers: [EmailController, EmailTemplatesController],
+  providers: [
+    EmailService,
+    EmailTemplatesService,
+    EmailProcessor,
+    EmailQueueService,
+    ResendMailerService,
+  ],
+  exports: [EmailService, EmailTemplatesService, EmailQueueService],
 })
 export class EmailModule {}

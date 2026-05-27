@@ -164,7 +164,9 @@ export class EmailTemplatesService {
   private validateTemplateText(content: string): void {
     const variables = Array.from(
       content.matchAll(/\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g),
-    ).map((match) => match[1]);
+    )
+      .map((match) => match[1])
+      .filter((variable): variable is string => typeof variable === 'string');
     const unsupported = variables.find(
       (variable) => !this.supportedVariableTags.has(variable),
     );

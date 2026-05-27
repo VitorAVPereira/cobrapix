@@ -47,8 +47,14 @@ export const EMAIL_TEMPLATE_DEFINITIONS: readonly EmailTemplateDefinition[] =
       'Ola, {{nome_devedor}}.\n\nVoce tem uma cobranca de {{valor}} da {{nome_empresa}} com vencimento em {{data_vencimento}}.\n\nAcesse: {{payment_link}}',
   }));
 
-export const DEFAULT_EMAIL_TEMPLATE_DEFINITION =
-  EMAIL_TEMPLATE_DEFINITIONS[0];
+export const DEFAULT_EMAIL_TEMPLATE_DEFINITION: EmailTemplateDefinition =
+  EMAIL_TEMPLATE_DEFINITIONS[0] ?? {
+    slug: 'cobranca-emissao',
+    name: 'Cobranca na emissao',
+    subject: '{{nome_empresa}}: cobranca emitida',
+    content:
+      'Ola, {{nome_devedor}}.\n\nVoce tem uma cobranca de {{valor}} da {{nome_empresa}} com vencimento em {{data_vencimento}}.\n\nAcesse: {{payment_link}}',
+  };
 
 export function getEmailTemplateDefinition(
   slug: string,
