@@ -15,6 +15,7 @@ import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { CollectionRuleEngine } from './collection-rule-engine';
 import { EmailQueueService } from '../email/email.queue';
 import { EmailService } from '../email/email.service';
+import { EmailTemplatesService } from '../email/email-templates.service';
 
 const DEFAULT_COLLECTION_REMINDER_DAYS = [0];
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -144,6 +145,7 @@ export class BillingService {
     private ruleEngine: CollectionRuleEngine,
     private emailQueue: EmailQueueService,
     private emailService: EmailService,
+    private emailTemplatesService: EmailTemplatesService,
     private whatsappService?: WhatsappService,
     private paymentLinkService?: PublicPaymentLinkService,
   ) {}
@@ -653,6 +655,26 @@ export class BillingService {
             templateId,
             false,
           );
+          const emailTemplate =
+            await this.emailTemplatesService.findActiveOrDefault(
+              company.id,
+              template?.slug ?? null,
+            );
+          const renderParams = {
+            debtorName: invoice.debtor.name,
+            originalAmount: Number(invoice.originalAmount),
+            dueDate: invoice.dueDate,
+            companyName: company.corporateName,
+            paymentData,
+          };
+          const templateBody = this.buildTemplateText(
+            emailTemplate.content,
+            renderParams,
+          );
+          const subject = this.buildTemplateText(
+            emailTemplate.subject,
+            renderParams,
+          );
           const attemptCreated = await this.createQueuedAttempt(
             company.id,
             invoice.id,
@@ -663,16 +685,6 @@ export class BillingService {
             skippedCount++;
             continue;
           }
-
-          const templateBody = template
-            ? this.buildMessageFromTemplate(template.content, {
-                debtorName: invoice.debtor.name,
-                originalAmount: Number(invoice.originalAmount),
-                dueDate: invoice.dueDate,
-                companyName: company.corporateName,
-                paymentData,
-              })
-            : undefined;
 
           const html = this.emailService.buildCollectionEmailHtml({
             debtorName: invoice.debtor.name,
@@ -700,7 +712,7 @@ export class BillingService {
             debtorId: invoice.debtor.id,
             debtorName: invoice.debtor.name,
             email: debtorEmail,
-            subject: `[${company.corporateName}] Cobranca pendente`,
+            subject,
             html,
             ruleStepId,
           });
@@ -1393,6 +1405,21 @@ export class BillingService {
       paymentData: PaymentMessageData;
     },
   ): string {
+    const message = this.buildTemplateText(templateContent, params);
+
+    return this.ensurePaymentInstruction(message, params.paymentData);
+  }
+
+  private buildTemplateText(
+    templateContent: string,
+    params: {
+      debtorName: string;
+      originalAmount: number;
+      dueDate: Date;
+      companyName: string;
+      paymentData: PaymentMessageData;
+    },
+  ): string {
     const replacements = this.buildTemplateReplacements(params);
     const contentWithoutEmptyPaymentLines = this.removeEmptyVariableLines(
       templateContent,
@@ -1414,7 +1441,7 @@ export class BillingService {
       .replace(/\n{3,}/g, '\n\n')
       .trim();
 
-    return this.ensurePaymentInstruction(processedMessage, params.paymentData);
+    return processedMessage;
   }
 
   private buildTemplateReplacements(params: {
