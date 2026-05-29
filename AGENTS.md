@@ -26,6 +26,7 @@
    - `EFI_PLATFORM_CLIENT_ID`, `EFI_PLATFORM_CLIENT_SECRET`
    - `EFI_PLATFORM_PAYEE_CODE`, `EFI_PLATFORM_SPLIT_PERCENTAGE`
    - `EFI_WEBHOOK_BASE_URL`
+   - `RESEND_WEBHOOK_SECRET` (signing secret do webhook Resend em producao)
    - `REDIS_HOST`, `REDIS_PORT` (para filas)
 
 ## Commands
@@ -75,6 +76,7 @@ Endpoints para geração de PIX e Boleto:
 | POST | `/webhooks/evolution` | Status conexão WhatsApp legado |
 | POST | `/webhooks/efi/pix` | Notificações de pagamento Pix |
 | POST | `/webhooks/efi/cobrancas` | Notificações de cobranças/boleto |
+| POST | `/webhooks/resend` | Eventos de email Resend (entrega, abertura, clique, bounce, falha) |
 
 ## Prisma Schema
 

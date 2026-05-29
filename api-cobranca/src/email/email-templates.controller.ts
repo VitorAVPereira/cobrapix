@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -44,5 +45,16 @@ export class EmailTemplatesController {
     @Body() dto: UpdateEmailTemplateDto,
   ) {
     return this.emailTemplatesService.update(user.companyId, id, dto);
+  }
+
+  @Post(':id/publish')
+  async publish(@GetUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.emailTemplatesService.publish(user.companyId, id);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async remove(@GetUser() user: AuthenticatedUser, @Param('id') id: string) {
+    await this.emailTemplatesService.remove(user.companyId, id);
   }
 }

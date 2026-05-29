@@ -29,13 +29,13 @@ const mockGetEmailTemplates = jest.fn() as jest.MockedFunction<
   () => Promise<EmailTemplate[]>
 >;
 const mockUpdateEmailTemplate = jest.fn() as jest.MockedFunction<
-  (
-    id: string,
-    data: Partial<SaveEmailTemplateInput>,
-  ) => Promise<EmailTemplate>
+  (id: string, data: Partial<SaveEmailTemplateInput>) => Promise<EmailTemplate>
 >;
 const mockCreateEmailTemplate = jest.fn() as jest.MockedFunction<
   (data: SaveEmailTemplateInput) => Promise<EmailTemplate>
+>;
+const mockDeleteEmailTemplate = jest.fn() as jest.MockedFunction<
+  (id: string) => Promise<void>
 >;
 
 const mockApiClient = {
@@ -47,6 +47,7 @@ const mockApiClient = {
   getEmailTemplates: mockGetEmailTemplates,
   updateEmailTemplate: mockUpdateEmailTemplate,
   createEmailTemplate: mockCreateEmailTemplate,
+  deleteEmailTemplate: mockDeleteEmailTemplate,
 };
 
 jest.mock("@/lib/use-api-client", () => ({
@@ -90,6 +91,13 @@ function createEmailTemplateFixture(
     subject: "{{nome_empresa}}: sua cobranca vence hoje",
     content: "Ola, {{nome_devedor}}. Acesse {{payment_link}}.",
     isActive: true,
+    resendTemplateId: "resend-template-1",
+    resendAlias: "cobrapix_vencimento_hoje",
+    resendStatus: "published",
+    resendPublishedAt: "2026-05-26T00:01:00.000Z",
+    lastResendSyncAt: "2026-05-26T00:01:00.000Z",
+    resendError: null,
+    deletedAt: null,
     companyId: "company-1",
     createdAt: "2026-05-26T00:00:00.000Z",
     updatedAt: "2026-05-26T00:00:00.000Z",
@@ -107,6 +115,7 @@ describe("TemplatesPage", () => {
     mockGetEmailTemplates.mockReset();
     mockUpdateEmailTemplate.mockReset();
     mockCreateEmailTemplate.mockReset();
+    mockDeleteEmailTemplate.mockReset();
     mockGetTemplates.mockResolvedValue([createTemplateFixture()]);
     mockGetEmailTemplates.mockResolvedValue([createEmailTemplateFixture()]);
     mockUpdateTemplate.mockImplementation(async (_id, data) =>
@@ -121,6 +130,7 @@ describe("TemplatesPage", () => {
     mockCreateEmailTemplate.mockImplementation(async (data) =>
       createEmailTemplateFixture(data),
     );
+    mockDeleteEmailTemplate.mockResolvedValue(undefined);
   });
 
   it("renderiza abas de componentes, preview de botoes e salva campos novos", async () => {
@@ -191,7 +201,9 @@ describe("TemplatesPage", () => {
       expect(mockSyncTemplateMetaStatuses).toHaveBeenCalledTimes(1),
     );
     expect(screen.getAllByText("Aprovado").length).toBeGreaterThan(0);
-    expect(screen.getByText(/Status atualizado pela Meta/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Status atualizado pela Meta/i),
+    ).toBeInTheDocument();
   });
 
   it("permite editar e pre-visualizar templates de email em uma aba propria", async () => {
@@ -231,6 +243,45 @@ describe("TemplatesPage", () => {
           "Ola {{nome_devedor}}, pague {{valor}} por aqui: {{payment_link}}",
         isActive: true,
       }),
+    );
+  });
+
+  it("permite criar e excluir templates de email pela UI", async () => {
+    const user = userEvent.setup();
+    jest.spyOn(window, "confirm").mockReturnValueOnce(true);
+
+    render(<TemplatesPage />);
+
+    await user.click(await screen.findByRole("button", { name: "Email" }));
+    await user.click(screen.getByRole("button", { name: "Novo" }));
+
+    expect(screen.getByLabelText("Tipo de template")).not.toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Assunto do email"), {
+      target: { value: "{{nome_empresa}}: nova cobranca" },
+    });
+    fireEvent.change(screen.getByLabelText("Corpo do email"), {
+      target: {
+        value: "Ola {{nome_devedor}}, acesse {{payment_link}}.",
+      },
+    });
+    await user.click(screen.getByRole("button", { name: /salvar/i }));
+
+    await waitFor(() =>
+      expect(mockCreateEmailTemplate).toHaveBeenCalledTimes(1),
+    );
+    expect(mockCreateEmailTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slug: "cobranca-emissao",
+        subject: "{{nome_empresa}}: nova cobranca",
+        content: "Ola {{nome_devedor}}, acesse {{payment_link}}.",
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /excluir/i }));
+
+    await waitFor(() =>
+      expect(mockDeleteEmailTemplate).toHaveBeenCalledWith("email-template-1"),
     );
   });
 });

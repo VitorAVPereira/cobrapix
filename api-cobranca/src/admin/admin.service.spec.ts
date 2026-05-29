@@ -124,7 +124,10 @@ describe('AdminService', () => {
       prisma,
       { configureMetaIntegration } as unknown as WhatsappService,
       { upsertManualGatewayAccount } as unknown as EfiService,
-      { encrypt: jest.fn(), decrypt: jest.fn() } as unknown as PaymentCryptoService,
+      {
+        encrypt: jest.fn(),
+        decrypt: jest.fn(),
+      } as unknown as PaymentCryptoService,
     );
 
     const result = await service.createClient({

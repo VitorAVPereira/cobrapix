@@ -315,7 +315,7 @@ export class AdminService {
       ),
       hasEfiCertificate: Boolean(
         company.paymentGateway?.encryptedCertificate ||
-          company.paymentGateway?.certificatePath,
+        company.paymentGateway?.certificatePath,
       ),
       hasEfiCertificatePassword: Boolean(
         company.paymentGateway?.encryptedCertificatePassword,

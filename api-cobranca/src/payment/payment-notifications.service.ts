@@ -1,10 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { PaymentNotificationStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentCryptoService } from './payment-crypto.service';
-
-const RESEND_API = 'https://api.resend.com';
+import {
+  formatResendFromAddress,
+  ResendMailerService,
+} from '../common/resend-mailer.service';
 
 interface PaidInvoiceRecord {
   id: string;
@@ -89,8 +90,8 @@ export class PaymentNotificationsService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly configService: ConfigService,
     private readonly crypto: PaymentCryptoService,
+    private readonly resendMailer: ResendMailerService,
   ) {}
 
   async notifyPaidInvoice(companyId: string, invoiceId: string): Promise<void> {
@@ -293,31 +294,23 @@ export class PaymentNotificationsService {
       throw new Error('Resend API key nao configurada para esta empresa.');
     }
 
-    const apiKey = this.crypto.decrypt(invoice.company.resendApiKeyEncrypted);
-    const fromEmail =
-      invoice.company.resendFromEmail ??
-      this.configService.get<string>('RESEND_FROM_EMAIL') ??
-      'cobranca@cobrapix.com';
-
-    const response = await fetch(`${RESEND_API}/emails`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: fromEmail,
-        to: recipients,
-        subject: this.buildEmailSubject(invoice),
-        html: this.buildPaymentEmailHtml(invoice, paidAt),
-      }),
-      signal: AbortSignal.timeout(30_000),
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`Resend API: falha (${response.status}): ${body}`);
+    if (!invoice.company.resendFromEmail) {
+      throw new Error('Remetente Resend nao configurado para esta empresa.');
     }
+
+    const apiKey = this.crypto.decrypt(invoice.company.resendApiKeyEncrypted);
+    const fromEmail = formatResendFromAddress(
+      invoice.company.corporateName,
+      invoice.company.resendFromEmail,
+    );
+
+    await this.resendMailer.sendEmail({
+      apiKey,
+      from: fromEmail,
+      to: recipients,
+      subject: this.buildEmailSubject(invoice),
+      html: this.buildPaymentEmailHtml(invoice, paidAt),
+    });
   }
 
   private buildPaymentSummary(

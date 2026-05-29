@@ -7,41 +7,61 @@ import { z } from 'zod';
  * Falha rápido com mensagem legível quando qualquer var obrigatória está ausente
  * ou fora do formato esperado.
  */
-export const envSchema = z.object({
-  NODE_ENV: z
-    .enum(['development', 'test', 'production'])
-    .default('development'),
-  PORT: z.coerce.number().int().positive().default(3001),
-  DATABASE_URL: z.string().min(1, 'DATABASE_URL é obrigatória'),
-  META_GRAPH_API_VERSION: z.string().default('v23.0'),
-  META_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
-  META_WEBHOOK_BASE_URL: z.string().url().optional(),
-  META_APP_SECRET: z.string().optional(),
-  JWT_SECRET: z
-    .string()
-    .min(32, 'JWT_SECRET deve ter pelo menos 32 caracteres'),
-  FRONTEND_URL: z.string().url().default('http://localhost:3000'),
-  EFI_ENV: z.enum(['homologation', 'production']).default('homologation'),
-  EFI_PLATFORM_CLIENT_ID: z.string().optional(),
-  EFI_PLATFORM_CLIENT_SECRET: z.string().optional(),
-  EFI_PLATFORM_CERT_PATH: z.string().optional(),
-  EFI_PLATFORM_CERT_PASSWORD: z.string().optional(),
-  EFI_PLATFORM_PAYEE_CODE: z.string().optional(),
-  EFI_PLATFORM_ACCOUNT_NUMBER: z.string().optional(),
-  EFI_PLATFORM_SPLIT_PERCENTAGE: z.coerce
-    .number()
-    .int()
-    .min(0)
-    .max(10000)
-    .default(0),
-  EFI_WEBHOOK_BASE_URL: z.string().url().optional(),
-  EFI_WEBHOOK_SECRET: z
-    .string()
-    .min(32, 'EFI_WEBHOOK_SECRET deve ter pelo menos 32 caracteres'),
-  PAYMENT_SECRET_KEY: z.string().min(32).optional(),
-  RESEND_FROM_EMAIL: z.string().email().optional(),
-  RESEND_WEBHOOK_SECRET: z.string().optional(),
-});
+export const envSchema = z
+  .object({
+    NODE_ENV: z
+      .enum(['development', 'test', 'production'])
+      .default('development'),
+    PORT: z.coerce.number().int().positive().default(3001),
+    DATABASE_URL: z.string().min(1, 'DATABASE_URL é obrigatória'),
+    META_GRAPH_API_VERSION: z.string().default('v23.0'),
+    META_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
+    META_WEBHOOK_BASE_URL: z.string().url().optional(),
+    META_APP_SECRET: z.string().optional(),
+    JWT_SECRET: z
+      .string()
+      .min(32, 'JWT_SECRET deve ter pelo menos 32 caracteres'),
+    FRONTEND_URL: z.string().url().default('http://localhost:3000'),
+    EFI_ENV: z.enum(['homologation', 'production']).default('homologation'),
+    EFI_PLATFORM_CLIENT_ID: z.string().optional(),
+    EFI_PLATFORM_CLIENT_SECRET: z.string().optional(),
+    EFI_PLATFORM_CERT_PATH: z.string().optional(),
+    EFI_PLATFORM_CERT_PASSWORD: z.string().optional(),
+    EFI_PLATFORM_PAYEE_CODE: z.string().optional(),
+    EFI_PLATFORM_ACCOUNT_NUMBER: z.string().optional(),
+    EFI_PLATFORM_SPLIT_PERCENTAGE: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(10000)
+      .default(0),
+    EFI_WEBHOOK_BASE_URL: z.string().url().optional(),
+    EFI_WEBHOOK_SECRET: z
+      .string()
+      .min(32, 'EFI_WEBHOOK_SECRET deve ter pelo menos 32 caracteres'),
+    PAYMENT_SECRET_KEY: z.string().min(32).optional(),
+    RESEND_WEBHOOK_SECRET: z.string().optional(),
+  })
+  .superRefine((env, ctx) => {
+    if (
+      env.RESEND_WEBHOOK_SECRET &&
+      !env.RESEND_WEBHOOK_SECRET.startsWith('whsec_')
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['RESEND_WEBHOOK_SECRET'],
+        message: 'RESEND_WEBHOOK_SECRET deve comecar com whsec_',
+      });
+    }
+
+    if (env.NODE_ENV === 'production' && !env.RESEND_WEBHOOK_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['RESEND_WEBHOOK_SECRET'],
+        message: 'RESEND_WEBHOOK_SECRET e obrigatoria em producao',
+      });
+    }
+  });
 
 export type Env = z.infer<typeof envSchema>;
 

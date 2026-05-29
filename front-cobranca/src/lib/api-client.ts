@@ -475,6 +475,13 @@ export interface EmailTemplate {
   subject: string;
   content: string;
   isActive: boolean;
+  resendTemplateId: string | null;
+  resendAlias: string | null;
+  resendStatus: string;
+  resendPublishedAt: string | null;
+  lastResendSyncAt: string | null;
+  resendError: string | null;
+  deletedAt: string | null;
   companyId: string;
   createdAt: string;
   updatedAt: string;
@@ -813,7 +820,9 @@ class ApiClient {
   }
 
   private buildMissingAuthError(): ApiError {
-    const error: ApiError = new Error("Sessao autenticada ainda nao carregada.");
+    const error: ApiError = new Error(
+      "Sessao autenticada ainda nao carregada.",
+    );
     error.status = 401;
     error.data = { message: error.message };
     return error;
@@ -1311,6 +1320,12 @@ class ApiClient {
     return this.fetch<EmailTemplate>(`/email/templates/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
+    });
+  }
+
+  async deleteEmailTemplate(id: string): Promise<void> {
+    await this.fetch<void>(`/email/templates/${id}`, {
+      method: "DELETE",
     });
   }
 

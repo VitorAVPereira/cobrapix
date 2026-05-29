@@ -484,10 +484,15 @@ describe('BillingService', () => {
       efiTxid: 'tx-invoice-1',
       efiPixCopiaECola: 'pix-copia-e-cola',
     });
-    const { service, ruleEngine, emailQueue, emailService, emailTemplatesService } =
-      createService({
-        invoices: [invoice],
-      });
+    const {
+      service,
+      ruleEngine,
+      emailQueue,
+      emailService,
+      emailTemplatesService,
+    } = createService({
+      invoices: [invoice],
+    });
     ruleEngine.getNextStep.mockResolvedValue({
       ruleStepId: 'step-1',
       channel: 'EMAIL',
@@ -504,8 +509,7 @@ describe('BillingService', () => {
     );
     expect(emailService.buildCollectionEmailHtml).toHaveBeenCalledWith(
       expect.objectContaining({
-        bodyText:
-          'Ola Maria Silva, acesse pix-copia-e-cola ate 28/04/2026.',
+        bodyText: 'Ola Maria Silva, acesse pix-copia-e-cola ate 28/04/2026.',
       }),
     );
     expect(emailQueue.addBulk).toHaveBeenCalledWith([

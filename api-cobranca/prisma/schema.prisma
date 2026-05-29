@@ -465,18 +465,27 @@ model MessageTemplate {
 }
 
 model EmailTemplate {
-  id        String  @id @default(uuid())
-  name      String
-  slug      String
-  subject   String
-  content   String  @db.Text
-  isActive  Boolean @default(true)
-  companyId String
-  company   Company @relation(fields: [companyId], references: [id])
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                String    @id @default(uuid())
+  name              String
+  slug              String
+  subject           String
+  content           String    @db.Text
+  isActive          Boolean   @default(true)
+  resendTemplateId  String?
+  resendAlias       String?
+  resendStatus      String    @default("local")
+  resendPublishedAt DateTime?
+  lastResendSyncAt  DateTime?
+  resendError       String?   @db.Text
+  deletedAt         DateTime?
+  companyId         String
+  company           Company   @relation(fields: [companyId], references: [id])
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   @@unique([companyId, slug])
+  @@index([companyId, deletedAt])
+  @@index([resendTemplateId])
 }
 
 model MessagingUsage {

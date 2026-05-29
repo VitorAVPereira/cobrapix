@@ -1,11 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { CollectionAttemptStatus, Prisma } from '@prisma/client';
-import { createHmac, timingSafeEqual } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentCryptoService } from '../payment/payment-crypto.service';
+import {
+  formatResendFromAddress,
+  ResendMailerService,
+} from '../common/resend-mailer.service';
 
-const RESEND_API = 'https://api.resend.com';
 const EMAIL_PACING_MS = 100;
 
 interface SendEmailInput {
@@ -35,6 +37,17 @@ interface SvixHeaders {
   signature?: string;
 }
 
+interface AttemptStatusTransition {
+  nextStatus: CollectionAttemptStatus;
+  allowedCurrentStatuses: CollectionAttemptStatus[];
+}
+
+interface WebhookTransactionResult {
+  processed: boolean;
+  eventType: string;
+  eventStored: boolean;
+}
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
@@ -44,6 +57,7 @@ export class EmailService {
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
     private readonly crypto: PaymentCryptoService,
+    private readonly resendMailer: ResendMailerService,
   ) {}
 
   async send(input: SendEmailInput): Promise<string> {
@@ -54,44 +68,36 @@ export class EmailService {
 
     const company = await this.prisma.company.findUnique({
       where: { id: input.companyId },
-      select: { resendApiKeyEncrypted: true, resendFromEmail: true },
+      select: {
+        corporateName: true,
+        resendApiKeyEncrypted: true,
+        resendFromEmail: true,
+      },
     });
 
     if (!company?.resendApiKeyEncrypted) {
       throw new Error('Resend API key nao configurada para esta empresa.');
     }
 
-    const fromEmail = company.resendFromEmail ?? this.defaultFromEmail();
+    if (!company.resendFromEmail) {
+      throw new Error('Remetente Resend nao configurado para esta empresa.');
+    }
+
+    const fromEmail = formatResendFromAddress(
+      company.corporateName,
+      company.resendFromEmail,
+    );
     const apiKey = this.crypto.decrypt(company.resendApiKeyEncrypted);
 
     await this.enforcePacing();
 
-    const response = await fetch(`${RESEND_API}/emails`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: fromEmail,
-        to: [input.email],
-        subject: input.subject,
-        html: input.html,
-      }),
-      signal: AbortSignal.timeout(30_000),
+    const { id: messageId } = await this.resendMailer.sendEmail({
+      apiKey,
+      from: fromEmail,
+      to: [input.email],
+      subject: input.subject,
+      html: input.html,
     });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`Resend API: falha (${response.status}): ${body}`);
-    }
-
-    const result = (await response.json()) as { id?: string };
-    const messageId = result.id;
-
-    if (!messageId) {
-      throw new Error('Resend API: resposta sem ID de mensagem');
-    }
 
     await this.markAttemptAsSent(input, messageId);
 
@@ -205,20 +211,23 @@ export class EmailService {
     headers: SvixHeaders,
   ): Promise<{ processed: boolean; eventType?: string }> {
     const secret = this.configService.get<string>('RESEND_WEBHOOK_SECRET');
-    if (secret) {
-      this.verifySvixSignature(rawBody, headers, secret);
-    }
+    const nodeEnv = this.configService.get<string>('NODE_ENV');
 
     if (!headers.id) {
-      throw new Error('Webhook Resend sem svix-id');
+      throw new Error('Webhook Resend: assinatura ausente');
     }
 
-    let payload: unknown;
-    try {
-      payload = JSON.parse(rawBody.toString('utf8'));
-    } catch {
-      throw new Error('Payload webhook Resend invalido: JSON mal formado');
+    if (!secret && nodeEnv === 'production') {
+      throw new Error('Webhook Resend: assinatura obrigatoria em producao');
     }
+
+    const payload = secret
+      ? this.resendMailer.verifyWebhookEvent({
+          payload: rawBody.toString('utf8'),
+          headers,
+          webhookSecret: secret,
+        })
+      : this.parseWebhookPayload(rawBody);
 
     if (!this.isRecord(payload)) {
       throw new Error('Payload webhook Resend invalido');
@@ -240,62 +249,101 @@ export class EmailService {
       return { processed: false };
     }
 
-    const existing = await this.prisma.emailEvent.findUnique({
-      where: { svixId: headers.id },
-      select: { id: true },
-    });
+    const payloadData = this.extractRecord(payload, 'data');
+    const occurredAt = this.parseWebhookTimestamp(payloadData);
+    const recipientEmail = this.extractRecipientEmail(payloadData);
 
-    if (existing) {
-      return { processed: true, eventType: normalizedType };
-    }
+    let transactionResult: WebhookTransactionResult;
+    try {
+      transactionResult = await this.prisma.$transaction(
+        async (
+          tx: Prisma.TransactionClient,
+        ): Promise<WebhookTransactionResult> => {
+          const existing = await tx.emailEvent.findUnique({
+            where: { svixId: headers.id },
+            select: { id: true },
+          });
 
-    const attempt = await this.prisma.collectionAttempt.findFirst({
-      where: { externalMessageId: emailMessageId, channel: 'EMAIL' },
-      select: { companyId: true, invoiceId: true, status: true },
-    });
+          if (existing) {
+            return {
+              processed: true,
+              eventType: normalizedType,
+              eventStored: false,
+            };
+          }
 
-    if (!attempt) {
-      this.logger.warn(
-        `Webhook Resend ignorado: tentativa nao encontrada para ${emailMessageId}`,
+          const attempt = await tx.collectionAttempt.findFirst({
+            where: { externalMessageId: emailMessageId, channel: 'EMAIL' },
+            select: { companyId: true, invoiceId: true, status: true },
+          });
+
+          if (!attempt) {
+            this.logger.warn(
+              `Webhook Resend ignorado: tentativa nao encontrada para ${emailMessageId}`,
+            );
+            return {
+              processed: false,
+              eventType: normalizedType,
+              eventStored: false,
+            };
+          }
+
+          await tx.emailEvent.create({
+            data: {
+              companyId: attempt.companyId,
+              svixId: headers.id,
+              emailMessageId,
+              eventType: normalizedType,
+              invoiceId: attempt.invoiceId,
+              recipientEmail,
+              rawPayload: payload as Prisma.InputJsonValue,
+              occurredAt,
+            },
+          });
+
+          if (this.canUpdateAttempt(normalizedType)) {
+            const transition = this.mapEventToAttemptStatus(
+              normalizedType,
+              attempt.status,
+            );
+            if (transition) {
+              await tx.collectionAttempt.updateMany({
+                where: {
+                  externalMessageId: emailMessageId,
+                  companyId: attempt.companyId,
+                  channel: 'EMAIL',
+                  status: { in: transition.allowedCurrentStatuses },
+                },
+                data: { status: transition.nextStatus },
+              });
+            }
+          }
+
+          return {
+            processed: true,
+            eventType: normalizedType,
+            eventStored: true,
+          };
+        },
       );
-      return { processed: false, eventType: normalizedType };
-    }
-
-    const occurredAt = this.parseWebhookTimestamp(
-      this.extractRecord(payload, 'data'),
-    );
-
-    await this.prisma.emailEvent.create({
-      data: {
-        companyId: attempt.companyId,
-        svixId: headers.id,
-        emailMessageId,
-        eventType: normalizedType,
-        invoiceId: attempt.invoiceId,
-        recipientEmail: this.extractRecipientEmail(
-          this.extractRecord(payload, 'data'),
-        ),
-        rawPayload: payload as Prisma.InputJsonValue,
-        occurredAt,
-      },
-    });
-
-    if (attempt && this.canUpdateAttempt(normalizedType)) {
-      const newStatus = this.mapEventToAttemptStatus(
-        normalizedType,
-        attempt.status,
-      );
-      if (newStatus) {
-        await this.prisma.collectionAttempt.updateMany({
-          where: { externalMessageId: emailMessageId },
-          data: { status: newStatus as CollectionAttemptStatus },
-        });
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return { processed: true, eventType: normalizedType };
       }
+
+      throw error;
     }
 
-    this.logger.log(`Webhook Resend: ${normalizedType} para ${emailMessageId}`);
+    if (transactionResult.eventStored) {
+      this.logger.log(
+        `Webhook Resend: ${normalizedType} para ${emailMessageId}`,
+      );
+    }
 
-    return { processed: true, eventType: normalizedType };
+    return {
+      processed: transactionResult.processed,
+      eventType: transactionResult.eventType,
+    };
   }
 
   buildCollectionEmailHtml(params: {
@@ -426,36 +474,6 @@ export class EmailService {
     });
   }
 
-  private verifySvixSignature(
-    rawBody: Buffer,
-    headers: SvixHeaders,
-    secret: string,
-  ): void {
-    if (!headers.id || !headers.timestamp || !headers.signature) {
-      throw new Error('Webhook Resend: assinatura ausente');
-    }
-
-    const timestamp = headers.timestamp;
-    const now = Math.floor(Date.now() / 1000);
-    if (Math.abs(now - parseInt(timestamp, 10)) > 300) {
-      throw new Error('Webhook Resend: timestamp fora do intervalo permitido');
-    }
-
-    const signedContent = `${headers.id}.${timestamp}.${rawBody.toString('utf8')}`;
-    const computed = createHmac('sha256', this.decodeSvixSecret(secret))
-      .update(signedContent)
-      .digest('base64');
-
-    const signatures = this.extractSvixSignatures(headers.signature);
-    const valid = signatures.some((signature) =>
-      this.safeEqual(signature, computed),
-    );
-
-    if (!valid) {
-      throw new Error('Webhook Resend: assinatura invalida');
-    }
-  }
-
   private normalizeEventType(raw: string): string | null {
     const valid: string[] = [
       'sent',
@@ -476,24 +494,78 @@ export class EmailService {
   private mapEventToAttemptStatus(
     eventType: string,
     currentStatus: CollectionAttemptStatus,
-  ): string | null {
-    if (currentStatus === 'CLICKED') {
-      return null;
-    }
-
-    if (currentStatus === 'OPENED' && eventType === 'delivered') {
-      return null;
-    }
-
-    const map: Record<string, string> = {
-      sent: 'SENT',
-      delivered: 'DELIVERED',
-      opened: 'OPENED',
-      clicked: 'CLICKED',
-      bounced: 'FAILED',
-      failed: 'FAILED',
+  ): AttemptStatusTransition | null {
+    const transitions: Record<string, AttemptStatusTransition> = {
+      sent: {
+        nextStatus: 'SENT',
+        allowedCurrentStatuses: ['QUEUED', 'SENT'],
+      },
+      delivered: {
+        nextStatus: 'DELIVERED',
+        allowedCurrentStatuses: ['QUEUED', 'SENT', 'DELIVERED'],
+      },
+      opened: {
+        nextStatus: 'OPENED',
+        allowedCurrentStatuses: ['QUEUED', 'SENT', 'DELIVERED', 'OPENED'],
+      },
+      clicked: {
+        nextStatus: 'CLICKED',
+        allowedCurrentStatuses: [
+          'QUEUED',
+          'SENT',
+          'DELIVERED',
+          'OPENED',
+          'CLICKED',
+        ],
+      },
+      bounced: {
+        nextStatus: 'FAILED',
+        allowedCurrentStatuses: [
+          'QUEUED',
+          'SENT',
+          'DELIVERED',
+          'OPENED',
+          'FAILED',
+        ],
+      },
+      complained: {
+        nextStatus: 'FAILED',
+        allowedCurrentStatuses: [
+          'QUEUED',
+          'SENT',
+          'DELIVERED',
+          'OPENED',
+          'FAILED',
+        ],
+      },
+      failed: {
+        nextStatus: 'FAILED',
+        allowedCurrentStatuses: [
+          'QUEUED',
+          'SENT',
+          'DELIVERED',
+          'OPENED',
+          'FAILED',
+        ],
+      },
+      suppressed: {
+        nextStatus: 'FAILED',
+        allowedCurrentStatuses: [
+          'QUEUED',
+          'SENT',
+          'DELIVERED',
+          'OPENED',
+          'FAILED',
+        ],
+      },
     };
-    return map[eventType] ?? null;
+    const transition = transitions[eventType];
+
+    if (!transition?.allowedCurrentStatuses.includes(currentStatus)) {
+      return null;
+    }
+
+    return transition;
   }
 
   private canUpdateAttempt(eventType: string): boolean {
@@ -503,35 +575,24 @@ export class EmailService {
       'opened',
       'clicked',
       'bounced',
+      'complained',
       'failed',
+      'suppressed',
     ].includes(eventType);
   }
 
-  private decodeSvixSecret(secret: string): Buffer {
-    if (secret.startsWith('whsec_')) {
-      return Buffer.from(secret.slice('whsec_'.length), 'base64');
+  private isUniqueConstraintError(error: unknown): boolean {
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      return error.code === 'P2002';
     }
 
-    return Buffer.from(secret, 'utf8');
-  }
-
-  private extractSvixSignatures(signatureHeader: string): string[] {
-    return signatureHeader
-      .split(' ')
-      .map((part) => part.trim())
-      .map((part) => part.split(','))
-      .filter(([version, signature]) => version === 'v1' && Boolean(signature))
-      .map(([, signature]) => signature)
-      .filter((signature): signature is string => Boolean(signature));
-  }
-
-  private safeEqual(left: string, right: string): boolean {
-    const leftBuffer = Buffer.from(left, 'utf8');
-    const rightBuffer = Buffer.from(right, 'utf8');
+    if (!this.isRecord(error)) {
+      return false;
+    }
 
     return (
-      leftBuffer.length === rightBuffer.length &&
-      timingSafeEqual(leftBuffer, rightBuffer)
+      this.extractString(error, 'name') === 'PrismaClientKnownRequestError' &&
+      this.extractString(error, 'code') === 'P2002'
     );
   }
 
@@ -544,13 +605,6 @@ export class EmailService {
       );
     }
     this.lastSendTimestamp = Date.now();
-  }
-
-  private defaultFromEmail(): string {
-    return (
-      this.configService.get<string>('RESEND_FROM_EMAIL') ??
-      'cobranca@cobrapix.com'
-    );
   }
 
   private escapeHtml(text: string): string {
@@ -593,6 +647,20 @@ export class EmailService {
     const date = created ? new Date(created) : new Date();
 
     return Number.isNaN(date.getTime()) ? new Date() : date;
+  }
+
+  private parseWebhookPayload(rawBody: Buffer): Record<string, unknown> {
+    try {
+      const payload = JSON.parse(rawBody.toString('utf8')) as unknown;
+
+      if (this.isRecord(payload)) {
+        return payload;
+      }
+    } catch {
+      throw new Error('Payload webhook Resend invalido: JSON mal formado');
+    }
+
+    throw new Error('Payload webhook Resend invalido');
   }
 
   private isRecord(value: unknown): value is Record<string, unknown> {

@@ -15,6 +15,7 @@ import {
   Smartphone,
   ToggleLeft,
   ToggleRight,
+  Trash2,
   UploadCloud,
 } from "lucide-react";
 import type {
@@ -272,9 +273,7 @@ function sortTemplates<T extends { slug: string; name: string }>(
   });
 }
 
-function emailTemplateToForm(
-  template: EmailTemplate,
-): EmailTemplateFormState {
+function emailTemplateToForm(template: EmailTemplate): EmailTemplateFormState {
   const option = getTemplateOption(template.slug);
 
   return {
@@ -313,13 +312,32 @@ function templateToForm(template: MessageTemplate): TemplateFormState {
 }
 
 function getFirstAvailableTemplateOption(
-  templates: MessageTemplate[],
+  templates: Array<{ slug: string }>,
 ): TemplateOption {
   return (
     TEMPLATE_OPTIONS.find(
       (option) => !templates.some((template) => template.slug === option.slug),
     ) ?? DEFAULT_TEMPLATE_OPTION
   );
+}
+
+function getEmailResendStatusStyle(status: string): string {
+  const normalized = status.toLowerCase();
+
+  if (normalized === "published") return "bg-emerald-100 text-emerald-700";
+  if (normalized === "deleted") return "bg-slate-100 text-slate-600";
+  if (normalized === "error") return "bg-red-100 text-red-700";
+  return "bg-amber-100 text-amber-700";
+}
+
+function formatEmailResendStatus(status: string): string {
+  const normalized = status.toLowerCase();
+
+  if (normalized === "published") return "Publicado";
+  if (normalized === "deleted") return "Excluido";
+  if (normalized === "error") return "Erro";
+  if (normalized === "draft") return "Rascunho";
+  return "Local";
 }
 
 function getMetaStatusStyle(status: string): {
@@ -408,8 +426,7 @@ export default function TemplatesPage() {
   const [form, setForm] = useState<TemplateFormState>(EMPTY_FORM);
   const [emailForm, setEmailForm] =
     useState<EmailTemplateFormState>(EMPTY_EMAIL_FORM);
-  const [activeChannel, setActiveChannel] =
-    useState<ChannelTab>("whatsapp");
+  const [activeChannel, setActiveChannel] = useState<ChannelTab>("whatsapp");
   const [activeTab, setActiveTab] = useState<ComponentTab>("body");
   const [loading, setLoading] = useState(true);
   const [loadingEmail, setLoadingEmail] = useState(true);
@@ -542,12 +559,7 @@ export default function TemplatesPage() {
   );
 
   useEffect(() => {
-    if (
-      loading ||
-      saving ||
-      syncingMeta ||
-      !hasTemplatesWaitingForMeta
-    ) {
+    if (loading || saving || syncingMeta || !hasTemplatesWaitingForMeta) {
       return;
     }
 
@@ -595,6 +607,27 @@ export default function TemplatesPage() {
       metaTemplateName: `cobrapix_${option.slug.replaceAll("-", "_")}`,
     });
     setActiveTab("body");
+    setError(null);
+    setSuccess(null);
+  }
+
+  function startNewEmailTemplate(): void {
+    const option = getFirstAvailableTemplateOption(emailTemplates);
+
+    if (emailTemplates.some((template) => template.slug === option.slug)) {
+      setError("Todos os tipos de template de email ja foram criados.");
+      setSuccess(null);
+      return;
+    }
+
+    setEmailForm({
+      ...EMPTY_EMAIL_FORM,
+      name: option.name,
+      slug: option.slug,
+      subject: "{{nome_empresa}}: cobranca",
+      content: option.defaultContent,
+      isActive: true,
+    });
     setError(null);
     setSuccess(null);
   }
@@ -648,6 +681,22 @@ export default function TemplatesPage() {
       metaTemplateName: current.metaTemplateName.trim()
         ? current.metaTemplateName
         : `cobrapix_${option.slug.replaceAll("-", "_")}`,
+    }));
+    setSuccess(null);
+  }
+
+  function selectEmailTemplateType(slug: MessageTemplateSlug): void {
+    const option = getTemplateOption(slug);
+    if (!option) return;
+
+    setEmailForm((current) => ({
+      ...current,
+      name: option.name,
+      slug: option.slug,
+      subject: current.subject.trim()
+        ? current.subject
+        : "{{nome_empresa}}: cobranca",
+      content: current.content.trim() ? current.content : option.defaultContent,
     }));
     setSuccess(null);
   }
@@ -754,6 +803,42 @@ export default function TemplatesPage() {
     }
   }
 
+  async function deleteEmailTemplate(): Promise<void> {
+    if (!emailForm.id) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Excluir este template de email tambem remove o template correspondente na Resend. Deseja continuar?",
+    );
+    if (!confirmed) return;
+
+    setSavingEmail(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      await apiClient.deleteEmailTemplate(emailForm.id);
+      const nextTemplates = sortTemplates(
+        emailTemplates.filter((template) => template.id !== emailForm.id),
+      );
+      const firstTemplate =
+        nextTemplates.find(
+          (template) => template.slug === DEFAULT_TEMPLATE_OPTION.slug,
+        ) ?? nextTemplates[0];
+
+      setEmailTemplates(nextTemplates);
+      setEmailForm(
+        firstTemplate ? emailTemplateToForm(firstTemplate) : EMPTY_EMAIL_FORM,
+      );
+      setSuccess("Template de email excluido com sucesso.");
+    } catch (deleteError) {
+      setError(getErrorMessage(deleteError));
+    } finally {
+      setSavingEmail(false);
+    }
+  }
+
   async function submitToMeta(): Promise<void> {
     if (!form.id) {
       setError("Salve o template antes de enviar para a Meta.");
@@ -799,16 +884,19 @@ export default function TemplatesPage() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            {activeChannel === "whatsapp" && (
-              <button
-                type="button"
-                onClick={startNewTemplate}
-                className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-100"
-              >
-                <CirclePlus size={18} />
-                Novo
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={
+                activeChannel === "whatsapp"
+                  ? startNewTemplate
+                  : startNewEmailTemplate
+              }
+              disabled={activeChannel === "whatsapp" ? loading : loadingEmail}
+              className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <CirclePlus size={18} />
+              Novo
+            </button>
             <button
               type="button"
               onClick={() =>
@@ -830,6 +918,17 @@ export default function TemplatesPage() {
               )}
               Salvar
             </button>
+            {activeChannel === "email" && emailForm.id && (
+              <button
+                type="button"
+                onClick={() => void deleteEmailTemplate()}
+                disabled={savingEmail || loadingEmail}
+                className="inline-flex items-center justify-center gap-2 rounded-md border border-red-200 bg-white px-4 py-2 text-sm font-semibold text-red-700 shadow-sm transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Trash2 size={18} />
+                Excluir
+              </button>
+            )}
             {activeChannel === "whatsapp" && (
               <button
                 type="button"
@@ -926,375 +1025,384 @@ export default function TemplatesPage() {
 
         {activeChannel === "whatsapp" && (
           <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)_340px]">
-          <section className="rounded-md border border-slate-200 bg-white">
-            <div className="border-b border-slate-200 px-4 py-3">
-              <h2 className="text-sm font-semibold text-slate-900">
-                Templates
-              </h2>
-            </div>
+            <section className="rounded-md border border-slate-200 bg-white">
+              <div className="border-b border-slate-200 px-4 py-3">
+                <h2 className="text-sm font-semibold text-slate-900">
+                  Templates
+                </h2>
+              </div>
 
-            <div className="max-h-155 overflow-y-auto p-2">
-              {loading ? (
-                <div className="flex items-center gap-2 px-3 py-4 text-sm text-slate-500">
-                  <Loader2 className="animate-spin" size={16} />
-                  Carregando templates
-                </div>
-              ) : templates.length === 0 ? (
-                <div className="px-3 py-4 text-sm text-slate-500">
-                  Nenhum template salvo ainda.
-                </div>
-              ) : (
-                templates.map((template) => {
-                  const active = template.id === form.id;
+              <div className="max-h-155 overflow-y-auto p-2">
+                {loading ? (
+                  <div className="flex items-center gap-2 px-3 py-4 text-sm text-slate-500">
+                    <Loader2 className="animate-spin" size={16} />
+                    Carregando templates
+                  </div>
+                ) : templates.length === 0 ? (
+                  <div className="px-3 py-4 text-sm text-slate-500">
+                    Nenhum template salvo ainda.
+                  </div>
+                ) : (
+                  templates.map((template) => {
+                    const active = template.id === form.id;
 
-                  return (
-                    <button
-                      key={template.id}
-                      type="button"
-                      onClick={() => selectTemplate(template)}
-                      className={`mb-2 w-full rounded-md border px-3 py-3 text-left transition ${
-                        active
-                          ? "border-emerald-300 bg-emerald-50"
-                          : "border-slate-200 bg-white hover:bg-slate-50"
-                      }`}
-                    >
-                      <span className="block truncate text-sm font-semibold text-slate-900">
-                        {template.name}
-                      </span>
-                      <span
-                        className={`mt-2 inline-flex rounded px-2 py-0.5 text-xs font-semibold ${
-                          template.isActive
-                            ? "bg-emerald-100 text-emerald-700"
-                            : "bg-slate-100 text-slate-600"
+                    return (
+                      <button
+                        key={template.id}
+                        type="button"
+                        onClick={() => selectTemplate(template)}
+                        className={`mb-2 w-full rounded-md border px-3 py-3 text-left transition ${
+                          active
+                            ? "border-emerald-300 bg-emerald-50"
+                            : "border-slate-200 bg-white hover:bg-slate-50"
                         }`}
                       >
-                        {template.isActive ? "Ativo" : "Inativo"}
-                      </span>
-                      <span
-                        className="ml-2 inline-flex rounded px-2 py-0.5 text-xs font-semibold"
-                        style={getMetaStatusStyle(template.metaStatus)}
-                      >
-                        {formatMetaStatus(template.metaStatus)}
-                      </span>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          </section>
-
-          <section className="rounded-md border border-slate-200 bg-white">
-            <div className="border-b border-slate-200 px-5 py-4">
-              <div className="flex flex-wrap gap-2">
-                {TABS.map((tab) => (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`rounded-md px-3 py-2 text-sm font-semibold transition ${
-                      activeTab === tab.id
-                        ? "bg-slate-950 text-white"
-                        : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
+                        <span className="block truncate text-sm font-semibold text-slate-900">
+                          {template.name}
+                        </span>
+                        <span
+                          className={`mt-2 inline-flex rounded px-2 py-0.5 text-xs font-semibold ${
+                            template.isActive
+                              ? "bg-emerald-100 text-emerald-700"
+                              : "bg-slate-100 text-slate-600"
+                          }`}
+                        >
+                          {template.isActive ? "Ativo" : "Inativo"}
+                        </span>
+                        <span
+                          className="ml-2 inline-flex rounded px-2 py-0.5 text-xs font-semibold"
+                          style={getMetaStatusStyle(template.metaStatus)}
+                        >
+                          {formatMetaStatus(template.metaStatus)}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
               </div>
-            </div>
+            </section>
 
-            <div className="space-y-5 p-5">
-              {activeTab === "body" && (
-                <>
-                  <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">
+            <section className="rounded-md border border-slate-200 bg-white">
+              <div className="border-b border-slate-200 px-5 py-4">
+                <div className="flex flex-wrap gap-2">
+                  {TABS.map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setActiveTab(tab.id)}
+                      className={`rounded-md px-3 py-2 text-sm font-semibold transition ${
+                        activeTab === tab.id
+                          ? "bg-slate-950 text-white"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-5 p-5">
+                {activeTab === "body" && (
+                  <>
+                    <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">
+                      <label className="space-y-1.5">
+                        <span className="text-sm font-medium text-slate-700">
+                          Tipo de template
+                        </span>
+                        <select
+                          value={form.slug}
+                          onChange={(event) =>
+                            selectTemplateType(
+                              event.target.value as MessageTemplateSlug,
+                            )
+                          }
+                          className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                        >
+                          {TEMPLATE_OPTIONS.map((option) => (
+                            <option key={option.slug} value={option.slug}>
+                              {option.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <button
+                        type="button"
+                        onClick={() => updateForm("isActive", !form.isActive)}
+                        className="mt-6 inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
+                      >
+                        {form.isActive ? (
+                          <ToggleRight className="text-emerald-600" size={22} />
+                        ) : (
+                          <ToggleLeft className="text-slate-500" size={22} />
+                        )}
+                        {form.isActive ? "Ativo" : "Inativo"}
+                      </button>
+                    </div>
+
+                    <div className="space-y-2">
+                      <span className="text-sm font-medium text-slate-700">
+                        Placeholders
+                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        {VARIABLES.map((variable) => (
+                          <button
+                            key={variable.tag}
+                            type="button"
+                            onClick={() => insertVariable(variable.tag)}
+                            title={variable.tag}
+                            className="max-w-full rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-left text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                          >
+                            <span className="block">{variable.label}</span>
+                            <code className="block break-all font-mono text-[11px] font-medium text-emerald-900">
+                              {variable.tag}
+                            </code>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
                     <label className="space-y-1.5">
                       <span className="text-sm font-medium text-slate-700">
-                        Tipo de template
+                        Corpo da mensagem
                       </span>
-                      <select
-                        value={form.slug}
+                      <textarea
+                        value={form.content}
                         onChange={(event) =>
-                          selectTemplateType(
-                            event.target.value as MessageTemplateSlug,
-                          )
+                          updateForm("content", event.target.value)
                         }
-                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                      >
-                        {TEMPLATE_OPTIONS.map((option) => (
-                          <option key={option.slug} value={option.slug}>
-                            {option.name}
-                          </option>
-                        ))}
-                      </select>
+                        rows={12}
+                        className="w-full resize-none rounded-md border border-slate-300 px-3 py-3 text-sm leading-6 text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                      />
                     </label>
+                  </>
+                )}
 
-                    <button
-                      type="button"
-                      onClick={() => updateForm("isActive", !form.isActive)}
-                      className="mt-6 inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
-                    >
-                      {form.isActive ? (
-                        <ToggleRight className="text-emerald-600" size={22} />
-                      ) : (
-                        <ToggleLeft className="text-slate-500" size={22} />
-                      )}
-                      {form.isActive ? "Ativo" : "Inativo"}
-                    </button>
-                  </div>
-
-                  <div className="space-y-2">
-                    <span className="text-sm font-medium text-slate-700">
-                      Placeholders
-                    </span>
-                    <div className="flex flex-wrap gap-2">
-                      {VARIABLES.map((variable) => (
-                        <button
-                          key={variable.tag}
-                          type="button"
-                          onClick={() => insertVariable(variable.tag)}
-                          title={variable.tag}
-                          className="max-w-full rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-left text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
-                        >
-                          <span className="block">{variable.label}</span>
-                          <code className="block break-all font-mono text-[11px] font-medium text-emerald-900">
-                            {variable.tag}
-                          </code>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
+                {activeTab === "footer" && (
                   <label className="space-y-1.5">
-                    <span className="text-sm font-medium text-slate-700">
-                      Corpo da mensagem
+                    <span className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                      <FileText size={16} />
+                      Texto do rodape
                     </span>
                     <textarea
-                      value={form.content}
+                      aria-label="Texto do rodape"
+                      value={form.footerText}
                       onChange={(event) =>
-                        updateForm("content", event.target.value)
+                        updateForm("footerText", event.target.value)
                       }
-                      rows={12}
+                      rows={4}
+                      maxLength={60}
                       className="w-full resize-none rounded-md border border-slate-300 px-3 py-3 text-sm leading-6 text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                     />
-                  </label>
-                </>
-              )}
-
-              {activeTab === "footer" && (
-                <label className="space-y-1.5">
-                  <span className="flex items-center gap-2 text-sm font-medium text-slate-700">
-                    <FileText size={16} />
-                    Texto do rodape
-                  </span>
-                  <textarea
-                    aria-label="Texto do rodape"
-                    value={form.footerText}
-                    onChange={(event) =>
-                      updateForm("footerText", event.target.value)
-                    }
-                    rows={4}
-                    maxLength={60}
-                    className="w-full resize-none rounded-md border border-slate-300 px-3 py-3 text-sm leading-6 text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                  />
-                  <span className="block text-xs text-slate-500">
-                    {form.footerText.length}/60 caracteres
-                  </span>
-                </label>
-              )}
-
-              {activeTab === "buttons" && (
-                <div className="space-y-5">
-                  <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
-                    <input
-                      type="checkbox"
-                      checked={form.paymentButtonEnabled}
-                      onChange={(event) =>
-                        updateForm("paymentButtonEnabled", event.target.checked)
-                      }
-                      className="mt-1 h-4 w-4 rounded border-slate-300"
-                    />
-                    <span>
-                      <span className="block text-sm font-semibold text-slate-800">
-                        Abrir pagamento/copiar codigo
-                      </span>
-                      <span className="mt-1 block text-xs text-slate-500">
-                        Botao URL seguro para a pagina /pagar com Pix e boleto.
-                      </span>
+                    <span className="block text-xs text-slate-500">
+                      {form.footerText.length}/60 caracteres
                     </span>
                   </label>
+                )}
 
-                  <label className="space-y-1.5">
-                    <span className="text-sm font-medium text-slate-700">
-                      Texto do botao de pagamento
-                    </span>
-                    <input
-                      value={form.paymentButtonLabel}
-                      onChange={(event) =>
-                        updateForm("paymentButtonLabel", event.target.value)
-                      }
-                      maxLength={25}
-                      className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                    />
-                  </label>
-
-                  <div className="rounded-md border border-amber-200 bg-amber-50 p-4">
-                    <label className="flex items-start gap-3">
+                {activeTab === "buttons" && (
+                  <div className="space-y-5">
+                    <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
                       <input
                         type="checkbox"
-                        checked={form.copyCodeButtonEnabled}
+                        checked={form.paymentButtonEnabled}
                         onChange={(event) =>
                           updateForm(
-                            "copyCodeButtonEnabled",
+                            "paymentButtonEnabled",
                             event.target.checked,
                           )
                         }
                         className="mt-1 h-4 w-4 rounded border-slate-300"
                       />
-                      <span className="text-sm font-semibold text-amber-950">
-                        COPY_CODE direto
+                      <span>
+                        <span className="block text-sm font-semibold text-slate-800">
+                          Abrir pagamento/copiar codigo
+                        </span>
+                        <span className="mt-1 block text-xs text-slate-500">
+                          Botao URL seguro para a pagina /pagar com Pix e
+                          boleto.
+                        </span>
                       </span>
                     </label>
 
-                    <label className="mt-3 block space-y-1.5">
-                      <span className="text-sm font-medium text-amber-950">
-                        Origem do COPY_CODE
+                    <label className="space-y-1.5">
+                      <span className="text-sm font-medium text-slate-700">
+                        Texto do botao de pagamento
+                      </span>
+                      <input
+                        value={form.paymentButtonLabel}
+                        onChange={(event) =>
+                          updateForm("paymentButtonLabel", event.target.value)
+                        }
+                        maxLength={25}
+                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                      />
+                    </label>
+
+                    <div className="rounded-md border border-amber-200 bg-amber-50 p-4">
+                      <label className="flex items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={form.copyCodeButtonEnabled}
+                          onChange={(event) =>
+                            updateForm(
+                              "copyCodeButtonEnabled",
+                              event.target.checked,
+                            )
+                          }
+                          className="mt-1 h-4 w-4 rounded border-slate-300"
+                        />
+                        <span className="text-sm font-semibold text-amber-950">
+                          COPY_CODE direto
+                        </span>
+                      </label>
+
+                      <label className="mt-3 block space-y-1.5">
+                        <span className="text-sm font-medium text-amber-950">
+                          Origem do COPY_CODE
+                        </span>
+                        <select
+                          aria-label="Origem do COPY_CODE"
+                          value={form.copyCodeSource}
+                          onChange={(event) =>
+                            updateForm(
+                              "copyCodeSource",
+                              event.target
+                                .value as MessageTemplateCopyCodeSource,
+                            )
+                          }
+                          className="w-full rounded-md border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                        >
+                          <option value="AUTO">Automatico</option>
+                          <option value="PIX_COPY_PASTE">
+                            Pix copia e cola
+                          </option>
+                          <option value="BOLETO_LINE_DIGITABLE">
+                            Linha digitavel
+                          </option>
+                        </select>
+                      </label>
+
+                      {!copyCodeValid && (
+                        <p className="mt-3 text-xs font-medium text-amber-900">
+                          Pix copia e cola e linha digitavel costumam
+                          ultrapassar o limite de 15 caracteres da Meta. Use o
+                          botao de pagamento.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {activeTab === "meta" && (
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <label className="space-y-1.5 md:col-span-2">
+                      <span className="text-sm font-medium text-slate-700">
+                        Nome oficial na Meta
+                      </span>
+                      <input
+                        value={form.metaTemplateName}
+                        onChange={(event) =>
+                          updateForm("metaTemplateName", event.target.value)
+                        }
+                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                      />
+                    </label>
+
+                    <label className="space-y-1.5">
+                      <span className="text-sm font-medium text-slate-700">
+                        Idioma
+                      </span>
+                      <input
+                        value={form.metaLanguage}
+                        onChange={(event) =>
+                          updateForm("metaLanguage", event.target.value)
+                        }
+                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                      />
+                    </label>
+
+                    <label className="space-y-1.5 md:col-span-3">
+                      <span className="text-sm font-medium text-slate-700">
+                        Categoria
                       </span>
                       <select
-                        aria-label="Origem do COPY_CODE"
-                        value={form.copyCodeSource}
+                        value={form.category}
                         onChange={(event) =>
                           updateForm(
-                            "copyCodeSource",
-                            event.target.value as MessageTemplateCopyCodeSource,
+                            "category",
+                            event.target.value as TemplateFormState["category"],
                           )
                         }
-                        className="w-full rounded-md border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                       >
-                        <option value="AUTO">Automatico</option>
-                        <option value="PIX_COPY_PASTE">Pix copia e cola</option>
-                        <option value="BOLETO_LINE_DIGITABLE">
-                          Linha digitavel
-                        </option>
+                        <option value="UTILITY">UTILITY</option>
+                        <option value="MARKETING">MARKETING</option>
+                        <option value="AUTHENTICATION">AUTHENTICATION</option>
                       </select>
                     </label>
-
-                    {!copyCodeValid && (
-                      <p className="mt-3 text-xs font-medium text-amber-900">
-                        Pix copia e cola e linha digitavel costumam ultrapassar
-                        o limite de 15 caracteres da Meta. Use o botao de
-                        pagamento.
-                      </p>
-                    )}
                   </div>
-                </div>
-              )}
+                )}
+              </div>
+            </section>
 
-              {activeTab === "meta" && (
-                <div className="grid gap-4 md:grid-cols-3">
-                  <label className="space-y-1.5 md:col-span-2">
-                    <span className="text-sm font-medium text-slate-700">
-                      Nome oficial na Meta
-                    </span>
-                    <input
-                      value={form.metaTemplateName}
-                      onChange={(event) =>
-                        updateForm("metaTemplateName", event.target.value)
-                      }
-                      className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                    />
-                  </label>
+            <aside className="rounded-md border border-slate-200 bg-white">
+              <div className="flex items-center gap-2 border-b border-slate-200 px-5 py-4">
+                <Smartphone size={18} />
+                <h2 className="text-sm font-semibold text-slate-900">
+                  Preview
+                </h2>
+              </div>
 
-                  <label className="space-y-1.5">
-                    <span className="text-sm font-medium text-slate-700">
-                      Idioma
-                    </span>
-                    <input
-                      value={form.metaLanguage}
-                      onChange={(event) =>
-                        updateForm("metaLanguage", event.target.value)
-                      }
-                      className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                    />
-                  </label>
-
-                  <label className="space-y-1.5 md:col-span-3">
-                    <span className="text-sm font-medium text-slate-700">
-                      Categoria
-                    </span>
-                    <select
-                      value={form.category}
-                      onChange={(event) =>
-                        updateForm(
-                          "category",
-                          event.target.value as TemplateFormState["category"],
-                        )
-                      }
-                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                    >
-                      <option value="UTILITY">UTILITY</option>
-                      <option value="MARKETING">MARKETING</option>
-                      <option value="AUTHENTICATION">AUTHENTICATION</option>
-                    </select>
-                  </label>
-                </div>
-              )}
-            </div>
-          </section>
-
-          <aside className="rounded-md border border-slate-200 bg-white">
-            <div className="flex items-center gap-2 border-b border-slate-200 px-5 py-4">
-              <Smartphone size={18} />
-              <h2 className="text-sm font-semibold text-slate-900">Preview</h2>
-            </div>
-
-            <div className="flex justify-center p-5">
-              <div className="flex h-130 w-full max-w-75 flex-col overflow-hidden rounded-[28px] border-10 border-slate-950 bg-[#efeae2] shadow-xl">
-                <div className="flex h-16 shrink-0 items-center gap-3 bg-[#075e54] px-4 text-white">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15">
-                    <MessageSquareText size={18} />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold">Cliente</p>
-                    <p className="text-xs text-white/70">online</p>
-                  </div>
-                </div>
-
-                <div className="flex flex-1 items-start overflow-y-auto p-4">
-                  <div className="max-w-[92%] overflow-hidden rounded-md rounded-tl-none bg-white text-sm leading-5 text-slate-900 shadow-sm">
-                    <div className="wrap-break-word whitespace-pre-wrap px-3 py-2">
-                      {previewBody || "A mensagem aparecera aqui."}
-                      {previewFooter && (
-                        <div className="mt-2 border-t border-slate-100 pt-2 text-xs text-slate-500">
-                          {previewFooter}
-                        </div>
-                      )}
-                      <div className="mt-1 text-right text-[11px] text-slate-400">
-                        09:00
-                      </div>
+              <div className="flex justify-center p-5">
+                <div className="flex h-130 w-full max-w-75 flex-col overflow-hidden rounded-[28px] border-10 border-slate-950 bg-[#efeae2] shadow-xl">
+                  <div className="flex h-16 shrink-0 items-center gap-3 bg-[#075e54] px-4 text-white">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15">
+                      <MessageSquareText size={18} />
                     </div>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">Cliente</p>
+                      <p className="text-xs text-white/70">online</p>
+                    </div>
+                  </div>
 
-                    {form.paymentButtonEnabled && (
-                      <button
-                        type="button"
-                        className="flex w-full items-center justify-center gap-2 border-t border-slate-100 px-3 py-2 text-xs font-semibold text-sky-700"
-                      >
-                        <ExternalLink size={13} />
-                        {form.paymentButtonLabel || "Abrir pagamento"}
-                      </button>
-                    )}
-                    {form.copyCodeButtonEnabled && copyCodeValid && (
-                      <button
-                        type="button"
-                        className="flex w-full items-center justify-center gap-2 border-t border-slate-100 px-3 py-2 text-xs font-semibold text-sky-700"
-                      >
-                        <Code2 size={13} />
-                        Copiar codigo
-                      </button>
-                    )}
+                  <div className="flex flex-1 items-start overflow-y-auto p-4">
+                    <div className="max-w-[92%] overflow-hidden rounded-md rounded-tl-none bg-white text-sm leading-5 text-slate-900 shadow-sm">
+                      <div className="wrap-break-word whitespace-pre-wrap px-3 py-2">
+                        {previewBody || "A mensagem aparecera aqui."}
+                        {previewFooter && (
+                          <div className="mt-2 border-t border-slate-100 pt-2 text-xs text-slate-500">
+                            {previewFooter}
+                          </div>
+                        )}
+                        <div className="mt-1 text-right text-[11px] text-slate-400">
+                          09:00
+                        </div>
+                      </div>
+
+                      {form.paymentButtonEnabled && (
+                        <button
+                          type="button"
+                          className="flex w-full items-center justify-center gap-2 border-t border-slate-100 px-3 py-2 text-xs font-semibold text-sky-700"
+                        >
+                          <ExternalLink size={13} />
+                          {form.paymentButtonLabel || "Abrir pagamento"}
+                        </button>
+                      )}
+                      {form.copyCodeButtonEnabled && copyCodeValid && (
+                        <button
+                          type="button"
+                          className="flex w-full items-center justify-center gap-2 border-t border-slate-100 px-3 py-2 text-xs font-semibold text-sky-700"
+                        >
+                          <Code2 size={13} />
+                          Copiar codigo
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
             </aside>
           </div>
         )}
@@ -1303,9 +1411,7 @@ export default function TemplatesPage() {
           <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)_420px]">
             <section className="rounded-md border border-slate-200 bg-white">
               <div className="border-b border-slate-200 px-4 py-3">
-                <h2 className="text-sm font-semibold text-slate-900">
-                  Emails
-                </h2>
+                <h2 className="text-sm font-semibold text-slate-900">Emails</h2>
               </div>
 
               <div className="max-h-155 overflow-y-auto p-2">
@@ -1345,6 +1451,13 @@ export default function TemplatesPage() {
                         >
                           {template.isActive ? "Ativo" : "Inativo"}
                         </span>
+                        <span
+                          className={`ml-2 mt-2 inline-flex rounded px-2 py-0.5 text-xs font-semibold ${getEmailResendStatusStyle(
+                            template.resendStatus,
+                          )}`}
+                        >
+                          {formatEmailResendStatus(template.resendStatus)}
+                        </span>
                       </button>
                     );
                   })
@@ -1359,11 +1472,23 @@ export default function TemplatesPage() {
                     Tipo de template
                   </span>
                   <select
+                    aria-label="Tipo de template"
                     value={emailForm.slug}
-                    disabled
+                    disabled={Boolean(emailForm.id)}
+                    onChange={(event) =>
+                      selectEmailTemplateType(
+                        event.target.value as MessageTemplateSlug,
+                      )
+                    }
                     className="w-full rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700"
                   >
-                    {TEMPLATE_OPTIONS.map((option) => (
+                    {TEMPLATE_OPTIONS.filter(
+                      (option) =>
+                        option.slug === emailForm.slug ||
+                        !emailTemplates.some(
+                          (template) => template.slug === option.slug,
+                        ),
+                    ).map((option) => (
                       <option key={option.slug} value={option.slug}>
                         {option.name}
                       </option>

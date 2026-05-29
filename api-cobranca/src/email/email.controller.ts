@@ -7,16 +7,11 @@ import {
   Query,
   HttpException,
   HttpStatus,
-  Headers,
-  Req,
 } from '@nestjs/common';
-import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { EmailService } from './email.service';
 import { EmailQueueService } from './email.queue';
-
-type RawBodyRequest = Request & { rawBody?: Buffer };
 
 interface AuthenticatedUser {
   companyId: string;
@@ -28,35 +23,6 @@ export class EmailController {
     private readonly emailService: EmailService,
     private readonly emailQueue: EmailQueueService,
   ) {}
-
-  @Post('webhooks/resend')
-  async handleResendWebhook(
-    @Body() payload: unknown,
-    @Headers('svix-id') svixId: string | undefined,
-    @Headers('svix-timestamp') svixTimestamp: string | undefined,
-    @Headers('svix-signature') svixSignature: string | undefined,
-    @Req() request: RawBodyRequest,
-  ) {
-    const rawBody =
-      request.rawBody ?? Buffer.from(JSON.stringify(payload), 'utf8');
-
-    try {
-      const result = await this.emailService.handleWebhookEvent(rawBody, {
-        id: svixId,
-        timestamp: svixTimestamp,
-        signature: svixSignature,
-      });
-      return result;
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('assinatura')) {
-        throw new HttpException('Nao autorizado', HttpStatus.UNAUTHORIZED);
-      }
-      throw new HttpException(
-        'Falha ao processar webhook',
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
-  }
 
   @Get('email/stats')
   @UseGuards(JwtAuthGuard)

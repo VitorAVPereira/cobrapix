@@ -8,6 +8,7 @@ import { PaymentNotificationsController } from './payment-notifications.controll
 import { PaymentNotificationsService } from './payment-notifications.service';
 import { PublicPaymentController } from './public-payment.controller';
 import { PublicPaymentLinkService } from './payment-link.service';
+import { ResendMailerService } from '../common/resend-mailer.service';
 
 @Module({
   imports: [PrismaModule],
@@ -22,6 +23,7 @@ import { PublicPaymentLinkService } from './payment-link.service';
     PaymentCryptoService,
     PaymentNotificationsService,
     PublicPaymentLinkService,
+    ResendMailerService,
   ],
   exports: [
     PaymentService,

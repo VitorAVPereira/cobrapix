@@ -1,6 +1,24 @@
-import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsIn,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
+import { TEMPLATE_SLUGS } from '../email-template-catalog';
 
 export class UpdateEmailTemplateDto {
+  @IsString()
+  @IsOptional()
+  @MaxLength(100)
+  name?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(50)
+  @IsIn(TEMPLATE_SLUGS)
+  slug?: string;
+
   @IsString()
   @IsOptional()
   @MaxLength(160)

@@ -60,8 +60,7 @@ export function getEmailTemplateDefinition(
   slug: string,
 ): EmailTemplateDefinition | null {
   return (
-    EMAIL_TEMPLATE_DEFINITIONS.find(
-      (definition) => definition.slug === slug,
-    ) ?? null
+    EMAIL_TEMPLATE_DEFINITIONS.find((definition) => definition.slug === slug) ??
+    null
   );
 }
