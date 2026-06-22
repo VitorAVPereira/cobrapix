@@ -18,15 +18,15 @@ function buildValidConfig(
 }
 
 describe('validateEnv', () => {
-  it('exige RESEND_WEBHOOK_SECRET em producao', () => {
-    expect(() =>
-      validateEnv(
-        buildValidConfig({
-          NODE_ENV: 'production',
-          RESEND_WEBHOOK_SECRET: undefined,
-        }),
-      ),
-    ).toThrow('RESEND_WEBHOOK_SECRET e obrigatoria em producao');
+  it('permite producao sem RESEND_WEBHOOK_SECRET global quando webhooks usam secret por cliente', () => {
+    const env = validateEnv(
+      buildValidConfig({
+        NODE_ENV: 'production',
+        RESEND_WEBHOOK_SECRET: undefined,
+      }),
+    );
+
+    expect(env.RESEND_WEBHOOK_SECRET).toBeUndefined();
   });
 
   it('aceita RESEND_WEBHOOK_SECRET com prefixo whsec', () => {

@@ -53,14 +53,6 @@ export const envSchema = z
         message: 'RESEND_WEBHOOK_SECRET deve comecar com whsec_',
       });
     }
-
-    if (env.NODE_ENV === 'production' && !env.RESEND_WEBHOOK_SECRET) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['RESEND_WEBHOOK_SECRET'],
-        message: 'RESEND_WEBHOOK_SECRET e obrigatoria em producao',
-      });
-    }
   });
 
 export type Env = z.infer<typeof envSchema>;

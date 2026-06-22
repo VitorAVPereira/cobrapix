@@ -2,12 +2,10 @@ import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import {
   BillingMethod,
   BusinessSegment,
-  CompanyStatus,
   MessagingLimitTier,
   Prisma,
   UserRole,
   WhatsappProvider,
-  WhatsappStatus,
 } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { createHash, randomBytes } from 'crypto';
@@ -51,6 +49,15 @@ const adminClientInclude = {
 type AdminClientRecord = Prisma.CompanyGetPayload<{
   include: typeof adminClientInclude;
 }>;
+
+interface AdminIntegrationData {
+  resendApiKeyEncrypted?: string;
+  resendWebhookSecretEncrypted?: string;
+  resendFromEmail?: string | null;
+  erpApiKeyHash?: string;
+  erpWebhookUrl?: string | null;
+  erpEnabledEvents?: string[];
+}
 
 export interface AdminClientResponse {
   id: string;
@@ -101,6 +108,7 @@ export interface AdminClientResponse {
   erpEnabledEvents: string[];
   hasMetaAccessToken: boolean;
   hasResendApiKey: boolean;
+  hasResendWebhookSecret: boolean;
   hasErpApiKey: boolean;
   hasEfiClientId: boolean;
   hasEfiClientSecret: boolean;
@@ -153,6 +161,7 @@ export class AdminService {
 
   async createClient(dto: CreateAdminClientDto): Promise<AdminClientResponse> {
     const passwordHash = await bcrypt.hash(dto.firstUser.password, 10);
+    const integrationData = this.buildIntegrationUpdateData(dto.integrations);
 
     const company = await this.prisma.company.create({
       data: {
@@ -165,6 +174,7 @@ export class AdminService {
         preferredBillingMethod: dto.billing.preferredBillingMethod,
         onTimeSplitPercentageBps: dto.billing.onTimeSplitPercentageBps,
         overdueSplitPercentageBps: dto.billing.overdueSplitPercentageBps,
+        ...integrationData,
         users: {
           create: {
             email: dto.firstUser.email,
@@ -308,6 +318,7 @@ export class AdminService {
       erpEnabledEvents: company.erpEnabledEvents,
       hasMetaAccessToken: Boolean(company.metaAccessTokenEncrypted),
       hasResendApiKey: Boolean(company.resendApiKeyEncrypted),
+      hasResendWebhookSecret: Boolean(company.resendWebhookSecretEncrypted),
       hasErpApiKey: Boolean(company.erpApiKeyHash),
       hasEfiClientId: Boolean(company.paymentGateway?.encryptedClientId),
       hasEfiClientSecret: Boolean(
@@ -503,26 +514,49 @@ export class AdminService {
     }
 
     if (dto.integrations) {
-      const integrations = dto.integrations;
-      const resendApiKey = this.secretString(integrations.resendApiKey);
-      if (resendApiKey) {
-        data.resendApiKeyEncrypted = this.crypto.encrypt(resendApiKey);
-      }
-      if (integrations.resendFromEmail !== undefined) {
-        data.resendFromEmail = this.nullableString(
-          integrations.resendFromEmail,
-        );
-      }
-      const erpApiKey = this.secretString(integrations.erpApiKey);
-      if (erpApiKey) {
-        data.erpApiKeyHash = this.hashSecret(erpApiKey);
-      }
-      if (integrations.erpWebhookUrl !== undefined) {
-        data.erpWebhookUrl = this.nullableString(integrations.erpWebhookUrl);
-      }
-      if (integrations.erpEnabledEvents !== undefined) {
-        data.erpEnabledEvents = integrations.erpEnabledEvents;
-      }
+      Object.assign(data, this.buildIntegrationUpdateData(dto.integrations));
+    }
+
+    return data;
+  }
+
+  private buildIntegrationUpdateData(
+    integrations: UpdateAdminClientDto['integrations'],
+  ): AdminIntegrationData {
+    const data: AdminIntegrationData = {};
+
+    if (!integrations) {
+      return data;
+    }
+
+    const resendApiKey = this.secretString(integrations.resendApiKey);
+    if (resendApiKey) {
+      data.resendApiKeyEncrypted = this.crypto.encrypt(resendApiKey);
+    }
+
+    const resendWebhookSecret = this.secretString(
+      integrations.resendWebhookSecret,
+    );
+    if (resendWebhookSecret) {
+      data.resendWebhookSecretEncrypted =
+        this.crypto.encrypt(resendWebhookSecret);
+    }
+
+    if (integrations.resendFromEmail !== undefined) {
+      data.resendFromEmail = this.nullableString(integrations.resendFromEmail);
+    }
+
+    const erpApiKey = this.secretString(integrations.erpApiKey);
+    if (erpApiKey) {
+      data.erpApiKeyHash = this.hashSecret(erpApiKey);
+    }
+
+    if (integrations.erpWebhookUrl !== undefined) {
+      data.erpWebhookUrl = this.nullableString(integrations.erpWebhookUrl);
+    }
+
+    if (integrations.erpEnabledEvents !== undefined) {
+      data.erpEnabledEvents = integrations.erpEnabledEvents;
     }
 
     return data;

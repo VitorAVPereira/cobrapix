@@ -317,6 +317,11 @@ export class AdminIntegrationsDto {
   resendApiKey?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(4096)
+  resendWebhookSecret?: string;
+
+  @IsOptional()
   @IsEmail()
   resendFromEmail?: string | null;
 
@@ -409,6 +414,11 @@ export class CreateAdminClientDto {
   @ValidateNested()
   @Type(() => CreateGatewayAccountDto)
   efi?: CreateGatewayAccountDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => AdminIntegrationsDto)
+  integrations?: AdminIntegrationsDto;
 }
 
 export class UpdateAdminClientDto {

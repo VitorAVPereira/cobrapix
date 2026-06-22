@@ -209,13 +209,15 @@ export class EmailService {
   async handleWebhookEvent(
     rawBody: Buffer,
     headers: SvixHeaders,
+    companyId?: string,
   ): Promise<{ processed: boolean; eventType?: string }> {
-    const secret = this.configService.get<string>('RESEND_WEBHOOK_SECRET');
-    const nodeEnv = this.configService.get<string>('NODE_ENV');
-
     if (!headers.id) {
       throw new Error('Webhook Resend: assinatura ausente');
     }
+
+    const svixId = headers.id;
+    const secret = await this.resolveWebhookSecret(companyId);
+    const nodeEnv = this.configService.get<string>('NODE_ENV');
 
     if (!secret && nodeEnv === 'production') {
       throw new Error('Webhook Resend: assinatura obrigatoria em producao');
@@ -260,7 +262,7 @@ export class EmailService {
           tx: Prisma.TransactionClient,
         ): Promise<WebhookTransactionResult> => {
           const existing = await tx.emailEvent.findUnique({
-            where: { svixId: headers.id },
+            where: { svixId },
             select: { id: true },
           });
 
@@ -272,8 +274,14 @@ export class EmailService {
             };
           }
 
+          const attemptWhere: Prisma.CollectionAttemptWhereInput = {
+            externalMessageId: emailMessageId,
+            channel: 'EMAIL',
+            ...(companyId ? { companyId } : {}),
+          };
+
           const attempt = await tx.collectionAttempt.findFirst({
-            where: { externalMessageId: emailMessageId, channel: 'EMAIL' },
+            where: attemptWhere,
             select: { companyId: true, invoiceId: true, status: true },
           });
 
@@ -291,7 +299,7 @@ export class EmailService {
           await tx.emailEvent.create({
             data: {
               companyId: attempt.companyId,
-              svixId: headers.id,
+              svixId,
               emailMessageId,
               eventType: normalizedType,
               invoiceId: attempt.invoiceId,
@@ -472,6 +480,25 @@ export class EmailService {
         errorDetails: null,
       },
     });
+  }
+
+  private async resolveWebhookSecret(
+    companyId?: string,
+  ): Promise<string | undefined> {
+    if (!companyId) {
+      return this.configService.get<string>('RESEND_WEBHOOK_SECRET');
+    }
+
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { resendWebhookSecretEncrypted: true },
+    });
+
+    if (!company?.resendWebhookSecretEncrypted) {
+      throw new Error('Webhook Resend: assinatura obrigatoria para empresa');
+    }
+
+    return this.crypto.decrypt(company.resendWebhookSecretEncrypted);
   }
 
   private normalizeEventType(raw: string): string | null {

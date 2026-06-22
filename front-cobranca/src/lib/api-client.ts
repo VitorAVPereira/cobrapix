@@ -30,6 +30,21 @@ export interface BillingResponse {
   message: string;
 }
 
+export type CollectionChannel = "EMAIL" | "WHATSAPP";
+
+export interface SelectedBillingContactInput {
+  invoiceId: string;
+  email?: string;
+  phoneNumber?: string;
+  whatsappOptIn?: boolean;
+}
+
+export interface RunSelectedBillingInput {
+  invoiceIds: string[];
+  channels?: CollectionChannel[];
+  contacts?: SelectedBillingContactInput[];
+}
+
 export interface CreatePaymentInput {
   invoiceId: string;
   billingType?: BillingMethod;
@@ -647,6 +662,7 @@ export interface AdminClient {
   erpEnabledEvents?: string[];
   hasMetaAccessToken?: boolean;
   hasResendApiKey?: boolean;
+  hasResendWebhookSecret?: boolean;
   hasErpApiKey?: boolean;
   hasEfiClientId?: boolean;
   hasEfiClientSecret?: boolean;
@@ -695,6 +711,14 @@ export interface CreateAdminClientInput {
   };
   meta?: ConfigureMetaWhatsappInput;
   efi?: GatewayAccountInput;
+  integrations?: {
+    resendApiKey?: string;
+    resendWebhookSecret?: string;
+    resendFromEmail?: string | null;
+    erpApiKey?: string;
+    erpWebhookUrl?: string | null;
+    erpEnabledEvents?: string[];
+  };
 }
 
 export interface UpdateAdminClientInput {
@@ -750,6 +774,7 @@ export interface UpdateAdminClientInput {
   };
   integrations?: {
     resendApiKey?: string;
+    resendWebhookSecret?: string;
     resendFromEmail?: string | null;
     erpApiKey?: string;
     erpWebhookUrl?: string | null;
@@ -1036,10 +1061,14 @@ class ApiClient {
     });
   }
 
-  async runSelectedBilling(invoiceIds: string[]): Promise<BillingResponse> {
+  async runSelectedBilling(
+    input: string[] | RunSelectedBillingInput,
+  ): Promise<BillingResponse> {
+    const payload = Array.isArray(input) ? { invoiceIds: input } : input;
+
     return this.fetch<BillingResponse>("/billing/invoices/run", {
       method: "POST",
-      body: JSON.stringify({ invoiceIds }),
+      body: JSON.stringify(payload),
     });
   }
 

@@ -82,6 +82,7 @@ interface ClientFormState {
   metaDefaultLanguage: string;
   messagingLimitTier: MessagingLimitTier | "";
   resendApiKey: string;
+  resendWebhookSecret: string;
   resendFromEmail: string;
   erpApiKey: string;
   erpWebhookUrl: string;
@@ -144,6 +145,7 @@ const initialForm: ClientFormState = {
   metaDefaultLanguage: "pt_BR",
   messagingLimitTier: "",
   resendApiKey: "",
+  resendWebhookSecret: "",
   resendFromEmail: "",
   erpApiKey: "",
   erpWebhookUrl: "",
@@ -390,6 +392,7 @@ export default function AdminClientsPage() {
       metaBusinessPhoneNumber: client.metaBusinessPhoneNumber ?? "",
       metaDefaultLanguage: client.metaDefaultLanguage ?? "pt_BR",
       messagingLimitTier: client.messagingLimitTier ?? "",
+      resendWebhookSecret: "",
       resendFromEmail: client.resendFromEmail ?? "",
       erpWebhookUrl: client.erpWebhookUrl ?? "",
       erpEnabledEvents: client.erpEnabledEvents?.join("\n") ?? "",
@@ -523,6 +526,12 @@ export default function AdminClientsPage() {
         resendApiKey: form.resendApiKey,
       };
     }
+    if (form.resendWebhookSecret.trim()) {
+      payload.integrations = {
+        ...payload.integrations,
+        resendWebhookSecret: form.resendWebhookSecret,
+      };
+    }
     if (form.erpApiKey.trim()) {
       payload.integrations = {
         ...payload.integrations,
@@ -641,6 +650,11 @@ export default function AdminClientsPage() {
     addChange("Conta bancaria", client.bankAccount, form.bankAccount);
     addSecretChange("Meta token", client.hasMetaAccessToken, form.metaAccessToken);
     addSecretChange("Resend API key", client.hasResendApiKey, form.resendApiKey);
+    addSecretChange(
+      "Resend webhook signing secret",
+      client.hasResendWebhookSecret,
+      form.resendWebhookSecret,
+    );
     addSecretChange("ERP API key", client.hasErpApiKey, form.erpApiKey);
     addSecretChange("Efi client ID", client.hasEfiClientId, form.efiClientId);
     addSecretChange(
@@ -794,6 +808,31 @@ export default function AdminClientsPage() {
         businessPhoneNumber: form.metaBusinessPhoneNumber || undefined,
         defaultLanguage: "pt_BR",
       };
+    }
+
+    if (
+      form.resendApiKey.trim() ||
+      form.resendWebhookSecret.trim() ||
+      form.resendFromEmail.trim() ||
+      form.erpApiKey.trim() ||
+      form.erpWebhookUrl.trim() ||
+      form.erpEnabledEvents.trim()
+    ) {
+      payload.integrations = {
+        resendFromEmail: form.resendFromEmail || null,
+        erpWebhookUrl: form.erpWebhookUrl || null,
+        erpEnabledEvents: parseEmailList(form.erpEnabledEvents),
+      };
+
+      if (form.resendApiKey.trim()) {
+        payload.integrations.resendApiKey = form.resendApiKey;
+      }
+      if (form.resendWebhookSecret.trim()) {
+        payload.integrations.resendWebhookSecret = form.resendWebhookSecret;
+      }
+      if (form.erpApiKey.trim()) {
+        payload.integrations.erpApiKey = form.erpApiKey;
+      }
     }
 
     if (canSubmitEfi) {
@@ -1196,6 +1235,7 @@ export default function AdminClientsPage() {
 
               <div className="grid gap-3 md:grid-cols-2">
                 <Input label="Resend API key" type="password" value={form.resendApiKey} onChange={(value) => updateField("resendApiKey", value)} placeholder={isEditing ? "Mantem chave atual se vazio" : undefined} />
+                <Input label="Resend webhook signing secret" type="password" value={form.resendWebhookSecret} onChange={(value) => updateField("resendWebhookSecret", value)} placeholder={isEditing ? "Mantem secret atual se vazio" : "whsec_..."} />
                 <Input label="E-mail remetente Resend" type="email" value={form.resendFromEmail} onChange={(value) => updateField("resendFromEmail", value)} />
                 <Input label="ERP API key" type="password" value={form.erpApiKey} onChange={(value) => updateField("erpApiKey", value)} placeholder={isEditing ? "Mantem chave atual se vazio" : undefined} />
                 <Input label="ERP webhook URL" value={form.erpWebhookUrl} onChange={(value) => updateField("erpWebhookUrl", value)} />

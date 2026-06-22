@@ -7,6 +7,7 @@ import {
   HttpException,
   HttpStatus,
   Logger,
+  Param,
   Post,
   Query,
   Req,
@@ -81,15 +82,55 @@ export class WebhooksController {
     @Headers('svix-signature') svixSignature: string | undefined,
     @Req() request: RawBodyRequest,
   ): Promise<unknown> {
+    return this.processResendWebhook(
+      payload,
+      svixId,
+      svixTimestamp,
+      svixSignature,
+      request,
+    );
+  }
+
+  @Post('resend/:companyId')
+  @HttpCode(HttpStatus.OK)
+  async handleCompanyResendWebhook(
+    @Param('companyId') companyId: string,
+    @Body() payload: unknown,
+    @Headers('svix-id') svixId: string | undefined,
+    @Headers('svix-timestamp') svixTimestamp: string | undefined,
+    @Headers('svix-signature') svixSignature: string | undefined,
+    @Req() request: RawBodyRequest,
+  ): Promise<unknown> {
+    return this.processResendWebhook(
+      payload,
+      svixId,
+      svixTimestamp,
+      svixSignature,
+      request,
+      companyId,
+    );
+  }
+
+  private async processResendWebhook(
+    payload: unknown,
+    svixId: string | undefined,
+    svixTimestamp: string | undefined,
+    svixSignature: string | undefined,
+    request: RawBodyRequest,
+    companyId?: string,
+  ): Promise<unknown> {
     const rawBody =
       request.rawBody ?? Buffer.from(JSON.stringify(payload), 'utf8');
-
     try {
-      return await this.emailService.handleWebhookEvent(rawBody, {
-        id: svixId,
-        timestamp: svixTimestamp,
-        signature: svixSignature,
-      });
+      return await this.emailService.handleWebhookEvent(
+        rawBody,
+        {
+          id: svixId,
+          timestamp: svixTimestamp,
+          signature: svixSignature,
+        },
+        companyId,
+      );
     } catch (error) {
       if (this.isResendUnauthorizedError(error)) {
         throw new HttpException('Nao autorizado', HttpStatus.UNAUTHORIZED);

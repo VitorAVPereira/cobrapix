@@ -10,8 +10,11 @@ import {
   FileSpreadsheet,
   FileUp,
   Loader2,
+  Mail,
+  MessageCircle,
   Plus,
   Search,
+  Send,
   X,
 } from "lucide-react";
 import { DebtorPaymentHistoryModal } from "@/components/features/DebtorPaymentHistoryModal";
@@ -27,8 +30,10 @@ import type {
 } from "@/components/features/UploadCSV";
 import type {
   BillingSettings,
+  CollectionChannel,
   CreatePaymentResponse,
   InvoicePaymentStatusResponse,
+  SelectedBillingContactInput,
 } from "@/lib/api-client";
 import { formatBillingMethodRateLabel } from "@/lib/billing-fees";
 import { normalizeRequiredDebtorDocument } from "@/lib/debtor-document";
@@ -61,6 +66,22 @@ interface RunningInvoiceAction {
   action: InvoiceRowAction;
 }
 
+type SendBillingMode = "selected" | "resend";
+
+interface SendBillingModalState {
+  mode: SendBillingMode;
+  invoiceIds: string[];
+  invoice: ParsedDebtor | null;
+}
+
+interface SendBillingForm {
+  email: boolean;
+  whatsapp: boolean;
+  emailAddress: string;
+  whatsappNumber: string;
+  whatsappOptIn: boolean;
+}
+
 const initialManualChargeForm: ManualChargeForm = {
   customerName: "",
   document: "",
@@ -75,6 +96,14 @@ const initialManualChargeForm: ManualChargeForm = {
   studentName: "",
   studentEnrollment: "",
   studentGroup: "",
+};
+
+const initialSendBillingForm: SendBillingForm = {
+  email: false,
+  whatsapp: true,
+  emailAddress: "",
+  whatsappNumber: "",
+  whatsappOptIn: false,
 };
 
 function isParsedDebtorArray(data: unknown): data is ParsedDebtor[] {
@@ -119,6 +148,10 @@ function getErrorMessage(error: unknown, fallback: string): string {
 
 function getInvoiceId(invoice: ParsedDebtor): string | null {
   return invoice.invoiceId ?? invoice.id ?? null;
+}
+
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
 function getPaymentMethodLabel(method: PaymentMethod): string {
@@ -232,6 +265,11 @@ export default function CobrancasPage() {
   const [isRunningSelected, setIsRunningSelected] = useState(false);
   const [runningInvoiceAction, setRunningInvoiceAction] =
     useState<RunningInvoiceAction | null>(null);
+  const [sendBillingModal, setSendBillingModal] =
+    useState<SendBillingModalState | null>(null);
+  const [sendBillingForm, setSendBillingForm] = useState<SendBillingForm>(
+    initialSendBillingForm,
+  );
   const [billingSettings, setBillingSettings] =
     useState<BillingSettings | null>(null);
   const [manualForm, setManualForm] = useState<ManualChargeForm>(
@@ -306,23 +344,161 @@ export default function CobrancasPage() {
     }
   }
 
-  async function handleRunSelectedInvoices(
-    invoiceIds: string[],
-  ): Promise<void> {
+  function openSelectedSendModal(invoiceIds: string[]): void {
+    if (invoiceIds.length === 0) {
+      return;
+    }
+
     setErrorMsg(null);
     setSuccessMsg(null);
-    setIsRunningSelected(true);
+    setSendBillingForm(initialSendBillingForm);
+    setSendBillingModal({
+      mode: "selected",
+      invoiceIds,
+      invoice: null,
+    });
+  }
+
+  function openResendModal(invoice: ParsedDebtor): void {
+    const invoiceId = getInvoiceId(invoice);
+
+    if (!invoiceId) {
+      setSuccessMsg(null);
+      setErrorMsg("Nao foi possivel identificar a fatura desta cobranca.");
+      return;
+    }
+
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setSendBillingForm({
+      email: false,
+      whatsapp: true,
+      emailAddress: invoice.email ?? "",
+      whatsappNumber: invoice.phone_number,
+      whatsappOptIn: invoice.whatsapp_opt_in ?? false,
+    });
+    setSendBillingModal({
+      mode: "resend",
+      invoiceIds: [invoiceId],
+      invoice,
+    });
+  }
+
+  function closeSendBillingModal(): void {
+    setSendBillingModal(null);
+    setSendBillingForm(initialSendBillingForm);
+  }
+
+  function updateSendBillingForm<Field extends keyof SendBillingForm>(
+    field: Field,
+    value: SendBillingForm[Field],
+  ): void {
+    setSendBillingForm((currentForm) => ({
+      ...currentForm,
+      [field]: value,
+    }));
+  }
+
+  async function submitSendBillingModal(
+    event: FormEvent<HTMLFormElement>,
+  ): Promise<void> {
+    event.preventDefault();
+
+    if (!sendBillingModal) {
+      return;
+    }
+
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    const channels: CollectionChannel[] = [];
+    if (sendBillingForm.email) {
+      channels.push("EMAIL");
+    }
+    if (sendBillingForm.whatsapp) {
+      channels.push("WHATSAPP");
+    }
+
+    if (channels.length === 0) {
+      setErrorMsg("Selecione e-mail, WhatsApp ou os dois canais.");
+      return;
+    }
+
+    const contacts: SelectedBillingContactInput[] = [];
+
+    if (sendBillingModal.invoice) {
+      const invoiceId = sendBillingModal.invoiceIds[0];
+      if (!invoiceId) {
+        setErrorMsg("Nao foi possivel identificar a fatura desta cobranca.");
+        return;
+      }
+
+      const contact: SelectedBillingContactInput = { invoiceId };
+
+      if (sendBillingForm.email) {
+        const emailAddress = sendBillingForm.emailAddress.trim();
+        if (!emailAddress || !isValidEmail(emailAddress)) {
+          setErrorMsg("Informe um e-mail valido para enviar a cobranca.");
+          return;
+        }
+        contact.email = emailAddress;
+      }
+
+      if (sendBillingForm.whatsapp) {
+        try {
+          contact.phoneNumber = normalizeWhatsAppNumber(
+            sendBillingForm.whatsappNumber,
+          );
+        } catch (error: unknown) {
+          setErrorMsg(
+            getErrorMessage(error, "Informe um WhatsApp valido para envio."),
+          );
+          return;
+        }
+
+        if (!sendBillingForm.whatsappOptIn) {
+          setErrorMsg(
+            "Confirme que o cliente autorizou mensagens pelo WhatsApp oficial.",
+          );
+          return;
+        }
+
+        contact.whatsappOptIn = true;
+      }
+
+      contacts.push(contact);
+    }
+
+    if (sendBillingModal.mode === "selected") {
+      setIsRunningSelected(true);
+    } else {
+      const invoiceId = sendBillingModal.invoiceIds[0];
+      if (invoiceId) {
+        setRunningInvoiceAction({ invoiceId, action: "resend" });
+      }
+    }
 
     try {
-      const result = await apiClient.runSelectedBilling(invoiceIds);
+      const result = await apiClient.runSelectedBilling({
+        invoiceIds: sendBillingModal.invoiceIds,
+        channels,
+        contacts,
+      });
       await fetchInvoices();
-      setSuccessMsg(result.message);
+      const targetName = sendBillingModal.invoice?.name;
+      setSuccessMsg(
+        targetName
+          ? `Reenvio iniciado para ${targetName}. ${result.message}`
+          : result.message,
+      );
+      closeSendBillingModal();
     } catch (error: unknown) {
       setErrorMsg(
         getErrorMessage(error, "Nao foi possivel iniciar as cobrancas."),
       );
     } finally {
       setIsRunningSelected(false);
+      setRunningInvoiceAction(null);
     }
   }
 
@@ -351,35 +527,6 @@ export default function CobrancasPage() {
       setSuccessMsg(buildPaymentCreatedMessage(invoice, response));
     } catch (error: unknown) {
       setErrorMsg(getErrorMessage(error, "Nao foi possivel gerar a cobranca."));
-    } finally {
-      setRunningInvoiceAction(null);
-    }
-  }
-
-  async function handleResendInvoice(invoice: ParsedDebtor): Promise<void> {
-    const invoiceId = getInvoiceId(invoice);
-
-    if (!invoiceId) {
-      setSuccessMsg(null);
-      setErrorMsg("Nao foi possivel identificar a fatura desta cobranca.");
-      return;
-    }
-
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    setRunningInvoiceAction({ invoiceId, action: "resend" });
-
-    try {
-      const response = await apiClient.runSelectedBilling([invoiceId]);
-
-      await fetchInvoices();
-      setSuccessMsg(
-        `Reenvio iniciado para ${invoice.name}. ${response.message}`,
-      );
-    } catch (error: unknown) {
-      setErrorMsg(
-        getErrorMessage(error, "Nao foi possivel reenviar a cobranca."),
-      );
     } finally {
       setRunningInvoiceAction(null);
     }
@@ -546,6 +693,13 @@ export default function CobrancasPage() {
   const modalTitle = invoiceTargetDebtor
     ? `Nova fatura para ${invoiceTargetDebtor.name}`
     : "Adicionar cobrança manual";
+  const sendBillingTitle =
+    sendBillingModal?.mode === "resend"
+      ? `Reenviar cobrança para ${sendBillingModal.invoice?.name ?? "devedor"}`
+      : "Enviar cobranças selecionadas";
+  const sendBillingCount = sendBillingModal?.invoiceIds.length ?? 0;
+  const isSendingBilling =
+    isRunningSelected || runningInvoiceAction?.action === "resend";
 
   return (
     <main className="min-h-full bg-slate-50">
@@ -681,14 +835,14 @@ export default function CobrancasPage() {
                   onConfigureDebtor={openDebtorSettings}
                   onAddInvoice={openInvoiceModal}
                   onRunSelectedInvoices={(invoiceIds) => {
-                    void handleRunSelectedInvoices(invoiceIds);
+                    openSelectedSendModal(invoiceIds);
                   }}
                   isRunningSelected={isRunningSelected}
                   onGeneratePayment={(invoice) => {
                     void handleGeneratePayment(invoice);
                   }}
                   onResendInvoice={(invoice) => {
-                    void handleResendInvoice(invoice);
+                    openResendModal(invoice);
                   }}
                   onCheckPaymentStatus={(invoice) => {
                     void handleCheckPaymentStatus(invoice);
@@ -984,6 +1138,184 @@ export default function CobrancasPage() {
                     <Loader2 size={16} className="animate-spin" />
                   )}
                   Salvar Cobrança
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {sendBillingModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 transition-all duration-200">
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-md bg-white shadow-xl transition-all duration-200">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="font-semibold text-slate-900">
+                  {sendBillingTitle}
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  {sendBillingModal.invoice
+                    ? "Escolha os canais e atualize os contatos antes do envio."
+                    : `${sendBillingCount} cobrança${
+                        sendBillingCount === 1 ? "" : "s"
+                      } será${sendBillingCount === 1 ? "" : "o"} enfileirada${
+                        sendBillingCount === 1 ? "" : "s"
+                      } com os contatos cadastrados.`}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeSendBillingModal}
+                disabled={isSendingBilling}
+                className="rounded-md p-2 text-slate-400 transition-all duration-200 hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Fechar modal de envio"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={submitSendBillingModal}>
+              <div className="space-y-5 px-5 py-5">
+                <div>
+                  <p className="text-xs font-semibold uppercase text-slate-500">
+                    Canais de envio
+                  </p>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <label className="flex min-h-16 items-start gap-3 rounded-md border border-slate-200 bg-white px-3 py-3 transition hover:bg-slate-50">
+                      <input
+                        type="checkbox"
+                        checked={sendBillingForm.email}
+                        onChange={(event) =>
+                          updateSendBillingForm("email", event.target.checked)
+                        }
+                        className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                      />
+                      <span className="flex min-w-0 items-start gap-2 text-sm font-medium text-slate-700">
+                        <Mail
+                          size={17}
+                          className="mt-0.5 shrink-0 text-slate-500"
+                        />
+                        <span>E-mail</span>
+                      </span>
+                    </label>
+
+                    <label className="flex min-h-16 items-start gap-3 rounded-md border border-slate-200 bg-white px-3 py-3 transition hover:bg-slate-50">
+                      <input
+                        type="checkbox"
+                        checked={sendBillingForm.whatsapp}
+                        onChange={(event) =>
+                          updateSendBillingForm(
+                            "whatsapp",
+                            event.target.checked,
+                          )
+                        }
+                        className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                      />
+                      <span className="flex min-w-0 items-start gap-2 text-sm font-medium text-slate-700">
+                        <MessageCircle
+                          size={17}
+                          className="mt-0.5 shrink-0 text-emerald-600"
+                        />
+                        <span>WhatsApp</span>
+                      </span>
+                    </label>
+                  </div>
+                </div>
+
+                {sendBillingModal.invoice ? (
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {sendBillingForm.email && (
+                      <label className="flex flex-col gap-1.5 sm:col-span-2">
+                        <span className="text-xs font-semibold uppercase text-slate-500">
+                          E-mail do devedor
+                        </span>
+                        <input
+                          required
+                          type="email"
+                          value={sendBillingForm.emailAddress}
+                          onChange={(event) =>
+                            updateSendBillingForm(
+                              "emailAddress",
+                              event.target.value,
+                            )
+                          }
+                          placeholder="financeiro@cliente.com"
+                          className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                        />
+                      </label>
+                    )}
+
+                    {sendBillingForm.whatsapp && (
+                      <>
+                        <label className="flex flex-col gap-1.5 sm:col-span-2">
+                          <span className="text-xs font-semibold uppercase text-slate-500">
+                            WhatsApp do devedor
+                          </span>
+                          <input
+                            required
+                            type="tel"
+                            value={sendBillingForm.whatsappNumber}
+                            onChange={(event) =>
+                              updateSendBillingForm(
+                                "whatsappNumber",
+                                event.target.value,
+                              )
+                            }
+                            placeholder="+55 (11) 99999-9999"
+                            className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                          />
+                        </label>
+
+                        <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 sm:col-span-2">
+                          <input
+                            type="checkbox"
+                            checked={sendBillingForm.whatsappOptIn}
+                            onChange={(event) =>
+                              updateSendBillingForm(
+                                "whatsappOptIn",
+                                event.target.checked,
+                              )
+                            }
+                            className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                          />
+                          <span className="text-sm font-medium text-slate-700">
+                            Cliente autorizou mensagens de cobrança pelo
+                            WhatsApp oficial
+                          </span>
+                        </label>
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+                    Para envio em lote, use os contatos já cadastrados em cada
+                    devedor. Para corrigir um contato específico, use Reenviar
+                    na linha da cobrança.
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col-reverse gap-2 border-t border-slate-200 px-5 py-4 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={closeSendBillingModal}
+                  disabled={isSendingBilling}
+                  className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-all duration-200 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSendingBilling}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isSendingBilling ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <Send size={16} />
+                  )}
+                  Enviar cobrança
                 </button>
               </div>
             </form>

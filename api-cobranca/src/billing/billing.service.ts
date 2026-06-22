@@ -32,6 +32,18 @@ interface SelectedBillingExecutionResult extends BillingExecutionResult {
   requested: number;
 }
 
+export interface SelectedBillingContactInput {
+  invoiceId: string;
+  email?: string;
+  phoneNumber?: string;
+  whatsappOptIn?: boolean;
+}
+
+export interface SelectedBillingOptions {
+  channels?: CollectionChannel[];
+  contacts?: SelectedBillingContactInput[];
+}
+
 type DashboardPeriod = 'today' | '7d' | '30d' | 'year';
 
 export interface BillingMetricsResponse {
@@ -213,8 +225,10 @@ export class BillingService {
   async enqueueSelectedInvoices(
     companyId: string,
     invoiceIds: string[],
+    options: SelectedBillingOptions = {},
   ): Promise<SelectedBillingExecutionResult> {
     const uniqueInvoiceIds = Array.from(new Set(invoiceIds));
+    const channels = this.normalizeSelectedChannels(options.channels);
 
     if (uniqueInvoiceIds.length === 0) {
       return { requested: 0, queued: 0, skipped: 0 };
@@ -228,8 +242,21 @@ export class BillingService {
       },
       select: {
         id: true,
+        debtor: {
+          select: {
+            id: true,
+          },
+        },
       },
     });
+
+    if (options.contacts?.length) {
+      await this.updateSelectedInvoiceContacts(
+        companyId,
+        pendingInvoices,
+        options.contacts,
+      );
+    }
 
     if (pendingInvoices.length > 0) {
       await this.messageQueue.addSelectedInitialChargeJobs(
@@ -237,6 +264,7 @@ export class BillingService {
           invoiceId: invoice.id,
           companyId,
           source: 'SELECTED',
+          channels,
         })),
       );
     }
@@ -246,6 +274,69 @@ export class BillingService {
       queued: pendingInvoices.length,
       skipped: uniqueInvoiceIds.length - pendingInvoices.length,
     };
+  }
+
+  private normalizeSelectedChannels(
+    channels: CollectionChannel[] | undefined,
+  ): CollectionChannel[] {
+    const normalized = Array.from(
+      new Set(
+        (channels?.length ? channels : ['WHATSAPP']).filter(
+          (channel): channel is CollectionChannel =>
+            channel === 'EMAIL' || channel === 'WHATSAPP',
+        ),
+      ),
+    );
+
+    return normalized.length > 0 ? normalized : ['WHATSAPP'];
+  }
+
+  private async updateSelectedInvoiceContacts(
+    companyId: string,
+    pendingInvoices: Array<{ id: string; debtor: { id: string } }>,
+    contacts: SelectedBillingContactInput[],
+  ): Promise<void> {
+    const debtorByInvoiceId = new Map(
+      pendingInvoices.map((invoice) => [invoice.id, invoice.debtor.id]),
+    );
+
+    await Promise.all(
+      contacts.map(async (contact) => {
+        const debtorId = debtorByInvoiceId.get(contact.invoiceId);
+        if (!debtorId) {
+          return;
+        }
+
+        const email = contact.email?.trim().toLowerCase();
+        const phoneNumber = contact.phoneNumber?.trim();
+        const data: Prisma.DebtorUpdateInput = {};
+
+        if (email) {
+          data.email = email;
+        }
+
+        if (phoneNumber) {
+          data.phoneNumber = phoneNumber;
+        }
+
+        if (contact.whatsappOptIn !== undefined) {
+          data.whatsappOptIn = contact.whatsappOptIn;
+          data.whatsappOptInAt = contact.whatsappOptIn ? new Date() : null;
+          data.whatsappOptInSource = contact.whatsappOptIn
+            ? 'manual_send_modal'
+            : null;
+        }
+
+        if (Object.keys(data).length === 0) {
+          return;
+        }
+
+        await this.prisma.debtor.updateMany({
+          where: { id: debtorId, companyId },
+          data,
+        });
+      }),
+    );
   }
 
   async getMetrics(

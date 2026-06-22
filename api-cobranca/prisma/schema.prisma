@@ -169,6 +169,7 @@ model Company {
   messagingLimitTier           MessagingLimitTier?
   messagingLimitUpdatedAt      DateTime?
   resendApiKeyEncrypted        String?             @db.Text
+  resendWebhookSecretEncrypted String?             @db.Text
   resendFromEmail              String?
   erpApiKeyHash                String?
   erpWebhookUrl                String?

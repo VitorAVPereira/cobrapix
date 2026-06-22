@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { CollectionChannel } from '@prisma/client';
 
 const SAFE_SINGLE_MIN_DELAY_MS = 1_000;
 const SAFE_SINGLE_MAX_DELAY_MS = 3_000;
@@ -27,6 +28,7 @@ export interface InitialChargeJob {
   invoiceId: string;
   companyId: string;
   source: 'MANUAL' | 'CSV' | 'RECURRING' | 'SELECTED';
+  channels?: CollectionChannel[];
 }
 
 export type WhatsAppQueueJob = SendMessageJob | InitialChargeJob;

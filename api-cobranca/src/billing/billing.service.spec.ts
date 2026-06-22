@@ -151,6 +151,9 @@ function createService(input: {
       findMany: jest.fn().mockResolvedValue(invoices),
       findFirst: jest.fn().mockResolvedValue(input.updatedInvoice ?? null),
     },
+    debtor: {
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
     collectionLog: {
       create: jest.fn().mockResolvedValue({ id: 'log-1' }),
     },
@@ -161,6 +164,7 @@ function createService(input: {
 
   const messageQueue = {
     addBulkSendMessageJobs: jest.fn().mockResolvedValue(undefined),
+    addSelectedInitialChargeJobs: jest.fn().mockResolvedValue(undefined),
   } as unknown as MessageQueueService;
 
   const spintaxService = {
@@ -213,9 +217,11 @@ function createService(input: {
     ),
     prisma: prisma as unknown as {
       collectionLog: { create: jest.Mock };
+      debtor: { updateMany: jest.Mock };
     },
     messageQueue: messageQueue as unknown as {
       addBulkSendMessageJobs: jest.Mock;
+      addSelectedInitialChargeJobs: jest.Mock;
     },
     ruleEngine: ruleEngine as unknown as {
       getNextStep: jest.Mock;
@@ -448,6 +454,49 @@ describe('BillingService', () => {
         }) as unknown,
       }),
     );
+  });
+
+  it('atualiza contatos informados antes de enfileirar cobrancas selecionadas', async () => {
+    const invoice = buildInvoice();
+    const { service, messageQueue, prisma } = createService({
+      invoices: [invoice],
+    });
+
+    const result = await service.enqueueSelectedInvoices(
+      'company-1',
+      ['invoice-1'],
+      {
+        channels: ['EMAIL', 'WHATSAPP'],
+        contacts: [
+          {
+            invoiceId: 'invoice-1',
+            email: 'novo@email.com',
+            phoneNumber: '+5511998887777',
+            whatsappOptIn: true,
+          },
+        ],
+      },
+    );
+
+    expect(result).toEqual({ requested: 1, queued: 1, skipped: 0 });
+    expect(prisma.debtor.updateMany).toHaveBeenCalledWith({
+      where: { id: 'debtor-1', companyId: 'company-1' },
+      data: expect.objectContaining({
+        email: 'novo@email.com',
+        phoneNumber: '+5511998887777',
+        whatsappOptIn: true,
+        whatsappOptInAt: expect.any(Date) as Date,
+        whatsappOptInSource: 'manual_send_modal',
+      }) as unknown,
+    });
+    expect(messageQueue.addSelectedInitialChargeJobs).toHaveBeenCalledWith([
+      {
+        invoiceId: 'invoice-1',
+        companyId: 'company-1',
+        source: 'SELECTED',
+        channels: ['EMAIL', 'WHATSAPP'],
+      },
+    ]);
   });
 
   it('nao enfileira mensagem quando a geracao de pagamento falha', async () => {

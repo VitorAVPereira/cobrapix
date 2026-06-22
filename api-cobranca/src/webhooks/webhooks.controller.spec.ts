@@ -22,6 +22,7 @@ type ResendWebhookResult = {
 type HandleWebhookEvent = (
   payload: Buffer,
   headers: ResendWebhookHeaders,
+  companyId?: string,
 ) => Promise<ResendWebhookResult>;
 
 function createController(options?: { emailError?: Error }): {
@@ -104,11 +105,41 @@ describe('WebhooksController', () => {
       ),
     ).resolves.toEqual({ processed: true, eventType: 'delivered' });
 
-    expect(emailService.handleWebhookEvent).toHaveBeenCalledWith(rawBody, {
-      id: 'msg_123',
-      timestamp: '1780000000',
-      signature: 'v1,signature',
-    });
+    expect(emailService.handleWebhookEvent).toHaveBeenCalledWith(
+      rawBody,
+      {
+        id: 'msg_123',
+        timestamp: '1780000000',
+        signature: 'v1,signature',
+      },
+      undefined,
+    );
+  });
+
+  it('encaminha companyId no endpoint de webhook Resend por cliente', async () => {
+    const { controller, emailService } = createController();
+    const rawBody = Buffer.from('{"type":"email.delivered"}', 'utf8');
+
+    await expect(
+      controller.handleCompanyResendWebhook(
+        'company-1',
+        { type: 'email.delivered' },
+        'msg_company',
+        '1780000000',
+        'v1,signature',
+        { rawBody } as never,
+      ),
+    ).resolves.toEqual({ processed: true, eventType: 'delivered' });
+
+    expect(emailService.handleWebhookEvent).toHaveBeenCalledWith(
+      rawBody,
+      {
+        id: 'msg_company',
+        timestamp: '1780000000',
+        signature: 'v1,signature',
+      },
+      'company-1',
+    );
   });
 
   it('retorna 401 para webhook Resend sem assinatura valida', async () => {

@@ -91,6 +91,7 @@ function buildWebhookPayload(type: string): Buffer {
 
 function createWebhookService(options?: {
   webhookSecret?: string;
+  companyWebhookSecretEncrypted?: string | null;
   verifiedPayload?: Record<string, unknown>;
   attemptStatus?: WebhookAttemptStatus;
   nodeEnv?: 'development' | 'test' | 'production';
@@ -123,6 +124,12 @@ function createWebhookService(options?: {
   );
   const prisma = {
     $transaction: transaction,
+    company: {
+      findUnique: jest.fn().mockResolvedValue({
+        resendWebhookSecretEncrypted:
+          options?.companyWebhookSecretEncrypted ?? null,
+      }),
+    },
     emailEvent: {
       findUnique: rootEmailEventFindUnique,
       create: rootEmailEventCreate,
@@ -142,7 +149,7 @@ function createWebhookService(options?: {
     }),
   } as unknown as ConfigService;
   const crypto = {
-    decrypt: jest.fn(),
+    decrypt: jest.fn().mockReturnValue('whsec_company_decrypted'),
   } as unknown as PaymentCryptoService;
   const resendMailer = {
     sendEmail: jest.fn(),
@@ -161,7 +168,13 @@ function createWebhookService(options?: {
       rootEmailEventCreate,
       rootCollectionAttemptFindFirst,
       rootCollectionAttemptUpdateMany,
+      companyFindUnique: (
+        prisma as unknown as {
+          company: { findUnique: jest.Mock };
+        }
+      ).company.findUnique,
     },
+    crypto: crypto as unknown as { decrypt: jest.Mock },
     resendMailer: resendMailer as unknown as {
       verifyWebhookEvent: jest.Mock;
     },
@@ -290,6 +303,51 @@ describe('EmailService', () => {
         signature: 'v1,signature',
       },
       webhookSecret: 'whsec_test',
+    });
+  });
+
+  it('usa o signing secret criptografado da empresa no webhook por cliente', async () => {
+    const verifiedPayload = JSON.parse(
+      buildWebhookPayload('email.clicked').toString('utf8'),
+    ) as Record<string, unknown>;
+    const rawBody = Buffer.from('{"raw":true}', 'utf8');
+    const { service, prisma, crypto, resendMailer } = createWebhookService({
+      companyWebhookSecretEncrypted: 'encrypted-company-whsec',
+      verifiedPayload,
+      attemptStatus: 'OPENED',
+    });
+
+    await service.handleWebhookEvent(
+      rawBody,
+      {
+        id: 'msg_company_webhook',
+        timestamp: '1780000000',
+        signature: 'v1,signature',
+      },
+      'company-1',
+    );
+
+    expect(prisma.companyFindUnique).toHaveBeenCalledWith({
+      where: { id: 'company-1' },
+      select: { resendWebhookSecretEncrypted: true },
+    });
+    expect(crypto.decrypt).toHaveBeenCalledWith('encrypted-company-whsec');
+    expect(resendMailer.verifyWebhookEvent).toHaveBeenCalledWith({
+      payload: rawBody.toString('utf8'),
+      headers: {
+        id: 'msg_company_webhook',
+        timestamp: '1780000000',
+        signature: 'v1,signature',
+      },
+      webhookSecret: 'whsec_company_decrypted',
+    });
+    expect(prisma.collectionAttemptFindFirst).toHaveBeenCalledWith({
+      where: {
+        externalMessageId: 'email-123',
+        channel: 'EMAIL',
+        companyId: 'company-1',
+      },
+      select: { companyId: true, invoiceId: true, status: true },
     });
   });
 

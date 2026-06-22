@@ -47,6 +47,7 @@ const baseCompanyRecord = {
   messagingLimitTier: 'TIER_50',
   messagingLimitUpdatedAt: new Date('2026-05-01T12:00:00.000Z'),
   resendApiKeyEncrypted: 'encrypted-resend',
+  resendWebhookSecretEncrypted: 'encrypted-resend-webhook',
   resendFromEmail: 'cobranca@empresa.com',
   erpApiKeyHash: 'hashed-erp',
   erpWebhookUrl: 'https://erp.original/webhook',
@@ -292,6 +293,7 @@ describe('AdminService', () => {
       integrations: {
         resendFromEmail: 'cobranca@editada.com',
         resendApiKey: 'new-resend-secret',
+        resendWebhookSecret: 'whsec_new-resend-webhook-secret',
         erpWebhookUrl: 'https://erp.editada/webhook',
         erpEnabledEvents: ['invoice.paid'],
         erpApiKey: 'new-erp-secret',
@@ -322,6 +324,8 @@ describe('AdminService', () => {
           paymentNotificationEmails: ['financeiro@editada.com'],
           resendFromEmail: 'cobranca@editada.com',
           resendApiKeyEncrypted: 'encrypted:new-resend-secret',
+          resendWebhookSecretEncrypted:
+            'encrypted:whsec_new-resend-webhook-secret',
           erpApiKeyHash: expect.stringMatching(/^[a-f0-9]{64}$/) as string,
         }) as unknown,
       }),
@@ -341,11 +345,13 @@ describe('AdminService', () => {
     );
     expect(result.hasMetaAccessToken).toBe(true);
     expect(result.hasResendApiKey).toBe(true);
+    expect(result.hasResendWebhookSecret).toBe(true);
     expect(result.hasErpApiKey).toBe(true);
     expect(result.hasEfiClientSecret).toBe(true);
     expect(JSON.stringify(result)).not.toContain('new-efi-secret');
     expect(JSON.stringify(result)).not.toContain('new-meta-secret-token');
     expect(JSON.stringify(result)).not.toContain('new-resend-secret');
+    expect(JSON.stringify(result)).not.toContain('whsec_new-resend-webhook');
   });
 
   it('mantem segredos existentes quando a edicao nao envia novos valores sensiveis', async () => {

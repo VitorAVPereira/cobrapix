@@ -1,5 +1,6 @@
 import type { ConfigService } from '@nestjs/config';
 import type { EmailQueueService } from '../../email/email.queue';
+import type { EmailTemplatesService } from '../../email/email-templates.service';
 import type { EmailService } from '../../email/email.service';
 import type { PublicPaymentLinkService } from '../../payment/payment-link.service';
 import type { PaymentService } from '../../payment/payment.service';
@@ -66,6 +67,7 @@ function createWorker(prisma: PrismaMock): TemplateSelector {
     {} as WhatsappService,
     {} as EmailQueueService,
     {} as EmailService,
+    {} as EmailTemplatesService,
     {} as PublicPaymentLinkService,
   );
 
