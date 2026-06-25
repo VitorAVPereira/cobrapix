@@ -25,8 +25,10 @@ import {
 } from './invoices.service';
 import {
   BillingType,
+  CreateDebtorDto,
   CreateDebtorInvoiceDto,
   CreateInvoiceDto,
+  UpdateDebtorDto,
   UpdateDebtorSettingsDto,
   UpdateRecurringInvoiceDto,
 } from './dto/invoice.dto';
@@ -81,6 +83,7 @@ export class InvoicesController {
     @Query('pageSize') pageSize?: string,
     @Query('search') search?: string,
     @Query('status') status?: string,
+    @Query('debtorId') debtorId?: string,
   ): Promise<unknown> {
     const pageNum = this.parsePositiveInt(page, 1);
     const size = Math.min(
@@ -88,12 +91,17 @@ export class InvoicesController {
       100,
     );
     const normalizedStatus = this.normalizeInvoiceStatus(status);
+    const normalizedDebtorId = this.normalizeUuidQuery(
+      debtorId,
+      'Cliente invalido.',
+    );
 
     return this.invoicesService.findPaginated(user.companyId, {
       page: pageNum,
       pageSize: size,
       search: search?.trim() || undefined,
       status: normalizedStatus,
+      debtorId: normalizedDebtorId,
     });
   }
 
@@ -251,6 +259,96 @@ export class InvoicesController {
           ? error.message
           : 'Nao foi possivel criar a fatura.',
         HttpStatus.BAD_REQUEST,
+      );
+    }
+  }
+
+  @Get('debtors')
+  async listDebtors(
+    @GetUser() user: AuthenticatedUser,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('search') search?: string,
+    @Query('profileId') profileId?: string,
+    @Query('paymentStatus') paymentStatus?: string,
+  ): Promise<unknown> {
+    const pageNum = this.parsePositiveInt(page, 1);
+    const size = Math.min(
+      Math.max(this.parsePositiveInt(pageSize, 20), 1),
+      100,
+    );
+    const normalizedProfileId = this.normalizeUuidQuery(
+      profileId,
+      'Perfil invalido.',
+    );
+
+    return this.invoicesService.listDebtors(user.companyId, {
+      page: pageNum,
+      pageSize: size,
+      search: search?.trim() || undefined,
+      profileId: normalizedProfileId,
+      paymentStatus: this.normalizeDebtorPaymentStatus(paymentStatus),
+    });
+  }
+
+  @Post('debtors')
+  async createDebtor(
+    @GetUser() user: AuthenticatedUser,
+    @Body() dto: CreateDebtorDto,
+  ): Promise<unknown> {
+    try {
+      return await this.invoicesService.createDebtor(user.companyId, {
+        name: dto.name,
+        document: dto.document,
+        phone_number: dto.phone_number,
+        email: dto.email,
+        whatsappOptIn: dto.whatsappOptIn,
+        collectionProfileId: dto.collectionProfileId,
+      });
+    } catch (error) {
+      throw this.toBadRequestHttpException(
+        error,
+        'Nao foi possivel criar o cliente.',
+      );
+    }
+  }
+
+  @Put('debtors/:debtorId')
+  async updateDebtor(
+    @GetUser() user: AuthenticatedUser,
+    @Param('debtorId') debtorId: string,
+    @Body() dto: UpdateDebtorDto,
+  ): Promise<unknown> {
+    if (!this.isUuid(debtorId)) {
+      throw new HttpException('Cliente invalido.', HttpStatus.BAD_REQUEST);
+    }
+
+    try {
+      const debtor = await this.invoicesService.updateDebtor(
+        user.companyId,
+        debtorId,
+        {
+          name: dto.name,
+          document: dto.document,
+          phone_number: dto.phone_number,
+          email: dto.email,
+          whatsappOptIn: dto.whatsappOptIn,
+          collectionProfileId: dto.collectionProfileId,
+        },
+      );
+
+      if (!debtor) {
+        throw new HttpException(
+          'Cliente nao encontrado.',
+          HttpStatus.NOT_FOUND,
+        );
+      }
+
+      return debtor;
+    } catch (error) {
+      throw this.toBadRequestHttpException(
+        error,
+        'Nao foi possivel editar o cliente.',
       );
     }
   }
@@ -521,5 +619,49 @@ export class InvoicesController {
       return upper;
     }
     return undefined;
+  }
+
+  private normalizeDebtorPaymentStatus(
+    raw: string | undefined,
+  ): 'all' | 'open' | 'paid' | 'no_open' | undefined {
+    if (!raw) return undefined;
+    if (
+      raw === 'all' ||
+      raw === 'open' ||
+      raw === 'paid' ||
+      raw === 'no_open'
+    ) {
+      return raw;
+    }
+    return undefined;
+  }
+
+  private normalizeUuidQuery(
+    value: string | undefined,
+    message: string,
+  ): string | undefined {
+    if (!value) {
+      return undefined;
+    }
+
+    if (!this.isUuid(value)) {
+      throw new HttpException(message, HttpStatus.BAD_REQUEST);
+    }
+
+    return value;
+  }
+
+  private toBadRequestHttpException(
+    error: unknown,
+    fallbackMessage: string,
+  ): HttpException {
+    if (error instanceof HttpException) {
+      return error;
+    }
+
+    return new HttpException(
+      error instanceof Error ? error.message : fallbackMessage,
+      HttpStatus.BAD_REQUEST,
+    );
   }
 }

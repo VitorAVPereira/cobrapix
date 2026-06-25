@@ -461,6 +461,7 @@ export class InvoicesService {
       pageSize: number;
       search?: string;
       status?: string;
+      debtorId?: string;
     },
   ): Promise<{
     data: InvoiceListItem[];
@@ -472,6 +473,10 @@ export class InvoicesService {
 
     if (params.status) {
       where.status = params.status as 'PENDING' | 'PAID' | 'CANCELED';
+    }
+
+    if (params.debtorId) {
+      where.debtorId = params.debtorId;
     }
 
     if (params.search) {

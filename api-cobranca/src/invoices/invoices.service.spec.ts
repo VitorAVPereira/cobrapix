@@ -312,6 +312,48 @@ describe('InvoicesService', () => {
     expect(transaction).not.toHaveBeenCalled();
   });
 
+  it('filtra faturas paginadas pelo cliente informado', async () => {
+    const invoice = buildInvoice({});
+    const invoiceFindMany = jest.fn().mockResolvedValue([invoice]);
+    const invoiceCount = jest.fn().mockResolvedValue(1);
+    const prisma = {
+      invoice: {
+        findMany: invoiceFindMany,
+        count: invoiceCount,
+      },
+    } as unknown as PrismaService;
+    const service = new InvoicesService(
+      prisma,
+      buildMessageQueue(),
+      buildPaymentService(),
+    );
+
+    const result = await service.findPaginated('company-1', {
+      page: 1,
+      pageSize: 20,
+      status: 'PENDING',
+      debtorId: 'debtor-1',
+    });
+
+    expect(result.total).toBe(1);
+    expect(invoiceFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          companyId: 'company-1',
+          status: 'PENDING',
+          debtorId: 'debtor-1',
+        }) as unknown,
+      }),
+    );
+    expect(invoiceCount).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        companyId: 'company-1',
+        status: 'PENDING',
+        debtorId: 'debtor-1',
+      }) as unknown,
+    });
+  });
+
   it('enfileira primeira cobranca apos importacao CSV', async () => {
     const debtorFindMany = jest.fn().mockResolvedValue([]);
     const debtorCreate = jest.fn().mockResolvedValue({ id: 'debtor-1' });
