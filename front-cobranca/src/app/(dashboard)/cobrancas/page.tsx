@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import type { PaginationState } from "@tanstack/react-table";
@@ -244,7 +244,7 @@ function buildPaymentStatusMessage(
   ].join(" ");
 }
 
-export default function CobrancasPage() {
+function CobrancasContent() {
   const apiClient = useApiClient();
   const searchParams = useSearchParams();
   const debtorIdFilter = searchParams.get("debtorId") ?? undefined;
@@ -1396,5 +1396,22 @@ export default function CobrancasPage() {
         />
       )}
     </main>
+  );
+}
+
+export default function CobrancasPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-full bg-slate-50">
+          <div className="mx-auto flex min-h-80 items-center justify-center p-4 text-sm text-slate-500 lg:p-8">
+            <Loader2 className="mr-2 animate-spin" size={18} />
+            Carregando cobrancas
+          </div>
+        </main>
+      }
+    >
+      <CobrancasContent />
+    </Suspense>
   );
 }
