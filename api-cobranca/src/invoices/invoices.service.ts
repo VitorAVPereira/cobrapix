@@ -615,7 +615,7 @@ export class InvoicesService {
       where.invoices = { none: { companyId, status: 'PENDING' } };
     }
 
-    const [debtors, total] = await Promise.all([
+    const [debtors, summaryDebtors, total] = await Promise.all([
       this.prisma.debtor.findMany({
         where,
         include: {
@@ -634,16 +634,37 @@ export class InvoicesService {
         skip: (params.page - 1) * params.pageSize,
         take: params.pageSize,
       }),
+      this.prisma.debtor.findMany({
+        where,
+        include: {
+          collectionProfile: true,
+          invoices: {
+            where: { companyId, status: { in: ['PENDING', 'PAID'] } },
+            select: {
+              status: true,
+              originalAmount: true,
+              createdAt: true,
+              paidAt: true,
+            },
+          },
+        },
+        orderBy: { updatedAt: 'desc' },
+        skip: undefined,
+        take: undefined,
+      }),
       this.prisma.debtor.count({ where }),
     ]);
     const data = debtors.map((debtor) => this.mapDebtorListItem(debtor));
+    const summaryData = summaryDebtors.map((debtor) =>
+      this.mapDebtorListItem(debtor),
+    );
 
     return {
       data,
       total,
       page: params.page,
       pageSize: params.pageSize,
-      summary: this.buildDebtorListSummary(data, total),
+      summary: this.buildDebtorListSummary(summaryData, total),
     };
   }
 
@@ -695,7 +716,7 @@ export class InvoicesService {
       return null;
     }
 
-    const data: Prisma.DebtorUpdateManyMutationInput = {};
+    const data: Prisma.DebtorUncheckedUpdateManyInput = {};
 
     if (input.name !== undefined) {
       data.name = input.name;
@@ -1271,10 +1292,12 @@ export class InvoicesService {
 
   private ensureProvidedCollectionProfile(
     collectionProfileId: string | null,
-  ): void {
+  ): string {
     if (collectionProfileId === null || collectionProfileId.trim() === '') {
       throw new BadRequestException('Perfil de pagador e obrigatorio.');
     }
+
+    return collectionProfileId;
   }
 
   private async resolveRequiredCollectionProfileId(
@@ -1285,10 +1308,11 @@ export class InvoicesService {
       return (await this.getDefaultNewDebtorProfile(companyId)).id;
     }
 
-    this.ensureProvidedCollectionProfile(collectionProfileId);
+    const requiredCollectionProfileId =
+      this.ensureProvidedCollectionProfile(collectionProfileId);
 
     const profile = await this.prisma.collectionProfile.findFirst({
-      where: { id: collectionProfileId, companyId, isActive: true },
+      where: { id: requiredCollectionProfileId, companyId, isActive: true },
       select: { id: true },
     });
 

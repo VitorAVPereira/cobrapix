@@ -902,6 +902,88 @@ describe('InvoicesService', () => {
       );
     });
 
+    it('calcula resumo de todos os clientes filtrados mesmo quando pagina retorna menos itens', async () => {
+      const pageDebtor = {
+        ...buildDebtor({ id: 'debtor-page' }),
+        invoices: [
+          {
+            status: 'PENDING',
+            originalAmount: decimal(120),
+            createdAt: new Date('2026-06-04T12:00:00.000Z'),
+            paidAt: null,
+          },
+        ],
+      };
+      const summaryDebtor = {
+        ...buildDebtor({ id: 'debtor-summary' }),
+        invoices: [
+          {
+            status: 'PENDING',
+            originalAmount: decimal(50),
+            createdAt: new Date('2026-06-05T12:00:00.000Z'),
+            paidAt: null,
+          },
+          {
+            status: 'PAID',
+            originalAmount: decimal(200),
+            createdAt: new Date('2026-06-02T12:00:00.000Z'),
+            paidAt: new Date('2026-06-03T12:00:00.000Z'),
+          },
+        ],
+      };
+      const debtorFindMany = jest
+        .fn()
+        .mockResolvedValueOnce([pageDebtor])
+        .mockResolvedValueOnce([pageDebtor, summaryDebtor]);
+      const prisma = {
+        collectionProfile: {
+          findFirst: jest.fn().mockResolvedValue(defaultProfile),
+        },
+        debtor: {
+          updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+          findMany: debtorFindMany,
+          count: jest.fn().mockResolvedValue(2),
+        },
+      } as unknown as PrismaService;
+      const service = new InvoicesService(
+        prisma,
+        buildMessageQueue(),
+        buildPaymentService(),
+      );
+
+      const result = await service.listDebtors('company-1', {
+        page: 1,
+        pageSize: 1,
+        search: 'maria',
+      });
+
+      expect(debtorFindMany).toHaveBeenCalledTimes(2);
+      expect(debtorFindMany).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          skip: 0,
+          take: 1,
+          where: expect.objectContaining({ companyId: 'company-1' }) as unknown,
+        }),
+      );
+      expect(debtorFindMany).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          skip: undefined,
+          take: undefined,
+          where: expect.objectContaining({ companyId: 'company-1' }) as unknown,
+        }),
+      );
+      expect(result.data).toHaveLength(1);
+      expect(result.summary).toEqual({
+        totalDebtors: 2,
+        openInvoiceAmount: 170,
+        openInvoiceCount: 2,
+        paidInvoiceAmount: 200,
+        paidInvoiceCount: 1,
+      });
+    });
+
     it('edita cliente e rejeita remocao de perfil', async () => {
       const debtorFindFirst = jest
         .fn()
