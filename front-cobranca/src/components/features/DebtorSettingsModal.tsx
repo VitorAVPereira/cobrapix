@@ -93,7 +93,7 @@ export function DebtorSettingsModal({
       }`;
     }
 
-    return "Sem perfil definido";
+    return "Selecione um perfil de pagador";
   }, [selectedProfile, selectedProfileId, settings?.collectionProfile]);
 
   useEffect(() => {
@@ -116,7 +116,14 @@ export function DebtorSettingsModal({
         setDebtorDocument(settingsResponse.document ?? "");
         setProfiles(profilesResponse);
         setWhatsappOptIn(settingsResponse.whatsappOptIn);
-        setSelectedProfileId(settingsResponse.collectionProfile?.id ?? "");
+        setSelectedProfileId(
+          settingsResponse.collectionProfile?.id ??
+            profilesResponse.find((profile) => profile.profileType === "NEW")
+              ?.id ??
+            profilesResponse.find((profile) => profile.isDefault)?.id ??
+            profilesResponse[0]?.id ??
+            "",
+        );
       } catch (loadError) {
         if (active) {
           setError(getErrorMessage(loadError));
@@ -140,11 +147,17 @@ export function DebtorSettingsModal({
     setError(null);
     setSuccess(null);
 
+    if (!selectedProfileId) {
+      setError("Selecione um perfil de pagador.");
+      setSaving(false);
+      return;
+    }
+
     try {
       const saved = await apiClient.updateDebtorBillingSettings(debtorId, {
         document: normalizeRequiredDebtorDocument(debtorDocument),
         whatsappOptIn,
-        collectionProfileId: selectedProfileId || null,
+        collectionProfileId: selectedProfileId,
       });
 
       setSettings(saved);
@@ -265,26 +278,6 @@ export function DebtorSettingsModal({
                 </div>
 
                 <div className="space-y-3 p-4">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedProfileId("");
-                      setSuccess(null);
-                    }}
-                    className={`w-full rounded-md border px-4 py-3 text-left transition ${
-                      selectedProfileId === ""
-                        ? "border-slate-400 bg-slate-100"
-                        : "border-slate-200 bg-white hover:bg-slate-50"
-                    }`}
-                  >
-                    <span className="block text-sm font-semibold text-slate-900">
-                      Sem perfil manual
-                    </span>
-                    <span className="mt-1 block text-xs text-slate-500">
-                      O devedor fica sem uma regra de perfil selecionada.
-                    </span>
-                  </button>
-
                   {profiles.map((profile) => {
                     const isSelected = selectedProfileId === profile.id;
 
