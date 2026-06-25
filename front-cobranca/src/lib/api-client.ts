@@ -280,6 +280,67 @@ export interface PaymentNotificationListResponse {
   unreadCount: number;
 }
 
+export type DebtorPaymentStatusFilter = "all" | "open" | "paid" | "no_open";
+
+export interface DebtorCollectionProfile {
+  id: string;
+  name: string;
+  profileType: CollectionProfileType;
+}
+
+export interface DebtorListItem {
+  debtorId: string;
+  name: string;
+  document: string;
+  phone_number: string;
+  email: string | null;
+  whatsapp_opt_in: boolean;
+  whatsappOptInAt: string | null;
+  collectionProfile: DebtorCollectionProfile;
+  openInvoicesCount: number;
+  openInvoicesAmount: number;
+  paidInvoicesCount: number;
+  paidInvoicesAmount: number;
+  lastInvoiceAt: string | null;
+  lastPaymentAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DebtorListSummary {
+  totalDebtors: number;
+  openInvoiceAmount: number;
+  openInvoiceCount: number;
+  paidInvoiceAmount: number;
+  paidInvoiceCount: number;
+}
+
+export interface DebtorListResponse {
+  data: DebtorListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  summary: DebtorListSummary;
+}
+
+export interface CreateDebtorInput {
+  name: string;
+  document: string;
+  phone_number: string;
+  email?: string | null;
+  whatsappOptIn?: boolean;
+  collectionProfileId?: string;
+}
+
+export interface UpdateDebtorInput {
+  name?: string;
+  document?: string;
+  phone_number?: string;
+  email?: string | null;
+  whatsappOptIn?: boolean;
+  collectionProfileId?: string;
+}
+
 export interface DebtorBillingSettings {
   debtorId: string;
   debtorName: string;
@@ -1009,6 +1070,7 @@ class ApiClient {
       pageSize?: number;
       search?: string;
       status?: string;
+      debtorId?: string;
     } = {},
   ): Promise<{
     data: InvoiceListItem[];
@@ -1021,6 +1083,7 @@ class ApiClient {
     if (params.pageSize) qs.set("pageSize", String(params.pageSize));
     if (params.search) qs.set("search", params.search);
     if (params.status) qs.set("status", params.status);
+    if (params.debtorId) qs.set("debtorId", params.debtorId);
 
     const qsStr = qs.toString();
     return this.fetch<{
@@ -1065,6 +1128,37 @@ class ApiClient {
         body: JSON.stringify(data),
       },
     );
+  }
+
+  async getDebtors(
+    params: {
+      page?: number;
+      pageSize?: number;
+      search?: string;
+      profileId?: string;
+      paymentStatus?: DebtorPaymentStatusFilter;
+    } = {},
+  ): Promise<DebtorListResponse> {
+    return this.fetch<DebtorListResponse>(
+      `/invoices/debtors${this.buildQueryString(params)}`,
+    );
+  }
+
+  async createDebtor(data: CreateDebtorInput): Promise<DebtorListItem> {
+    return this.fetch<DebtorListItem>("/invoices/debtors", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateDebtor(
+    debtorId: string,
+    data: UpdateDebtorInput,
+  ): Promise<DebtorListItem> {
+    return this.fetch<DebtorListItem>(`/invoices/debtors/${debtorId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
   }
 
   async getRecurringInvoices(): Promise<RecurringInvoice[]> {
