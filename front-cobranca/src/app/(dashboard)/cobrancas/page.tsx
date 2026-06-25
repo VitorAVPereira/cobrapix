@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { useSearchParams } from "next/navigation";
 import type { PaginationState } from "@tanstack/react-table";
 import {
   AlertCircle,
@@ -245,6 +246,9 @@ function buildPaymentStatusMessage(
 
 export default function CobrancasPage() {
   const apiClient = useApiClient();
+  const searchParams = useSearchParams();
+  const debtorIdFilter = searchParams.get("debtorId") ?? undefined;
+  const statusFilter = searchParams.get("status") ?? undefined;
   const [debtors, setDebtors] = useState<ParsedDebtor[]>([]);
   const [total, setTotal] = useState(0);
   const [pagination, setPagination] = useState<PaginationState>({
@@ -290,6 +294,8 @@ export default function CobrancasPage() {
         page: pagination.pageIndex + 1,
         pageSize: pagination.pageSize,
         search: searchQuery.trim() || undefined,
+        status: statusFilter || undefined,
+        debtorId: debtorIdFilter,
       });
       const invoices = result.data;
       setDebtors(isParsedDebtorArray(invoices) ? invoices : []);
@@ -301,7 +307,14 @@ export default function CobrancasPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [apiClient, pagination.pageIndex, pagination.pageSize, searchQuery]);
+  }, [
+    apiClient,
+    debtorIdFilter,
+    pagination.pageIndex,
+    pagination.pageSize,
+    searchQuery,
+    statusFilter,
+  ]);
 
   useEffect(() => {
     void fetchInvoices();
@@ -809,6 +822,12 @@ export default function CobrancasPage() {
           <div className="flex items-start gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">
             <CheckCircle2 className="mt-0.5 shrink-0" size={18} />
             <span>{successMsg}</span>
+          </div>
+        )}
+
+        {debtorIdFilter && (
+          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
+            Exibindo cobrancas filtradas pelo cliente selecionado.
           </div>
         )}
 
