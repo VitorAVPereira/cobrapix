@@ -123,6 +123,57 @@ export class CreateDebtorInvoiceDto {
   studentGroup?: string;
 }
 
+export class CreateDebtorDto {
+  @IsString()
+  @Length(2, 120)
+  name!: string;
+
+  @IsString()
+  document!: string;
+
+  @Matches(/^\+?[\d\s().-]{10,24}$/)
+  phone_number!: string;
+
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  whatsappOptIn?: boolean;
+
+  @IsOptional()
+  @IsUUID('4')
+  collectionProfileId?: string;
+}
+
+export class UpdateDebtorDto {
+  @IsOptional()
+  @IsString()
+  @Length(2, 120)
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  document?: string;
+
+  @IsOptional()
+  @Matches(/^\+?[\d\s().-]{10,24}$/)
+  phone_number?: string;
+
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  whatsappOptIn?: boolean;
+
+  @IsOptional()
+  @IsUUID('4')
+  collectionProfileId?: string;
+}
+
 export class UpdateRecurringInvoiceDto {
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)

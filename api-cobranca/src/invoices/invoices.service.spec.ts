@@ -705,4 +705,252 @@ describe('InvoicesService', () => {
       }),
     );
   });
+
+  describe('clientes pagadores', () => {
+    const defaultProfile = {
+      id: 'profile-new',
+      name: 'Novo Cliente',
+      profileType: 'NEW',
+    };
+
+    function buildDebtor(
+      overrides: Partial<{
+        id: string;
+        name: string;
+        document: string;
+        phoneNumber: string;
+        email: string | null;
+        collectionProfileId: string | null;
+      }> = {},
+    ) {
+      return {
+        id: overrides.id ?? 'debtor-1',
+        companyId: 'company-1',
+        name: overrides.name ?? 'Maria Silva',
+        document: overrides.document ?? '12345678909',
+        phoneNumber: overrides.phoneNumber ?? '+5511999999999',
+        email: overrides.email ?? null,
+        whatsappOptIn: false,
+        whatsappOptInAt: null,
+        whatsappOptInSource: null,
+        collectionProfileId:
+          overrides.collectionProfileId === undefined
+            ? defaultProfile.id
+            : overrides.collectionProfileId,
+        collectionProfile:
+          overrides.collectionProfileId === null ? null : defaultProfile,
+        createdAt: new Date('2026-06-01T12:00:00.000Z'),
+        updatedAt: new Date('2026-06-02T12:00:00.000Z'),
+        invoices: [],
+      };
+    }
+
+    it('cria cliente sem cobranca com perfil NEW quando nenhum perfil e enviado', async () => {
+      const debtorCreate = jest.fn().mockResolvedValue(buildDebtor());
+      const profileFindFirst = jest.fn().mockResolvedValue(defaultProfile);
+      const prisma = {
+        collectionProfile: { findFirst: profileFindFirst },
+        debtor: {
+          findMany: jest.fn().mockResolvedValue([]),
+          create: debtorCreate,
+        },
+      } as unknown as PrismaService;
+      const service = new InvoicesService(
+        prisma,
+        buildMessageQueue(),
+        buildPaymentService(),
+      );
+
+      const result = await service.createDebtor('company-1', {
+        name: 'Maria Silva',
+        document: '123.456.789-09',
+        phone_number: '11999999999',
+        email: null,
+        whatsappOptIn: false,
+      });
+
+      expect(profileFindFirst).toHaveBeenCalledWith({
+        where: { companyId: 'company-1', profileType: 'NEW', isActive: true },
+        select: { id: true, name: true, profileType: true },
+        orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+      });
+      expect(debtorCreate).toHaveBeenCalledWith({
+        data: {
+          companyId: 'company-1',
+          name: 'Maria Silva',
+          document: '12345678909',
+          phoneNumber: '+5511999999999',
+          email: null,
+          whatsappOptIn: false,
+          whatsappOptInAt: null,
+          whatsappOptInSource: null,
+          collectionProfileId: 'profile-new',
+        },
+        include: { collectionProfile: true },
+      });
+      expect(result.collectionProfile.profileType).toBe('NEW');
+      expect(result.openInvoicesCount).toBe(0);
+      expect(result.paidInvoicesCount).toBe(0);
+    });
+
+    it('rejeita cliente novo com WhatsApp duplicado na empresa', async () => {
+      const prisma = {
+        collectionProfile: {
+          findFirst: jest.fn().mockResolvedValue(defaultProfile),
+        },
+        debtor: {
+          findMany: jest
+            .fn()
+            .mockResolvedValue([
+              { id: 'existing', phoneNumber: '+5511999999999' },
+            ]),
+        },
+      } as unknown as PrismaService;
+      const service = new InvoicesService(
+        prisma,
+        buildMessageQueue(),
+        buildPaymentService(),
+      );
+
+      await expect(
+        service.createDebtor('company-1', {
+          name: 'Maria Silva',
+          document: '12345678909',
+          phone_number: '11999999999',
+          email: null,
+          whatsappOptIn: false,
+        }),
+      ).rejects.toThrow('Ja existe cliente com este WhatsApp.');
+    });
+
+    it('lista clientes com totais de cobrancas e backfill de perfil NEW', async () => {
+      const debtorWithInvoices = {
+        ...buildDebtor(),
+        invoices: [
+          {
+            status: 'PENDING',
+            originalAmount: decimal(120),
+            createdAt: new Date('2026-06-04T12:00:00.000Z'),
+            paidAt: null,
+          },
+          {
+            status: 'PAID',
+            originalAmount: decimal(80),
+            createdAt: new Date('2026-06-01T12:00:00.000Z'),
+            paidAt: new Date('2026-06-03T12:00:00.000Z'),
+          },
+        ],
+      };
+      const debtorFindMany = jest.fn().mockResolvedValue([debtorWithInvoices]);
+      const debtorUpdateMany = jest.fn().mockResolvedValue({ count: 2 });
+      const prisma = {
+        collectionProfile: {
+          findFirst: jest.fn().mockResolvedValue(defaultProfile),
+        },
+        debtor: {
+          updateMany: debtorUpdateMany,
+          findMany: debtorFindMany,
+          count: jest.fn().mockResolvedValue(1),
+        },
+      } as unknown as PrismaService;
+      const service = new InvoicesService(
+        prisma,
+        buildMessageQueue(),
+        buildPaymentService(),
+      );
+
+      const result = await service.listDebtors('company-1', {
+        page: 1,
+        pageSize: 20,
+        search: 'maria',
+      });
+
+      expect(debtorUpdateMany).toHaveBeenCalledWith({
+        where: { companyId: 'company-1', collectionProfileId: null },
+        data: { collectionProfileId: 'profile-new' },
+      });
+      expect(debtorFindMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ companyId: 'company-1' }) as unknown,
+          include: expect.objectContaining({
+            collectionProfile: true,
+            invoices: expect.objectContaining({
+              where: expect.objectContaining({
+                companyId: 'company-1',
+                status: { in: ['PENDING', 'PAID'] },
+              }) as unknown,
+            }) as unknown,
+          }) as unknown,
+        }),
+      );
+      expect(result.summary).toEqual({
+        totalDebtors: 1,
+        openInvoiceAmount: 120,
+        openInvoiceCount: 1,
+        paidInvoiceAmount: 80,
+        paidInvoiceCount: 1,
+      });
+      expect(result.data[0]).toEqual(
+        expect.objectContaining({
+          debtorId: 'debtor-1',
+          openInvoicesCount: 1,
+          openInvoicesAmount: 120,
+          paidInvoicesCount: 1,
+          paidInvoicesAmount: 80,
+          collectionProfile: defaultProfile,
+        }),
+      );
+    });
+
+    it('edita cliente e rejeita remocao de perfil', async () => {
+      const debtorFindFirst = jest
+        .fn()
+        .mockResolvedValueOnce({ id: 'debtor-1', whatsappOptInAt: null })
+        .mockResolvedValueOnce(
+          buildDebtor({ name: 'Maria Editada', email: 'maria@email.com' }),
+        );
+      const debtorUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
+      const prisma = {
+        collectionProfile: {
+          findFirst: jest.fn().mockResolvedValue(defaultProfile),
+        },
+        debtor: {
+          findFirst: debtorFindFirst,
+          findMany: jest.fn().mockResolvedValue([]),
+          updateMany: debtorUpdateMany,
+        },
+      } as unknown as PrismaService;
+      const service = new InvoicesService(
+        prisma,
+        buildMessageQueue(),
+        buildPaymentService(),
+      );
+
+      const result = await service.updateDebtor('company-1', 'debtor-1', {
+        name: 'Maria Editada',
+        document: '123.456.789-09',
+        phone_number: '+55 11 99999-9999',
+        email: 'maria@email.com',
+        collectionProfileId: 'profile-new',
+      });
+
+      expect(result?.name).toBe('Maria Editada');
+      expect(debtorUpdateMany).toHaveBeenCalledWith({
+        where: { id: 'debtor-1', companyId: 'company-1' },
+        data: expect.objectContaining({
+          name: 'Maria Editada',
+          document: '12345678909',
+          phoneNumber: '+5511999999999',
+          email: 'maria@email.com',
+          collectionProfileId: 'profile-new',
+        }) as unknown,
+      });
+
+      await expect(
+        service.updateDebtor('company-1', 'debtor-1', {
+          collectionProfileId: null as unknown as string,
+        }),
+      ).rejects.toThrow('Perfil de pagador e obrigatorio.');
+    });
+  });
 });

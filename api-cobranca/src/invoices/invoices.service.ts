@@ -336,6 +336,92 @@ export interface UpdateDebtorSettingsInput {
   collectionProfileId?: string | null;
 }
 
+export interface DebtorCollectionProfileSummary {
+  id: string;
+  name: string;
+  profileType: CollectionProfileType;
+}
+
+export interface CreateDebtorInput {
+  name: string;
+  document: string;
+  phone_number: string;
+  email?: string | null;
+  whatsappOptIn?: boolean;
+  collectionProfileId?: string | null;
+}
+
+export interface UpdateDebtorInput {
+  name?: string;
+  document?: string;
+  phone_number?: string;
+  email?: string | null;
+  whatsappOptIn?: boolean;
+  collectionProfileId?: string | null;
+}
+
+export interface DebtorListParams {
+  page: number;
+  pageSize: number;
+  search?: string;
+  profileId?: string;
+  paymentStatus?: 'all' | 'open' | 'paid' | 'no_open';
+}
+
+export interface DebtorListSummary {
+  totalDebtors: number;
+  openInvoiceAmount: number;
+  openInvoiceCount: number;
+  paidInvoiceAmount: number;
+  paidInvoiceCount: number;
+}
+
+export interface DebtorListItem {
+  debtorId: string;
+  name: string;
+  document: string;
+  phone_number: string;
+  email: string | null;
+  whatsapp_opt_in: boolean;
+  whatsappOptInAt: string | null;
+  collectionProfile: DebtorCollectionProfileSummary;
+  openInvoicesCount: number;
+  openInvoicesAmount: number;
+  paidInvoicesCount: number;
+  paidInvoicesAmount: number;
+  lastInvoiceAt: string | null;
+  lastPaymentAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DebtorListResponse {
+  data: DebtorListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  summary: DebtorListSummary;
+}
+
+interface DebtorWithSummaryRelations {
+  id: string;
+  name: string;
+  document: string | null;
+  phoneNumber: string;
+  email: string | null;
+  whatsappOptIn: boolean;
+  whatsappOptInAt: Date | null;
+  collectionProfile: DebtorCollectionProfileSummary | null;
+  createdAt: Date;
+  updatedAt: Date;
+  invoices: Array<{
+    status: string;
+    originalAmount: { toNumber(): number };
+    createdAt: Date;
+    paidAt: Date | null;
+  }>;
+}
+
 @Injectable()
 export class InvoicesService {
   private readonly logger = new Logger(InvoicesService.name);
@@ -495,6 +581,184 @@ export class InvoicesService {
     );
 
     return { success: true, count: result.created, initialChargeQueued };
+  }
+
+  async listDebtors(
+    companyId: string,
+    params: DebtorListParams,
+  ): Promise<DebtorListResponse> {
+    await this.backfillMissingDebtorProfiles(companyId);
+
+    const where: Prisma.DebtorWhereInput = { companyId };
+    if (params.profileId) {
+      where.collectionProfileId = params.profileId;
+    }
+
+    if (params.search) {
+      const normalizedDocument = normalizeDebtorDocument(params.search);
+      const normalizedPhone = params.search.replace(/\D/g, '');
+      where.OR = [
+        { name: { contains: params.search, mode: 'insensitive' } },
+        { document: { contains: normalizedDocument || params.search } },
+        { phoneNumber: { contains: normalizedPhone || params.search } },
+        { email: { contains: params.search, mode: 'insensitive' } },
+      ];
+    }
+
+    if (params.paymentStatus === 'open') {
+      where.invoices = { some: { companyId, status: 'PENDING' } };
+    }
+    if (params.paymentStatus === 'paid') {
+      where.invoices = { some: { companyId, status: 'PAID' } };
+    }
+    if (params.paymentStatus === 'no_open') {
+      where.invoices = { none: { companyId, status: 'PENDING' } };
+    }
+
+    const [debtors, total] = await Promise.all([
+      this.prisma.debtor.findMany({
+        where,
+        include: {
+          collectionProfile: true,
+          invoices: {
+            where: { companyId, status: { in: ['PENDING', 'PAID'] } },
+            select: {
+              status: true,
+              originalAmount: true,
+              createdAt: true,
+              paidAt: true,
+            },
+          },
+        },
+        orderBy: { updatedAt: 'desc' },
+        skip: (params.page - 1) * params.pageSize,
+        take: params.pageSize,
+      }),
+      this.prisma.debtor.count({ where }),
+    ]);
+    const data = debtors.map((debtor) => this.mapDebtorListItem(debtor));
+
+    return {
+      data,
+      total,
+      page: params.page,
+      pageSize: params.pageSize,
+      summary: this.buildDebtorListSummary(data, total),
+    };
+  }
+
+  async createDebtor(
+    companyId: string,
+    input: CreateDebtorInput,
+  ): Promise<DebtorListItem> {
+    const document = this.normalizeRequiredDebtorDocument(input.document);
+    const phoneNumber = normalizeWhatsAppNumber(input.phone_number);
+    await this.ensureUniqueDebtorPhone(companyId, phoneNumber);
+    const collectionProfileId = await this.resolveRequiredCollectionProfileId(
+      companyId,
+      input.collectionProfileId,
+    );
+    const whatsappOptIn = input.whatsappOptIn === true;
+    const debtor = await this.prisma.debtor.create({
+      data: {
+        companyId,
+        name: input.name,
+        document,
+        phoneNumber,
+        email: input.email || null,
+        whatsappOptIn,
+        whatsappOptInAt: whatsappOptIn ? new Date() : null,
+        whatsappOptInSource: whatsappOptIn ? 'manual-client-page' : null,
+        collectionProfileId,
+      },
+      include: { collectionProfile: true },
+    });
+
+    return this.mapDebtorListItem({ ...debtor, invoices: [] });
+  }
+
+  async updateDebtor(
+    companyId: string,
+    debtorId: string,
+    input: UpdateDebtorInput,
+  ): Promise<DebtorListItem | null> {
+    if (input.collectionProfileId !== undefined) {
+      this.ensureProvidedCollectionProfile(input.collectionProfileId);
+    }
+
+    const debtor = await this.prisma.debtor.findFirst({
+      where: { id: debtorId, companyId },
+      select: { id: true, whatsappOptInAt: true },
+    });
+
+    if (!debtor) {
+      return null;
+    }
+
+    const data: Prisma.DebtorUpdateManyMutationInput = {};
+
+    if (input.name !== undefined) {
+      data.name = input.name;
+    }
+
+    if (input.document !== undefined) {
+      data.document = this.normalizeRequiredDebtorDocument(input.document);
+    }
+
+    if (input.phone_number !== undefined) {
+      const phoneNumber = normalizeWhatsAppNumber(input.phone_number);
+      await this.ensureUniqueDebtorPhone(companyId, phoneNumber, debtorId);
+      data.phoneNumber = phoneNumber;
+    }
+
+    if (input.email !== undefined) {
+      data.email = input.email || null;
+    }
+
+    if (input.collectionProfileId !== undefined) {
+      data.collectionProfileId = await this.resolveRequiredCollectionProfileId(
+        companyId,
+        input.collectionProfileId,
+      );
+    }
+
+    if (input.whatsappOptIn !== undefined) {
+      data.whatsappOptIn = input.whatsappOptIn;
+      if (input.whatsappOptIn) {
+        data.whatsappOptInSource = 'manual-client-page';
+        if (!debtor.whatsappOptInAt) {
+          data.whatsappOptInAt = new Date();
+        }
+      } else {
+        data.whatsappOptInAt = null;
+        data.whatsappOptInSource = null;
+      }
+    }
+
+    if (Object.keys(data).length > 0) {
+      await this.prisma.debtor.updateMany({
+        where: { id: debtorId, companyId },
+        data,
+      });
+    }
+
+    const updatedDebtor = await this.prisma.debtor.findFirst({
+      where: { id: debtorId, companyId },
+      include: {
+        collectionProfile: true,
+        invoices: {
+          where: { companyId, status: { in: ['PENDING', 'PAID'] } },
+          select: {
+            status: true,
+            originalAmount: true,
+            createdAt: true,
+            paidAt: true,
+          },
+        },
+      },
+    });
+
+    return updatedDebtor ? this.mapDebtorListItem(updatedDebtor) : null;
   }
 
   async createInvoice(
@@ -985,6 +1249,174 @@ export class InvoicesService {
     }
 
     return this.getDebtorSettings(companyId, debtorId);
+  }
+
+  private async getDefaultNewDebtorProfile(
+    companyId: string,
+  ): Promise<DebtorCollectionProfileSummary> {
+    const profile = await this.prisma.collectionProfile.findFirst({
+      where: { companyId, profileType: 'NEW', isActive: true },
+      select: { id: true, name: true, profileType: true },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+    });
+
+    if (!profile) {
+      throw new BadRequestException(
+        'Perfil Novo pagador nao encontrado para esta empresa.',
+      );
+    }
+
+    return profile;
+  }
+
+  private ensureProvidedCollectionProfile(
+    collectionProfileId: string | null,
+  ): void {
+    if (collectionProfileId === null || collectionProfileId.trim() === '') {
+      throw new BadRequestException('Perfil de pagador e obrigatorio.');
+    }
+  }
+
+  private async resolveRequiredCollectionProfileId(
+    companyId: string,
+    collectionProfileId: string | null | undefined,
+  ): Promise<string> {
+    if (collectionProfileId === undefined) {
+      return (await this.getDefaultNewDebtorProfile(companyId)).id;
+    }
+
+    this.ensureProvidedCollectionProfile(collectionProfileId);
+
+    const profile = await this.prisma.collectionProfile.findFirst({
+      where: { id: collectionProfileId, companyId, isActive: true },
+      select: { id: true },
+    });
+
+    if (!profile) {
+      throw new BadRequestException('Perfil de cobranca invalido.');
+    }
+
+    return profile.id;
+  }
+
+  private async backfillMissingDebtorProfiles(
+    companyId: string,
+  ): Promise<void> {
+    const defaultProfile = await this.getDefaultNewDebtorProfile(companyId);
+    await this.prisma.debtor.updateMany({
+      where: { companyId, collectionProfileId: null },
+      data: { collectionProfileId: defaultProfile.id },
+    });
+  }
+
+  private async ensureUniqueDebtorPhone(
+    companyId: string,
+    phoneNumber: string,
+    ignoredDebtorId?: string,
+  ): Promise<void> {
+    const lookupCandidates = getWhatsAppNumberLookupCandidates(phoneNumber);
+    const where: Prisma.DebtorWhereInput = {
+      companyId,
+      phoneNumber: { in: lookupCandidates },
+    };
+
+    if (ignoredDebtorId) {
+      where.id = { not: ignoredDebtorId };
+    }
+
+    const existingDebtors = await this.prisma.debtor.findMany({
+      where,
+      select: { id: true, phoneNumber: true },
+    });
+
+    if (existingDebtors.length > 0) {
+      throw new ConflictException('Ja existe cliente com este WhatsApp.');
+    }
+  }
+
+  private buildDebtorListSummary(
+    data: DebtorListItem[],
+    totalDebtors: number,
+  ): DebtorListSummary {
+    const openInvoiceAmount = data.reduce(
+      (sum, debtor) => sum + debtor.openInvoicesAmount,
+      0,
+    );
+    const paidInvoiceAmount = data.reduce(
+      (sum, debtor) => sum + debtor.paidInvoicesAmount,
+      0,
+    );
+
+    return {
+      totalDebtors,
+      openInvoiceAmount: Number(openInvoiceAmount.toFixed(2)),
+      openInvoiceCount: data.reduce(
+        (sum, debtor) => sum + debtor.openInvoicesCount,
+        0,
+      ),
+      paidInvoiceAmount: Number(paidInvoiceAmount.toFixed(2)),
+      paidInvoiceCount: data.reduce(
+        (sum, debtor) => sum + debtor.paidInvoicesCount,
+        0,
+      ),
+    };
+  }
+
+  private mapDebtorListItem(
+    debtor: DebtorWithSummaryRelations,
+  ): DebtorListItem {
+    if (!debtor.collectionProfile) {
+      throw new BadRequestException('Cliente sem perfil de pagador.');
+    }
+
+    const openInvoices = debtor.invoices.filter(
+      (invoice) => invoice.status === 'PENDING',
+    );
+    const paidInvoices = debtor.invoices.filter(
+      (invoice) => invoice.status === 'PAID',
+    );
+    const sumAmount = (
+      invoices: Array<{ originalAmount: { toNumber(): number } }>,
+    ): number =>
+      Number(
+        invoices
+          .reduce((sum, invoice) => sum + invoice.originalAmount.toNumber(), 0)
+          .toFixed(2),
+      );
+    const lastInvoiceAt =
+      debtor.invoices
+        .map((invoice) => invoice.createdAt)
+        .sort((left, right) => right.getTime() - left.getTime())[0]
+        ?.toISOString() ?? null;
+    const lastPaymentAt =
+      paidInvoices
+        .map((invoice) => invoice.paidAt)
+        .filter((date): date is Date => Boolean(date))
+        .sort((left, right) => right.getTime() - left.getTime())[0]
+        ?.toISOString() ?? null;
+
+    return {
+      debtorId: debtor.id,
+      name: debtor.name,
+      document: debtor.document ?? '',
+      phone_number: this.normalizePhoneNumberForResponse(debtor.phoneNumber),
+      email: debtor.email,
+      whatsapp_opt_in: debtor.whatsappOptIn,
+      whatsappOptInAt: debtor.whatsappOptInAt?.toISOString() ?? null,
+      collectionProfile: {
+        id: debtor.collectionProfile.id,
+        name: debtor.collectionProfile.name,
+        profileType: debtor.collectionProfile.profileType,
+      },
+      openInvoicesCount: openInvoices.length,
+      openInvoicesAmount: sumAmount(openInvoices),
+      paidInvoicesCount: paidInvoices.length,
+      paidInvoicesAmount: sumAmount(paidInvoices),
+      lastInvoiceAt,
+      lastPaymentAt,
+      createdAt: debtor.createdAt.toISOString(),
+      updatedAt: debtor.updatedAt.toISOString(),
+    };
   }
 
   private async resolveCollectionProfileId(
