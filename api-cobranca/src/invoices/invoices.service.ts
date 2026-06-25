@@ -206,6 +206,7 @@ interface DebtorUpsertInput {
   phoneNumber: string;
   email?: string | null;
   whatsappOptIn?: boolean;
+  collectionProfileId: string;
 }
 
 interface DebtorIdentity {
@@ -536,6 +537,10 @@ export class InvoicesService {
     companyId: string,
     rows: ImportRow[],
   ): Promise<{ success: boolean; count: number; initialChargeQueued: number }> {
+    const collectionProfileId = await this.resolveRequiredCollectionProfileId(
+      companyId,
+      undefined,
+    );
     const result = await this.prisma.$transaction(async (tx) => {
       let created = 0;
       const invoiceIds: string[] = [];
@@ -547,6 +552,7 @@ export class InvoicesService {
           phoneNumber: row.phone_number,
           email: row.email || null,
           whatsappOptIn: row.whatsapp_opt_in ?? false,
+          collectionProfileId,
         });
 
         const dueDate = this.parseDueDate(row.due_date);
@@ -845,6 +851,9 @@ export class InvoicesService {
     if (!dueDate) {
       throw new Error('Data de vencimento invalida.');
     }
+    const collectionProfileId = debtorId
+      ? null
+      : await this.resolveRequiredCollectionProfileId(companyId, undefined);
 
     const invoice = await this.prisma.$transaction(async (tx) => {
       const debtor = debtorId
@@ -858,6 +867,8 @@ export class InvoicesService {
             phoneNumber: input.phone_number ?? '',
             email: input.email ?? null,
             whatsappOptIn: input.whatsappOptIn ?? false,
+            collectionProfileId:
+              this.ensureProvidedCollectionProfile(collectionProfileId),
           });
 
       if (!debtor) {
@@ -1195,7 +1206,7 @@ export class InvoicesService {
       return null;
     }
 
-    const updateData: Prisma.DebtorUpdateInput = {};
+    const updateData: Prisma.DebtorUncheckedUpdateManyInput = {};
 
     if (input.document !== undefined) {
       updateData.document = this.normalizeRequiredDebtorDocument(
@@ -1244,14 +1255,11 @@ export class InvoicesService {
     }
 
     if (input.collectionProfileId !== undefined) {
-      const collectionProfileId = await this.resolveCollectionProfileId(
-        companyId,
-        input.collectionProfileId,
-      );
-      updateData.collectionProfile =
-        collectionProfileId === null
-          ? { disconnect: true }
-          : { connect: { id: collectionProfileId } };
+      updateData.collectionProfileId =
+        await this.resolveRequiredCollectionProfileId(
+          companyId,
+          input.collectionProfileId,
+        );
     }
 
     if (input.whatsappOptIn !== undefined) {
@@ -1263,8 +1271,8 @@ export class InvoicesService {
     }
 
     if (Object.keys(updateData).length > 0) {
-      await this.prisma.debtor.update({
-        where: { id: debtorId },
+      await this.prisma.debtor.updateMany({
+        where: { id: debtorId, companyId },
         data: updateData,
       });
     }
@@ -1443,30 +1451,6 @@ export class InvoicesService {
     };
   }
 
-  private async resolveCollectionProfileId(
-    companyId: string,
-    collectionProfileId: string | null,
-  ): Promise<string | null> {
-    if (collectionProfileId === null) {
-      return null;
-    }
-
-    const profile = await this.prisma.collectionProfile.findFirst({
-      where: {
-        id: collectionProfileId,
-        companyId,
-        isActive: true,
-      },
-      select: { id: true },
-    });
-
-    if (!profile) {
-      throw new BadRequestException('Perfil de cobranca invalido.');
-    }
-
-    return profile.id;
-  }
-
   private async queueInitialChargeJobs(
     companyId: string,
     invoiceIds: string[],
@@ -1500,6 +1484,9 @@ export class InvoicesService {
     const newDebtorDocument = input.debtorId
       ? null
       : this.normalizeRequiredDebtorDocument(input.document);
+    const collectionProfileId = input.debtorId
+      ? null
+      : await this.resolveRequiredCollectionProfileId(companyId, undefined);
     const debtor = input.debtorId
       ? await this.prisma.debtor.findFirst({
           where: { id: input.debtorId, companyId },
@@ -1511,6 +1498,8 @@ export class InvoicesService {
           phoneNumber: input.phone_number ?? '',
           email: input.email ?? null,
           whatsappOptIn: input.whatsappOptIn ?? false,
+          collectionProfileId:
+            this.ensureProvidedCollectionProfile(collectionProfileId),
         });
 
     if (!debtor) {
@@ -1752,6 +1741,7 @@ export class InvoicesService {
           document,
           phoneNumber,
           email: input.email || null,
+          collectionProfileId: input.collectionProfileId,
           ...(input.whatsappOptIn === true && {
             whatsappOptIn: true,
             whatsappOptInAt: new Date(),
@@ -1774,6 +1764,7 @@ export class InvoicesService {
         whatsappOptInAt: input.whatsappOptIn === true ? new Date() : null,
         whatsappOptInSource:
           input.whatsappOptIn === true ? 'manual_import' : null,
+        collectionProfileId: input.collectionProfileId,
       },
       select: { id: true },
     });

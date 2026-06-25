@@ -248,5 +248,5 @@ export class UpdateDebtorSettingsDto {
 
   @IsOptional()
   @IsUUID('4')
-  collectionProfileId?: string | null;
+  collectionProfileId?: string;
 }
