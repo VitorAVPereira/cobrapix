@@ -23,6 +23,22 @@ interface WebhookTransactionMock {
   };
 }
 
+interface EmailServicePrismaMock {
+  invoice: {
+    findFirst: jest.Mock;
+  };
+  company: {
+    findUnique: jest.Mock;
+  };
+  collectionAttempt: {
+    findUnique: jest.Mock;
+    upsert: jest.Mock;
+  };
+  collectionLog: {
+    create: jest.Mock;
+  };
+}
+
 function buildEmailInput(): Parameters<EmailService['send']>[0] {
   return {
     companyId: 'company-1',
@@ -41,7 +57,10 @@ function createService(company: {
   resendApiKeyEncrypted: string | null;
   resendFromEmail: string | null;
 }) {
-  const prisma = {
+  const prisma: EmailServicePrismaMock = {
+    invoice: {
+      findFirst: jest.fn().mockResolvedValue({ status: 'PENDING' }),
+    },
     company: {
       findUnique: jest.fn().mockResolvedValue(company),
     },
@@ -49,7 +68,10 @@ function createService(company: {
       findUnique: jest.fn().mockResolvedValue(null),
       upsert: jest.fn().mockResolvedValue({ id: 'attempt-1' }),
     },
-  } as unknown as PrismaService;
+    collectionLog: {
+      create: jest.fn().mockResolvedValue({ id: 'log-1' }),
+    },
+  };
   const configService = {
     get: jest.fn(),
   } as unknown as ConfigService;
@@ -61,10 +83,13 @@ function createService(company: {
   } as unknown as ResendMailerService;
 
   return {
-    service: new EmailService(configService, prisma, crypto, resendMailer),
-    prisma: prisma as unknown as {
-      collectionAttempt: { upsert: jest.Mock };
-    },
+    service: new EmailService(
+      configService,
+      prisma as unknown as PrismaService,
+      crypto,
+      resendMailer,
+    ),
+    prisma,
     crypto: crypto as unknown as { decrypt: jest.Mock },
     resendMailer: resendMailer as unknown as {
       sendEmail: jest.Mock;
@@ -219,6 +244,51 @@ describe('EmailService', () => {
     await expect(service.send(buildEmailInput())).rejects.toThrow(
       'Remetente Resend nao configurado para esta empresa.',
     );
+    expect(crypto.decrypt).not.toHaveBeenCalled();
+    expect(resendMailer.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('ignora envio quando a fatura nao esta mais pendente', async () => {
+    const { service, prisma, crypto, resendMailer } = createService({
+      corporateName: 'Escola Teste',
+      resendApiKeyEncrypted: 'encrypted-resend-key',
+      resendFromEmail: 'cobranca@escolateste.com.br',
+    });
+    prisma.invoice.findFirst.mockResolvedValueOnce({ status: 'CANCELED' });
+
+    await expect(service.send(buildEmailInput())).resolves.toBe(
+      'skipped-invoice-not-pending',
+    );
+
+    expect(crypto.decrypt).not.toHaveBeenCalled();
+    expect(resendMailer.sendEmail).not.toHaveBeenCalled();
+    expect(prisma.collectionAttempt.findUnique).not.toHaveBeenCalled();
+    expect(prisma.collectionAttempt.upsert).not.toHaveBeenCalled();
+    expect(prisma.collectionLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        companyId: 'company-1',
+        invoiceId: 'invoice-1',
+        actionType: 'EMAIL_SKIPPED_INVOICE_NOT_PENDING',
+        status: 'SKIPPED',
+      }),
+    });
+  });
+
+  it('mantem skip sem retry quando falha ao registrar log de fatura nao pendente', async () => {
+    const { service, prisma, crypto, resendMailer } = createService({
+      corporateName: 'Escola Teste',
+      resendApiKeyEncrypted: 'encrypted-resend-key',
+      resendFromEmail: 'cobranca@escolateste.com.br',
+    });
+    prisma.invoice.findFirst.mockResolvedValueOnce({ status: 'CANCELED' });
+    prisma.collectionLog.create.mockRejectedValueOnce(
+      new Error('database unavailable'),
+    );
+
+    await expect(service.send(buildEmailInput())).resolves.toBe(
+      'skipped-invoice-not-pending',
+    );
+
     expect(crypto.decrypt).not.toHaveBeenCalled();
     expect(resendMailer.sendEmail).not.toHaveBeenCalled();
   });

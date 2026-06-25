@@ -559,6 +559,40 @@ export default function CobrancasPage() {
     }
   }
 
+  async function handleCancelInvoice(invoice: ParsedDebtor): Promise<void> {
+    const invoiceId = getInvoiceId(invoice);
+
+    if (!invoiceId) {
+      setSuccessMsg(null);
+      setErrorMsg("Nao foi possivel identificar a fatura desta cobranca.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Cancelar a cobranca de ${invoice.name}? Esta acao impede novos envios e novas geracoes para esta fatura.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setRunningInvoiceAction({ invoiceId, action: "cancel" });
+
+    try {
+      await apiClient.cancelInvoice(invoiceId);
+      await fetchInvoices();
+      setSuccessMsg(`Cobranca de ${invoice.name} cancelada com sucesso.`);
+    } catch (error: unknown) {
+      setErrorMsg(
+        getErrorMessage(error, "Nao foi possivel cancelar a cobranca."),
+      );
+    } finally {
+      setRunningInvoiceAction(null);
+    }
+  }
+
   function updateManualForm<Field extends keyof ManualChargeForm>(
     field: Field,
     value: ManualChargeForm[Field],
@@ -846,6 +880,9 @@ export default function CobrancasPage() {
                   }}
                   onCheckPaymentStatus={(invoice) => {
                     void handleCheckPaymentStatus(invoice);
+                  }}
+                  onCancelInvoice={(invoice) => {
+                    void handleCancelInvoice(invoice);
                   }}
                   onViewPaymentHistory={openPaymentHistory}
                   runningInvoiceAction={runningInvoiceAction}

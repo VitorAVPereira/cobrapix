@@ -145,4 +145,48 @@ describe("ApiClient admin clients", () => {
     expect(payload.efi?.efiCertificatePath).toBe("");
     expect(payload.efi?.efiCertificateBase64).toBe("Y2VydA==");
   });
+
+  it("fetches admin client analytics with filled query params only", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        period: {
+          key: "custom",
+          startDate: "2026-06-01T00:00:00.000Z",
+          endDate: "2026-07-01T00:00:00.000Z",
+        },
+        totals: {
+          totalChargedAmount: 100,
+          activeChargesCount: 1,
+          overduePendingChargesCount: 0,
+          canceledChargesCount: 0,
+          pendingTotalAmount: 100,
+          overduePendingAmount: 0,
+          whatsappSentCount: 2,
+          whatsappCostAmount: 0.66,
+          emailSentCount: 1,
+          emailCostAmount: 0,
+          averageTicketAmount: 100,
+          recoveredChargesCount: 0,
+          recoveredAmount: 0,
+        },
+        clients: [],
+        pagination: { page: 1, pageSize: 50, total: 0 },
+      }),
+    } as Response);
+    const apiClient = new ApiClient("http://api.test", "token");
+
+    await apiClient.getAdminClientAnalytics({
+      period: "custom",
+      startDate: "2026-06-01",
+      endDate: "2026-06-30",
+      search: "alpha",
+      page: 1,
+      pageSize: 25,
+    });
+
+    expect(mockFetch.mock.calls[0]?.[0]).toBe(
+      "http://api.test/admin/clients/analytics?period=custom&startDate=2026-06-01&endDate=2026-06-30&search=alpha&page=1&pageSize=25",
+    );
+  });
 });

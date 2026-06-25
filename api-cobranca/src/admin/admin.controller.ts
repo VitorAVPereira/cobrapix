@@ -5,10 +5,16 @@ import {
   Param,
   Post,
   Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ThrottleGuard } from '../common/guards/throttle.guard';
+import {
+  AdminAnalyticsService,
+  AdminClientAnalyticsResponse,
+} from './admin-analytics.service';
+import { AdminAnalyticsQueryDto } from './dto/admin-analytics-query.dto';
 import {
   CreateAdminClientDto,
   ResetClientPasswordDto,
@@ -20,11 +26,21 @@ import { PlatformAdminGuard } from './guards/platform-admin.guard';
 @Controller('admin/clients')
 @UseGuards(JwtAuthGuard, PlatformAdminGuard, ThrottleGuard)
 export class AdminController {
-  constructor(private readonly adminService: AdminService) {}
+  constructor(
+    private readonly adminService: AdminService,
+    private readonly adminAnalyticsService: AdminAnalyticsService,
+  ) {}
 
   @Get()
   async listClients(): Promise<AdminClientResponse[]> {
     return this.adminService.listClients();
+  }
+
+  @Get('analytics')
+  async getAnalytics(
+    @Query() query: AdminAnalyticsQueryDto,
+  ): Promise<AdminClientAnalyticsResponse> {
+    return this.adminAnalyticsService.getAnalytics(query);
   }
 
   @Get(':id')

@@ -7,6 +7,7 @@ import type { PaymentService } from '../../payment/payment.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { WhatsappService } from '../../whatsapp/whatsapp.service';
 import type { MessageQueueService } from '../message.queue';
+import type { SendMessageJob } from '../message.queue';
 import type { MessagingLimitService } from '../services/messaging-limit.service';
 import type { RateLimitService } from '../services/rate-limit.service';
 import type { SpintaxService } from '../services/spintax.service';
@@ -28,9 +29,58 @@ interface FindManyTemplatesArgs {
   };
 }
 
+interface FindFirstInvoiceStatusArgs {
+  where: {
+    id: string;
+    companyId: string;
+  };
+  select: {
+    status: true;
+  };
+}
+
+interface InvoiceStatusRecord {
+  status: 'PENDING' | 'PAID' | 'CANCELED';
+}
+
+interface CollectionLogCreateArgs {
+  data: {
+    companyId: string;
+    invoiceId: string;
+    actionType: string;
+    description: string;
+    status: string;
+  };
+}
+
+interface FindFirstDebtorOptInArgs {
+  where: {
+    id: string;
+    companyId: string;
+  };
+  select: {
+    whatsappOptIn: true;
+  };
+}
+
 interface PrismaMock {
   messageTemplate: {
     findMany: jest.Mock<Promise<TemplateRecord[]>, [FindManyTemplatesArgs]>;
+  };
+  invoice: {
+    findFirst: jest.Mock<
+      Promise<InvoiceStatusRecord | null>,
+      [FindFirstInvoiceStatusArgs]
+    >;
+  };
+  collectionLog: {
+    create: jest.Mock<Promise<unknown>, [CollectionLogCreateArgs]>;
+  };
+  debtor: {
+    findFirst: jest.Mock<
+      Promise<{ whatsappOptIn: boolean } | null>,
+      [FindFirstDebtorOptInArgs]
+    >;
   };
 }
 
@@ -39,6 +89,10 @@ interface TemplateSelector {
     companyId: string;
     dueDate: Date;
   }): Promise<TemplateRecord | null>;
+}
+
+interface SendMessageJobProcessor {
+  processSendMessageJob(data: SendMessageJob): Promise<void>;
 }
 
 function createPrismaMock(templates: TemplateRecord[]): PrismaMock {
@@ -52,10 +106,19 @@ function createPrismaMock(templates: TemplateRecord[]): PrismaMock {
         ),
       ),
     },
+    invoice: {
+      findFirst: jest.fn(async () => ({ status: 'PENDING' })),
+    },
+    collectionLog: {
+      create: jest.fn(async () => ({})),
+    },
+    debtor: {
+      findFirst: jest.fn(async () => ({ whatsappOptIn: true })),
+    },
   };
 }
 
-function createWorker(prisma: PrismaMock): TemplateSelector {
+function createWorker(prisma: PrismaMock): TemplateSelector & SendMessageJobProcessor {
   const service = new MessageWorkerService(
     {} as ConfigService,
     prisma as unknown as PrismaService,
@@ -71,7 +134,7 @@ function createWorker(prisma: PrismaMock): TemplateSelector {
     {} as PublicPaymentLinkService,
   );
 
-  return service as unknown as TemplateSelector;
+  return service as unknown as TemplateSelector & SendMessageJobProcessor;
 }
 
 describe('MessageWorkerService template selection', () => {
@@ -120,5 +183,97 @@ describe('MessageWorkerService template selection', () => {
         }),
       }),
     );
+  });
+
+  it('ignora envio WhatsApp quando a fatura nao esta mais pendente', async () => {
+    const prisma = createPrismaMock([]);
+    prisma.invoice.findFirst.mockResolvedValueOnce({ status: 'CANCELED' });
+    const whatsappService = {
+      sendTemplateMessage: jest.fn(async () => ({
+        messageId: 'meta-message-1',
+        status: 'sent',
+      })),
+    };
+    const messagingLimitService = {
+      canSend: jest.fn(async () => ({
+        allowed: true,
+        usage: 0,
+        limit: 100,
+        resetAt: Date.now() + 60_000,
+      })),
+      trackSend: jest.fn(async () => undefined),
+      recordInteraction: jest.fn(async () => undefined),
+    };
+    const rateLimitService = {
+      checkRateLimit: jest.fn(async () => ({
+        allowed: true,
+        resetAt: Date.now() + 60_000,
+      })),
+    };
+    const service = new MessageWorkerService(
+      {} as ConfigService,
+      prisma as unknown as PrismaService,
+      rateLimitService as unknown as RateLimitService,
+      messagingLimitService as unknown as MessagingLimitService,
+      {} as PaymentService,
+      {} as SpintaxService,
+      {} as MessageQueueService,
+      whatsappService as unknown as WhatsappService,
+      {} as EmailQueueService,
+      {} as EmailService,
+      {} as EmailTemplatesService,
+      {} as PublicPaymentLinkService,
+    ) as unknown as SendMessageJobProcessor;
+
+    const job: SendMessageJob = {
+      invoiceId: 'invoice-1',
+      companyId: 'company-1',
+      debtorId: 'debtor-1',
+      phoneNumber: '5511999999999',
+      senderKey: 'phone-number-id',
+      templateName: 'cobrapix_cobranca_emissao',
+      templateLanguage: 'pt_BR',
+      templateParameters: ['Cliente'],
+      debtorName: 'Cliente Teste',
+    };
+
+    await service.processSendMessageJob(job);
+
+    expect(whatsappService.sendTemplateMessage).not.toHaveBeenCalled();
+    expect(prisma.collectionLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        companyId: 'company-1',
+        invoiceId: 'invoice-1',
+        actionType: 'MESSAGE_SKIPPED_INVOICE_NOT_PENDING',
+        status: 'SKIPPED',
+      }),
+    });
+    expect(prisma.collectionLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        description: expect.stringContaining('WHATSAPP'),
+      }),
+    });
+  });
+
+  it('nao falha o job quando o log de skip da fatura cancelada falha', async () => {
+    const prisma = createPrismaMock([]);
+    prisma.invoice.findFirst.mockResolvedValueOnce({ status: 'CANCELED' });
+    prisma.collectionLog.create.mockRejectedValueOnce(
+      new Error('database unavailable'),
+    );
+    const worker = createWorker(prisma);
+    const job: SendMessageJob = {
+      invoiceId: 'invoice-1',
+      companyId: 'company-1',
+      debtorId: 'debtor-1',
+      phoneNumber: '5511999999999',
+      senderKey: 'phone-number-id',
+      templateName: 'cobrapix_cobranca_emissao',
+      templateLanguage: 'pt_BR',
+      templateParameters: ['Cliente'],
+      debtorName: 'Cliente Teste',
+    };
+
+    await expect(worker.processSendMessageJob(job)).resolves.toBeUndefined();
   });
 });

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { CollectionAttemptStatus, Prisma } from '@prisma/client';
+import { CollectionAttemptStatus, InvoiceStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import {
@@ -61,6 +61,16 @@ export class EmailService {
   ) {}
 
   async send(input: SendEmailInput): Promise<string> {
+    const invoice = await this.prisma.invoice.findFirst({
+      where: { id: input.invoiceId, companyId: input.companyId },
+      select: { status: true },
+    });
+
+    if (invoice?.status !== InvoiceStatus.PENDING) {
+      await this.logSkippedInvoiceNotPending(input);
+      return 'skipped-invoice-not-pending';
+    }
+
     const reusableMessageId = await this.findReusableMessageId(input);
     if (reusableMessageId) {
       return reusableMessageId;
@@ -447,6 +457,28 @@ export class EmailService {
     }
 
     return null;
+  }
+
+  private async logSkippedInvoiceNotPending(
+    input: SendEmailInput,
+  ): Promise<void> {
+    try {
+      await this.prisma.collectionLog.create({
+        data: {
+          companyId: input.companyId,
+          invoiceId: input.invoiceId,
+          actionType: 'EMAIL_SKIPPED_INVOICE_NOT_PENDING',
+          description: `Email para ${input.debtorName} <${input.email}> ignorado: fatura nao esta pendente.`,
+          status: 'SKIPPED',
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Falha ao registrar skip de email para fatura ${input.invoiceId}: ${
+          error instanceof Error ? error.message : 'erro desconhecido'
+        }`,
+      );
+    }
   }
 
   private async markAttemptAsSent(

@@ -1,6 +1,7 @@
 import { InvoicesService } from './invoices.service.ts';
 import { PrismaService } from '../prisma/prisma.service';
 import { MessageQueueService } from '../queue/message.queue';
+import { PaymentService } from '../payment/payment.service';
 
 function decimal(value: number): { toNumber(): number } {
   return { toNumber: () => value };
@@ -69,6 +70,15 @@ describe('InvoicesService', () => {
     } as unknown as MessageQueueService;
   }
 
+  function buildPaymentService(): PaymentService {
+    return {
+      cancelPaymentForInvoice: jest.fn().mockResolvedValue({
+        providerAction: 'LOCAL_ONLY',
+        gatewayStatusRaw: 'CANCELED_BY_USER',
+      }),
+    } as unknown as PaymentService;
+  }
+
   afterEach(() => {
     jest.useRealTimers();
   });
@@ -105,7 +115,11 @@ describe('InvoicesService', () => {
       $transaction: transaction,
     } as unknown as PrismaService;
 
-    const service = new InvoicesService(prisma, buildMessageQueue());
+    const service = new InvoicesService(
+      prisma,
+      buildMessageQueue(),
+      buildPaymentService(),
+    );
     const result = await service.createInvoice('company-1', {
       debtorId: 'debtor-1',
       original_amount: 199.9,
@@ -147,7 +161,11 @@ describe('InvoicesService', () => {
       ),
     } as unknown as PrismaService;
 
-    const service = new InvoicesService(prisma, buildMessageQueue());
+    const service = new InvoicesService(
+      prisma,
+      buildMessageQueue(),
+      buildPaymentService(),
+    );
     const result = await service.createInvoice('company-1', {
       name: 'Maria Silva',
       document: '123.456.789-09',
@@ -190,7 +208,11 @@ describe('InvoicesService', () => {
       $transaction: transaction,
     } as unknown as PrismaService;
 
-    const service = new InvoicesService(prisma, buildMessageQueue());
+    const service = new InvoicesService(
+      prisma,
+      buildMessageQueue(),
+      buildPaymentService(),
+    );
 
     await expect(
       service.createInvoice('company-1', {
@@ -235,7 +257,11 @@ describe('InvoicesService', () => {
       $transaction: transaction,
     } as unknown as PrismaService;
 
-    const service = new InvoicesService(prisma, buildMessageQueue());
+    const service = new InvoicesService(
+      prisma,
+      buildMessageQueue(),
+      buildPaymentService(),
+    );
 
     await expect(
       service.createInvoice('company-1', {
@@ -259,7 +285,11 @@ describe('InvoicesService', () => {
       $transaction: transaction,
     } as unknown as PrismaService;
 
-    const service = new InvoicesService(prisma, buildMessageQueue());
+    const service = new InvoicesService(
+      prisma,
+      buildMessageQueue(),
+      buildPaymentService(),
+    );
 
     await expect(
       service.createInvoice('company-1', {
@@ -300,7 +330,11 @@ describe('InvoicesService', () => {
       ),
     } as unknown as PrismaService;
 
-    const service = new InvoicesService(prisma, messageQueue);
+    const service = new InvoicesService(
+      prisma,
+      messageQueue,
+      buildPaymentService(),
+    );
     const result = await service.importCsv('company-1', [
       {
         name: 'Maria Silva',
@@ -339,6 +373,160 @@ describe('InvoicesService', () => {
     ]);
   });
 
+  it('cancela fatura pendente local sem identificadores Efi', async () => {
+    const invoice = buildInvoice({ id: 'invoice-1', status: 'PENDING' });
+    const canceledInvoice = buildInvoice({
+      id: 'invoice-1',
+      status: 'CANCELED',
+    });
+    const invoiceFindFirst = jest
+      .fn()
+      .mockResolvedValueOnce(invoice)
+      .mockResolvedValueOnce(canceledInvoice);
+    const invoiceUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const collectionLogCreate = jest.fn().mockResolvedValue({ id: 'log-1' });
+    const transaction = jest.fn(
+      async (
+        callback: (tx: {
+          invoice: {
+            updateMany: typeof invoiceUpdateMany;
+            findFirst: typeof invoiceFindFirst;
+          };
+          collectionLog: { create: typeof collectionLogCreate };
+        }) => Promise<unknown>,
+      ) =>
+        callback({
+          invoice: {
+            updateMany: invoiceUpdateMany,
+            findFirst: invoiceFindFirst,
+          },
+          collectionLog: { create: collectionLogCreate },
+        }),
+    );
+    const prisma = {
+      invoice: {
+        findFirst: invoiceFindFirst,
+      },
+      $transaction: transaction,
+    } as unknown as PrismaService;
+    const paymentService = buildPaymentService();
+    const paymentServiceMock = paymentService as unknown as {
+      cancelPaymentForInvoice: jest.Mock;
+    };
+
+    const service = new InvoicesService(
+      prisma,
+      buildMessageQueue(),
+      paymentService,
+    );
+    const result = await service.cancelInvoice('company-1', 'invoice-1');
+
+    expect(paymentServiceMock.cancelPaymentForInvoice).toHaveBeenCalledWith({
+      id: 'invoice-1',
+      companyId: 'company-1',
+      efiTxid: null,
+      efiChargeId: null,
+    });
+    expect(invoiceUpdateMany).toHaveBeenCalledWith({
+      where: { id: 'invoice-1', companyId: 'company-1', status: 'PENDING' },
+      data: {
+        status: 'CANCELED',
+        gatewayStatusRaw: 'CANCELED_BY_USER',
+      },
+    });
+    expect(collectionLogCreate).toHaveBeenCalledWith({
+      data: {
+        companyId: 'company-1',
+        invoiceId: 'invoice-1',
+        actionType: 'INVOICE_CANCELED',
+        description: 'Fatura cancelada pelo usuario.',
+        status: 'CANCELED',
+      },
+    });
+    expect(result.status).toBe('CANCELED');
+  });
+
+  it('mantem fatura pendente quando cancelamento Efi falha', async () => {
+    const invoice = buildInvoice({
+      id: 'invoice-1',
+      status: 'PENDING',
+    });
+    const transaction = jest.fn();
+    const prisma = {
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue(invoice),
+      },
+      $transaction: transaction,
+    } as unknown as PrismaService;
+    const paymentService = buildPaymentService();
+    const paymentServiceMock = paymentService as unknown as {
+      cancelPaymentForInvoice: jest.Mock;
+    };
+    paymentServiceMock.cancelPaymentForInvoice.mockRejectedValue(
+      new Error('Efi indisponivel'),
+    );
+
+    const service = new InvoicesService(
+      prisma,
+      buildMessageQueue(),
+      paymentService,
+    );
+
+    await expect(
+      service.cancelInvoice('company-1', 'invoice-1'),
+    ).rejects.toThrow('Efi indisponivel');
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejeita cancelamento de fatura paga sem chamar PaymentService', async () => {
+    const invoice = buildInvoice({ id: 'invoice-1', status: 'PAID' });
+    const prisma = {
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue(invoice),
+      },
+      $transaction: jest.fn(),
+    } as unknown as PrismaService;
+    const paymentService = buildPaymentService();
+    const paymentServiceMock = paymentService as unknown as {
+      cancelPaymentForInvoice: jest.Mock;
+    };
+
+    const service = new InvoicesService(
+      prisma,
+      buildMessageQueue(),
+      paymentService,
+    );
+
+    await expect(
+      service.cancelInvoice('company-1', 'invoice-1'),
+    ).rejects.toThrow('Apenas faturas pendentes podem ser canceladas.');
+    expect(paymentServiceMock.cancelPaymentForInvoice).not.toHaveBeenCalled();
+  });
+
+  it('retorna erro quando fatura para cancelamento nao existe', async () => {
+    const prisma = {
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      $transaction: jest.fn(),
+    } as unknown as PrismaService;
+    const paymentService = buildPaymentService();
+    const paymentServiceMock = paymentService as unknown as {
+      cancelPaymentForInvoice: jest.Mock;
+    };
+
+    const service = new InvoicesService(
+      prisma,
+      buildMessageQueue(),
+      paymentService,
+    );
+
+    await expect(
+      service.cancelInvoice('company-1', 'invoice-1'),
+    ).rejects.toThrow('Fatura nao encontrada.');
+    expect(paymentServiceMock.cancelPaymentForInvoice).not.toHaveBeenCalled();
+  });
+
   it('monta historico de pagamentos do devedor com pontualidade', async () => {
     const paidEarly = buildInvoice({
       id: 'invoice-early',
@@ -374,7 +562,11 @@ describe('InvoicesService', () => {
       },
     } as unknown as PrismaService;
 
-    const service = new InvoicesService(prisma, buildMessageQueue());
+    const service = new InvoicesService(
+      prisma,
+      buildMessageQueue(),
+      buildPaymentService(),
+    );
     const result = await service.getDebtorPaymentHistory(
       'company-1',
       'debtor-1',
@@ -483,7 +675,11 @@ describe('InvoicesService', () => {
       },
     } as unknown as PrismaService;
 
-    const service = new InvoicesService(prisma, buildMessageQueue());
+    const service = new InvoicesService(
+      prisma,
+      buildMessageQueue(),
+      buildPaymentService(),
+    );
     const result = await service.createInvoice('company-1', {
       debtorId: 'debtor-1',
       original_amount: 199.9,

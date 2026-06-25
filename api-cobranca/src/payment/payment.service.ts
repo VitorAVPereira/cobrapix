@@ -4,6 +4,18 @@ import { PrismaService } from '../prisma/prisma.service';
 
 type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
 
+interface CancelablePaymentInvoice {
+  id: string;
+  companyId: string;
+  efiTxid: string | null;
+  efiChargeId: string | null;
+}
+
+export interface CancelPaymentResult {
+  providerAction: 'LOCAL_ONLY' | 'PIX_COBV_REMOVED' | 'CHARGE_CANCELED';
+  gatewayStatusRaw: string;
+}
+
 @Injectable()
 export class PaymentService {
   private readonly logger = new Logger(PaymentService.name);
@@ -29,9 +41,43 @@ export class PaymentService {
       );
     }
 
+    await this.ensureInvoiceCanGeneratePayment(invoiceId, companyId);
     await this.ensureBillingMethodEnabled(companyId, billingType);
 
     return this.efiService.createPayment(invoiceId, companyId, billingType);
+  }
+
+  async cancelPaymentForInvoice(
+    invoice: CancelablePaymentInvoice,
+  ): Promise<CancelPaymentResult> {
+    if (invoice.efiTxid) {
+      const gatewayStatusRaw = await this.efiService.cancelPixDueCharge(
+        invoice.companyId,
+        invoice.efiTxid,
+      );
+
+      return {
+        providerAction: 'PIX_COBV_REMOVED',
+        gatewayStatusRaw,
+      };
+    }
+
+    if (invoice.efiChargeId) {
+      const gatewayStatusRaw = await this.efiService.cancelCharge(
+        invoice.companyId,
+        invoice.efiChargeId,
+      );
+
+      return {
+        providerAction: 'CHARGE_CANCELED',
+        gatewayStatusRaw,
+      };
+    }
+
+    return {
+      providerAction: 'LOCAL_ONLY',
+      gatewayStatusRaw: 'CANCELED_BY_USER',
+    };
   }
 
   async createPaymentBatch(
@@ -128,6 +174,27 @@ export class PaymentService {
 
   isConfigured(): boolean {
     return this.efiService.isConfigured();
+  }
+
+  private async ensureInvoiceCanGeneratePayment(
+    invoiceId: string,
+    companyId: string,
+  ): Promise<void> {
+    const invoice = await this.prisma.invoice.findFirst({
+      where: { id: invoiceId, companyId },
+      select: { status: true },
+    });
+
+    if (!invoice) {
+      throw new HttpException('Fatura nao encontrada.', HttpStatus.NOT_FOUND);
+    }
+
+    if (invoice.status !== 'PENDING') {
+      throw new HttpException(
+        'Apenas faturas pendentes podem gerar cobranca.',
+        HttpStatus.CONFLICT,
+      );
+    }
   }
 
   private async ensureBillingMethodEnabled(

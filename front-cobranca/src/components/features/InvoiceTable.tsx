@@ -33,7 +33,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 
-export type InvoiceRowAction = "generate" | "resend" | "status";
+export type InvoiceRowAction = "generate" | "resend" | "status" | "cancel";
 
 interface InvoiceTableProps {
   data: ParsedDebtor[];
@@ -48,6 +48,7 @@ interface InvoiceTableProps {
   onGeneratePayment: (invoice: ParsedDebtor) => void;
   onResendInvoice: (invoice: ParsedDebtor) => void;
   onCheckPaymentStatus: (invoice: ParsedDebtor) => void;
+  onCancelInvoice: (invoice: ParsedDebtor) => void;
   onViewPaymentHistory: (invoice: ParsedDebtor) => void;
   runningInvoiceAction: {
     invoiceId: string;
@@ -109,6 +110,7 @@ export function InvoiceTable({
   onGeneratePayment,
   onResendInvoice,
   onCheckPaymentStatus,
+  onCancelInvoice,
   onViewPaymentHistory,
   runningInvoiceAction,
   showEducationFields = false,
@@ -450,6 +452,7 @@ export function InvoiceTable({
   ): ReactNode {
     const invoiceId = getInvoiceId(invoice);
     const isClosed = invoice.status === "PAID" || invoice.status === "CANCELED";
+    const canCancel = invoice.status === "PENDING";
     const activeAction =
       runningInvoiceAction?.invoiceId === invoiceId
         ? runningInvoiceAction.action
@@ -463,7 +466,7 @@ export function InvoiceTable({
       <div
         className={
           variant === "table"
-            ? "flex min-w-[13.25rem] items-center justify-end gap-1"
+            ? "flex min-w-[15.75rem] items-center justify-end gap-1"
             : "grid grid-cols-2 gap-2 sm:grid-cols-3"
         }
       >
@@ -511,6 +514,21 @@ export function InvoiceTable({
             <SearchCheck size={14} />
           )}
           <span className={hideTextClass}>Status</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onCancelInvoice(invoice)}
+          disabled={!invoiceId || !canCancel || isBusy}
+          className={`${buttonBase} border-red-200 bg-red-50 text-red-700 hover:bg-red-100`}
+          title="Cancelar cobrança"
+          aria-label="Cancelar cobrança"
+        >
+          {activeAction === "cancel" ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : (
+            <Ban size={14} />
+          )}
+          <span className={hideTextClass}>Cancelar</span>
         </button>
         <button
           type="button"

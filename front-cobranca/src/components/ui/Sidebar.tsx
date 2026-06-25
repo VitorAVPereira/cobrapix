@@ -12,6 +12,7 @@ import {
   Database,
   FileText,
   HandCoins,
+  LayoutDashboard,
   LogOut,
   MessageCircle,
   MessageSquareText,
@@ -75,6 +76,11 @@ const settingsItems = [
 ];
 
 const adminItems = [
+  {
+    href: "/admin/visao-geral",
+    label: "Visao geral",
+    icon: LayoutDashboard,
+  },
   {
     href: "/admin/clientes",
     label: "Clientes",

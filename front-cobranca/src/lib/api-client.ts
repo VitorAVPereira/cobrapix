@@ -690,6 +690,64 @@ export interface AdminClient {
   updatedAt: string;
 }
 
+export type AdminAnalyticsPeriod =
+  | "current_month"
+  | "today"
+  | "7d"
+  | "30d"
+  | "year"
+  | "custom";
+
+export interface AdminClientAnalyticsMetrics {
+  totalChargedAmount: number;
+  activeChargesCount: number;
+  overduePendingChargesCount: number;
+  canceledChargesCount: number;
+  pendingTotalAmount: number;
+  overduePendingAmount: number;
+  whatsappSentCount: number;
+  whatsappCostAmount: number;
+  emailSentCount: number;
+  emailCostAmount: number;
+  averageTicketAmount: number;
+  recoveredChargesCount: number;
+  recoveredAmount: number;
+}
+
+export interface AdminClientAnalyticsRow {
+  companyId: string;
+  corporateName: string;
+  document: string;
+  email: string;
+  status: CompanyStatus;
+  metrics: AdminClientAnalyticsMetrics;
+}
+
+export interface AdminClientAnalyticsResponse {
+  period: {
+    key: AdminAnalyticsPeriod;
+    startDate: string;
+    endDate: string;
+  };
+  totals: AdminClientAnalyticsMetrics;
+  clients: AdminClientAnalyticsRow[];
+  pagination: {
+    page: number;
+    pageSize: number;
+    total: number;
+  };
+}
+
+export interface AdminClientAnalyticsParams {
+  period?: AdminAnalyticsPeriod;
+  startDate?: string;
+  endDate?: string;
+  companyId?: string;
+  search?: string;
+  page?: number;
+  pageSize?: number;
+}
+
 export interface CreateAdminClientInput {
   company: {
     corporateName: string;
@@ -844,6 +902,23 @@ class ApiClient {
     return this.token;
   }
 
+  private buildQueryString(
+    params: Record<string, string | number | undefined>,
+  ): string {
+    const searchParams = new URLSearchParams();
+
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === "") {
+        return;
+      }
+
+      searchParams.set(key, String(value));
+    });
+
+    const query = searchParams.toString();
+    return query ? `?${query}` : "";
+  }
+
   private buildMissingAuthError(): ApiError {
     const error: ApiError = new Error(
       "Sessao autenticada ainda nao carregada.",
@@ -967,6 +1042,12 @@ class ApiClient {
     return this.fetch<InvoiceListItem>("/invoices", {
       method: "POST",
       body: JSON.stringify(data),
+    });
+  }
+
+  async cancelInvoice(invoiceId: string): Promise<InvoiceListItem> {
+    return this.fetch<InvoiceListItem>(`/invoices/${invoiceId}/cancel`, {
+      method: "POST",
     });
   }
 
@@ -1377,6 +1458,24 @@ class ApiClient {
   // Admin
   async getAdminClients(): Promise<AdminClient[]> {
     return this.fetch<AdminClient[]>("/admin/clients");
+  }
+
+  async getAdminClientAnalytics(
+    params: AdminClientAnalyticsParams = {},
+  ): Promise<AdminClientAnalyticsResponse> {
+    const query = this.buildQueryString({
+      period: params.period,
+      startDate: params.startDate,
+      endDate: params.endDate,
+      companyId: params.companyId,
+      search: params.search,
+      page: params.page,
+      pageSize: params.pageSize,
+    });
+
+    return this.fetch<AdminClientAnalyticsResponse>(
+      `/admin/clients/analytics${query}`,
+    );
   }
 
   async createAdminClient(data: CreateAdminClientInput): Promise<AdminClient> {

@@ -270,6 +270,35 @@ export class EfiService {
     return this.createPixCobv(invoice, gatewayAccount);
   }
 
+  async cancelPixDueCharge(companyId: string, txid: string): Promise<string> {
+    const gatewayAccount = await this.getActiveGatewayAccount(companyId);
+    this.ensurePixCertificate(gatewayAccount);
+
+    const client = this.createSdkClient(gatewayAccount);
+    const response = await this.runEfiRequest(
+      () =>
+        client.pixUpdateDueCharge(
+          { txid },
+          { status: 'REMOVIDA_PELO_USUARIO_RECEBEDOR' },
+        ),
+      'cancelar Pix CobV',
+    );
+
+    return response.status ?? 'REMOVIDA_PELO_USUARIO_RECEBEDOR';
+  }
+
+  async cancelCharge(companyId: string, chargeId: string): Promise<string> {
+    const gatewayAccount = await this.getActiveGatewayAccount(companyId);
+    const client = this.createSdkClient(gatewayAccount);
+
+    await this.runEfiRequest(
+      () => client.cancelCharge({ id: chargeId }),
+      'cancelar boleto/Bolix',
+    );
+
+    return 'canceled';
+  }
+
   async handlePixWebhook(payload: unknown): Promise<{
     processed: boolean;
     invoiceId?: string;

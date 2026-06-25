@@ -255,6 +255,18 @@ export class InvoicesController {
     }
   }
 
+  @Post(':invoiceId/cancel')
+  async cancelInvoice(
+    @GetUser() user: AuthenticatedUser,
+    @Param('invoiceId') invoiceId: string,
+  ): Promise<unknown> {
+    if (!this.isUuid(invoiceId)) {
+      throw new HttpException('Fatura invalida.', HttpStatus.BAD_REQUEST);
+    }
+
+    return this.invoicesService.cancelInvoice(user.companyId, invoiceId);
+  }
+
   @Get('debtors/:debtorId/settings')
   async getDebtorSettings(
     @GetUser() user: AuthenticatedUser,

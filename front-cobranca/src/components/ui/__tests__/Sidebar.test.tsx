@@ -35,11 +35,14 @@ describe("Sidebar", () => {
   });
 
   it("shows only admin navigation for platform admins", () => {
-    mockPathname = "/admin/clientes";
+    mockPathname = "/admin/visao-geral";
     mockRole = "PLATFORM_ADMIN";
 
     renderSidebar();
 
+    expect(
+      screen.getByRole("link", { name: /visao geral/i }),
+    ).toHaveAttribute("href", "/admin/visao-geral");
     expect(
       screen.getByRole("link", { name: /clientes/i }),
     ).toHaveAttribute("href", "/admin/clientes");

@@ -211,6 +211,15 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
 
     this.logger.log(`Processando mensagem para ${debtorName} (${phoneNumber})`);
 
+    const shouldSkip = await this.shouldSkipInvoiceNotPending(
+      companyId,
+      invoiceId,
+      'WHATSAPP',
+    );
+    if (shouldSkip) {
+      return;
+    }
+
     const hasOptIn = await this.ensureDebtorOptIn(
       companyId,
       debtorId,
@@ -314,6 +323,15 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     errorMessage: string,
   ): Promise<void> {
     try {
+      const shouldSkip = await this.shouldSkipInvoiceNotPending(
+        data.companyId,
+        data.invoiceId,
+        'EMAIL',
+      );
+      if (shouldSkip) {
+        return;
+      }
+
       const debtor = await this.prisma.debtor.findFirst({
         where: { id: data.debtorId, companyId: data.companyId },
         select: { email: true },
@@ -405,6 +423,39 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         fallbackError,
       );
     }
+  }
+
+  private async shouldSkipInvoiceNotPending(
+    companyId: string,
+    invoiceId: string,
+    channel: CollectionChannel,
+  ): Promise<boolean> {
+    const invoice = await this.prisma.invoice.findFirst({
+      where: { id: invoiceId, companyId },
+      select: { status: true },
+    });
+
+    if (invoice?.status === 'PENDING') {
+      return false;
+    }
+
+    try {
+      await this.createCollectionLog(
+        companyId,
+        invoiceId,
+        'MESSAGE_SKIPPED_INVOICE_NOT_PENDING',
+        `Envio pelo canal ${channel} ignorado: fatura nao esta pendente.`,
+        'SKIPPED',
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Falha ao registrar skip ${channel} para fatura ${invoiceId}: ${
+          error instanceof Error ? error.message : 'erro desconhecido'
+        }`,
+      );
+    }
+
+    return true;
   }
 
   private async recordCollectionAttempt(

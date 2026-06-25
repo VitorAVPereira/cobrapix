@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import {
   BillingMethod,
@@ -16,6 +22,7 @@ import {
 } from '../common/debtor-document';
 import { PrismaService } from '../prisma/prisma.service';
 import { InitialChargeJob, MessageQueueService } from '../queue/message.queue';
+import { PaymentService } from '../payment/payment.service';
 import { BillingType } from './dto/invoice.dto';
 
 const PLATFORM_FIXED_FEE = 0.5;
@@ -336,6 +343,7 @@ export class InvoicesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly messageQueue: MessageQueueService,
+    private readonly paymentService: PaymentService,
   ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
@@ -600,6 +608,78 @@ export class InvoicesService {
     input: Omit<CreateInvoiceInput, 'debtorId'>,
   ): Promise<InvoiceListItem> {
     return this.createInvoice(companyId, { ...input, debtorId });
+  }
+
+  async cancelInvoice(
+    companyId: string,
+    invoiceId: string,
+  ): Promise<InvoiceListItem> {
+    const invoice = await this.prisma.invoice.findFirst({
+      where: { id: invoiceId, companyId },
+      include: {
+        debtor: { include: { collectionProfile: true } },
+        recurringInvoice: true,
+      },
+    });
+
+    if (!invoice) {
+      throw new NotFoundException('Fatura nao encontrada.');
+    }
+
+    if (invoice.status !== 'PENDING') {
+      throw new ConflictException(
+        'Apenas faturas pendentes podem ser canceladas.',
+      );
+    }
+
+    const cancellation = await this.paymentService.cancelPaymentForInvoice({
+      id: invoice.id,
+      companyId: invoice.companyId,
+      efiTxid: invoice.efiTxid,
+      efiChargeId: invoice.efiChargeId,
+    });
+
+    const updatedInvoice = await this.prisma.$transaction(async (tx) => {
+      const updateResult = await tx.invoice.updateMany({
+        where: { id: invoice.id, companyId, status: 'PENDING' },
+        data: {
+          status: 'CANCELED',
+          gatewayStatusRaw: cancellation.gatewayStatusRaw,
+        },
+      });
+
+      if (updateResult.count !== 1) {
+        throw new ConflictException(
+          'A fatura deixou de estar pendente antes do cancelamento local.',
+        );
+      }
+
+      await tx.collectionLog.create({
+        data: {
+          companyId,
+          invoiceId: invoice.id,
+          actionType: 'INVOICE_CANCELED',
+          description: 'Fatura cancelada pelo usuario.',
+          status: 'CANCELED',
+        },
+      });
+
+      const reloadedInvoice = await tx.invoice.findFirst({
+        where: { id: invoice.id, companyId },
+        include: {
+          debtor: { include: { collectionProfile: true } },
+          recurringInvoice: true,
+        },
+      });
+
+      if (!reloadedInvoice) {
+        throw new NotFoundException('Fatura nao encontrada.');
+      }
+
+      return reloadedInvoice;
+    });
+
+    return this.mapInvoiceListItem(updatedInvoice);
   }
 
   async listRecurringInvoices(

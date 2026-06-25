@@ -1,6 +1,18 @@
 import { auth } from "@/lib/auth";
 import { NextResponse } from "next/server";
 
+const PLATFORM_ADMIN_ALLOWED_PATHS = [
+  "/admin/clientes",
+  "/admin/visao-geral",
+] as const;
+
+function isAllowedPlatformAdminPath(pathname: string): boolean {
+  return PLATFORM_ADMIN_ALLOWED_PATHS.some(
+    (allowedPath) =>
+      pathname === allowedPath || pathname.startsWith(`${allowedPath}/`),
+  );
+}
+
 export default auth((req) => {
   const pathname = req.nextUrl.pathname;
   const isApiRoute = pathname.startsWith("/api/");
@@ -21,8 +33,7 @@ export default auth((req) => {
   if (
     !isApiRoute &&
     isPlatformAdmin &&
-    pathname !== "/admin/clientes" &&
-    !pathname.startsWith("/admin/clientes/")
+    !isAllowedPlatformAdminPath(pathname)
   ) {
     return NextResponse.redirect(new URL("/admin/clientes", req.url));
   }
