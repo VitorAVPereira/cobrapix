@@ -82,11 +82,12 @@ describe("Sidebar", () => {
     expect(
       screen.getByRole("link", { name: /inbox whatsapp/i }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /clientes/i })).toHaveAttribute(
+      "href",
+      "/clientes",
+    );
     expect(
       screen.getByRole("button", { name: /configuracoes/i }),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("link", { name: /clientes/i }),
-    ).not.toBeInTheDocument();
   });
 });

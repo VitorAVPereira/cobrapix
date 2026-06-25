@@ -19,6 +19,7 @@ import {
   MessageSquare,
   Settings,
   SlidersHorizontal,
+  Users,
   X,
 } from "lucide-react";
 
@@ -33,6 +34,11 @@ const mainItems = [
     href: "/cobrancas",
     label: "Cobrancas",
     icon: HandCoins,
+  },
+  {
+    href: "/clientes",
+    label: "Clientes",
+    icon: Users,
   },
   {
     href: "/baixas",
