@@ -16,7 +16,9 @@ O cliente pagador pode existir sem nenhuma cobranca. Para a primeira versao:
 - `email` e opcional.
 - `phoneNumber` continua obrigatorio e unico por empresa.
 - Nao ha alteracao de schema Prisma nesta etapa.
-- O perfil de pagador e editavel na propria tela por meio de `collectionProfileId`.
+- Todo cliente deve ter perfil de pagador.
+- Ao criar um cliente sem perfil informado, o backend atribui automaticamente o perfil padrao de tipo `NEW`, exibido na UI como "Novo pagador".
+- O perfil de pagador continua editavel na propria tela por meio de `collectionProfileId`, mas nao pode ser removido para ficar vazio.
 
 ## Objetivos
 
@@ -42,6 +44,7 @@ O cliente pagador pode existir sem nenhuma cobranca. Para a primeira versao:
 - Criar grafico ou painel analitico profundo por cliente.
 - Alterar regras de classificacao automatica de perfis.
 - Alterar a tela admin `Admin > Clientes`.
+- Exibir quantidade de clientes sem perfil.
 
 ## Backend
 
@@ -91,7 +94,6 @@ interface DebtorListSummary {
   openInvoiceCount: number;
   paidInvoiceAmount: number;
   paidInvoiceCount: number;
-  withoutProfileCount: number;
 }
 
 interface DebtorListItem {
@@ -106,7 +108,7 @@ interface DebtorListItem {
     id: string;
     name: string;
     profileType: CollectionProfileType;
-  } | null;
+  };
   openInvoicesCount: number;
   openInvoicesAmount: number;
   paidInvoicesCount: number;
@@ -132,6 +134,8 @@ Resumo financeiro:
 - valores usam `Invoice.originalAmount`;
 - valores devem ser convertidos de `Decimal` para `number`.
 
+Antes de listar, criar ou editar clientes, a feature deve garantir que os perfis padrao da empresa existam. Clientes legados com `collectionProfileId = null` devem ser vinculados ao perfil ativo de tipo `NEW` para que a listagem nao exiba clientes sem perfil.
+
 ### Criacao
 
 `POST /invoices/debtors`
@@ -145,7 +149,7 @@ interface CreateDebtorInput {
   phone_number: string;
   email?: string | null;
   whatsappOptIn?: boolean;
-  collectionProfileId?: string | null;
+  collectionProfileId?: string;
 }
 ```
 
@@ -156,6 +160,8 @@ Regras:
 - `phone_number` obrigatorio e normalizado com a regra atual de WhatsApp.
 - `email` opcional; se informado, deve ter formato valido.
 - `collectionProfileId`, quando informado, precisa existir para a mesma empresa.
+- se `collectionProfileId` nao for informado, usar automaticamente o perfil ativo de tipo `NEW`;
+- rejeitar `collectionProfileId` vazio ou `null`.
 - Se o WhatsApp ja existir para a empresa, retornar erro amigavel de duplicidade.
 
 ### Edicao
@@ -171,7 +177,7 @@ interface UpdateDebtorInput {
   phone_number?: string;
   email?: string | null;
   whatsappOptIn?: boolean;
-  collectionProfileId?: string | null;
+  collectionProfileId?: string;
 }
 ```
 
@@ -180,6 +186,7 @@ Regras:
 - sempre filtrar por `id` e `companyId`;
 - retornar `404` quando o pagador nao pertencer a empresa;
 - manter validacoes de documento, WhatsApp, e-mail e perfil;
+- rejeitar tentativa de salvar `collectionProfileId` vazio ou `null`;
 - ao mudar WhatsApp, validar duplicidade dentro da empresa;
 - se `whatsappOptIn` mudar para `true`, preencher `whatsappOptInAt` quando ainda estiver vazio e usar uma fonte explicita como `manual-client-page`.
 
@@ -217,7 +224,6 @@ A pagina segue uma visao operacional:
   - clientes cadastrados;
   - valor em aberto;
   - cobrancas pagas;
-  - clientes sem perfil;
 - busca por nome, CPF/CNPJ, WhatsApp ou e-mail;
 - filtro por perfil de pagador;
 - filtro operacional simples, como todos, com aberto, sem aberto ou com pagas;
@@ -240,7 +246,7 @@ O modal de criar/editar cliente deve conter:
 - WhatsApp;
 - e-mail opcional;
 - checkbox de opt-in WhatsApp oficial;
-- select de perfil de pagador.
+- select de perfil de pagador preselecionado como "Novo pagador" ao criar.
 
 Estados:
 
@@ -266,6 +272,7 @@ Comportamentos:
 - `Ver cobrancas em aberto` navega para `/cobrancas?debtorId=<debtorId>&status=PENDING`.
 - `Historico de pagamentos` reaproveita `DebtorPaymentHistoryModal`.
 - `Configurar perfil/cobranca` reaproveita `DebtorSettingsModal` ou o mesmo formulario de edicao quando a configuracao ficar equivalente.
+- Qualquer modal reaproveitado deve remover a opcao "sem perfil" e impedir gravar `collectionProfileId = null`.
 
 ## API client
 
@@ -289,6 +296,7 @@ Atualizar:
 Backend:
 
 - `400` para documento invalido, WhatsApp invalido, e-mail invalido ou perfil invalido.
+- `400` para tentativa de remover o perfil de pagador.
 - `404` para cliente nao encontrado na empresa.
 - `409` para WhatsApp duplicado na empresa.
 
@@ -305,14 +313,18 @@ Frontend:
 ### Backend
 
 - cria cliente sem cobranca.
+- cria cliente com perfil `NEW` quando nenhum perfil e enviado.
 - exige nome, CPF/CNPJ e WhatsApp.
 - aceita e-mail ausente.
 - normaliza WhatsApp antes de salvar.
 - rejeita WhatsApp duplicado na mesma empresa.
 - permite mesmo WhatsApp em empresas diferentes somente se a regra atual permitir por `companyId`.
 - edita dados cadastrais e perfil.
+- rejeita remocao de perfil.
 - rejeita perfil de outra empresa.
+- vincula clientes legados sem perfil ao perfil `NEW`.
 - lista clientes sem cobranca.
+- retorna sempre `collectionProfile` preenchido na listagem de clientes.
 - calcula quantidade e valor de cobrancas `PENDING`.
 - calcula quantidade e valor de cobrancas `PAID`.
 - aplica busca por nome, documento, WhatsApp e e-mail.
@@ -323,6 +335,7 @@ Frontend:
 - renderiza cards e tabela com retorno da API.
 - abre menu pelo botao de icone.
 - abre modal de novo cliente.
+- modal de novo cliente vem com "Novo pagador" selecionado.
 - valida campos obrigatorios antes de enviar.
 - cria cliente com e-mail opcional.
 - edita cliente existente.
@@ -343,6 +356,8 @@ Frontend:
 - Usuario `COMPANY_ADMIN` ve o item `Clientes` no menu principal.
 - A pagina lista clientes cadastrados mesmo sem cobranca.
 - O usuario cria cliente informando nome, CPF/CNPJ e WhatsApp, com e-mail opcional.
+- Cliente criado sem perfil selecionado explicitamente recebe o perfil "Novo pagador".
+- A pagina nao exibe card ou contagem de clientes sem perfil.
 - O usuario edita dados cadastrais e perfil de pagador.
 - A tabela mostra perfil, cobrancas em aberto e cobrancas pagas por cliente.
 - A coluna de acoes usa botao de icone, nao texto "Abrir menu".
