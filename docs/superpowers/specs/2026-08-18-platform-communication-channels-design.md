@@ -106,7 +106,10 @@ Templates deixam de ter proprietário empresa. O catálogo global terá template
 separados por canal e finalidade, com slug único e variáveis permitidas.
 
 Templates de WhatsApp armazenarão também nome oficial Meta, idioma, categoria,
-estado de aprovação, motivo de rejeição e data da última sincronização.
+estado de aprovação, motivo de rejeição e data da última sincronização. Como os
+números de backup podem pertencer a WABAs diferentes, cada template terá uma
+implantação por WABA único presente nos remetentes cadastrados. A implantação
+guarda o ID/nome remoto e o estado de aprovação naquele WABA.
 Templates de e-mail armazenarão assunto e corpo. A conta global do Resend será
 usada quando houver sincronização remota.
 
@@ -149,7 +152,8 @@ lista antes de qualquer envio, independentemente da empresa da cobrança.
    template. O job não contém um número previamente escolhido.
 2. No início de cada tentativa, o worker consulta os remetentes habilitados na
    ordem administrativa vigente.
-3. Remetentes em cooldown, desativados ou com limite esgotado são ignorados.
+3. Remetentes em cooldown, desativados, com limite esgotado ou cujo WABA não
+   tenha o template aprovado são ignorados.
 4. O worker tenta o primeiro remetente elegível e persiste a tentativa antes de
    chamar a Meta.
 5. Em sucesso, associa o `messageId` à tentativa, cobrança e conversa global.
@@ -231,6 +235,11 @@ O painel `/admin/canais` oferecerá:
 O painel administrativo de templates oferecerá criação, edição, validação,
 publicação e consulta de aprovação. Somente variáveis conhecidas serão aceitas.
 Templates usados por etapas ativas não poderão ser removidos sem substituição.
+Publicar ou atualizar um template sincronizará uma implantação em cada WABA
+único dos remetentes cadastrados e testados, inclusive backups ainda
+desativados, e o painel mostrará o estado por WABA. Um remetente só poderá ser
+ativado depois que todos os templates globais ativos estiverem aprovados em
+seu WABA.
 
 ### Atendimento
 
@@ -246,6 +255,9 @@ serão paginadas e permitirão busca por telefone, devedor, empresa e cobrança.
 - Alterações de canal, prioridade, ativação e templates produzirão `AuditLog`.
 - Testes de envio usarão destinatário informado explicitamente pelo
   administrador e serão identificados como teste.
+- Limites informados para um WABA tornam temporariamente inelegíveis todos os
+  remetentes daquele WABA; limites específicos de telefone afetam apenas o
+  remetente correspondente.
 - Nenhum envio será considerado bem-sucedido sem ID confirmado do provedor.
 - Sem canal saudável, o sistema falha fechado, preserva o job e registra uma
   mensagem operacional clara.
@@ -313,6 +325,8 @@ A implementação seguirá TDD e cobrirá:
 - uso exclusivo da configuração global do Resend;
 - webhook Resend global mantendo atribuição por empresa/cobrança;
 - resolução automática e validação de templates globais;
+- implantação e aprovação de cada template em todos os WABAs cadastrados e
+  testados;
 - autorização `PLATFORM_ADMIN` e não exposição de segredos;
 - interfaces de canais, templates e atendimento;
 - ausência de links, páginas e chamadas legadas para usuários clientes;
@@ -335,6 +349,7 @@ A implementação seguirá TDD e cobrirá:
 - Nenhuma credencial de WhatsApp ou Resend pertence a `Company`.
 - Apenas administradores da plataforma configuram canais e templates.
 - Todo WhatsApp usa o primeiro remetente global saudável por prioridade.
+- O remetente escolhido possui o template aprovado em seu próprio WABA.
 - Falhas elegíveis avançam pelos backups na ordem configurada.
 - Todo e-mail usa a única conta global do Cifra+.
 - Usuários clientes não têm inbox nem acesso a páginas/APIs de canais ou
