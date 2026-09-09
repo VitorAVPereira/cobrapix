@@ -30,7 +30,11 @@ function createPrismaMock(): PrismaMock {
 function createService(prisma: PrismaMock): WhatsappService {
   return new WhatsappService(
     {
-      get: jest.fn((_key: string, fallback?: string) => fallback),
+      get: jest.fn((key: string, fallback?: string) => {
+        if (key === 'META_BUSINESS_ACCOUNT_ID') return '123456789';
+        if (key === 'META_ACCESS_TOKEN') return 'plain-token';
+        return fallback;
+      }),
     } as unknown as ConfigService,
     prisma as unknown as PrismaService,
     {

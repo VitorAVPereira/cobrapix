@@ -7,6 +7,8 @@ export interface SendResendEmailInput {
   to: string[];
   subject: string;
   html: string;
+  replyTo?: string;
+  idempotencyKey?: string;
 }
 
 export interface SendResendEmailResult {
@@ -86,12 +88,18 @@ export interface VerifyResendWebhookInput {
 export class ResendMailerService {
   async sendEmail(input: SendResendEmailInput): Promise<SendResendEmailResult> {
     const resend = new Resend(input.apiKey);
-    const result = await resend.emails.send({
+    const payload = {
       from: input.from,
       to: input.to,
       subject: input.subject,
       html: input.html,
-    });
+      ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+    };
+    const result = input.idempotencyKey
+      ? await resend.emails.send(payload, {
+          idempotencyKey: input.idempotencyKey,
+        })
+      : await resend.emails.send(payload);
 
     if (result.error) {
       throw new Error(this.formatError(result.error));

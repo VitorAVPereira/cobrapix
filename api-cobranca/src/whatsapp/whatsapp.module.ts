@@ -6,6 +6,7 @@ import { QueueModule } from '../queue/queue.module';
 import { WhatsappService } from './whatsapp.service';
 import { WhatsappController } from './whatsapp.controller';
 import { WhatsAppConversationService } from './conversation.service';
+import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
 
 @Module({
   imports: [
@@ -15,7 +16,7 @@ import { WhatsAppConversationService } from './conversation.service';
     forwardRef(() => QueueModule),
   ],
   controllers: [WhatsappController],
-  providers: [WhatsappService, WhatsAppConversationService],
+  providers: [WhatsappService, WhatsAppConversationService, PlatformAdminGuard],
   exports: [WhatsappService, WhatsAppConversationService],
 })
 export class WhatsappModule {}

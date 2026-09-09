@@ -209,7 +209,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       debtorName,
     } = data;
 
-    this.logger.log(`Processando mensagem para ${debtorName} (${phoneNumber})`);
+    this.logger.log(`Processando mensagem da fatura ${invoiceId}`);
 
     const shouldSkip = await this.shouldSkipInvoiceNotPending(
       companyId,
@@ -256,6 +256,9 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         languageCode: templateLanguage,
         bodyParameters: templateParameters,
         buttonUrlSuffix: data.buttonUrlSuffix,
+        invoiceId,
+        debtorId,
+        content: `Template: ${templateName}`,
       });
 
       await this.messagingLimitService.trackSend(companyId, phoneNumber);
@@ -272,7 +275,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
           companyId,
           invoiceId,
           actionType: 'WHATSAPP_SENT',
-          description: `Template oficial ${templateName} enviado para ${debtorName} (${phoneNumber}) - Meta ID: ${response.messageId}`,
+          description: `Template oficial ${templateName} enviado - Meta ID: ${response.messageId}`,
           status: 'SENT',
         },
       });
@@ -285,7 +288,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         response.messageId,
       );
 
-      this.logger.log(`Mensagem enviada com sucesso para ${phoneNumber}`);
+      this.logger.log(`Mensagem da fatura ${invoiceId} enviada com sucesso`);
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : 'Erro desconhecido';
@@ -295,7 +298,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
           companyId,
           invoiceId,
           actionType: 'WHATSAPP_SENT',
-          description: `Falha ao enviar para ${debtorName}: ${errorMessage}`,
+          description: `Falha no envio da fatura ${invoiceId}: ${errorMessage}`,
           status: 'FAILED',
         },
       });
@@ -310,10 +313,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
 
       await this.tryEmailFallback(data, errorMessage);
 
-      this.logger.error(
-        `Erro ao enviar mensagem para ${phoneNumber}:`,
-        errorMessage,
-      );
+      this.logger.error(`Erro ao enviar mensagem da fatura ${invoiceId}`);
       throw error;
     }
   }
@@ -638,7 +638,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
             invoice.companyId,
             invoice.id,
             'WHATSAPP_QUEUED',
-            `Primeira mensagem de cobranca enfileirada para ${invoice.debtor.name} (${phoneNumber}).`,
+            `Primeira mensagem de cobranca enfileirada para a fatura ${invoice.id}.`,
             'QUEUED',
           );
         }
@@ -920,7 +920,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     if (!recipientLimit.allowed) {
       const delay = Math.max(recipientLimit.resetAt - Date.now(), 0);
       this.logger.warn(
-        `Rate limit atingido para ${phoneNumber}. Retry em ${delay}ms`,
+        `Rate limit de destinatario atingido. Retry em ${delay}ms`,
       );
       throw new Error(`Rate limit destinatario: retry after ${delay}ms`);
     }

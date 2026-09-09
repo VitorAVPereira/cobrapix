@@ -37,6 +37,8 @@ interface EmailServicePrismaMock {
   collectionLog: {
     create: jest.Mock;
   };
+  communicationConversation: { upsert: jest.Mock };
+  communicationMessage: { upsert: jest.Mock };
 }
 
 function buildEmailInput(): Parameters<EmailService['send']>[0] {
@@ -71,12 +73,24 @@ function createService(company: {
     collectionLog: {
       create: jest.fn().mockResolvedValue({ id: 'log-1' }),
     },
+    communicationConversation: {
+      upsert: jest.fn().mockResolvedValue({ id: 'conversation-1' }),
+    },
+    communicationMessage: { upsert: jest.fn() },
   };
   const configService = {
-    get: jest.fn(),
+    get: jest.fn(
+      (key: string) =>
+        ({
+          RESEND_API_KEY: 're_platform_123',
+          RESEND_FROM_EMAIL: 'CifraMais <cobranca@ciframais.com.br>',
+          RESEND_REPLY_TO: 'atendimento@ciframais.com.br',
+        })[key],
+    ),
   } as unknown as ConfigService;
   const crypto = {
     decrypt: jest.fn().mockReturnValue('re_cliente_123'),
+    encrypt: jest.fn().mockReturnValue('encrypted-recipient'),
   } as unknown as PaymentCryptoService;
   const resendMailer = {
     sendEmail: jest.fn().mockResolvedValue({ id: 'email-123' }),
@@ -207,8 +221,8 @@ function createWebhookService(options?: {
 }
 
 describe('EmailService', () => {
-  it('envia cobranca com a conta Resend e remetente da empresa', async () => {
-    const { service, prisma, crypto, resendMailer } = createService({
+  it('envia cobranca com a conta Resend central e registra o contexto', async () => {
+    const { service, prisma, resendMailer } = createService({
       corporateName: 'Escola Teste',
       resendApiKeyEncrypted: 'encrypted-resend-key',
       resendFromEmail: 'cobranca@escolateste.com.br',
@@ -217,13 +231,14 @@ describe('EmailService', () => {
     const messageId = await service.send(buildEmailInput());
 
     expect(messageId).toBe('email-123');
-    expect(crypto.decrypt).toHaveBeenCalledWith('encrypted-resend-key');
     expect(resendMailer.sendEmail).toHaveBeenCalledWith({
-      apiKey: 're_cliente_123',
-      from: 'Escola Teste <cobranca@escolateste.com.br>',
+      apiKey: 're_platform_123',
+      from: 'CifraMais <cobranca@ciframais.com.br>',
       to: ['responsavel@familia.com'],
       subject: '[Escola Teste] Cobranca pendente',
       html: '<p>Cobranca pendente</p>',
+      replyTo: 'atendimento@ciframais.com.br',
+      idempotencyKey: 'collection:company-1:invoice-1:step-1',
     });
     expect(prisma.collectionAttempt.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -234,18 +249,16 @@ describe('EmailService', () => {
     );
   });
 
-  it('falha antes do envio quando o remetente Resend da empresa nao foi configurado', async () => {
+  it('ignora as credenciais Resend legadas da empresa', async () => {
     const { service, crypto, resendMailer } = createService({
       corporateName: 'Escola Teste',
       resendApiKeyEncrypted: 'encrypted-resend-key',
       resendFromEmail: null,
     });
 
-    await expect(service.send(buildEmailInput())).rejects.toThrow(
-      'Remetente Resend nao configurado para esta empresa.',
-    );
+    await expect(service.send(buildEmailInput())).resolves.toBe('email-123');
     expect(crypto.decrypt).not.toHaveBeenCalled();
-    expect(resendMailer.sendEmail).not.toHaveBeenCalled();
+    expect(resendMailer.sendEmail).toHaveBeenCalled();
   });
 
   it('ignora envio quando a fatura nao esta mais pendente', async () => {
@@ -270,7 +283,7 @@ describe('EmailService', () => {
         invoiceId: 'invoice-1',
         actionType: 'EMAIL_SKIPPED_INVOICE_NOT_PENDING',
         status: 'SKIPPED',
-      }),
+      }) as unknown,
     });
   });
 

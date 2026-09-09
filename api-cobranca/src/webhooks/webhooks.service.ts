@@ -1,8 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac, timingSafeEqual } from 'crypto';
+import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { EfiService } from '../payment/efi.service';
+import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { MessagingLimitService } from '../queue/services/messaging-limit.service';
 import { WhatsAppConversationService } from '../whatsapp/conversation.service';
 import { getWhatsAppNumberLookupCandidates } from '../common/whatsapp-number';
@@ -59,6 +61,7 @@ export class WebhooksService {
     private readonly efiService: EfiService,
     private readonly messagingLimitService: MessagingLimitService,
     private readonly conversationService: WhatsAppConversationService,
+    private readonly crypto: PaymentCryptoService,
   ) {}
 
   async handleEfiPixWebhook(payload: unknown): Promise<{
@@ -121,8 +124,8 @@ export class WebhooksService {
 
     let statuses = 0;
     let optOuts = 0;
-    let tierUpdates = 0;
-    let accountUpdates = 0;
+    const tierUpdates = 0;
+    const accountUpdates = 0;
 
     for (const entry of payload.entry) {
       for (const change of entry.changes) {
@@ -131,18 +134,11 @@ export class WebhooksService {
           continue;
         }
 
-        const company = await this.prisma.company.findFirst({
-          where: {
-            whatsappProvider: 'META_CLOUD',
-            metaPhoneNumberId: phoneNumberId,
-          },
-          select: { id: true, metaPhoneNumberId: true },
-        });
-
-        if (!company) {
-          this.logger.warn(
-            `Webhook Meta ignorado: phone_number_id ${phoneNumberId} sem empresa`,
-          );
+        if (
+          phoneNumberId !==
+          this.configService.get<string>('META_PHONE_NUMBER_ID')
+        ) {
+          this.logger.warn('Webhook Meta ignorado: remetente desconhecido');
           continue;
         }
 
@@ -150,54 +146,91 @@ export class WebhooksService {
           case 'messages':
             for (const status of change.value.statuses ?? []) {
               statuses++;
-              this.logger.log(
-                `Webhook Meta status ${status.status} para ${status.recipient_id ?? 'desconhecido'} (${status.id})`,
-              );
-              await this.recordMessageInteraction(company.id, status);
+              await this.prisma.communicationMessage.updateMany({
+                where: { externalMessageId: status.id },
+                data: { status: status.status },
+              });
             }
 
             for (const message of change.value.messages ?? []) {
-              await this.recordInboundInteraction(company.id, message);
-
-              if (this.isOptOutMessage(message)) {
-                const updated = await this.revokeDebtorOptIn(
-                  company.id,
-                  message.from,
-                );
-                optOuts += updated;
-              }
+              await this.recordGlobalInbound(message);
+              if (this.isOptOutMessage(message)) optOuts++;
             }
             break;
 
           case 'messaging_limit':
-            tierUpdates += await this.handleMessagingLimitUpdate(
-              company.id,
-              change.value,
-            );
+            this.logger.log('Atualizacao de limite Meta recebida');
             break;
 
           case 'account_review_update':
-            this.logger.log(
-              `Webhook Meta account_review_update para ${company.id}: ${JSON.stringify(change.value)}`,
-            );
+            this.logger.log('Atualizacao de revisao Meta recebida');
             break;
 
           case 'account_update':
-            accountUpdates += await this.handleAccountUpdate(
-              company.id,
-              change.value,
-            );
+            this.logger.log('Atualizacao de conta Meta recebida');
             break;
 
           default:
             this.logger.debug(
-              `Webhook Meta: campo nao tratado "${change.field}" para ${company.id}`,
+              `Webhook Meta: campo nao tratado "${change.field}"`,
             );
         }
       }
     }
 
     return { processed: true, statuses, optOuts, tierUpdates, accountUpdates };
+  }
+
+  private async recordGlobalInbound(
+    message: MetaIncomingMessage,
+  ): Promise<void> {
+    const recipient = message.from.replace(/\D/g, '');
+    const recipientHash = createHash('sha256').update(recipient).digest('hex');
+    const content = message.text?.body ?? '(midia/sem texto)';
+    const receivedAt = message.timestamp
+      ? new Date(Number(message.timestamp) * 1000)
+      : new Date();
+    const retentionExpiresAt = new Date(receivedAt);
+    retentionExpiresAt.setUTCFullYear(retentionExpiresAt.getUTCFullYear() + 5);
+    const serviceWindowExpiresAt = new Date(
+      receivedAt.getTime() + 24 * 60 * 60 * 1000,
+    );
+    const conversation = await this.prisma.communicationConversation.upsert({
+      where: { channel_recipientHash: { channel: 'WHATSAPP', recipientHash } },
+      create: {
+        channel: 'WHATSAPP',
+        recipientHash,
+        recipientEncrypted: this.crypto.encrypt(recipient),
+        lastInboundAt: receivedAt,
+        serviceWindowExpiresAt,
+        lastMessagePreview: content.slice(0, 255),
+        unreadCount: 1,
+        retentionExpiresAt,
+      },
+      update: {
+        lastInboundAt: receivedAt,
+        serviceWindowExpiresAt,
+        lastMessagePreview: content.slice(0, 255),
+        unreadCount: { increment: 1 },
+        retentionExpiresAt,
+      },
+      select: { id: true },
+    });
+    await this.prisma.communicationMessage.upsert({
+      where: {
+        externalMessageId:
+          message.id ?? `meta:${recipientHash}:${receivedAt.getTime()}`,
+      },
+      create: {
+        conversationId: conversation.id,
+        direction: 'INBOUND',
+        content,
+        externalMessageId: message.id,
+        status: 'received',
+        retentionExpiresAt,
+      },
+      update: { status: 'received' },
+    });
   }
 
   private async recordMessageInteraction(

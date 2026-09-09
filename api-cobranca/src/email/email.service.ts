@@ -1,12 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { CollectionAttemptStatus, InvoiceStatus, Prisma } from '@prisma/client';
+import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentCryptoService } from '../payment/payment-crypto.service';
-import {
-  formatResendFromAddress,
-  ResendMailerService,
-} from '../common/resend-mailer.service';
+import { ResendMailerService } from '../common/resend-mailer.service';
 
 const EMAIL_PACING_MS = 100;
 
@@ -78,26 +76,12 @@ export class EmailService {
 
     const company = await this.prisma.company.findUnique({
       where: { id: input.companyId },
-      select: {
-        corporateName: true,
-        resendApiKeyEncrypted: true,
-        resendFromEmail: true,
-      },
+      select: { id: true },
     });
-
-    if (!company?.resendApiKeyEncrypted) {
-      throw new Error('Resend API key nao configurada para esta empresa.');
-    }
-
-    if (!company.resendFromEmail) {
-      throw new Error('Remetente Resend nao configurado para esta empresa.');
-    }
-
-    const fromEmail = formatResendFromAddress(
-      company.corporateName,
-      company.resendFromEmail,
-    );
-    const apiKey = this.crypto.decrypt(company.resendApiKeyEncrypted);
+    if (!company) throw new Error('Empresa nao encontrada.');
+    const apiKey = this.requireConfig('RESEND_API_KEY');
+    const fromEmail = this.requireConfig('RESEND_FROM_EMAIL');
+    const replyTo = this.requireConfig('RESEND_REPLY_TO');
 
     await this.enforcePacing();
 
@@ -107,13 +91,13 @@ export class EmailService {
       to: [input.email],
       subject: input.subject,
       html: input.html,
+      replyTo,
+      idempotencyKey: `collection:${input.companyId}:${input.invoiceId}:${input.ruleStepId ?? 'direct'}`,
     });
 
     await this.markAttemptAsSent(input, messageId);
-
-    this.logger.log(
-      `Email enviado: ${input.debtorName} <${input.email}> — Resend ID: ${messageId}`,
-    );
+    await this.recordOutbound(input, messageId);
+    this.logger.log(`Email de cobranca enviado (${messageId})`);
 
     return messageId;
   }
@@ -758,5 +742,51 @@ export class EmailService {
     }
 
     return 'unknown';
+  }
+
+  private requireConfig(name: string): string {
+    const value = this.configService.get<string>(name)?.trim();
+    if (!value) throw new Error(`${name} nao configurada.`);
+    return value;
+  }
+
+  private async recordOutbound(
+    input: SendEmailInput,
+    messageId: string,
+  ): Promise<void> {
+    const recipient = input.email.trim().toLowerCase();
+    const recipientHash = createHash('sha256').update(recipient).digest('hex');
+    const retentionExpiresAt = new Date();
+    retentionExpiresAt.setUTCFullYear(retentionExpiresAt.getUTCFullYear() + 5);
+    const conversation = await this.prisma.communicationConversation.upsert({
+      where: { channel_recipientHash: { channel: 'EMAIL', recipientHash } },
+      create: {
+        channel: 'EMAIL',
+        recipientHash,
+        recipientEncrypted: this.crypto.encrypt(recipient),
+        lastMessagePreview: input.subject.slice(0, 255),
+        retentionExpiresAt,
+      },
+      update: {
+        lastMessagePreview: input.subject.slice(0, 255),
+        retentionExpiresAt,
+      },
+      select: { id: true },
+    });
+    await this.prisma.communicationMessage.upsert({
+      where: { externalMessageId: messageId },
+      create: {
+        conversationId: conversation.id,
+        companyId: input.companyId,
+        invoiceId: input.invoiceId,
+        debtorId: input.debtorId,
+        direction: 'OUTBOUND',
+        content: input.subject,
+        externalMessageId: messageId,
+        status: 'sent',
+        retentionExpiresAt,
+      },
+      update: { status: 'sent' },
+    });
   }
 }

@@ -14,6 +14,7 @@ import { GetUser } from '../auth/decorators/get-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateEmailTemplateDto, UpdateEmailTemplateDto } from './dto';
 import { EmailTemplatesService } from './email-templates.service';
+import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
 
 interface AuthenticatedUser {
   companyId: string;
@@ -30,6 +31,7 @@ export class EmailTemplatesController {
   }
 
   @Post()
+  @UseGuards(PlatformAdminGuard)
   @HttpCode(HttpStatus.CREATED)
   async create(
     @GetUser() user: AuthenticatedUser,
@@ -48,11 +50,13 @@ export class EmailTemplatesController {
   }
 
   @Post(':id/publish')
+  @UseGuards(PlatformAdminGuard)
   async publish(@GetUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.emailTemplatesService.publish(user.companyId, id);
   }
 
   @Delete(':id')
+  @UseGuards(PlatformAdminGuard)
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(@GetUser() user: AuthenticatedUser, @Param('id') id: string) {
     await this.emailTemplatesService.remove(user.companyId, id);
