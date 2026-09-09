@@ -21,14 +21,15 @@ export function validatePaymentFeeComponent(
 
   if (value.kind === 'FIXED') {
     return (
-      isIntegerInRange(value.amountCents, 0) && value.basisPoints === undefined
+      hasOnlyKeys(value, ['kind', 'amountCents']) &&
+      isIntegerInRange(value.amountCents, 0)
     );
   }
 
   if (value.kind === 'PERCENTAGE') {
     return (
-      isIntegerInRange(value.basisPoints, 0, 10_000) &&
-      value.amountCents === undefined
+      hasOnlyKeys(value, ['kind', 'basisPoints']) &&
+      isIntegerInRange(value.basisPoints, 0, 10_000)
     );
   }
 
@@ -37,6 +38,13 @@ export function validatePaymentFeeComponent(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(
+  value: Record<string, unknown>,
+  allowedKeys: readonly string[],
+): boolean {
+  return Object.keys(value).every((key: string) => allowedKeys.includes(key));
 }
 
 function isIntegerInRange(

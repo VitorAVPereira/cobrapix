@@ -217,7 +217,16 @@ CREATE INDEX "PaymentFeeVersion_scopeKey_billingMethod_effectiveFrom_idx" ON "Pa
 CREATE UNIQUE INDEX "PaymentFeeVersion_scopeKey_billingMethod_version_key" ON "PaymentFeeVersion"("scopeKey", "billingMethod", "version");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "PaymentCharge_replacesChargeId_key" ON "PaymentCharge"("replacesChargeId");
+CREATE UNIQUE INDEX "Debtor_id_companyId_key" ON "Debtor"("id", "companyId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Invoice_id_companyId_key" ON "Invoice"("id", "companyId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PaymentCharge_id_companyId_invoiceId_key" ON "PaymentCharge"("id", "companyId", "invoiceId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PaymentCharge_replacesChargeId_companyId_invoiceId_key" ON "PaymentCharge"("replacesChargeId", "companyId", "invoiceId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "PaymentCharge_gatewayId_key" ON "PaymentCharge"("gatewayId");
@@ -271,19 +280,25 @@ CREATE INDEX "CommunicationMessage_retentionExpiresAt_idx" ON "CommunicationMess
 ALTER TABLE "EfiOnboarding" ADD CONSTRAINT "EfiOnboarding_companyId_fkey" FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "EfiOnboarding" ADD CONSTRAINT "EfiOnboarding_consentUserId_companyId_fkey" FOREIGN KEY ("consentUserId", "companyId") REFERENCES "User"("id", "companyId") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "PaymentFeeVersion" ADD CONSTRAINT "PaymentFeeVersion_companyId_fkey" FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PaymentFeeVersion" ADD CONSTRAINT "PaymentFeeVersion_createdByUserId_fkey" FOREIGN KEY ("createdByUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "PaymentCharge" ADD CONSTRAINT "PaymentCharge_companyId_fkey" FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "PaymentCharge" ADD CONSTRAINT "PaymentCharge_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "Invoice"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "PaymentCharge" ADD CONSTRAINT "PaymentCharge_invoiceId_companyId_fkey" FOREIGN KEY ("invoiceId", "companyId") REFERENCES "Invoice"("id", "companyId") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "PaymentCharge" ADD CONSTRAINT "PaymentCharge_feeVersionId_fkey" FOREIGN KEY ("feeVersionId") REFERENCES "PaymentFeeVersion"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "PaymentCharge" ADD CONSTRAINT "PaymentCharge_replacesChargeId_fkey" FOREIGN KEY ("replacesChargeId") REFERENCES "PaymentCharge"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "PaymentCharge" ADD CONSTRAINT "PaymentCharge_replacesChargeId_companyId_invoiceId_fkey" FOREIGN KEY ("replacesChargeId", "companyId", "invoiceId") REFERENCES "PaymentCharge"("id", "companyId", "invoiceId") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "CommunicationMessage" ADD CONSTRAINT "CommunicationMessage_conversationId_fkey" FOREIGN KEY ("conversationId") REFERENCES "CommunicationConversation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -292,10 +307,10 @@ ALTER TABLE "CommunicationMessage" ADD CONSTRAINT "CommunicationMessage_conversa
 ALTER TABLE "CommunicationMessage" ADD CONSTRAINT "CommunicationMessage_companyId_fkey" FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "CommunicationMessage" ADD CONSTRAINT "CommunicationMessage_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "Invoice"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "CommunicationMessage" ADD CONSTRAINT "CommunicationMessage_invoiceId_companyId_fkey" FOREIGN KEY ("invoiceId", "companyId") REFERENCES "Invoice"("id", "companyId") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "CommunicationMessage" ADD CONSTRAINT "CommunicationMessage_debtorId_fkey" FOREIGN KEY ("debtorId") REFERENCES "Debtor"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "CommunicationMessage" ADD CONSTRAINT "CommunicationMessage_debtorId_companyId_fkey" FOREIGN KEY ("debtorId", "companyId") REFERENCES "Debtor"("id", "companyId") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- Preserve every charge lifecycle transition independently from the current row.
 CREATE TABLE "PaymentChargeStatusHistory" (
@@ -348,6 +363,11 @@ ADD CONSTRAINT "PaymentCharge_amounts_check" CHECK (
     ("effectivePlatformFeeCents" IS NULL OR "effectivePlatformFeeCents" >= 0)
 );
 
+ALTER TABLE "CommunicationMessage"
+ADD CONSTRAINT "CommunicationMessage_context_check" CHECK (
+    "companyId" IS NOT NULL OR ("invoiceId" IS NULL AND "debtorId" IS NULL)
+);
+
 ALTER TABLE "EfiOnboarding"
 ADD CONSTRAINT "EfiOnboarding_attempts_check" CHECK (
     "submissionAttempts" >= 0 AND
@@ -379,3 +399,36 @@ FOR EACH ROW EXECUTE FUNCTION "reject_payment_fee_version_mutation"();
 CREATE TRIGGER "PaymentFeeVersion_immutable_delete"
 BEFORE DELETE ON "PaymentFeeVersion"
 FOR EACH ROW EXECUTE FUNCTION "reject_payment_fee_version_mutation"();
+
+-- A charge may use a global fee or its own tenant override, but the payment
+-- method must always match the selected version.
+CREATE FUNCTION "validate_payment_charge_fee_version"() RETURNS trigger AS $$
+DECLARE
+    fee_company_id TEXT;
+    fee_billing_method "BillingMethod";
+BEGIN
+    SELECT "companyId", "billingMethod"
+    INTO fee_company_id, fee_billing_method
+    FROM "PaymentFeeVersion"
+    WHERE "id" = NEW."feeVersionId";
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'PaymentCharge fee version does not exist';
+    END IF;
+
+    IF fee_company_id IS NOT NULL AND fee_company_id <> NEW."companyId" THEN
+        RAISE EXCEPTION 'PaymentCharge fee version belongs to another company';
+    END IF;
+
+    IF fee_billing_method <> NEW."billingMethod" THEN
+        RAISE EXCEPTION 'PaymentCharge billing method differs from fee version';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "PaymentCharge_validate_fee_version"
+BEFORE INSERT OR UPDATE OF "companyId", "billingMethod", "feeVersionId"
+ON "PaymentCharge"
+FOR EACH ROW EXECUTE FUNCTION "validate_payment_charge_fee_version"();

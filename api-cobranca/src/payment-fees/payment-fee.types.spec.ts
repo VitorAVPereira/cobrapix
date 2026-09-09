@@ -17,11 +17,13 @@ describe('validatePaymentFeeComponent', () => {
     { kind: 'FIXED', amountCents: -1 },
     { kind: 'FIXED', amountCents: 1.5 },
     { kind: 'FIXED', amountCents: 100, basisPoints: 100 },
+    { kind: 'FIXED', amountCents: 100, typo: true },
     { kind: 'PERCENTAGE' },
     { kind: 'PERCENTAGE', basisPoints: -1 },
     { kind: 'PERCENTAGE', basisPoints: 10_001 },
     { kind: 'PERCENTAGE', basisPoints: 1.5 },
     { kind: 'PERCENTAGE', basisPoints: 100, amountCents: 100 },
+    { kind: 'PERCENTAGE', basisPoints: 100, typo: true },
     { kind: 'UNKNOWN', amountCents: 100 },
   ])('rejects a malformed fee component: %#', (component: unknown) => {
     expect(validatePaymentFeeComponent(component)).toBe(false);

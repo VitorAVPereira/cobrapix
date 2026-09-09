@@ -345,6 +345,7 @@ model Debtor {
 
   @@unique([companyId, phoneNumber])
   @@unique([companyId, externalDebtorId])
+  @@unique([id, companyId])
   @@index([companyId])
 }
 
@@ -397,6 +398,7 @@ model Invoice {
 
   @@unique([recurringInvoiceId, recurrencePeriod])
   @@unique([companyId, externalInvoiceId])
+  @@unique([id, companyId])
   @@index([companyId])
   @@index([debtorId])
   @@index([recurringInvoiceId])
@@ -433,6 +435,7 @@ model EfiOnboarding {
   draftRevision                     Int                 @default(0)
   consentDraftRevision              Int?
   consentUserId                     String?
+  consentUser                       User?               @relation("EfiOnboardingConsentUser", fields: [consentUserId, companyId], references: [id, companyId], onDelete: Restrict)
   consentIpAddress                  String?
   authorizationTextVersion          String?
   termsVersion                      String?
@@ -470,6 +473,7 @@ model PaymentFeeVersion {
   effectiveFrom          DateTime
   effectiveUntil         DateTime?
   createdByUserId        String?
+  createdByUser          User?           @relation("PaymentFeeCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
   createdAt              DateTime        @default(now())
   paymentCharges         PaymentCharge[]
 
@@ -483,11 +487,11 @@ model PaymentCharge {
   companyId                 String
   company                   Company                      @relation(fields: [companyId], references: [id])
   invoiceId                 String
-  invoice                   Invoice                      @relation(fields: [invoiceId], references: [id])
+  invoice                   Invoice                      @relation(fields: [invoiceId, companyId], references: [id, companyId])
   feeVersionId              String
   feeVersion                PaymentFeeVersion            @relation(fields: [feeVersionId], references: [id])
-  replacesChargeId          String?                      @unique
-  replacesCharge            PaymentCharge?               @relation("ChargeReplacement", fields: [replacesChargeId], references: [id])
+  replacesChargeId          String?
+  replacesCharge            PaymentCharge?               @relation("ChargeReplacement", fields: [replacesChargeId, companyId, invoiceId], references: [id, companyId, invoiceId])
   replacementCharge         PaymentCharge?               @relation("ChargeReplacement")
   billingMethod             BillingMethod
   status                    PaymentChargeStatus          @default(DRAFT)
@@ -514,6 +518,8 @@ model PaymentCharge {
   updatedAt                 DateTime                     @updatedAt
   statusHistory             PaymentChargeStatusHistory[]
 
+  @@unique([id, companyId, invoiceId])
+  @@unique([replacesChargeId, companyId, invoiceId])
   @@index([companyId, status, createdAt])
   @@index([invoiceId, createdAt])
   @@index([feeVersionId])
@@ -577,9 +583,9 @@ model CommunicationMessage {
   companyId          String?
   company            Company?                  @relation(fields: [companyId], references: [id])
   invoiceId          String?
-  invoice            Invoice?                  @relation(fields: [invoiceId], references: [id])
+  invoice            Invoice?                  @relation(fields: [invoiceId, companyId], references: [id, companyId], onDelete: Restrict)
   debtorId           String?
-  debtor             Debtor?                   @relation(fields: [debtorId], references: [id])
+  debtor             Debtor?                   @relation(fields: [debtorId, companyId], references: [id, companyId], onDelete: Restrict)
   direction          MessageDirection
   content            String                    @db.Text
   externalMessageId  String?                   @unique
@@ -669,6 +675,8 @@ model User {
   assignedConversations WhatsAppConversation[]
   auditLogs             AuditLog[]
   passwordResetTokens   PasswordResetToken[]
+  efiOnboardingConsents EfiOnboarding[]        @relation("EfiOnboardingConsentUser")
+  createdPaymentFees    PaymentFeeVersion[]    @relation("PaymentFeeCreatedBy")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
