@@ -1,26 +1,34 @@
 import { Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { CollectionChannel } from '@prisma/client';
 
-const SAFE_SINGLE_MIN_DELAY_MS = 15_000;
-const SAFE_SINGLE_MAX_DELAY_MS = 45_000;
-const SAFE_BULK_INTERVAL_MS = 30_000;
-const SAFE_BULK_JITTER_MS = 15_000;
+const SAFE_SINGLE_MIN_DELAY_MS = 1_000;
+const SAFE_SINGLE_MAX_DELAY_MS = 3_000;
+const SAFE_BULK_INTERVAL_MS = 500;
+const SAFE_BULK_JITTER_MS = 1_000;
 
 export interface SendMessageJob {
   invoiceId: string;
   companyId: string;
+  debtorId: string;
   phoneNumber: string;
-  instanceName: string;
-  message: string;
+  senderKey: string;
+  templateName: string;
+  templateLanguage: string;
+  templateParameters: string[];
+  buttonUrlSuffix?: string;
+  message?: string;
   debtorName: string;
   retryCount?: number;
+  ruleStepId?: string;
 }
 
 export interface InitialChargeJob {
   invoiceId: string;
   companyId: string;
   source: 'MANUAL' | 'CSV' | 'RECURRING' | 'SELECTED';
+  channels?: CollectionChannel[];
 }
 
 export type WhatsAppQueueJob = SendMessageJob | InitialChargeJob;
@@ -35,19 +43,17 @@ export class MessageQueueService {
   async addSendMessageJob(job: SendMessageJob): Promise<void> {
     await this.whatsappQueue.add('send-message', job, {
       delay: this.buildSafeDelay(0),
-      ...this.buildJobOptions(`send-message:${job.companyId}:${job.invoiceId}`),
+      ...this.buildJobOptions(this.buildSendMessageJobId(job)),
     });
   }
 
   async addBulkSendMessageJobs(jobs: SendMessageJob[]): Promise<void> {
     const bulkJobs = jobs.map((job, index) => ({
-      name: 'send-message',
+      name: 'send-message' as const,
       data: job,
       opts: {
         delay: this.buildSafeDelay(index),
-        ...this.buildJobOptions(
-          `send-message:${job.companyId}:${job.invoiceId}`,
-        ),
+        ...this.buildJobOptions(this.buildSendMessageJobId(job)),
       },
     }));
 
@@ -106,6 +112,12 @@ export class MessageQueueService {
     return baseDelay + index * SAFE_BULK_INTERVAL_MS + jitter;
   }
 
+  private buildSendMessageJobId(job: SendMessageJob): string {
+    const stepKey = job.ruleStepId ?? 'initial';
+
+    return `send-message:${job.companyId}:${job.invoiceId}:${stepKey}:WHATSAPP`;
+  }
+
   private buildJobOptions(jobId: string): {
     jobId: string;
     attempts: number;
@@ -123,7 +135,7 @@ export class MessageQueueService {
     };
   } {
     return {
-      jobId,
+      jobId: this.sanitizeJobId(jobId),
       attempts: 3,
       backoff: {
         type: 'exponential',
@@ -138,6 +150,10 @@ export class MessageQueueService {
         age: 7 * 24 * 3600,
       },
     };
+  }
+
+  private sanitizeJobId(jobId: string): string {
+    return jobId.replace(/:/g, '_');
   }
 
   private randomBetween(min: number, max: number): number {

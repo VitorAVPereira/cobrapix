@@ -1,36 +1,182 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpException,
   HttpStatus,
+  Param,
   Post,
   Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { IsArray, IsUUID } from 'class-validator';
-import { BillingService } from './billing.service';
+import { Type } from 'class-transformer';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsBoolean,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Length,
+  Max,
+  Min,
+  ValidateNested,
+} from 'class-validator';
+import { CollectionChannel, CollectionProfileType } from '@prisma/client';
+import {
+  BillingService,
+  type SelectedBillingContactInput,
+} from './billing.service';
+import { CollectionProfileService } from './collection-profile.service';
 import { UpdateBillingSettingsDto } from './dto/update-billing-settings.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
+import { normalizeWhatsAppNumber } from '../common/whatsapp-number';
 
 interface AuthenticatedUser {
   companyId: string;
 }
 
+const COLLECTION_PROFILE_TYPES: CollectionProfileType[] = [
+  'NEW',
+  'GOOD',
+  'DOUBTFUL',
+  'BAD',
+];
+const COLLECTION_CHANNELS: CollectionChannel[] = ['EMAIL', 'WHATSAPP'];
+
 class RunSelectedBillingDto {
   @IsArray()
   @IsUUID('4', { each: true })
   invoiceIds!: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsIn(COLLECTION_CHANNELS, { each: true })
+  channels?: CollectionChannel[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  contacts?: RunSelectedBillingContactDto[];
+}
+
+class RunSelectedBillingContactDto {
+  @IsUUID('4')
+  invoiceId!: string;
+
+  @IsOptional()
+  @IsString()
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  phoneNumber?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  whatsappOptIn?: boolean;
+}
+
+class CreateRuleDto {
+  @IsString()
+  @Length(2, 80)
+  name!: string;
+
+  @IsIn(COLLECTION_PROFILE_TYPES)
+  profileType!: CollectionProfileType;
+
+  @IsOptional()
+  @IsBoolean()
+  isDefault?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(-30)
+  @Max(365)
+  daysOverdueMin?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(-30)
+  @Max(365)
+  daysOverdueMax?: number;
+}
+
+class UpdateRuleDto {
+  @IsOptional()
+  @IsString()
+  @Length(2, 80)
+  name?: string;
+
+  @IsOptional()
+  @IsIn(COLLECTION_PROFILE_TYPES)
+  profileType?: CollectionProfileType;
+
+  @IsOptional()
+  @IsBoolean()
+  isDefault?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(-30)
+  @Max(365)
+  daysOverdueMin?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(-30)
+  @Max(365)
+  daysOverdueMax?: number;
+}
+
+class RuleStepDto {
+  @IsInt()
+  @Min(0)
+  @Max(50)
+  stepOrder!: number;
+
+  @IsIn(COLLECTION_CHANNELS)
+  channel!: CollectionChannel;
+
+  @IsOptional()
+  @IsUUID('4')
+  templateId?: string;
+
+  @IsInt()
+  @Min(-30)
+  @Max(365)
+  delayDays!: number;
+
+  @IsOptional()
+  @IsString()
+  sendTimeStart?: string;
+
+  @IsOptional()
+  @IsString()
+  sendTimeEnd?: string;
+}
+
+class SetRuleStepsDto {
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => RuleStepDto)
+  steps!: RuleStepDto[];
 }
 
 @Controller('billing')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ThrottleGuard)
 export class BillingController {
   constructor(
     private readonly billingService: BillingService,
+    private readonly collectionProfileService: CollectionProfileService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -42,21 +188,7 @@ export class BillingController {
       });
 
       if (!company) {
-        throw new HttpException('Não autorizado.', HttpStatus.UNAUTHORIZED);
-      }
-
-      if (company.whatsappStatus !== 'CONNECTED') {
-        throw new HttpException(
-          'WhatsApp não está conectado. Conecte antes de executar cobranças.',
-          HttpStatus.BAD_REQUEST,
-        );
-      }
-
-      if (!company.whatsappInstanceId) {
-        throw new HttpException(
-          'Nenhuma instância WhatsApp configurada.',
-          HttpStatus.BAD_REQUEST,
-        );
+        throw new HttpException('Nao autorizado.', HttpStatus.UNAUTHORIZED);
       }
 
       const result = await this.billingService.executeBilling(user.companyId);
@@ -68,14 +200,14 @@ export class BillingController {
           queued: result.queued,
           skipped: result.skipped,
         },
-        message: `Cobrança executada: ${result.queued} mensagens enfileiradas, ${result.skipped} puladas.`,
+        message: `Cobranca executada: ${result.queued} mensagens enfileiradas, ${result.skipped} puladas.`,
       };
     } catch (error) {
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         error instanceof Error
           ? error.message
-          : 'Falha interna ao executar cobrança.',
+          : 'Falha interna ao executar cobranca.',
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
@@ -100,6 +232,13 @@ export class BillingController {
     @Body() dto: RunSelectedBillingDto,
   ) {
     try {
+      if (!Array.isArray(dto.invoiceIds) || dto.invoiceIds.length === 0) {
+        throw new HttpException(
+          'Selecione pelo menos uma fatura.',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+
       const company = await this.prisma.company.findUnique({
         where: { id: user.companyId },
       });
@@ -108,14 +247,20 @@ export class BillingController {
         throw new HttpException('Não autorizado.', HttpStatus.UNAUTHORIZED);
       }
 
-      if (company.whatsappStatus !== 'CONNECTED') {
+      const channels = this.normalizeSelectedChannels(dto.channels);
+      const contacts = this.normalizeSelectedContacts(dto.contacts);
+
+      if (
+        channels.includes('WHATSAPP') &&
+        company.whatsappStatus !== 'CONNECTED'
+      ) {
         throw new HttpException(
           'WhatsApp não está conectado. Conecte antes de executar cobranças.',
           HttpStatus.BAD_REQUEST,
         );
       }
 
-      if (!company.whatsappInstanceId) {
+      if (channels.includes('WHATSAPP') && !company.whatsappInstanceId) {
         throw new HttpException(
           'Nenhuma instância WhatsApp configurada.',
           HttpStatus.BAD_REQUEST,
@@ -125,6 +270,7 @@ export class BillingController {
       const result = await this.billingService.enqueueSelectedInvoices(
         user.companyId,
         dto.invoiceIds,
+        { channels, contacts },
       );
 
       return {
@@ -147,6 +293,56 @@ export class BillingController {
     }
   }
 
+  private normalizeSelectedChannels(
+    channels: CollectionChannel[] | undefined,
+  ): CollectionChannel[] {
+    const normalized = Array.from(
+      new Set(
+        (channels?.length ? channels : ['WHATSAPP']).filter(
+          (channel): channel is CollectionChannel =>
+            channel === 'EMAIL' || channel === 'WHATSAPP',
+        ),
+      ),
+    );
+
+    if (normalized.length === 0) {
+      throw new HttpException(
+        'Selecione pelo menos um canal de envio.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    return normalized;
+  }
+
+  private normalizeSelectedContacts(
+    contacts: RunSelectedBillingContactDto[] | undefined,
+  ): SelectedBillingContactInput[] {
+    if (!contacts?.length) {
+      return [];
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    return contacts.map((contact) => {
+      const email = contact.email?.trim().toLowerCase();
+      const phoneNumber = contact.phoneNumber?.trim();
+
+      if (email && !emailRegex.test(email)) {
+        throw new HttpException('E-mail invalido.', HttpStatus.BAD_REQUEST);
+      }
+
+      return {
+        invoiceId: contact.invoiceId,
+        email: email || undefined,
+        phoneNumber: phoneNumber
+          ? normalizeWhatsAppNumber(phoneNumber)
+          : undefined,
+        whatsappOptIn: contact.whatsappOptIn,
+      };
+    });
+  }
+
   @Put('settings')
   async updateSettings(
     @GetUser() user: AuthenticatedUser,
@@ -159,6 +355,65 @@ export class BillingController {
       autoDiscountEnabled: dto.autoDiscountEnabled,
       autoDiscountDaysAfterDue: dto.autoDiscountDaysAfterDue,
       autoDiscountPercentage: dto.autoDiscountPercentage,
+      businessSegment: dto.businessSegment,
+      paymentNotificationEnabled: dto.paymentNotificationEnabled,
+      paymentNotificationEmails: dto.paymentNotificationEmails,
     });
+  }
+
+  @Get('rules')
+  async getRules(@GetUser() user: AuthenticatedUser) {
+    return this.collectionProfileService.listProfiles(user.companyId);
+  }
+
+  @Post('rules')
+  async createRule(
+    @GetUser() user: AuthenticatedUser,
+    @Body() body: CreateRuleDto,
+  ) {
+    return this.collectionProfileService.createProfile(user.companyId, body);
+  }
+
+  @Put('rules/:profileId')
+  async updateRule(
+    @GetUser() user: AuthenticatedUser,
+    @Param('profileId') profileId: string,
+    @Body() body: UpdateRuleDto,
+  ) {
+    return this.collectionProfileService.updateProfile(
+      user.companyId,
+      profileId,
+      body,
+    );
+  }
+
+  @Delete('rules/:profileId')
+  async deleteRule(
+    @GetUser() user: AuthenticatedUser,
+    @Param('profileId') profileId: string,
+  ) {
+    return this.collectionProfileService.deleteProfile(
+      user.companyId,
+      profileId,
+    );
+  }
+
+  @Put('rules/:profileId/steps')
+  async setSteps(
+    @GetUser() user: AuthenticatedUser,
+    @Param('profileId') profileId: string,
+    @Body() body: SetRuleStepsDto,
+  ) {
+    return this.collectionProfileService.setSteps(
+      user.companyId,
+      profileId,
+      body.steps,
+    );
+  }
+
+  @Post('classify-debtors')
+  async classifyDebtors(@GetUser() user: AuthenticatedUser) {
+    await this.collectionProfileService.classifyDebtors(user.companyId);
+    return { success: true };
   }
 }

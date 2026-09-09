@@ -7,16 +7,28 @@ import {
   Param,
   Post,
   Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { GetUser } from '../auth/decorators/get-user.decorator';
+import {
+  normalizeDebtorDocument,
+  validateDebtorDocument,
+} from '../common/debtor-document';
 import { normalizeWhatsAppNumber } from '../common/whatsapp-number';
-import { DebtorSettingsResponse, InvoicesService } from './invoices.service';
+import {
+  DebtorPaymentHistoryResponse,
+  DebtorSettingsResponse,
+  InvoicesService,
+} from './invoices.service';
 import {
   BillingType,
+  CreateDebtorDto,
   CreateDebtorInvoiceDto,
   CreateInvoiceDto,
+  UpdateDebtorDto,
   UpdateDebtorSettingsDto,
   UpdateRecurringInvoiceDto,
 } from './dto/invoice.dto';
@@ -27,30 +39,70 @@ interface AuthenticatedUser {
 
 interface ImportRowInput {
   name?: unknown;
+  'CPF/CNPJ'?: unknown;
+  document?: unknown;
+  cpf_cnpj?: unknown;
+  cpfCnpj?: unknown;
   phone_number?: unknown;
   email?: unknown;
   original_amount?: unknown;
   due_date?: unknown;
   billing_type?: unknown;
+  whatsapp_opt_in?: unknown;
+  studentName?: unknown;
+  student_name?: unknown;
+  studentEnrollment?: unknown;
+  student_enrollment?: unknown;
+  studentGroup?: unknown;
+  student_group?: unknown;
 }
 
 interface ValidImportRow {
   name: string;
+  document: string;
   phone_number: string;
   email?: string;
   original_amount: number;
   due_date: string;
   billing_type: BillingType;
+  whatsapp_opt_in?: boolean;
+  studentName?: string;
+  studentEnrollment?: string;
+  studentGroup?: string;
 }
 
 @Controller('invoices')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ThrottleGuard)
 export class InvoicesController {
   constructor(private readonly invoicesService: InvoicesService) {}
 
   @Get()
-  async findAll(@GetUser() user: AuthenticatedUser): Promise<unknown> {
-    return this.invoicesService.findAll(user.companyId);
+  async findAll(
+    @GetUser() user: AuthenticatedUser,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('debtorId') debtorId?: string,
+  ): Promise<unknown> {
+    const pageNum = this.parsePositiveInt(page, 1);
+    const size = Math.min(
+      Math.max(this.parsePositiveInt(pageSize, 20), 1),
+      100,
+    );
+    const normalizedStatus = this.normalizeInvoiceStatus(status);
+    const normalizedDebtorId = this.normalizeUuidQuery(
+      debtorId,
+      'Cliente invalido.',
+    );
+
+    return this.invoicesService.findPaginated(user.companyId, {
+      page: pageNum,
+      pageSize: size,
+      search: search?.trim() || undefined,
+      status: normalizedStatus,
+      debtorId: normalizedDebtorId,
+    });
   }
 
   @Post()
@@ -66,13 +118,18 @@ export class InvoicesController {
       return await this.invoicesService.createInvoice(user.companyId, {
         debtorId: dto.debtorId,
         name: dto.name,
+        document: dto.document,
         phone_number: dto.phone_number,
         email: dto.email,
+        whatsappOptIn: dto.whatsappOptIn,
         original_amount: dto.original_amount,
         due_date: dto.due_date,
         billing_type: dto.billing_type,
         recurring: dto.recurring,
         due_day: dto.due_day,
+        studentName: dto.studentName,
+        studentEnrollment: dto.studentEnrollment,
+        studentGroup: dto.studentGroup,
       });
     } catch (error) {
       throw new HttpException(
@@ -191,6 +248,9 @@ export class InvoicesController {
           billing_type: dto.billing_type,
           recurring: dto.recurring,
           due_day: dto.due_day,
+          studentName: dto.studentName,
+          studentEnrollment: dto.studentEnrollment,
+          studentGroup: dto.studentGroup,
         },
       );
     } catch (error) {
@@ -201,6 +261,108 @@ export class InvoicesController {
         HttpStatus.BAD_REQUEST,
       );
     }
+  }
+
+  @Get('debtors')
+  async listDebtors(
+    @GetUser() user: AuthenticatedUser,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('search') search?: string,
+    @Query('profileId') profileId?: string,
+    @Query('paymentStatus') paymentStatus?: string,
+  ): Promise<unknown> {
+    const pageNum = this.parsePositiveInt(page, 1);
+    const size = Math.min(
+      Math.max(this.parsePositiveInt(pageSize, 20), 1),
+      100,
+    );
+    const normalizedProfileId = this.normalizeUuidQuery(
+      profileId,
+      'Perfil invalido.',
+    );
+
+    return this.invoicesService.listDebtors(user.companyId, {
+      page: pageNum,
+      pageSize: size,
+      search: search?.trim() || undefined,
+      profileId: normalizedProfileId,
+      paymentStatus: this.normalizeDebtorPaymentStatus(paymentStatus),
+    });
+  }
+
+  @Post('debtors')
+  async createDebtor(
+    @GetUser() user: AuthenticatedUser,
+    @Body() dto: CreateDebtorDto,
+  ): Promise<unknown> {
+    try {
+      return await this.invoicesService.createDebtor(user.companyId, {
+        name: dto.name,
+        document: dto.document,
+        phone_number: dto.phone_number,
+        email: dto.email,
+        whatsappOptIn: dto.whatsappOptIn,
+        collectionProfileId: dto.collectionProfileId,
+      });
+    } catch (error) {
+      throw this.toBadRequestHttpException(
+        error,
+        'Nao foi possivel criar o cliente.',
+      );
+    }
+  }
+
+  @Put('debtors/:debtorId')
+  async updateDebtor(
+    @GetUser() user: AuthenticatedUser,
+    @Param('debtorId') debtorId: string,
+    @Body() dto: UpdateDebtorDto,
+  ): Promise<unknown> {
+    if (!this.isUuid(debtorId)) {
+      throw new HttpException('Cliente invalido.', HttpStatus.BAD_REQUEST);
+    }
+
+    try {
+      const debtor = await this.invoicesService.updateDebtor(
+        user.companyId,
+        debtorId,
+        {
+          name: dto.name,
+          document: dto.document,
+          phone_number: dto.phone_number,
+          email: dto.email,
+          whatsappOptIn: dto.whatsappOptIn,
+          collectionProfileId: dto.collectionProfileId,
+        },
+      );
+
+      if (!debtor) {
+        throw new HttpException(
+          'Cliente nao encontrado.',
+          HttpStatus.NOT_FOUND,
+        );
+      }
+
+      return debtor;
+    } catch (error) {
+      throw this.toBadRequestHttpException(
+        error,
+        'Nao foi possivel editar o cliente.',
+      );
+    }
+  }
+
+  @Post(':invoiceId/cancel')
+  async cancelInvoice(
+    @GetUser() user: AuthenticatedUser,
+    @Param('invoiceId') invoiceId: string,
+  ): Promise<unknown> {
+    if (!this.isUuid(invoiceId)) {
+      throw new HttpException('Fatura invalida.', HttpStatus.BAD_REQUEST);
+    }
+
+    return this.invoicesService.cancelInvoice(user.companyId, invoiceId);
   }
 
   @Get('debtors/:debtorId/settings')
@@ -224,6 +386,27 @@ export class InvoicesController {
     return settings;
   }
 
+  @Get('debtors/:debtorId/payment-history')
+  async getDebtorPaymentHistory(
+    @GetUser() user: AuthenticatedUser,
+    @Param('debtorId') debtorId: string,
+  ): Promise<DebtorPaymentHistoryResponse> {
+    if (!this.isUuid(debtorId)) {
+      throw new HttpException('Devedor invalido.', HttpStatus.BAD_REQUEST);
+    }
+
+    const history = await this.invoicesService.getDebtorPaymentHistory(
+      user.companyId,
+      debtorId,
+    );
+
+    if (!history) {
+      throw new HttpException('Devedor nao encontrado.', HttpStatus.NOT_FOUND);
+    }
+
+    return history;
+  }
+
   @Put('debtors/:debtorId/settings')
   async updateDebtorSettings(
     @GetUser() user: AuthenticatedUser,
@@ -238,13 +421,16 @@ export class InvoicesController {
       user.companyId,
       debtorId,
       {
+        document: dto.document,
         useGlobalBillingSettings: dto.useGlobalBillingSettings,
+        whatsappOptIn: dto.whatsappOptIn,
         preferredBillingMethod: dto.preferredBillingMethod,
         collectionReminderDays: dto.collectionReminderDays,
         autoGenerateFirstCharge: dto.autoGenerateFirstCharge,
         autoDiscountEnabled: dto.autoDiscountEnabled,
         autoDiscountDaysAfterDue: dto.autoDiscountDaysAfterDue,
         autoDiscountPercentage: dto.autoDiscountPercentage,
+        collectionProfileId: dto.collectionProfileId,
       },
     );
 
@@ -253,6 +439,17 @@ export class InvoicesController {
     }
 
     return settings;
+  }
+
+  @Get(':invoiceId/attempts')
+  async getAttempts(
+    @GetUser() user: AuthenticatedUser,
+    @Param('invoiceId') invoiceId: string,
+  ): Promise<unknown> {
+    return this.invoicesService.getCollectionAttempts(
+      user.companyId,
+      invoiceId,
+    );
   }
 
   @Post('import')
@@ -284,6 +481,9 @@ export class InvoicesController {
       } else {
         validRows.push({
           name: (row.name as string).trim(),
+          document: normalizeDebtorDocument(
+            this.getImportRowDocument(row) as string,
+          ),
           phone_number: normalizeWhatsAppNumber(
             (row.phone_number as string).trim(),
           ),
@@ -294,6 +494,19 @@ export class InvoicesController {
           original_amount: row.original_amount as number,
           due_date: (row.due_date as string).trim(),
           billing_type: row.billing_type as BillingType,
+          whatsapp_opt_in:
+            typeof row.whatsapp_opt_in === 'boolean'
+              ? row.whatsapp_opt_in
+              : false,
+          studentName: this.normalizeOptionalText(
+            row.studentName ?? row.student_name,
+          ),
+          studentEnrollment: this.normalizeOptionalText(
+            row.studentEnrollment ?? row.student_enrollment,
+          ),
+          studentGroup: this.normalizeOptionalText(
+            row.studentGroup ?? row.student_group,
+          ),
         });
       }
     }
@@ -313,6 +526,15 @@ export class InvoicesController {
 
     if (typeof row.name !== 'string' || row.name.trim().length < 2) {
       return `Linha ${i}: Nome invalido ou ausente.`;
+    }
+
+    const document = this.getImportRowDocument(row);
+    if (typeof document !== 'string' || document.trim() === '') {
+      return `Linha ${i}: CPF/CNPJ ausente.`;
+    }
+
+    if (!validateDebtorDocument(document).valid) {
+      return `Linha ${i}: CPF/CNPJ deve ter 11 ou 14 digitos validos.`;
     }
 
     if (
@@ -349,6 +571,19 @@ export class InvoicesController {
     return null;
   }
 
+  private normalizeOptionalText(value: unknown): string | undefined {
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : undefined;
+  }
+
+  private getImportRowDocument(row: ImportRowInput): unknown {
+    return row.document ?? row.cpf_cnpj ?? row.cpfCnpj ?? row['CPF/CNPJ'];
+  }
+
   private isBillingType(value: unknown): value is BillingType {
     return value === 'PIX' || value === 'BOLETO' || value === 'BOLIX';
   }
@@ -365,6 +600,68 @@ export class InvoicesController {
   private isUuid(value: string): value is string {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       value,
+    );
+  }
+
+  private parsePositiveInt(
+    value: string | undefined,
+    fallback: number,
+  ): number {
+    if (value === undefined) return fallback;
+    const num = parseInt(value, 10);
+    return Number.isInteger(num) && num > 0 ? num : fallback;
+  }
+
+  private normalizeInvoiceStatus(raw: string | undefined): string | undefined {
+    if (!raw) return undefined;
+    const upper = raw.toUpperCase();
+    if (upper === 'PENDING' || upper === 'PAID' || upper === 'CANCELED') {
+      return upper;
+    }
+    return undefined;
+  }
+
+  private normalizeDebtorPaymentStatus(
+    raw: string | undefined,
+  ): 'all' | 'open' | 'paid' | 'no_open' | undefined {
+    if (!raw) return undefined;
+    if (
+      raw === 'all' ||
+      raw === 'open' ||
+      raw === 'paid' ||
+      raw === 'no_open'
+    ) {
+      return raw;
+    }
+    return undefined;
+  }
+
+  private normalizeUuidQuery(
+    value: string | undefined,
+    message: string,
+  ): string | undefined {
+    if (!value) {
+      return undefined;
+    }
+
+    if (!this.isUuid(value)) {
+      throw new HttpException(message, HttpStatus.BAD_REQUEST);
+    }
+
+    return value;
+  }
+
+  private toBadRequestHttpException(
+    error: unknown,
+    fallbackMessage: string,
+  ): HttpException {
+    if (error instanceof HttpException) {
+      return error;
+    }
+
+    return new HttpException(
+      error instanceof Error ? error.message : fallbackMessage,
+      HttpStatus.BAD_REQUEST,
     );
   }
 }

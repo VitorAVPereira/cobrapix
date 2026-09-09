@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, FormEvent } from "react";
-import { signIn } from "next-auth/react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState, FormEvent } from "react";
+import { getSession, signIn } from "next-auth/react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2, Zap, Shield, BarChart3 } from "lucide-react";
 
-export default function LoginPage() {
+function LoginPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -23,15 +25,30 @@ export default function LoginPage() {
       redirect: false,
     });
 
-    setIsLoading(false);
-
     if (result?.error) {
+      setIsLoading(false);
       setError("E-mail ou senha incorretos.");
       return;
     }
 
-    router.push("/cobrancas");
+    const session = await getSession();
+    if (session?.user.mustChangePassword) {
+      router.push("/primeiro-acesso");
+      return;
+    }
+    const nextPath =
+      session?.user.role === "PLATFORM_ADMIN" ? "/admin/clientes" : "/cobrancas";
+
+    router.push(nextPath);
   }
+
+  const successMessage = searchParams.has("passwordReset")
+    ? "Senha redefinida. Entre com sua nova senha."
+    : searchParams.has("passwordChanged")
+      ? "Senha alterada. Entre novamente para continuar."
+      : searchParams.has("sessionExpired")
+        ? "Sua sessão expirou. Entre novamente para continuar."
+        : null;
 
   return (
     <div className="min-h-screen flex flex-col lg:flex-row">
@@ -123,6 +140,11 @@ export default function LoginPage() {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
+            {successMessage && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-sm text-emerald-800 text-center font-medium">
+                {successMessage}
+              </div>
+            )}
             {error && (
               <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 text-center font-medium">
                 {error}
@@ -148,12 +170,20 @@ export default function LoginPage() {
             </div>
 
             <div>
-              <label
-                htmlFor="password"
-                className="block text-sm font-medium text-slate-700 mb-1.5"
-              >
-                Senha
-              </label>
+              <div className="mb-1.5 flex items-center justify-between gap-3">
+                <label
+                  htmlFor="password"
+                  className="block text-sm font-medium text-slate-700"
+                >
+                  Senha
+                </label>
+                <Link
+                  href="/esqueci-senha"
+                  className="text-sm font-medium text-emerald-700 hover:text-emerald-800"
+                >
+                  Esqueci minha senha
+                </Link>
+              </div>
               <input
                 id="password"
                 type="password"
@@ -187,5 +217,13 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-slate-50" />}>
+      <LoginPageContent />
+    </Suspense>
   );
 }

@@ -4,9 +4,11 @@ import {
   ArrayUnique,
   IsArray,
   IsBoolean,
+  IsEmail,
   IsIn,
   IsInt,
   IsNumber,
+  IsOptional,
   Max,
   Min,
   ValidateIf,
@@ -42,4 +44,19 @@ export class UpdateBillingSettingsDto {
   @Min(0.01)
   @Max(100)
   autoDiscountPercentage?: number | null;
+
+  @IsOptional()
+  @IsIn(['GENERAL', 'EDUCATION'])
+  businessSegment?: 'GENERAL' | 'EDUCATION';
+
+  @IsOptional()
+  @IsBoolean()
+  paymentNotificationEnabled?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @ArrayUnique()
+  @IsEmail({}, { each: true })
+  paymentNotificationEmails?: string[];
 }

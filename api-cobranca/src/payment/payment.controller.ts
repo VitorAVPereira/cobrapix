@@ -12,6 +12,7 @@ import { InvoiceStatus } from '@prisma/client';
 import { IsArray, IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateGatewayAccountDto,
@@ -19,6 +20,7 @@ import {
 } from './dto/gateway-account.dto';
 import { EfiService } from './efi.service';
 import { PaymentService } from './payment.service';
+import { PaymentNotificationsService } from './payment-notifications.service';
 
 interface AuthenticatedUser {
   userId: string;
@@ -56,12 +58,13 @@ class InvoiceStatusDto {
 }
 
 @Controller('payments')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ThrottleGuard)
 export class PaymentController {
   constructor(
     private readonly paymentService: PaymentService,
     private readonly efiService: EfiService,
     private readonly prisma: PrismaService,
+    private readonly paymentNotifications: PaymentNotificationsService,
   ) {}
 
   @Get('gateway-account')
@@ -364,6 +367,10 @@ export class PaymentController {
       gatewayStatusRaw: invoice.gatewayStatusRaw,
       originalAmount: invoice.originalAmount,
       dueDate: invoice.dueDate,
+      paidAt: invoice.paidAt,
+      studentName: invoice.studentName,
+      studentEnrollment: invoice.studentEnrollment,
+      studentGroup: invoice.studentGroup,
     };
   }
 
@@ -386,7 +393,12 @@ export class PaymentController {
 
     await this.prisma.invoice.updateMany({
       where: { id: invoiceId, companyId: user.companyId },
-      data: { status: dto.status },
+      data: {
+        status: dto.status,
+        ...(dto.status === 'PAID'
+          ? { paidAt: invoice.paidAt ?? new Date() }
+          : {}),
+      },
     });
 
     await this.prisma.collectionLog.create({
@@ -398,6 +410,13 @@ export class PaymentController {
         status: dto.status,
       },
     });
+
+    if (dto.status === 'PAID') {
+      await this.paymentNotifications.notifyPaidInvoice(
+        user.companyId,
+        invoice.id,
+      );
+    }
 
     return {
       success: true,

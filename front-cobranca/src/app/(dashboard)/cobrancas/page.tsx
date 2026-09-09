@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { useSearchParams } from "next/navigation";
+import type { PaginationState } from "@tanstack/react-table";
 import {
   AlertCircle,
   ArrowLeft,
@@ -9,23 +11,35 @@ import {
   FileSpreadsheet,
   FileUp,
   Loader2,
+  Mail,
+  MessageCircle,
   Plus,
   Search,
+  Send,
   X,
 } from "lucide-react";
+import { DebtorPaymentHistoryModal } from "@/components/features/DebtorPaymentHistoryModal";
 import { DebtorSettingsModal } from "@/components/features/DebtorSettingsModal";
-import { InvoiceTable } from "@/components/features/InvoiceTable";
+import {
+  InvoiceTable,
+  type InvoiceRowAction,
+} from "@/components/features/InvoiceTable";
 import { UploadCSV } from "@/components/features/UploadCSV";
 import type {
   ParsedDebtor,
   PaymentMethod,
 } from "@/components/features/UploadCSV";
-import type { BillingSettings } from "@/lib/api-client";
+import type {
+  BillingSettings,
+  CollectionChannel,
+  CreatePaymentResponse,
+  InvoicePaymentStatusResponse,
+  SelectedBillingContactInput,
+} from "@/lib/api-client";
+import { formatBillingMethodRateLabel } from "@/lib/billing-fees";
+import { normalizeRequiredDebtorDocument } from "@/lib/debtor-document";
 import { useApiClient } from "@/lib/use-api-client";
-import {
-  formatWhatsAppNumber,
-  normalizeWhatsAppNumber,
-} from "@/lib/whatsapp-number";
+import { normalizeWhatsAppNumber } from "@/lib/whatsapp-number";
 
 interface ApiErrorData {
   details?: string[];
@@ -34,24 +48,63 @@ interface ApiErrorData {
 
 interface ManualChargeForm {
   customerName: string;
+  document: string;
   email: string;
   whatsapp: string;
+  whatsappOptIn: boolean;
   amount: string;
   dueDate: string;
   billingType: PaymentMethod;
   recurring: boolean;
   dueDay: string;
+  studentName: string;
+  studentEnrollment: string;
+  studentGroup: string;
+}
+
+interface RunningInvoiceAction {
+  invoiceId: string;
+  action: InvoiceRowAction;
+}
+
+type SendBillingMode = "selected" | "resend";
+
+interface SendBillingModalState {
+  mode: SendBillingMode;
+  invoiceIds: string[];
+  invoice: ParsedDebtor | null;
+}
+
+interface SendBillingForm {
+  email: boolean;
+  whatsapp: boolean;
+  emailAddress: string;
+  whatsappNumber: string;
+  whatsappOptIn: boolean;
 }
 
 const initialManualChargeForm: ManualChargeForm = {
   customerName: "",
+  document: "",
   email: "",
   whatsapp: "",
+  whatsappOptIn: false,
   amount: "",
   dueDate: "",
   billingType: "PIX",
   recurring: false,
   dueDay: "10",
+  studentName: "",
+  studentEnrollment: "",
+  studentGroup: "",
+};
+
+const initialSendBillingForm: SendBillingForm = {
+  email: false,
+  whatsapp: true,
+  emailAddress: "",
+  whatsappNumber: "",
+  whatsappOptIn: false,
 };
 
 function isParsedDebtorArray(data: unknown): data is ParsedDebtor[] {
@@ -94,10 +147,119 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-export default function CobrancasPage() {
+function getInvoiceId(invoice: ParsedDebtor): string | null {
+  return invoice.invoiceId ?? invoice.id ?? null;
+}
+
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function getPaymentMethodLabel(method: PaymentMethod): string {
+  if (method === "BOLIX") {
+    return "Bolix";
+  }
+
+  if (method === "BOLETO") {
+    return "Boleto";
+  }
+
+  return "Pix";
+}
+
+function getInvoiceStatusLabel(status: string): string {
+  if (status === "PAID") {
+    return "Pago";
+  }
+
+  if (status === "CANCELED") {
+    return "Cancelado";
+  }
+
+  if (status === "PENDING") {
+    return "Pendente";
+  }
+
+  return status;
+}
+
+function formatDateBR(dateString: string): string {
+  if (!dateString) {
+    return "";
+  }
+
+  const date = new Date(dateString);
+
+  if (Number.isNaN(date.getTime())) {
+    return dateString;
+  }
+
+  return new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" }).format(date);
+}
+
+function buildPaymentCreatedMessage(
+  invoice: ParsedDebtor,
+  response: CreatePaymentResponse,
+): string {
+  const method = getPaymentMethodLabel(response.billingType);
+  const reference =
+    response.txid ??
+    response.chargeId ??
+    response.gatewayId ??
+    response.invoiceId;
+  const availableData = [
+    response.pixCopyPaste ? "Pix copia e cola disponivel" : null,
+    response.boletoLink || response.boletoCode ? "boleto disponivel" : null,
+  ].filter((item): item is string => Boolean(item));
+  const details =
+    availableData.length > 0 ? ` ${availableData.join(" e ")}.` : "";
+
+  return `Cobrança ${method} gerada para ${invoice.name}. Referencia ${reference}.${details}`;
+}
+
+function buildPaymentStatusMessage(
+  invoice: ParsedDebtor,
+  response: InvoicePaymentStatusResponse,
+): string {
+  const status = getInvoiceStatusLabel(response.status);
+  const dueDate = formatDateBR(response.dueDate);
+  const gatewayReference =
+    response.txid ??
+    response.chargeId ??
+    response.gatewayId ??
+    "sem referencia";
+  const paymentData = [
+    response.pixCopyPaste || response.pixPayload ? "Pix gerado" : null,
+    response.boletoLink || response.boletoCode || response.boletoPdf
+      ? "boleto gerado"
+      : null,
+  ].filter((item): item is string => Boolean(item));
+  const paymentSummary =
+    paymentData.length > 0 ? paymentData.join(" e ") : "sem cobrança gerada";
+
+  return [
+    `Status de ${invoice.name}: ${status}.`,
+    `Vencimento ${dueDate}.`,
+    `Gateway Efí: ${gatewayReference}; ${paymentSummary}.`,
+  ].join(" ");
+}
+
+function CobrancasContent() {
   const apiClient = useApiClient();
+  const searchParams = useSearchParams();
+  const debtorIdFilter = searchParams.get("debtorId") ?? undefined;
+  const statusFilter = searchParams.get("status") ?? undefined;
   const [debtors, setDebtors] = useState<ParsedDebtor[]>([]);
-  const [selectedDebtor, setSelectedDebtor] = useState<ParsedDebtor | null>(null);
+  const [total, setTotal] = useState(0);
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 20,
+  });
+  const [selectedDebtor, setSelectedDebtor] = useState<ParsedDebtor | null>(
+    null,
+  );
+  const [historyTargetDebtor, setHistoryTargetDebtor] =
+    useState<ParsedDebtor | null>(null);
   const [invoiceTargetDebtor, setInvoiceTargetDebtor] =
     useState<ParsedDebtor | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -105,6 +267,13 @@ export default function CobrancasPage() {
   const [isUploadingCSV, setIsUploadingCSV] = useState(false);
   const [isSavingInvoice, setIsSavingInvoice] = useState(false);
   const [isRunningSelected, setIsRunningSelected] = useState(false);
+  const [runningInvoiceAction, setRunningInvoiceAction] =
+    useState<RunningInvoiceAction | null>(null);
+  const [sendBillingModal, setSendBillingModal] =
+    useState<SendBillingModalState | null>(null);
+  const [sendBillingForm, setSendBillingForm] = useState<SendBillingForm>(
+    initialSendBillingForm,
+  );
   const [billingSettings, setBillingSettings] =
     useState<BillingSettings | null>(null);
   const [manualForm, setManualForm] = useState<ManualChargeForm>(
@@ -121,8 +290,16 @@ export default function CobrancasPage() {
     setSuccessMsg(null);
 
     try {
-      const data = await apiClient.getInvoices();
-      setDebtors(isParsedDebtorArray(data) ? data : []);
+      const result = await apiClient.getInvoices({
+        page: pagination.pageIndex + 1,
+        pageSize: pagination.pageSize,
+        search: searchQuery.trim() || undefined,
+        status: statusFilter || undefined,
+        debtorId: debtorIdFilter,
+      });
+      const invoices = result.data;
+      setDebtors(isParsedDebtorArray(invoices) ? invoices : []);
+      setTotal(result.total);
     } catch (error: unknown) {
       setErrorMsg(
         getErrorMessage(error, "Nao foi possivel carregar as cobrancas."),
@@ -130,7 +307,14 @@ export default function CobrancasPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [apiClient]);
+  }, [
+    apiClient,
+    debtorIdFilter,
+    pagination.pageIndex,
+    pagination.pageSize,
+    searchQuery,
+    statusFilter,
+  ]);
 
   useEffect(() => {
     void fetchInvoices();
@@ -141,6 +325,11 @@ export default function CobrancasPage() {
       try {
         const settings = await apiClient.getBillingSettings();
         setBillingSettings(settings);
+        setManualForm((current) => {
+          const enabled = settings.enabledBillingMethods;
+          if (enabled.includes(current.billingType)) return current;
+          return { ...current, billingType: enabled[0] ?? "PIX" };
+        });
       } catch {
         setBillingSettings(null);
       }
@@ -149,29 +338,8 @@ export default function CobrancasPage() {
     void fetchBillingSettings();
   }, [apiClient]);
 
-  const filteredDebtors = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-
-    if (!query) {
-      return debtors;
-    }
-
-    return debtors.filter((debtor) => {
-      const formattedPhoneNumber = formatWhatsAppNumber(debtor.phone_number);
-      const searchableFields = [
-        debtor.name,
-        debtor.document || "",
-        debtor.phone_number,
-        formattedPhoneNumber,
-        formattedPhoneNumber.replace(/\D/g, ""),
-        debtor.email || "",
-      ];
-
-      return searchableFields.some((field) =>
-        field.toLowerCase().includes(query),
-      );
-    });
-  }, [debtors, searchQuery]);
+  const filteredDebtors = debtors;
+  const isEducationSegment = billingSettings?.businessSegment === "EDUCATION";
 
   async function handleUploadSuccess(
     importedDebtors: ParsedDebtor[],
@@ -189,21 +357,252 @@ export default function CobrancasPage() {
     }
   }
 
-  async function handleRunSelectedInvoices(invoiceIds: string[]): Promise<void> {
+  function openSelectedSendModal(invoiceIds: string[]): void {
+    if (invoiceIds.length === 0) {
+      return;
+    }
+
     setErrorMsg(null);
     setSuccessMsg(null);
-    setIsRunningSelected(true);
+    setSendBillingForm(initialSendBillingForm);
+    setSendBillingModal({
+      mode: "selected",
+      invoiceIds,
+      invoice: null,
+    });
+  }
+
+  function openResendModal(invoice: ParsedDebtor): void {
+    const invoiceId = getInvoiceId(invoice);
+
+    if (!invoiceId) {
+      setSuccessMsg(null);
+      setErrorMsg("Nao foi possivel identificar a fatura desta cobranca.");
+      return;
+    }
+
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setSendBillingForm({
+      email: false,
+      whatsapp: true,
+      emailAddress: invoice.email ?? "",
+      whatsappNumber: invoice.phone_number,
+      whatsappOptIn: invoice.whatsapp_opt_in ?? false,
+    });
+    setSendBillingModal({
+      mode: "resend",
+      invoiceIds: [invoiceId],
+      invoice,
+    });
+  }
+
+  function closeSendBillingModal(): void {
+    setSendBillingModal(null);
+    setSendBillingForm(initialSendBillingForm);
+  }
+
+  function updateSendBillingForm<Field extends keyof SendBillingForm>(
+    field: Field,
+    value: SendBillingForm[Field],
+  ): void {
+    setSendBillingForm((currentForm) => ({
+      ...currentForm,
+      [field]: value,
+    }));
+  }
+
+  async function submitSendBillingModal(
+    event: FormEvent<HTMLFormElement>,
+  ): Promise<void> {
+    event.preventDefault();
+
+    if (!sendBillingModal) {
+      return;
+    }
+
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    const channels: CollectionChannel[] = [];
+    if (sendBillingForm.email) {
+      channels.push("EMAIL");
+    }
+    if (sendBillingForm.whatsapp) {
+      channels.push("WHATSAPP");
+    }
+
+    if (channels.length === 0) {
+      setErrorMsg("Selecione e-mail, WhatsApp ou os dois canais.");
+      return;
+    }
+
+    const contacts: SelectedBillingContactInput[] = [];
+
+    if (sendBillingModal.invoice) {
+      const invoiceId = sendBillingModal.invoiceIds[0];
+      if (!invoiceId) {
+        setErrorMsg("Nao foi possivel identificar a fatura desta cobranca.");
+        return;
+      }
+
+      const contact: SelectedBillingContactInput = { invoiceId };
+
+      if (sendBillingForm.email) {
+        const emailAddress = sendBillingForm.emailAddress.trim();
+        if (!emailAddress || !isValidEmail(emailAddress)) {
+          setErrorMsg("Informe um e-mail valido para enviar a cobranca.");
+          return;
+        }
+        contact.email = emailAddress;
+      }
+
+      if (sendBillingForm.whatsapp) {
+        try {
+          contact.phoneNumber = normalizeWhatsAppNumber(
+            sendBillingForm.whatsappNumber,
+          );
+        } catch (error: unknown) {
+          setErrorMsg(
+            getErrorMessage(error, "Informe um WhatsApp valido para envio."),
+          );
+          return;
+        }
+
+        if (!sendBillingForm.whatsappOptIn) {
+          setErrorMsg(
+            "Confirme que o cliente autorizou mensagens pelo WhatsApp oficial.",
+          );
+          return;
+        }
+
+        contact.whatsappOptIn = true;
+      }
+
+      contacts.push(contact);
+    }
+
+    if (sendBillingModal.mode === "selected") {
+      setIsRunningSelected(true);
+    } else {
+      const invoiceId = sendBillingModal.invoiceIds[0];
+      if (invoiceId) {
+        setRunningInvoiceAction({ invoiceId, action: "resend" });
+      }
+    }
 
     try {
-      const result = await apiClient.runSelectedBilling(invoiceIds);
+      const result = await apiClient.runSelectedBilling({
+        invoiceIds: sendBillingModal.invoiceIds,
+        channels,
+        contacts,
+      });
       await fetchInvoices();
-      setSuccessMsg(result.message);
+      const targetName = sendBillingModal.invoice?.name;
+      setSuccessMsg(
+        targetName
+          ? `Reenvio iniciado para ${targetName}. ${result.message}`
+          : result.message,
+      );
+      closeSendBillingModal();
     } catch (error: unknown) {
       setErrorMsg(
         getErrorMessage(error, "Nao foi possivel iniciar as cobrancas."),
       );
     } finally {
       setIsRunningSelected(false);
+      setRunningInvoiceAction(null);
+    }
+  }
+
+  async function handleGeneratePayment(invoice: ParsedDebtor): Promise<void> {
+    const invoiceId = getInvoiceId(invoice);
+
+    if (!invoiceId) {
+      setSuccessMsg(null);
+      setErrorMsg("Nao foi possivel identificar a fatura desta cobranca.");
+      return;
+    }
+
+    const billingType =
+      invoice.payment?.method ?? invoice.billing_type ?? "PIX";
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setRunningInvoiceAction({ invoiceId, action: "generate" });
+
+    try {
+      const response = await apiClient.createPayment({
+        invoiceId,
+        billingType,
+      });
+
+      await fetchInvoices();
+      setSuccessMsg(buildPaymentCreatedMessage(invoice, response));
+    } catch (error: unknown) {
+      setErrorMsg(getErrorMessage(error, "Nao foi possivel gerar a cobranca."));
+    } finally {
+      setRunningInvoiceAction(null);
+    }
+  }
+
+  async function handleCheckPaymentStatus(
+    invoice: ParsedDebtor,
+  ): Promise<void> {
+    const invoiceId = getInvoiceId(invoice);
+
+    if (!invoiceId) {
+      setSuccessMsg(null);
+      setErrorMsg("Nao foi possivel identificar a fatura desta cobranca.");
+      return;
+    }
+
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setRunningInvoiceAction({ invoiceId, action: "status" });
+
+    try {
+      const response = await apiClient.getInvoicePaymentStatus(invoiceId);
+      setSuccessMsg(buildPaymentStatusMessage(invoice, response));
+    } catch (error: unknown) {
+      setErrorMsg(
+        getErrorMessage(error, "Nao foi possivel consultar o status."),
+      );
+    } finally {
+      setRunningInvoiceAction(null);
+    }
+  }
+
+  async function handleCancelInvoice(invoice: ParsedDebtor): Promise<void> {
+    const invoiceId = getInvoiceId(invoice);
+
+    if (!invoiceId) {
+      setSuccessMsg(null);
+      setErrorMsg("Nao foi possivel identificar a fatura desta cobranca.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Cancelar a cobranca de ${invoice.name}? Esta acao impede novos envios e novas geracoes para esta fatura.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setRunningInvoiceAction({ invoiceId, action: "cancel" });
+
+    try {
+      await apiClient.cancelInvoice(invoiceId);
+      await fetchInvoices();
+      setSuccessMsg(`Cobranca de ${invoice.name} cancelada com sucesso.`);
+    } catch (error: unknown) {
+      setErrorMsg(
+        getErrorMessage(error, "Nao foi possivel cancelar a cobranca."),
+      );
+    } finally {
+      setRunningInvoiceAction(null);
     }
   }
 
@@ -229,6 +628,15 @@ export default function CobrancasPage() {
     setSelectedDebtor(debtor);
   }
 
+  function openPaymentHistory(debtor: ParsedDebtor): void {
+    if (!debtor.debtorId) {
+      setErrorMsg("Nao foi possivel identificar o devedor desta cobranca.");
+      return;
+    }
+
+    setHistoryTargetDebtor(debtor);
+  }
+
   function openInvoiceModal(debtor: ParsedDebtor): void {
     if (!debtor.debtorId) {
       setErrorMsg("Nao foi possivel identificar o devedor desta cobranca.");
@@ -236,9 +644,14 @@ export default function CobrancasPage() {
     }
 
     setInvoiceTargetDebtor(debtor);
+    const enabledMethods = billingSettings?.enabledBillingMethods ?? ["PIX"];
+    const currentBillingType = debtor.billing_type ?? "PIX";
+    const billingType = enabledMethods.includes(currentBillingType)
+      ? currentBillingType
+      : (enabledMethods[0] ?? "PIX");
     setManualForm({
       ...initialManualChargeForm,
-      billingType: debtor.billing_type ?? "PIX",
+      billingType,
     });
     setIsModalOpen(true);
   }
@@ -252,7 +665,6 @@ export default function CobrancasPage() {
 
     const amount = Number(manualForm.amount);
     const dueDay = Number(manualForm.dueDay);
-    const phoneNumber = normalizeWhatsAppNumber(manualForm.whatsapp);
 
     try {
       if (!Number.isFinite(amount) || amount <= 0) {
@@ -277,17 +689,38 @@ export default function CobrancasPage() {
           billing_type: manualForm.billingType,
           recurring: manualForm.recurring,
           due_day: manualForm.recurring ? dueDay : undefined,
+          ...(isEducationSegment
+            ? {
+                studentName: manualForm.studentName.trim() || undefined,
+                studentEnrollment:
+                  manualForm.studentEnrollment.trim() || undefined,
+                studentGroup: manualForm.studentGroup.trim() || undefined,
+              }
+            : {}),
         });
       } else {
+        const phoneNumber = normalizeWhatsAppNumber(manualForm.whatsapp);
+        const document = normalizeRequiredDebtorDocument(manualForm.document);
+
         await apiClient.createInvoice({
           name: manualForm.customerName.trim(),
+          document,
           email: manualForm.email.trim(),
           phone_number: phoneNumber,
+          whatsappOptIn: manualForm.whatsappOptIn,
           original_amount: amount,
           due_date: manualForm.recurring ? undefined : manualForm.dueDate,
           billing_type: manualForm.billingType,
           recurring: manualForm.recurring,
           due_day: manualForm.recurring ? dueDay : undefined,
+          ...(isEducationSegment
+            ? {
+                studentName: manualForm.studentName.trim() || undefined,
+                studentEnrollment:
+                  manualForm.studentEnrollment.trim() || undefined,
+                studentGroup: manualForm.studentGroup.trim() || undefined,
+              }
+            : {}),
         });
       }
 
@@ -300,27 +733,37 @@ export default function CobrancasPage() {
     }
   }
 
-  const paymentMethods: PaymentMethod[] = ["PIX", "BOLETO", "BOLIX"];
+  const paymentMethods: PaymentMethod[] =
+    billingSettings?.enabledBillingMethods.length
+      ? billingSettings.enabledBillingMethods
+      : ["PIX"];
   const modalTitle = invoiceTargetDebtor
     ? `Nova fatura para ${invoiceTargetDebtor.name}`
     : "Adicionar cobrança manual";
+  const sendBillingTitle =
+    sendBillingModal?.mode === "resend"
+      ? `Reenviar cobrança para ${sendBillingModal.invoice?.name ?? "devedor"}`
+      : "Enviar cobranças selecionadas";
+  const sendBillingCount = sendBillingModal?.invoiceIds.length ?? 0;
+  const isSendingBilling =
+    isRunningSelected || runningInvoiceAction?.action === "resend";
 
   return (
     <main className="min-h-full bg-slate-50">
-      <div className="mx-auto flex max-w-7xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
-        <header className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div>
+      <div className="mx-auto flex flex-col gap-5 p-4 lg:p-8">
+        <header className="flex flex-col gap-4 2xl:flex-row 2xl:items-center 2xl:justify-between">
+          <div className="min-w-0">
             <h1 className="text-2xl font-bold text-slate-900">
               Gestão de Cobranças
             </h1>
             <p className="mt-1 text-sm text-slate-500">
-              Gira os devedores, adicione novas faturas ou importe listas em
+              Gerencie devedores, adicione novas faturas ou importe listas em
               lote.
             </p>
           </div>
 
-          <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
-            <div className="relative w-full lg:w-80">
+          <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center 2xl:w-auto">
+            <div className="relative min-w-0 flex-1 2xl:w-[28rem] 2xl:flex-none">
               <Search
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
                 size={18}
@@ -328,8 +771,15 @@ export default function CobrancasPage() {
               <input
                 type="search"
                 value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Pesquisar por nome, CPF ou WhatsApp..."
+                onChange={(event) => {
+                  setSearchQuery(event.target.value);
+                  setPagination((prev) => ({ ...prev, pageIndex: 0 }));
+                }}
+                placeholder={
+                  isEducationSegment
+                    ? "Buscar por responsável, aluno ou WhatsApp"
+                    : "Buscar por nome, CPF/CNPJ ou WhatsApp"
+                }
                 className="h-11 w-full rounded-md border border-slate-200 bg-white py-2 pl-10 pr-3 text-sm text-slate-900 outline-none transition-all duration-200 placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
               />
             </div>
@@ -340,7 +790,7 @@ export default function CobrancasPage() {
                 setImportError(null);
                 setIsUploadingCSV(true);
               }}
-              className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-all duration-200 hover:bg-slate-100 hover:text-slate-900"
+              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-all duration-200 hover:bg-slate-100 hover:text-slate-900"
             >
               <FileUp size={17} />
               Importar CSV
@@ -353,7 +803,7 @@ export default function CobrancasPage() {
                 setManualForm(initialManualChargeForm);
                 setIsModalOpen(true);
               }}
-              className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:bg-emerald-700"
+              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:bg-emerald-700"
             >
               <Plus size={17} />
               Adicionar Manual
@@ -372,6 +822,12 @@ export default function CobrancasPage() {
           <div className="flex items-start gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">
             <CheckCircle2 className="mt-0.5 shrink-0" size={18} />
             <span>{successMsg}</span>
+          </div>
+        )}
+
+        {debtorIdFilter && (
+          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
+            Exibindo cobrancas filtradas pelo cliente selecionado.
           </div>
         )}
 
@@ -408,6 +864,7 @@ export default function CobrancasPage() {
             )}
 
             <UploadCSV
+              showEducationFields={isEducationSegment}
               onUploadSuccess={(importedDebtors) => {
                 void handleUploadSuccess(importedDebtors);
               }}
@@ -422,23 +879,33 @@ export default function CobrancasPage() {
               </div>
             ) : debtors.length > 0 ? (
               <>
-                <div className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
-                  <span>
-                    <strong className="font-semibold text-slate-900">
-                      {filteredDebtors.length}
-                    </strong>{" "}
-                    de {debtors.length} cobranças
-                  </span>
-                </div>
-
                 <InvoiceTable
                   data={filteredDebtors}
+                  pageCount={Math.ceil(total / pagination.pageSize)}
+                  total={total}
+                  pagination={pagination}
+                  onPaginationChange={setPagination}
                   onConfigureDebtor={openDebtorSettings}
                   onAddInvoice={openInvoiceModal}
                   onRunSelectedInvoices={(invoiceIds) => {
-                    void handleRunSelectedInvoices(invoiceIds);
+                    openSelectedSendModal(invoiceIds);
                   }}
                   isRunningSelected={isRunningSelected}
+                  onGeneratePayment={(invoice) => {
+                    void handleGeneratePayment(invoice);
+                  }}
+                  onResendInvoice={(invoice) => {
+                    openResendModal(invoice);
+                  }}
+                  onCheckPaymentStatus={(invoice) => {
+                    void handleCheckPaymentStatus(invoice);
+                  }}
+                  onCancelInvoice={(invoice) => {
+                    void handleCancelInvoice(invoice);
+                  }}
+                  onViewPaymentHistory={openPaymentHistory}
+                  runningInvoiceAction={runningInvoiceAction}
+                  showEducationFields={isEducationSegment}
                 />
 
                 {searchQuery && filteredDebtors.length === 0 && (
@@ -467,12 +934,10 @@ export default function CobrancasPage() {
 
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 transition-all duration-200">
-          <div className="w-full max-w-lg rounded-md bg-white shadow-xl transition-all duration-200">
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-md bg-white shadow-xl transition-all duration-200">
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
               <div>
-                <h2 className="font-semibold text-slate-900">
-                  {modalTitle}
-                </h2>
+                <h2 className="font-semibold text-slate-900">{modalTitle}</h2>
                 <p className="mt-1 text-sm text-slate-500">
                   {invoiceTargetDebtor
                     ? "Preencha os dados da nova fatura deste devedor."
@@ -511,6 +976,23 @@ export default function CobrancasPage() {
 
                     <label className="flex flex-col gap-1.5 sm:col-span-2">
                       <span className="text-xs font-semibold uppercase text-slate-500">
+                        CPF/CNPJ do Devedor
+                      </span>
+                      <input
+                        required
+                        type="text"
+                        inputMode="numeric"
+                        value={manualForm.document}
+                        placeholder="CPF ou CNPJ"
+                        onChange={(event) =>
+                          updateManualForm("document", event.target.value)
+                        }
+                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-1.5 sm:col-span-2">
+                      <span className="text-xs font-semibold uppercase text-slate-500">
                         Email
                       </span>
                       <input
@@ -539,6 +1021,24 @@ export default function CobrancasPage() {
                         className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                       />
                     </label>
+
+                    <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 sm:col-span-2">
+                      <input
+                        type="checkbox"
+                        checked={manualForm.whatsappOptIn}
+                        onChange={(event) =>
+                          updateManualForm(
+                            "whatsappOptIn",
+                            event.target.checked,
+                          )
+                        }
+                        className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                      />
+                      <span className="text-sm font-medium text-slate-700">
+                        Cliente autorizou mensagens de cobrança pelo WhatsApp
+                        oficial
+                      </span>
+                    </label>
                   </>
                 )}
 
@@ -558,19 +1058,12 @@ export default function CobrancasPage() {
                     className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                   >
                     {paymentMethods.map((method) => {
-                      const tariff = billingSettings?.tariffs[method];
-                      const label =
-                        method === "BOLETO"
-                          ? "Boleto"
-                          : method === "BOLIX"
-                            ? "Bolix"
-                            : "PIX";
-
                       return (
                         <option key={method} value={method}>
-                          {tariff
-                            ? `${label} - ${tariff.combinedLabel}`
-                            : label}
+                          {formatBillingMethodRateLabel(
+                            method,
+                            billingSettings,
+                          )}
                         </option>
                       );
                     })}
@@ -593,6 +1086,55 @@ export default function CobrancasPage() {
                     className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                   />
                 </label>
+
+                {isEducationSegment && (
+                  <>
+                    <label className="flex flex-col gap-1.5 sm:col-span-2">
+                      <span className="text-xs font-semibold uppercase text-slate-500">
+                        Nome do Aluno
+                      </span>
+                      <input
+                        type="text"
+                        value={manualForm.studentName}
+                        onChange={(event) =>
+                          updateManualForm("studentName", event.target.value)
+                        }
+                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-1.5">
+                      <span className="text-xs font-semibold uppercase text-slate-500">
+                        Matricula
+                      </span>
+                      <input
+                        type="text"
+                        value={manualForm.studentEnrollment}
+                        onChange={(event) =>
+                          updateManualForm(
+                            "studentEnrollment",
+                            event.target.value,
+                          )
+                        }
+                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-1.5">
+                      <span className="text-xs font-semibold uppercase text-slate-500">
+                        Turma/Curso
+                      </span>
+                      <input
+                        type="text"
+                        value={manualForm.studentGroup}
+                        onChange={(event) =>
+                          updateManualForm("studentGroup", event.target.value)
+                        }
+                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                      />
+                    </label>
+                  </>
+                )}
 
                 <label className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 sm:col-span-2">
                   <input
@@ -648,8 +1190,188 @@ export default function CobrancasPage() {
                   disabled={isSavingInvoice}
                   className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {isSavingInvoice && <Loader2 size={16} className="animate-spin" />}
+                  {isSavingInvoice && (
+                    <Loader2 size={16} className="animate-spin" />
+                  )}
                   Salvar Cobrança
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {sendBillingModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 transition-all duration-200">
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-md bg-white shadow-xl transition-all duration-200">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="font-semibold text-slate-900">
+                  {sendBillingTitle}
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  {sendBillingModal.invoice
+                    ? "Escolha os canais e atualize os contatos antes do envio."
+                    : `${sendBillingCount} cobrança${
+                        sendBillingCount === 1 ? "" : "s"
+                      } será${sendBillingCount === 1 ? "" : "o"} enfileirada${
+                        sendBillingCount === 1 ? "" : "s"
+                      } com os contatos cadastrados.`}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeSendBillingModal}
+                disabled={isSendingBilling}
+                className="rounded-md p-2 text-slate-400 transition-all duration-200 hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Fechar modal de envio"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={submitSendBillingModal}>
+              <div className="space-y-5 px-5 py-5">
+                <div>
+                  <p className="text-xs font-semibold uppercase text-slate-500">
+                    Canais de envio
+                  </p>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <label className="flex min-h-16 items-start gap-3 rounded-md border border-slate-200 bg-white px-3 py-3 transition hover:bg-slate-50">
+                      <input
+                        type="checkbox"
+                        checked={sendBillingForm.email}
+                        onChange={(event) =>
+                          updateSendBillingForm("email", event.target.checked)
+                        }
+                        className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                      />
+                      <span className="flex min-w-0 items-start gap-2 text-sm font-medium text-slate-700">
+                        <Mail
+                          size={17}
+                          className="mt-0.5 shrink-0 text-slate-500"
+                        />
+                        <span>E-mail</span>
+                      </span>
+                    </label>
+
+                    <label className="flex min-h-16 items-start gap-3 rounded-md border border-slate-200 bg-white px-3 py-3 transition hover:bg-slate-50">
+                      <input
+                        type="checkbox"
+                        checked={sendBillingForm.whatsapp}
+                        onChange={(event) =>
+                          updateSendBillingForm(
+                            "whatsapp",
+                            event.target.checked,
+                          )
+                        }
+                        className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                      />
+                      <span className="flex min-w-0 items-start gap-2 text-sm font-medium text-slate-700">
+                        <MessageCircle
+                          size={17}
+                          className="mt-0.5 shrink-0 text-emerald-600"
+                        />
+                        <span>WhatsApp</span>
+                      </span>
+                    </label>
+                  </div>
+                </div>
+
+                {sendBillingModal.invoice ? (
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {sendBillingForm.email && (
+                      <label className="flex flex-col gap-1.5 sm:col-span-2">
+                        <span className="text-xs font-semibold uppercase text-slate-500">
+                          E-mail do devedor
+                        </span>
+                        <input
+                          required
+                          type="email"
+                          value={sendBillingForm.emailAddress}
+                          onChange={(event) =>
+                            updateSendBillingForm(
+                              "emailAddress",
+                              event.target.value,
+                            )
+                          }
+                          placeholder="financeiro@cliente.com"
+                          className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                        />
+                      </label>
+                    )}
+
+                    {sendBillingForm.whatsapp && (
+                      <>
+                        <label className="flex flex-col gap-1.5 sm:col-span-2">
+                          <span className="text-xs font-semibold uppercase text-slate-500">
+                            WhatsApp do devedor
+                          </span>
+                          <input
+                            required
+                            type="tel"
+                            value={sendBillingForm.whatsappNumber}
+                            onChange={(event) =>
+                              updateSendBillingForm(
+                                "whatsappNumber",
+                                event.target.value,
+                              )
+                            }
+                            placeholder="+55 (11) 99999-9999"
+                            className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                          />
+                        </label>
+
+                        <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 sm:col-span-2">
+                          <input
+                            type="checkbox"
+                            checked={sendBillingForm.whatsappOptIn}
+                            onChange={(event) =>
+                              updateSendBillingForm(
+                                "whatsappOptIn",
+                                event.target.checked,
+                              )
+                            }
+                            className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                          />
+                          <span className="text-sm font-medium text-slate-700">
+                            Cliente autorizou mensagens de cobrança pelo
+                            WhatsApp oficial
+                          </span>
+                        </label>
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+                    Para envio em lote, use os contatos já cadastrados em cada
+                    devedor. Para corrigir um contato específico, use Reenviar
+                    na linha da cobrança.
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col-reverse gap-2 border-t border-slate-200 px-5 py-4 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={closeSendBillingModal}
+                  disabled={isSendingBilling}
+                  className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-all duration-200 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSendingBilling}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isSendingBilling ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <Send size={16} />
+                  )}
+                  Enviar cobrança
                 </button>
               </div>
             </form>
@@ -662,8 +1384,34 @@ export default function CobrancasPage() {
           debtorId={selectedDebtor.debtorId}
           debtorName={selectedDebtor.name}
           onClose={() => setSelectedDebtor(null)}
+          onSaved={fetchInvoices}
+        />
+      )}
+
+      {historyTargetDebtor?.debtorId && (
+        <DebtorPaymentHistoryModal
+          debtorId={historyTargetDebtor.debtorId}
+          debtorName={historyTargetDebtor.name}
+          onClose={() => setHistoryTargetDebtor(null)}
         />
       )}
     </main>
+  );
+}
+
+export default function CobrancasPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-full bg-slate-50">
+          <div className="mx-auto flex min-h-80 items-center justify-center p-4 text-sm text-slate-500 lg:p-8">
+            <Loader2 className="mr-2 animate-spin" size={18} />
+            Carregando cobrancas
+          </div>
+        </main>
+      }
+    >
+      <CobrancasContent />
+    </Suspense>
   );
 }

@@ -55,6 +55,10 @@ declare module 'sdk-node-apis-efi' {
     status?: string;
   }
 
+  interface PixUpdateDueChargeBody {
+    status?: 'REMOVIDA_PELO_USUARIO_RECEBEDOR';
+  }
+
   interface PixSplitConfigBody {
     descricao: string;
     lancamento: {
@@ -126,8 +130,12 @@ declare module 'sdk-node-apis-efi' {
               };
         };
         customer: {
-          name: string;
+          name?: string;
           cpf?: string;
+          juridical_person?: {
+            corporate_name: string;
+            cnpj: string;
+          };
           email?: string;
           phone_number?: string;
           address: {
@@ -161,6 +169,10 @@ declare module 'sdk-node-apis-efi' {
     };
   }
 
+  interface CancelChargeResponse {
+    code?: number;
+  }
+
   interface NotificationResponse {
     code?: number;
     data?: Array<{
@@ -184,6 +196,11 @@ declare module 'sdk-node-apis-efi' {
 
     pixDetailDueCharge(params: { txid: string }): Promise<PixDueChargeResponse>;
 
+    pixUpdateDueCharge(
+      params: { txid: string },
+      body: PixUpdateDueChargeBody,
+    ): Promise<PixDueChargeResponse>;
+
     pixGenerateQRCode(params: { id: number }): Promise<PixQrCodeResponse>;
 
     pixSplitConfig(
@@ -200,6 +217,8 @@ declare module 'sdk-node-apis-efi' {
       params: EmptyParams,
       body: CreateOneStepChargeBody,
     ): Promise<CreateOneStepChargeResponse>;
+
+    cancelCharge(params: { id: string | number }): Promise<CancelChargeResponse>;
 
     getNotification(params: { token: string }): Promise<NotificationResponse>;
   }

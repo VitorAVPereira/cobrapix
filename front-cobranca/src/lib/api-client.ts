@@ -14,6 +14,10 @@ interface ApiErrorBody {
   message?: string | string[];
 }
 
+interface ApiClientOptions {
+  requireAuth?: boolean;
+}
+
 export interface BillingRunSummary {
   total: number;
   queued: number;
@@ -26,13 +30,79 @@ export interface BillingResponse {
   message: string;
 }
 
+export type CollectionChannel = "EMAIL" | "WHATSAPP";
+
+export interface SelectedBillingContactInput {
+  invoiceId: string;
+  email?: string;
+  phoneNumber?: string;
+  whatsappOptIn?: boolean;
+}
+
+export interface RunSelectedBillingInput {
+  invoiceIds: string[];
+  channels?: CollectionChannel[];
+  contacts?: SelectedBillingContactInput[];
+}
+
+export interface CreatePaymentInput {
+  invoiceId: string;
+  billingType?: BillingMethod;
+}
+
+export interface CreatePaymentResponse {
+  success: boolean;
+  invoiceId: string;
+  billingType: BillingMethod;
+  gateway: "efi";
+  gatewayId?: string | null;
+  txid?: string | null;
+  chargeId?: string | null;
+  pixPayload?: string | null;
+  pixCopyPaste?: string | null;
+  pixExpiresAt?: string | null;
+  expiresAt?: string | null;
+  boletoCode?: string | null;
+  boletoLink?: string | null;
+  boletoPdf?: string | null;
+  paymentLink?: string | null;
+}
+
+export interface InvoicePaymentStatusResponse {
+  invoiceId: string;
+  status: string;
+  gateway: "efi";
+  gatewayId: string | null;
+  txid: string | null;
+  chargeId: string | null;
+  pixPayload: string | null;
+  pixCopyPaste: string | null;
+  pixExpiresAt: string | null;
+  boletoCode: string | null;
+  boletoLink: string | null;
+  boletoPdf: string | null;
+  gatewayStatusRaw: unknown;
+  originalAmount: number | string;
+  dueDate: string;
+  paidAt: string | null;
+  studentName: string | null;
+  studentEnrollment: string | null;
+  studentGroup: string | null;
+}
+
 export interface BillingSettings {
   preferredBillingMethod: BillingMethod;
+  enabledBillingMethods: BillingMethod[];
   collectionReminderDays: number[];
   autoGenerateFirstCharge: boolean;
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue: number | null;
   autoDiscountPercentage: number | null;
+  onTimeSplitPercentageBps: number;
+  overdueSplitPercentageBps: number;
+  businessSegment: BusinessSegment;
+  paymentNotificationEnabled: boolean;
+  paymentNotificationEmails: string[];
   tariffs: Record<
     BillingMethod,
     {
@@ -54,11 +124,29 @@ export interface UpdateBillingSettingsInput {
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue: number | null;
   autoDiscountPercentage: number | null;
+  businessSegment?: BusinessSegment;
+  paymentNotificationEnabled?: boolean;
+  paymentNotificationEmails?: string[];
 }
 
 export type BillingMethod = "PIX" | "BOLETO" | "BOLIX";
+export type UserRole = "PLATFORM_ADMIN" | "COMPANY_ADMIN";
+export type CompanyStatus = "ACTIVE" | "INACTIVE" | "SUSPENDED";
+export type BusinessSegment = "GENERAL" | "EDUCATION";
+export type WhatsappProvider = "META_CLOUD";
+export type WhatsappStatus = "CONNECTED" | "DISCONNECTED" | "PENDING";
+export type MessagingLimitTier =
+  | "TIER_50"
+  | "TIER_250"
+  | "TIER_1K"
+  | "TIER_10K"
+  | "TIER_100K"
+  | "TIER_UNLIMITED";
+export type PaymentNotificationStatus = "PENDING" | "SENT" | "FAILED" | "READ";
 export type RecurringInvoiceStatus = "ACTIVE" | "PAUSED";
 export type DashboardPeriod = "today" | "7d" | "30d" | "year";
+export type CollectionProfileType = "NEW" | "GOOD" | "DOUBTFUL" | "BAD";
+export type PaymentTimeliness = "EARLY" | "ON_DUE_DATE" | "OVERDUE" | "UNKNOWN";
 
 export interface BillingMetrics {
   period: DashboardPeriod;
@@ -88,15 +176,21 @@ export interface InvoiceListItem {
   id: string;
   invoiceId: string;
   name: string;
+  document?: string;
   phone_number: string;
   email?: string;
   original_amount: number;
   due_date: string;
   status?: string;
   debtorId: string;
+  whatsapp_opt_in: boolean;
   gatewayId: string | null;
   pixPayload: string | null;
   billing_type: BillingMethod;
+  studentName: string | null;
+  studentEnrollment: string | null;
+  studentGroup: string | null;
+  paidAt: string | null;
   payment: InvoicePaymentSummary;
   createdAt: string;
   recurrence?: {
@@ -105,18 +199,28 @@ export interface InvoiceListItem {
     dueDay: number;
     status: RecurringInvoiceStatus;
   };
+  collectionProfile?: {
+    id: string;
+    name: string;
+    profileType: CollectionProfileType;
+  } | null;
 }
 
 export interface CreateInvoiceInput {
   debtorId?: string;
   name?: string;
+  document?: string;
   phone_number?: string;
   email?: string;
+  whatsappOptIn?: boolean;
   original_amount: number;
   due_date?: string;
   billing_type: BillingMethod;
   recurring?: boolean;
   due_day?: number;
+  studentName?: string;
+  studentEnrollment?: string;
+  studentGroup?: string;
 }
 
 export interface RecurringInvoice {
@@ -124,6 +228,7 @@ export interface RecurringInvoice {
   debtor: {
     debtorId: string;
     name: string;
+    document?: string;
     phone_number: string;
     email?: string;
   };
@@ -149,9 +254,105 @@ export interface UpdateRecurringInvoiceInput {
   dueDay: number;
 }
 
+export interface PaymentNotificationItem {
+  id: string;
+  invoiceId: string;
+  status: PaymentNotificationStatus;
+  recipientEmails: string[];
+  errorMessage: string | null;
+  debtorName: string;
+  debtorEmail: string | null;
+  amount: number;
+  billingType: string;
+  dueDate: string;
+  paidAt: string | null;
+  studentName: string | null;
+  studentEnrollment: string | null;
+  studentGroup: string | null;
+  sentAt: string | null;
+  readAt: string | null;
+  createdAt: string;
+  summary: unknown;
+}
+
+export interface PaymentNotificationListResponse {
+  data: PaymentNotificationItem[];
+  unreadCount: number;
+}
+
+export type DebtorPaymentStatusFilter = "all" | "open" | "paid" | "no_open";
+
+export interface DebtorCollectionProfile {
+  id: string;
+  name: string;
+  profileType: CollectionProfileType;
+}
+
+export interface DebtorListItem {
+  debtorId: string;
+  name: string;
+  document: string;
+  phone_number: string;
+  email: string | null;
+  whatsapp_opt_in: boolean;
+  whatsappOptInAt: string | null;
+  collectionProfile: DebtorCollectionProfile;
+  openInvoicesCount: number;
+  openInvoicesAmount: number;
+  paidInvoicesCount: number;
+  paidInvoicesAmount: number;
+  lastInvoiceAt: string | null;
+  lastPaymentAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DebtorListSummary {
+  totalDebtors: number;
+  openInvoiceAmount: number;
+  openInvoiceCount: number;
+  paidInvoiceAmount: number;
+  paidInvoiceCount: number;
+}
+
+export interface DebtorListResponse {
+  data: DebtorListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  summary: DebtorListSummary;
+}
+
+export interface CreateDebtorInput {
+  name: string;
+  document: string;
+  phone_number: string;
+  email?: string | null;
+  whatsappOptIn?: boolean;
+  collectionProfileId?: string;
+}
+
+export interface UpdateDebtorInput {
+  name?: string;
+  document?: string;
+  phone_number?: string;
+  email?: string | null;
+  whatsappOptIn?: boolean;
+  collectionProfileId?: string;
+}
+
 export interface DebtorBillingSettings {
   debtorId: string;
   debtorName: string;
+  document: string | null;
+  whatsappOptIn: boolean;
+  whatsappOptInAt: string | null;
+  whatsappOptInSource: string | null;
+  collectionProfile: {
+    id: string;
+    name: string;
+    profileType: CollectionProfileType;
+  } | null;
   useGlobalBillingSettings: boolean;
   customPreferredBillingMethod: BillingMethod | null;
   customCollectionReminderDays: number[];
@@ -164,27 +365,161 @@ export interface DebtorBillingSettings {
   updatedAt: string;
 }
 
+export interface DebtorPaymentHistoryItem {
+  invoiceId: string;
+  amount: number;
+  billingType: string;
+  dueDate: string;
+  paidAt: string | null;
+  paidDate: string | null;
+  paidOnOrBeforeDueDate: boolean | null;
+  timeliness: PaymentTimeliness;
+  daysFromDueDate: number | null;
+  daysAfterDue: number | null;
+  daysBeforeDue: number | null;
+  gatewayId: string | null;
+  studentName: string | null;
+  studentEnrollment: string | null;
+  studentGroup: string | null;
+}
+
+export interface DebtorPaymentHistoryResponse {
+  debtor: {
+    debtorId: string;
+    name: string;
+    phone_number: string;
+    email?: string;
+  };
+  summary: {
+    totalPaidInvoices: number;
+    totalPaidAmount: number;
+    paidOnOrBeforeDueDate: number;
+    paidEarly: number;
+    paidOnDueDate: number;
+    paidOverdue: number;
+    unknownTiming: number;
+    averageDaysAfterDue: number;
+    maxDaysAfterDue: number;
+    lastPaymentAt: string | null;
+  };
+  payments: DebtorPaymentHistoryItem[];
+}
+
 export interface UpdateDebtorBillingSettingsInput {
-  useGlobalBillingSettings: boolean;
+  document?: string | null;
+  useGlobalBillingSettings?: boolean;
+  whatsappOptIn?: boolean;
   preferredBillingMethod?: BillingMethod | null;
   collectionReminderDays?: number[] | null;
   autoGenerateFirstCharge?: boolean | null;
   autoDiscountEnabled?: boolean | null;
   autoDiscountDaysAfterDue?: number | null;
   autoDiscountPercentage?: number | null;
+  collectionProfileId?: string | null;
 }
 
-interface WhatsAppInstanceResponse {
-  qrCode: string | null;
-  instanceName: string;
-  pairingCode?: string | null;
-  state?: string;
-  dbStatus?: string;
+export interface ConfigureMetaWhatsappInput {
+  phoneNumberId: string;
+  businessAccountId: string;
+  accessToken: string;
+  businessPhoneNumber?: string;
+  defaultLanguage?: string;
 }
 
 interface WhatsAppStatusResponse {
+  provider?: "META_CLOUD";
   state?: string;
   dbStatus?: string;
+  phoneNumberId?: string | null;
+  businessAccountId?: string | null;
+  businessPhoneNumber?: string | null;
+  defaultLanguage?: string;
+  webhookUrl?: string;
+  templatesRequired?: boolean;
+}
+
+export interface WhatsAppUsageResponse {
+  tier: string;
+  dailyLimit: number;
+  dailyUsage: number;
+  remaining: number;
+  interactions: {
+    outbound: number;
+    delivered: number;
+    read: number;
+    inbound: number;
+    failed: number;
+  };
+}
+
+export interface CollectionRuleStep {
+  id: string;
+  profileId: string;
+  stepOrder: number;
+  channel: "EMAIL" | "WHATSAPP";
+  templateId: string | null;
+  template?: { id: string; name: string } | null;
+  delayDays: number;
+  sendTimeStart: string | null;
+  sendTimeEnd: string | null;
+  isActive: boolean;
+}
+
+export interface CollectionRuleProfile {
+  id: string;
+  companyId: string;
+  name: string;
+  profileType: CollectionProfileType;
+  isDefault: boolean;
+  isActive: boolean;
+  daysOverdueMin: number | null;
+  daysOverdueMax: number | null;
+  steps: CollectionRuleStep[];
+  _count?: { debtors: number };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CollectionAttempt {
+  id: string;
+  channel: "EMAIL" | "WHATSAPP";
+  status: string;
+  externalMessageId: string | null;
+  errorDetails: string | null;
+  createdAt: string;
+  ruleStep?: {
+    stepOrder: number;
+    channel: string;
+    delayDays: number;
+  } | null;
+}
+
+export type ConversationStatus = "NEW" | "IN_PROGRESS" | "CLOSED";
+
+export interface WhatsAppConversationItem {
+  id: string;
+  phoneNumber: string;
+  status: ConversationStatus;
+  debtorName: string | null;
+  debtorId: string | null;
+  assignee: { id: string; name: string | null } | null;
+  lastMessagePreview: string | null;
+  unreadCount: number;
+  serviceWindowExpiresAt: string | null;
+  lastInboundAt: string | null;
+  messageCount: number;
+  updatedAt: string;
+  createdAt: string;
+}
+
+export interface WhatsAppConversationMessage {
+  id: string;
+  direction: "INBOUND" | "OUTBOUND";
+  content: string;
+  messageId: string | null;
+  status: string | null;
+  readAt: string | null;
+  createdAt: string;
 }
 
 export interface MessageTemplate {
@@ -192,21 +527,74 @@ export interface MessageTemplate {
   name: string;
   slug: string;
   content: string;
+  footerText: string | null;
+  paymentButtonEnabled: boolean;
+  paymentButtonLabel: string;
+  copyCodeButtonEnabled: boolean;
+  copyCodeSource: MessageTemplateCopyCodeSource;
   isActive: boolean;
+  metaTemplateName: string | null;
+  metaLanguage: string;
+  category: "UTILITY" | "MARKETING" | "AUTHENTICATION";
+  metaStatus: string;
+  metaRejectedReason: string | null;
+  lastMetaSyncAt: string | null;
   companyId: string;
   createdAt: string;
   updatedAt: string;
 }
 
+export interface EmailTemplate {
+  id: string;
+  name: string;
+  slug: string;
+  subject: string;
+  content: string;
+  isActive: boolean;
+  resendTemplateId: string | null;
+  resendAlias: string | null;
+  resendStatus: string;
+  resendPublishedAt: string | null;
+  lastResendSyncAt: string | null;
+  resendError: string | null;
+  deletedAt: string | null;
+  companyId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type MessageTemplateCopyCodeSource =
+  | "AUTO"
+  | "PIX_COPY_PASTE"
+  | "BOLETO_LINE_DIGITABLE";
+
 export type MessageTemplateSlug =
+  | "cobranca-emissao"
   | "vencimento-hoje"
   | "pre-vencimento"
   | "atraso-primeiro-aviso"
-  | "atraso-recorrente";
+  | "atraso-recorrente"
+  | "atraso-critico";
 
 export interface SaveMessageTemplateInput {
   name: string;
   slug: MessageTemplateSlug;
+  content: string;
+  footerText?: string | null;
+  paymentButtonEnabled?: boolean;
+  paymentButtonLabel?: string;
+  copyCodeButtonEnabled?: boolean;
+  copyCodeSource?: MessageTemplateCopyCodeSource;
+  isActive?: boolean;
+  metaTemplateName?: string;
+  metaLanguage?: string;
+  category?: "UTILITY" | "MARKETING" | "AUTHENTICATION";
+}
+
+export interface SaveEmailTemplateInput {
+  name: string;
+  slug: MessageTemplateSlug;
+  subject: string;
   content: string;
   isActive?: boolean;
 }
@@ -239,6 +627,7 @@ export interface GatewayAccountInput {
   efiPixKey: string;
   efiCertificatePath: string;
   efiCertificatePassword: string;
+  efiCertificateBase64?: string;
   gatewayStatus: "PENDING" | "ACTIVE" | "REJECTED" | "DISABLED";
 }
 
@@ -285,13 +674,306 @@ export interface GatewayAccountStatus {
   };
 }
 
+export interface AdminClient {
+  id: string;
+  corporateName: string;
+  document: string;
+  email: string;
+  phoneNumber: string;
+  status: CompanyStatus;
+  gatewayProvider?: string;
+  enabledBillingMethods: BillingMethod[];
+  preferredBillingMethod: BillingMethod;
+  maxDiscountsPerDebtor?: number;
+  discountTriggerDay?: number;
+  collectionReminderDays?: number[];
+  autoGenerateFirstCharge?: boolean;
+  autoDiscountEnabled?: boolean;
+  autoDiscountDaysAfterDue?: number | null;
+  autoDiscountPercentage?: number | null;
+  onTimeSplitPercentageBps: number;
+  overdueSplitPercentageBps: number;
+  businessSegment?: BusinessSegment;
+  paymentNotificationEnabled?: boolean;
+  paymentNotificationEmails?: string[];
+  gatewayStatus: string;
+  legalRepresentative?: string | null;
+  legalRepresentativeCpf?: string | null;
+  legalRepresentativeBirthDate?: string | null;
+  addressPostalCode?: string | null;
+  addressStreet?: string | null;
+  addressNumber?: string | null;
+  addressDistrict?: string | null;
+  addressCity?: string | null;
+  addressState?: string | null;
+  bankName?: string | null;
+  bankAgency?: string | null;
+  bankAccount?: string | null;
+  whatsappProvider?: WhatsappProvider;
+  whatsappInstanceId?: string | null;
+  whatsappStatus: string;
+  metaPhoneNumberId?: string | null;
+  metaBusinessAccountId?: string | null;
+  metaBusinessPhoneNumber?: string | null;
+  metaDefaultLanguage?: string;
+  messagingLimitTier?: MessagingLimitTier | null;
+  messagingLimitUpdatedAt?: string | null;
+  resendFromEmail?: string | null;
+  erpWebhookUrl?: string | null;
+  erpEnabledEvents?: string[];
+  hasMetaAccessToken?: boolean;
+  hasResendApiKey?: boolean;
+  hasResendWebhookSecret?: boolean;
+  hasErpApiKey?: boolean;
+  hasEfiClientId?: boolean;
+  hasEfiClientSecret?: boolean;
+  hasEfiCertificate?: boolean;
+  hasEfiCertificatePassword?: boolean;
+  firstUser: {
+    id: string;
+    email: string;
+    name: string | null;
+    role: UserRole;
+  } | null;
+  efi: {
+    configured: boolean;
+    provider?: string | null;
+    status: string | null;
+    environment: string | null;
+    payeeCode?: string | null;
+    accountNumber?: string | null;
+    accountDigit?: string | null;
+    pixKey?: string | null;
+    certificatePath?: string | null;
+    lastError?: string | null;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type AdminAnalyticsPeriod =
+  | "current_month"
+  | "today"
+  | "7d"
+  | "30d"
+  | "year"
+  | "custom";
+
+export interface AdminClientAnalyticsMetrics {
+  totalChargedAmount: number;
+  activeChargesCount: number;
+  overduePendingChargesCount: number;
+  canceledChargesCount: number;
+  pendingTotalAmount: number;
+  overduePendingAmount: number;
+  whatsappSentCount: number;
+  whatsappCostAmount: number;
+  emailSentCount: number;
+  emailCostAmount: number;
+  averageTicketAmount: number;
+  recoveredChargesCount: number;
+  recoveredAmount: number;
+}
+
+export interface AdminClientAnalyticsRow {
+  companyId: string;
+  corporateName: string;
+  document: string;
+  email: string;
+  status: CompanyStatus;
+  metrics: AdminClientAnalyticsMetrics;
+}
+
+export interface AdminClientAnalyticsResponse {
+  period: {
+    key: AdminAnalyticsPeriod;
+    startDate: string;
+    endDate: string;
+  };
+  totals: AdminClientAnalyticsMetrics;
+  clients: AdminClientAnalyticsRow[];
+  pagination: {
+    page: number;
+    pageSize: number;
+    total: number;
+  };
+}
+
+export interface AdminClientAnalyticsParams {
+  period?: AdminAnalyticsPeriod;
+  startDate?: string;
+  endDate?: string;
+  companyId?: string;
+  search?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface CreateAdminClientInput {
+  company: {
+    corporateName: string;
+    document: string;
+    email: string;
+    phoneNumber: string;
+    status?: CompanyStatus;
+  };
+  firstUser: {
+    name: string;
+    email: string;
+  };
+  billing: {
+    enabledBillingMethods: BillingMethod[];
+    preferredBillingMethod: BillingMethod;
+    onTimeSplitPercentageBps: number;
+    overdueSplitPercentageBps: number;
+  };
+  meta?: ConfigureMetaWhatsappInput;
+  efi?: GatewayAccountInput;
+  integrations?: {
+    resendApiKey?: string;
+    resendWebhookSecret?: string;
+    resendFromEmail?: string | null;
+    erpApiKey?: string;
+    erpWebhookUrl?: string | null;
+    erpEnabledEvents?: string[];
+  };
+}
+
+export interface MessageResponse {
+  message: string;
+}
+
+export interface ResetPasswordInput {
+  token: string;
+  password: string;
+  passwordConfirmation: string;
+}
+
+export interface ChangePasswordInput {
+  currentPassword: string;
+  password: string;
+  passwordConfirmation: string;
+}
+
+export interface CreateAdminClientResponse {
+  client: AdminClient;
+  temporaryPassword: string;
+  integrationWarnings: string[];
+}
+
+export interface UpdateAdminClientInput {
+  company?: {
+    corporateName?: string;
+    document?: string;
+    email?: string;
+    phoneNumber?: string;
+    status?: CompanyStatus;
+    gatewayProvider?: string;
+    gatewayStatus?: string;
+    legalRepresentative?: string | null;
+    legalRepresentativeCpf?: string | null;
+    legalRepresentativeBirthDate?: string | null;
+    addressPostalCode?: string | null;
+    addressStreet?: string | null;
+    addressNumber?: string | null;
+    addressDistrict?: string | null;
+    addressCity?: string | null;
+    addressState?: string | null;
+    bankName?: string | null;
+    bankAgency?: string | null;
+    bankAccount?: string | null;
+  };
+  billing?: {
+    enabledBillingMethods?: BillingMethod[];
+    preferredBillingMethod?: BillingMethod;
+    onTimeSplitPercentageBps?: number;
+    overdueSplitPercentageBps?: number;
+    maxDiscountsPerDebtor?: number;
+    discountTriggerDay?: number;
+    collectionReminderDays?: number[];
+    autoGenerateFirstCharge?: boolean;
+    autoDiscountEnabled?: boolean;
+    autoDiscountDaysAfterDue?: number | null;
+    autoDiscountPercentage?: number | null;
+  };
+  notifications?: {
+    businessSegment?: BusinessSegment;
+    paymentNotificationEnabled?: boolean;
+    paymentNotificationEmails?: string[];
+  };
+  whatsapp?: {
+    whatsappProvider?: WhatsappProvider;
+    whatsappInstanceId?: string | null;
+    whatsappStatus?: WhatsappStatus;
+    metaPhoneNumberId?: string | null;
+    metaBusinessAccountId?: string | null;
+    metaBusinessPhoneNumber?: string | null;
+    metaDefaultLanguage?: string;
+    messagingLimitTier?: MessagingLimitTier | null;
+    metaAccessToken?: string;
+  };
+  integrations?: {
+    resendApiKey?: string;
+    resendWebhookSecret?: string;
+    resendFromEmail?: string | null;
+    erpApiKey?: string;
+    erpWebhookUrl?: string | null;
+    erpEnabledEvents?: string[];
+  };
+  efi?: Partial<GatewayAccountInput>;
+}
+
+function normalizeGatewayAccountPayload<T extends Partial<GatewayAccountInput>>(
+  data: T,
+): T {
+  return {
+    ...data,
+    efiCertificatePath: data.efiCertificateBase64
+      ? ""
+      : data.efiCertificatePath,
+    efiCertificateBase64: data.efiCertificateBase64 || undefined,
+  };
+}
+
+function normalizeCreateAdminClientPayload(
+  data: CreateAdminClientInput,
+): CreateAdminClientInput {
+  if (!data.efi) {
+    return data;
+  }
+
+  return {
+    ...data,
+    efi: normalizeGatewayAccountPayload(data.efi),
+  };
+}
+
+function normalizeUpdateAdminClientPayload(
+  data: UpdateAdminClientInput,
+): UpdateAdminClientInput {
+  if (!data.efi) {
+    return data;
+  }
+
+  return {
+    ...data,
+    efi: normalizeGatewayAccountPayload(data.efi),
+  };
+}
+
 class ApiClient {
   private baseUrl: string;
   private token: string | null;
+  private requireAuth: boolean;
 
-  constructor(baseUrl: string = API_URL, token: string | null = null) {
+  constructor(
+    baseUrl: string = API_URL,
+    token: string | null = null,
+    options: ApiClientOptions = {},
+  ) {
     this.baseUrl = baseUrl;
     this.token = token;
+    this.requireAuth = options.requireAuth ?? false;
   }
 
   setToken(token: string | null): void {
@@ -302,12 +984,42 @@ class ApiClient {
     return this.token;
   }
 
+  private buildQueryString(
+    params: Record<string, string | number | undefined>,
+  ): string {
+    const searchParams = new URLSearchParams();
+
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === "") {
+        return;
+      }
+
+      searchParams.set(key, String(value));
+    });
+
+    const query = searchParams.toString();
+    return query ? `?${query}` : "";
+  }
+
+  private buildMissingAuthError(): ApiError {
+    const error: ApiError = new Error(
+      "Sessao autenticada ainda nao carregada.",
+    );
+    error.status = 401;
+    error.data = { message: error.message };
+    return error;
+  }
+
   private async fetch<T>(
     endpoint: string,
     options: RequestInit = {},
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
     const token = this.getAuthHeader();
+
+    if (this.requireAuth && !token) {
+      throw this.buildMissingAuthError();
+    }
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -360,6 +1072,27 @@ class ApiClient {
     });
   }
 
+  async forgotPassword(email: string): Promise<MessageResponse> {
+    return this.fetch<MessageResponse>("/auth/forgot-password", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  async resetPassword(data: ResetPasswordInput): Promise<MessageResponse> {
+    return this.fetch<MessageResponse>("/auth/reset-password", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async changePassword(data: ChangePasswordInput): Promise<MessageResponse> {
+    return this.fetch<MessageResponse>("/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
   async logout(): Promise<unknown> {
     return this.fetch("/auth/logout", {
       method: "POST",
@@ -373,8 +1106,34 @@ class ApiClient {
   }
 
   // Invoices
-  async getInvoices(): Promise<InvoiceListItem[]> {
-    return this.fetch<InvoiceListItem[]>("/invoices");
+  async getInvoices(
+    params: {
+      page?: number;
+      pageSize?: number;
+      search?: string;
+      status?: string;
+      debtorId?: string;
+    } = {},
+  ): Promise<{
+    data: InvoiceListItem[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set("page", String(params.page));
+    if (params.pageSize) qs.set("pageSize", String(params.pageSize));
+    if (params.search) qs.set("search", params.search);
+    if (params.status) qs.set("status", params.status);
+    if (params.debtorId) qs.set("debtorId", params.debtorId);
+
+    const qsStr = qs.toString();
+    return this.fetch<{
+      data: InvoiceListItem[];
+      total: number;
+      page: number;
+      pageSize: number;
+    }>(`/invoices${qsStr ? `?${qsStr}` : ""}`);
   }
 
   async importInvoices(data: ReadonlyArray<unknown>): Promise<unknown> {
@@ -391,11 +1150,17 @@ class ApiClient {
     });
   }
 
+  async cancelInvoice(invoiceId: string): Promise<InvoiceListItem> {
+    return this.fetch<InvoiceListItem>(`/invoices/${invoiceId}/cancel`, {
+      method: "POST",
+    });
+  }
+
   async createDebtorInvoice(
     debtorId: string,
     data: Omit<
       CreateInvoiceInput,
-      "debtorId" | "name" | "phone_number" | "email"
+      "debtorId" | "name" | "document" | "phone_number" | "email"
     >,
   ): Promise<InvoiceListItem> {
     return this.fetch<InvoiceListItem>(
@@ -405,6 +1170,37 @@ class ApiClient {
         body: JSON.stringify(data),
       },
     );
+  }
+
+  async getDebtors(
+    params: {
+      page?: number;
+      pageSize?: number;
+      search?: string;
+      profileId?: string;
+      paymentStatus?: DebtorPaymentStatusFilter;
+    } = {},
+  ): Promise<DebtorListResponse> {
+    return this.fetch<DebtorListResponse>(
+      `/invoices/debtors${this.buildQueryString(params)}`,
+    );
+  }
+
+  async createDebtor(data: CreateDebtorInput): Promise<DebtorListItem> {
+    return this.fetch<DebtorListItem>("/invoices/debtors", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateDebtor(
+    debtorId: string,
+    data: UpdateDebtorInput,
+  ): Promise<DebtorListItem> {
+    return this.fetch<DebtorListItem>(`/invoices/debtors/${debtorId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
   }
 
   async getRecurringInvoices(): Promise<RecurringInvoice[]> {
@@ -438,9 +1234,12 @@ class ApiClient {
   }
 
   // WhatsApp
-  async createWhatsappInstance(): Promise<WhatsAppInstanceResponse> {
-    return this.fetch<WhatsAppInstanceResponse>("/whatsapp/instance", {
+  async configureMetaWhatsapp(
+    data: ConfigureMetaWhatsappInput,
+  ): Promise<WhatsAppStatusResponse> {
+    return this.fetch<WhatsAppStatusResponse>("/whatsapp/meta", {
       method: "POST",
+      body: JSON.stringify(data),
     });
   }
 
@@ -448,10 +1247,28 @@ class ApiClient {
     return this.fetch<WhatsAppStatusResponse>("/whatsapp/status");
   }
 
+  async getWhatsappUsage(): Promise<WhatsAppUsageResponse> {
+    return this.fetch<WhatsAppUsageResponse>("/whatsapp/usage");
+  }
+
   async disconnectWhatsapp(): Promise<{ success: boolean }> {
     return this.fetch<{ success: boolean }>("/whatsapp/disconnect", {
       method: "POST",
     });
+  }
+
+  // Email
+  async getEmailStats(period: string = "30d"): Promise<{
+    period: string;
+    sent: number;
+    delivered: number;
+    opened: number;
+    clicked: number;
+    bounced: number;
+    complained: number;
+    failed: number;
+  }> {
+    return this.fetch(`/email/stats?period=${period}`);
   }
 
   // Billing
@@ -461,11 +1278,32 @@ class ApiClient {
     });
   }
 
-  async runSelectedBilling(invoiceIds: string[]): Promise<BillingResponse> {
+  async runSelectedBilling(
+    input: string[] | RunSelectedBillingInput,
+  ): Promise<BillingResponse> {
+    const payload = Array.isArray(input) ? { invoiceIds: input } : input;
+
     return this.fetch<BillingResponse>("/billing/invoices/run", {
       method: "POST",
-      body: JSON.stringify({ invoiceIds }),
+      body: JSON.stringify(payload),
     });
+  }
+
+  async createPayment(
+    data: CreatePaymentInput,
+  ): Promise<CreatePaymentResponse> {
+    return this.fetch<CreatePaymentResponse>("/payments/create", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getInvoicePaymentStatus(
+    invoiceId: string,
+  ): Promise<InvoicePaymentStatusResponse> {
+    return this.fetch<InvoicePaymentStatusResponse>(
+      `/payments/invoice/${invoiceId}`,
+    );
   }
 
   async getBillingMetrics(period: DashboardPeriod): Promise<BillingMetrics> {
@@ -474,6 +1312,146 @@ class ApiClient {
 
   async getBillingSettings(): Promise<BillingSettings> {
     return this.fetch<BillingSettings>("/billing/settings");
+  }
+
+  // Collection Rules
+  async getRules(): Promise<CollectionRuleProfile[]> {
+    return this.fetch<CollectionRuleProfile[]>("/billing/rules");
+  }
+
+  async createRule(data: {
+    name: string;
+    profileType: CollectionProfileType;
+    isDefault?: boolean;
+    daysOverdueMin?: number;
+    daysOverdueMax?: number;
+  }): Promise<CollectionRuleProfile> {
+    return this.fetch<CollectionRuleProfile>("/billing/rules", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateRule(
+    profileId: string,
+    data: {
+      name?: string;
+      profileType?: CollectionProfileType;
+      isDefault?: boolean;
+      daysOverdueMin?: number;
+      daysOverdueMax?: number;
+    },
+  ): Promise<CollectionRuleProfile> {
+    return this.fetch<CollectionRuleProfile>(`/billing/rules/${profileId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteRule(profileId: string): Promise<unknown> {
+    return this.fetch(`/billing/rules/${profileId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async setRuleSteps(
+    profileId: string,
+    steps: Array<{
+      stepOrder: number;
+      channel: "EMAIL" | "WHATSAPP";
+      templateId?: string;
+      delayDays: number;
+      sendTimeStart?: string;
+      sendTimeEnd?: string;
+    }>,
+  ): Promise<CollectionRuleStep[]> {
+    return this.fetch<CollectionRuleStep[]>(
+      `/billing/rules/${profileId}/steps`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ steps }),
+      },
+    );
+  }
+
+  async classifyDebtors(): Promise<{ success: boolean }> {
+    return this.fetch<{ success: boolean }>("/billing/classify-debtors", {
+      method: "POST",
+    });
+  }
+
+  // Inbox WhatsApp
+  async getConversations(
+    params: {
+      status?: string;
+      search?: string;
+      page?: number;
+      pageSize?: number;
+    } = {},
+  ): Promise<{
+    data: WhatsAppConversationItem[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set("status", params.status);
+    if (params.search) qs.set("search", params.search);
+    if (params.page) qs.set("page", String(params.page));
+    if (params.pageSize) qs.set("pageSize", String(params.pageSize));
+    const qsStr = qs.toString();
+    return this.fetch<{
+      data: WhatsAppConversationItem[];
+      total: number;
+      page: number;
+      pageSize: number;
+    }>(`/whatsapp/conversations${qsStr ? `?${qsStr}` : ""}`);
+  }
+
+  async getConversationMessages(
+    conversationId: string,
+  ): Promise<WhatsAppConversationMessage[]> {
+    return this.fetch<WhatsAppConversationMessage[]>(
+      `/whatsapp/conversations/${conversationId}/messages`,
+    );
+  }
+
+  async replyToConversation(
+    conversationId: string,
+    content: string,
+  ): Promise<{ success: boolean }> {
+    return this.fetch<{ success: boolean }>(
+      `/whatsapp/conversations/${conversationId}/reply`,
+      { method: "POST", body: JSON.stringify({ content }) },
+    );
+  }
+
+  async updateConversationStatus(
+    conversationId: string,
+    status: ConversationStatus,
+  ): Promise<{ success: boolean }> {
+    return this.fetch<{ success: boolean }>(
+      `/whatsapp/conversations/${conversationId}/status`,
+      { method: "PUT", body: JSON.stringify({ status }) },
+    );
+  }
+
+  async updateConversationAssignee(
+    conversationId: string,
+    assigneeId: string | null,
+  ): Promise<{ success: boolean }> {
+    return this.fetch<{ success: boolean }>(
+      `/whatsapp/conversations/${conversationId}/assignee`,
+      { method: "PUT", body: JSON.stringify({ assigneeId }) },
+    );
+  }
+
+  async getInboxUnreadCount(): Promise<{ count: number }> {
+    return this.fetch<{ count: number }>("/whatsapp/unread-count");
+  }
+
+  async getInvoiceAttempts(invoiceId: string): Promise<CollectionAttempt[]> {
+    return this.fetch<CollectionAttempt[]>(`/invoices/${invoiceId}/attempts`);
   }
 
   async updateBillingSettings(
@@ -485,11 +1463,34 @@ class ApiClient {
     });
   }
 
+  async getPaymentNotifications(): Promise<PaymentNotificationListResponse> {
+    return this.fetch<PaymentNotificationListResponse>(
+      "/payment-notifications",
+    );
+  }
+
+  async markPaymentNotificationAsRead(
+    notificationId: string,
+  ): Promise<PaymentNotificationItem> {
+    return this.fetch<PaymentNotificationItem>(
+      `/payment-notifications/${notificationId}/read`,
+      { method: "POST" },
+    );
+  }
+
   async getDebtorBillingSettings(
     debtorId: string,
   ): Promise<DebtorBillingSettings> {
     return this.fetch<DebtorBillingSettings>(
       `/invoices/debtors/${debtorId}/settings`,
+    );
+  }
+
+  async getDebtorPaymentHistory(
+    debtorId: string,
+  ): Promise<DebtorPaymentHistoryResponse> {
+    return this.fetch<DebtorPaymentHistoryResponse>(
+      `/invoices/debtors/${debtorId}/payment-history`,
     );
   }
 
@@ -530,6 +1531,50 @@ class ApiClient {
     });
   }
 
+  async submitTemplateToMeta(
+    id: string,
+  ): Promise<{ template: MessageTemplate; meta: unknown }> {
+    return this.fetch<{ template: MessageTemplate; meta: unknown }>(
+      `/templates/${id}/submit-meta`,
+      { method: "POST" },
+    );
+  }
+
+  async syncTemplateMetaStatuses(): Promise<MessageTemplate[]> {
+    return this.fetch<MessageTemplate[]>("/templates/sync-meta", {
+      method: "POST",
+    });
+  }
+
+  async getEmailTemplates(): Promise<EmailTemplate[]> {
+    return this.fetch<EmailTemplate[]>("/email/templates");
+  }
+
+  async createEmailTemplate(
+    data: SaveEmailTemplateInput,
+  ): Promise<EmailTemplate> {
+    return this.fetch<EmailTemplate>("/email/templates", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateEmailTemplate(
+    id: string,
+    data: Partial<SaveEmailTemplateInput>,
+  ): Promise<EmailTemplate> {
+    return this.fetch<EmailTemplate>(`/email/templates/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteEmailTemplate(id: string): Promise<void> {
+    await this.fetch<void>(`/email/templates/${id}`, {
+      method: "DELETE",
+    });
+  }
+
   // Payment gateway
   async getGatewayAccount(): Promise<GatewayAccountStatus> {
     return this.fetch<GatewayAccountStatus>("/payments/gateway-account");
@@ -538,10 +1583,67 @@ class ApiClient {
   async createGatewayAccount(
     data: GatewayAccountInput,
   ): Promise<GatewayAccountStatus> {
+    const payload = normalizeGatewayAccountPayload(data);
+
     return this.fetch<GatewayAccountStatus>("/payments/gateway-account", {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify(payload),
     });
+  }
+
+  // Admin
+  async getAdminClients(): Promise<AdminClient[]> {
+    return this.fetch<AdminClient[]>("/admin/clients");
+  }
+
+  async getAdminClientAnalytics(
+    params: AdminClientAnalyticsParams = {},
+  ): Promise<AdminClientAnalyticsResponse> {
+    const query = this.buildQueryString({
+      period: params.period,
+      startDate: params.startDate,
+      endDate: params.endDate,
+      companyId: params.companyId,
+      search: params.search,
+      page: params.page,
+      pageSize: params.pageSize,
+    });
+
+    return this.fetch<AdminClientAnalyticsResponse>(
+      `/admin/clients/analytics${query}`,
+    );
+  }
+
+  async createAdminClient(
+    data: CreateAdminClientInput,
+  ): Promise<CreateAdminClientResponse> {
+    const payload = normalizeCreateAdminClientPayload(data);
+
+    return this.fetch<CreateAdminClientResponse>("/admin/clients", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateAdminClient(
+    clientId: string,
+    data: UpdateAdminClientInput,
+  ): Promise<AdminClient> {
+    const payload = normalizeUpdateAdminClientPayload(data);
+
+    return this.fetch<AdminClient>(`/admin/clients/${clientId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async resetAdminClientPassword(
+    clientId: string,
+  ): Promise<{ userId: string; temporaryPassword: string }> {
+    return this.fetch<{ userId: string; temporaryPassword: string }>(
+      `/admin/clients/${clientId}/reset-password`,
+      { method: "POST", body: JSON.stringify({}) },
+    );
   }
 
   // Health

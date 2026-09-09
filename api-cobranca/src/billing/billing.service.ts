@@ -1,10 +1,21 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { BillingMethod, Prisma } from '@prisma/client';
+import {
+  BillingMethod,
+  BusinessSegment,
+  CollectionChannel,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentService } from '../payment/payment.service';
+import { PublicPaymentLinkService } from '../payment/payment-link.service';
 import { MessageQueueService, SendMessageJob } from '../queue/message.queue';
 import { SpintaxService } from '../queue/services/spintax.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { CollectionRuleEngine } from './collection-rule-engine';
+import { EmailQueueService } from '../email/email.queue';
+import { EmailService } from '../email/email.service';
+import { EmailTemplatesService } from '../email/email-templates.service';
 
 const DEFAULT_COLLECTION_REMINDER_DAYS = [0];
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -19,6 +30,18 @@ interface BillingExecutionResult {
 
 interface SelectedBillingExecutionResult extends BillingExecutionResult {
   requested: number;
+}
+
+export interface SelectedBillingContactInput {
+  invoiceId: string;
+  email?: string;
+  phoneNumber?: string;
+  whatsappOptIn?: boolean;
+}
+
+export interface SelectedBillingOptions {
+  channels?: CollectionChannel[];
+  contacts?: SelectedBillingContactInput[];
 }
 
 type DashboardPeriod = 'today' | '7d' | '30d' | 'year';
@@ -48,11 +71,17 @@ interface TariffDetails {
 
 export interface BillingSettingsResponse {
   preferredBillingMethod: BillingMethod;
+  enabledBillingMethods: BillingMethod[];
   collectionReminderDays: number[];
   autoGenerateFirstCharge: boolean;
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue: number | null;
   autoDiscountPercentage: number | null;
+  onTimeSplitPercentageBps: number;
+  overdueSplitPercentageBps: number;
+  businessSegment: BusinessSegment;
+  paymentNotificationEnabled: boolean;
+  paymentNotificationEmails: string[];
   tariffs: Record<BillingMethod, TariffDetails>;
 }
 
@@ -63,6 +92,18 @@ interface BillingSettingsInput {
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue?: number | null;
   autoDiscountPercentage?: number | null;
+  businessSegment?: BusinessSegment;
+  paymentNotificationEnabled?: boolean;
+  paymentNotificationEmails?: string[];
+}
+
+interface NormalizedBillingSettings {
+  preferredBillingMethod: BillingMethod;
+  collectionReminderDays: number[];
+  autoGenerateFirstCharge: boolean;
+  autoDiscountEnabled: boolean;
+  autoDiscountDaysAfterDue: number | null;
+  autoDiscountPercentage: number | null;
 }
 
 interface ScheduledInvoice {
@@ -81,8 +122,11 @@ interface ScheduledInvoice {
   pixExpiresAt: Date | null;
   billingType: string | null;
   debtor: {
+    id: string;
     name: string;
     phoneNumber: string;
+    email?: string | null;
+    whatsappOptIn: boolean;
     useGlobalBillingSettings: boolean;
     preferredBillingMethod: BillingMethod | null;
   };
@@ -93,6 +137,7 @@ interface PaymentMessageData {
   billingType: BillingMethod;
   billingTypeLabel: string;
   paymentLink: string;
+  paymentPageToken: string;
   pixCopiaECola: string;
   boletoLinhaDigitavel: string;
   boletoLink: string;
@@ -109,6 +154,12 @@ export class BillingService {
     private messageQueue: MessageQueueService,
     private spintaxService: SpintaxService,
     private paymentService: PaymentService,
+    private ruleEngine: CollectionRuleEngine,
+    private emailQueue: EmailQueueService,
+    private emailService: EmailService,
+    private emailTemplatesService: EmailTemplatesService,
+    private whatsappService?: WhatsappService,
+    private paymentLinkService?: PublicPaymentLinkService,
   ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_9AM)
@@ -137,8 +188,7 @@ export class BillingService {
       try {
         const companies = await this.prisma.company.findMany({
           where: {
-            whatsappStatus: 'CONNECTED',
-            whatsappInstanceId: { not: null },
+            collectionProfiles: { some: { isActive: true } },
           },
         });
 
@@ -175,8 +225,10 @@ export class BillingService {
   async enqueueSelectedInvoices(
     companyId: string,
     invoiceIds: string[],
+    options: SelectedBillingOptions = {},
   ): Promise<SelectedBillingExecutionResult> {
     const uniqueInvoiceIds = Array.from(new Set(invoiceIds));
+    const channels = this.normalizeSelectedChannels(options.channels);
 
     if (uniqueInvoiceIds.length === 0) {
       return { requested: 0, queued: 0, skipped: 0 };
@@ -190,8 +242,21 @@ export class BillingService {
       },
       select: {
         id: true,
+        debtor: {
+          select: {
+            id: true,
+          },
+        },
       },
     });
+
+    if (options.contacts?.length) {
+      await this.updateSelectedInvoiceContacts(
+        companyId,
+        pendingInvoices,
+        options.contacts,
+      );
+    }
 
     if (pendingInvoices.length > 0) {
       await this.messageQueue.addSelectedInitialChargeJobs(
@@ -199,6 +264,7 @@ export class BillingService {
           invoiceId: invoice.id,
           companyId,
           source: 'SELECTED',
+          channels,
         })),
       );
     }
@@ -208,6 +274,69 @@ export class BillingService {
       queued: pendingInvoices.length,
       skipped: uniqueInvoiceIds.length - pendingInvoices.length,
     };
+  }
+
+  private normalizeSelectedChannels(
+    channels: CollectionChannel[] | undefined,
+  ): CollectionChannel[] {
+    const normalized = Array.from(
+      new Set(
+        (channels?.length ? channels : ['WHATSAPP']).filter(
+          (channel): channel is CollectionChannel =>
+            channel === 'EMAIL' || channel === 'WHATSAPP',
+        ),
+      ),
+    );
+
+    return normalized.length > 0 ? normalized : ['WHATSAPP'];
+  }
+
+  private async updateSelectedInvoiceContacts(
+    companyId: string,
+    pendingInvoices: Array<{ id: string; debtor: { id: string } }>,
+    contacts: SelectedBillingContactInput[],
+  ): Promise<void> {
+    const debtorByInvoiceId = new Map(
+      pendingInvoices.map((invoice) => [invoice.id, invoice.debtor.id]),
+    );
+
+    await Promise.all(
+      contacts.map(async (contact) => {
+        const debtorId = debtorByInvoiceId.get(contact.invoiceId);
+        if (!debtorId) {
+          return;
+        }
+
+        const email = contact.email?.trim().toLowerCase();
+        const phoneNumber = contact.phoneNumber?.trim();
+        const data: Prisma.DebtorUpdateInput = {};
+
+        if (email) {
+          data.email = email;
+        }
+
+        if (phoneNumber) {
+          data.phoneNumber = phoneNumber;
+        }
+
+        if (contact.whatsappOptIn !== undefined) {
+          data.whatsappOptIn = contact.whatsappOptIn;
+          data.whatsappOptInAt = contact.whatsappOptIn ? new Date() : null;
+          data.whatsappOptInSource = contact.whatsappOptIn
+            ? 'manual_send_modal'
+            : null;
+        }
+
+        if (Object.keys(data).length === 0) {
+          return;
+        }
+
+        await this.prisma.debtor.updateMany({
+          where: { id: debtorId, companyId },
+          data,
+        });
+      }),
+    );
   }
 
   async getMetrics(
@@ -239,7 +368,7 @@ export class BillingService {
         where: {
           companyId,
           status: 'PAID',
-          updatedAt: { gte: range.start, lte: range.end },
+          paidAt: { gte: range.start, lte: range.end },
         },
         _sum: { originalAmount: true },
       }),
@@ -247,7 +376,7 @@ export class BillingService {
         where: {
           companyId,
           status: 'PAID',
-          updatedAt: { gte: range.start, lte: range.end },
+          paidAt: { gte: range.start, lte: range.end },
         },
       }),
       this.prisma.invoice.count({
@@ -322,11 +451,17 @@ export class BillingService {
       where: { id: companyId },
       select: {
         preferredBillingMethod: true,
+        enabledBillingMethods: true,
         collectionReminderDays: true,
         autoGenerateFirstCharge: true,
         autoDiscountEnabled: true,
         autoDiscountDaysAfterDue: true,
         autoDiscountPercentage: true,
+        onTimeSplitPercentageBps: true,
+        overdueSplitPercentageBps: true,
+        businessSegment: true,
+        paymentNotificationEnabled: true,
+        paymentNotificationEmails: true,
       },
     });
 
@@ -338,24 +473,65 @@ export class BillingService {
     settings: BillingSettingsInput,
   ): Promise<BillingSettingsResponse> {
     const normalizedSettings = this.normalizeSettingsInput(settings);
+    const currentCompany = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { enabledBillingMethods: true },
+    });
+
+    if (!currentCompany) {
+      throw new Error('Empresa nao encontrada.');
+    }
+
+    if (
+      !currentCompany.enabledBillingMethods.includes(
+        normalizedSettings.preferredBillingMethod,
+      )
+    ) {
+      throw new Error('Metodo de cobranca nao habilitado para esta empresa.');
+    }
+
+    const updateData: Prisma.CompanyUpdateInput = {
+      preferredBillingMethod: normalizedSettings.preferredBillingMethod,
+      collectionReminderDays: normalizedSettings.collectionReminderDays,
+      autoGenerateFirstCharge: normalizedSettings.autoGenerateFirstCharge,
+      autoDiscountEnabled: normalizedSettings.autoDiscountEnabled,
+      autoDiscountDaysAfterDue: normalizedSettings.autoDiscountDaysAfterDue,
+      autoDiscountPercentage: normalizedSettings.autoDiscountPercentage,
+    };
+
+    if (settings.businessSegment !== undefined) {
+      updateData.businessSegment = this.normalizeBusinessSegment(
+        settings.businessSegment,
+      );
+    }
+
+    if (settings.paymentNotificationEnabled !== undefined) {
+      updateData.paymentNotificationEnabled =
+        settings.paymentNotificationEnabled;
+    }
+
+    if (settings.paymentNotificationEmails !== undefined) {
+      updateData.paymentNotificationEmails = this.normalizeNotificationEmails(
+        settings.paymentNotificationEmails,
+      );
+    }
 
     const company = await this.prisma.company.update({
       where: { id: companyId },
-      data: {
-        preferredBillingMethod: normalizedSettings.preferredBillingMethod,
-        collectionReminderDays: normalizedSettings.collectionReminderDays,
-        autoGenerateFirstCharge: normalizedSettings.autoGenerateFirstCharge,
-        autoDiscountEnabled: normalizedSettings.autoDiscountEnabled,
-        autoDiscountDaysAfterDue: normalizedSettings.autoDiscountDaysAfterDue,
-        autoDiscountPercentage: normalizedSettings.autoDiscountPercentage,
-      },
+      data: updateData,
       select: {
         preferredBillingMethod: true,
+        enabledBillingMethods: true,
         collectionReminderDays: true,
         autoGenerateFirstCharge: true,
         autoDiscountEnabled: true,
         autoDiscountDaysAfterDue: true,
         autoDiscountPercentage: true,
+        onTimeSplitPercentageBps: true,
+        overdueSplitPercentageBps: true,
+        businessSegment: true,
+        paymentNotificationEnabled: true,
+        paymentNotificationEmails: true,
       },
     });
 
@@ -370,124 +546,285 @@ export class BillingService {
         where: { id: companyId },
       });
 
-      if (
-        !company ||
-        company.whatsappStatus !== 'CONNECTED' ||
-        !company.whatsappInstanceId
-      ) {
-        this.logger.log(`Empresa ${companyId} nao esta pronta para cobrancas`);
-        return { queued: 0, skipped: 0 };
-      }
-
-      const scheduledOffsets = this.normalizeReminderDays(
-        company.collectionReminderDays,
-      );
-      const templateSlugs = this.getTemplateSlugsForOffsets(scheduledOffsets);
-      const templates = await this.prisma.messageTemplate.findMany({
-        where: {
-          companyId,
-          slug: { in: templateSlugs },
-          isActive: true,
-        },
-      });
-      const templatesBySlug = new Map(
-        templates.map((template) => [template.slug, template]),
-      );
-      const fallbackTemplate =
-        templatesBySlug.get('vencimento-hoje') ?? templates[0];
-
-      if (!fallbackTemplate) {
-        this.logger.warn(
-          `Nenhum template de cobranca ativo para empresa ${companyId}`,
-        );
+      if (!company) {
         return { queued: 0, skipped: 0 };
       }
 
       const startOfToday = this.startOfDay(new Date());
-      const dueDateWindows = scheduledOffsets.map((offset) =>
-        this.getDueDateWindow(startOfToday, offset),
-      );
-
-      const scheduledInvoices = await this.prisma.invoice.findMany({
+      const pendingInvoices = await this.prisma.invoice.findMany({
         where: {
           companyId: company.id,
           status: 'PENDING',
-          OR: dueDateWindows,
         },
         include: {
-          debtor: true,
+          debtor: {
+            include: {
+              collectionProfile: {
+                include: {
+                  steps: {
+                    where: { isActive: true },
+                    orderBy: { stepOrder: 'asc' },
+                  },
+                },
+              },
+            },
+          },
           collectionLogs: {
             where: {
               createdAt: { gte: startOfToday },
-              actionType: { in: ['WHATSAPP_QUEUED', 'WHATSAPP_SENT'] },
+              actionType: {
+                in: ['WHATSAPP_QUEUED', 'WHATSAPP_SENT', 'EMAIL_SENT'],
+              },
             },
           },
         },
       });
 
-      const jobs: SendMessageJob[] = [];
-      let skippedCount = 0;
+      interface ResolvedInvoice {
+        invoice: ScheduledInvoice;
+        ruleStepId: string;
+        channel: CollectionChannel;
+        templateId: string | null;
+        delayDays: number;
+      }
 
-      for (const invoice of scheduledInvoices) {
-        const daysFromDueDate = this.getDaysBetween(
-          startOfToday,
-          this.startOfDay(invoice.dueDate),
+      const resolved: ResolvedInvoice[] = [];
+      let skippedPre = 0;
+
+      for (const invoice of pendingInvoices) {
+        const nextStep = await this.ruleEngine.getNextStep(invoice);
+        if (!nextStep) {
+          skippedPre++;
+          continue;
+        }
+
+        resolved.push({
+          invoice: invoice as never,
+          ruleStepId: nextStep.ruleStepId,
+          channel: nextStep.channel,
+          templateId: nextStep.templateId,
+          delayDays: nextStep.delayDays,
+        });
+      }
+
+      if (resolved.length === 0) {
+        return { queued: 0, skipped: skippedPre };
+      }
+
+      const CHUNK_SIZE = 10;
+      const paymentResults = new Map<string, PaymentMessageData | null>();
+
+      for (let i = 0; i < resolved.length; i += CHUNK_SIZE) {
+        const chunk = resolved.slice(i, i + CHUNK_SIZE);
+        const settled = await Promise.allSettled(
+          chunk.map(async ({ invoice }) => {
+            const data = await this.ensureInvoicePayment(invoice, company);
+            return { invoiceId: invoice.id, paymentData: data };
+          }),
         );
 
-        if (!scheduledOffsets.includes(daysFromDueDate)) {
-          skippedCount++;
-          continue;
+        for (const outcome of settled) {
+          if (outcome.status === 'fulfilled') {
+            paymentResults.set(
+              outcome.value.invoiceId,
+              outcome.value.paymentData,
+            );
+          } else {
+            this.logger.error(
+              'Falha ao processar pagamento em lote:',
+              outcome.reason,
+            );
+          }
         }
+      }
 
-        if (invoice.collectionLogs.length > 0) {
-          skippedCount++;
-          continue;
-        }
+      const whatsAppJobs: SendMessageJob[] = [];
+      const emailJobs: Array<{
+        companyId: string;
+        invoiceId: string;
+        debtorId: string;
+        debtorName: string;
+        email: string;
+        subject: string;
+        html: string;
+        ruleStepId: string;
+      }> = [];
+      let skippedCount = skippedPre;
 
-        const paymentData = await this.ensureInvoicePayment(invoice, company);
+      for (const { invoice, ruleStepId, channel, templateId } of resolved) {
+        const paymentData = paymentResults.get(invoice.id);
         if (!paymentData) {
           skippedCount++;
           continue;
         }
 
-        let phone = invoice.debtor.phoneNumber;
-        if (!phone.startsWith('55')) {
-          phone = `55${phone}`;
+        if (channel === 'WHATSAPP') {
+          const template = await this.resolveTemplate(
+            company.id,
+            templateId,
+            true,
+          );
+          if (!template) {
+            await this.createCollectionLog(
+              company.id,
+              invoice.id,
+              'WHATSAPP_TEMPLATE_NOT_APPROVED',
+              'Nenhum template Meta aprovado disponivel para esta etapa da regua.',
+              'SKIPPED',
+            );
+            skippedCount++;
+            continue;
+          }
+
+          const attemptCreated = await this.createQueuedAttempt(
+            company.id,
+            invoice.id,
+            ruleStepId,
+            'WHATSAPP',
+          );
+          if (!attemptCreated) {
+            skippedCount++;
+            continue;
+          }
+
+          let phone = invoice.debtor.phoneNumber;
+          if (!phone.startsWith('55')) {
+            phone = `55${phone}`;
+          }
+
+          const replacements = this.buildTemplateReplacements({
+            debtorName: invoice.debtor.name,
+            originalAmount: Number(invoice.originalAmount),
+            dueDate: invoice.dueDate,
+            companyName: company.corporateName,
+            paymentData,
+          });
+          const templateParameters = this.whatsappService
+            ?.buildTemplateParameters
+            ? this.whatsappService.buildTemplateParameters(
+                template.content,
+                replacements,
+              )
+            : this.buildTemplateParameters(template.content, replacements);
+          const templateName =
+            template.metaTemplateName ??
+            this.whatsappService?.buildMetaTemplateName(template.slug) ??
+            template.slug;
+          const message = this.buildMessageFromTemplate(template.content, {
+            debtorName: invoice.debtor.name,
+            originalAmount: Number(invoice.originalAmount),
+            dueDate: invoice.dueDate,
+            companyName: company.corporateName,
+            paymentData,
+          });
+
+          whatsAppJobs.push({
+            invoiceId: invoice.id,
+            companyId: company.id,
+            debtorId: invoice.debtor.id,
+            phoneNumber: phone,
+            senderKey: company.whatsappInstanceId ?? 'unknown',
+            templateName,
+            templateLanguage: template.metaLanguage,
+            templateParameters,
+            buttonUrlSuffix: template.paymentButtonEnabled
+              ? paymentData.paymentPageToken || undefined
+              : undefined,
+            message,
+            debtorName: invoice.debtor.name,
+            ruleStepId,
+          });
+        } else if (channel === 'EMAIL') {
+          const debtorEmail = invoice.debtor.email as string | undefined;
+          if (!debtorEmail) {
+            skippedCount++;
+            continue;
+          }
+
+          const template = await this.resolveTemplate(
+            company.id,
+            templateId,
+            false,
+          );
+          const emailTemplate =
+            await this.emailTemplatesService.findActiveOrDefault(
+              company.id,
+              template?.slug ?? null,
+            );
+          const renderParams = {
+            debtorName: invoice.debtor.name,
+            originalAmount: Number(invoice.originalAmount),
+            dueDate: invoice.dueDate,
+            companyName: company.corporateName,
+            paymentData,
+          };
+          const templateBody = this.buildTemplateText(
+            emailTemplate.content,
+            renderParams,
+          );
+          const subject = this.buildTemplateText(
+            emailTemplate.subject,
+            renderParams,
+          );
+          const attemptCreated = await this.createQueuedAttempt(
+            company.id,
+            invoice.id,
+            ruleStepId,
+            'EMAIL',
+          );
+          if (!attemptCreated) {
+            skippedCount++;
+            continue;
+          }
+
+          const html = this.emailService.buildCollectionEmailHtml({
+            debtorName: invoice.debtor.name,
+            companyName: company.corporateName,
+            amount: new Intl.NumberFormat('pt-BR', {
+              style: 'currency',
+              currency: 'BRL',
+            }).format(Number(invoice.originalAmount)),
+            dueDate: new Intl.DateTimeFormat('pt-BR', {
+              day: '2-digit',
+              month: '2-digit',
+              year: 'numeric',
+              timeZone: 'America/Sao_Paulo',
+            }).format(invoice.dueDate),
+            paymentMethod: paymentData.billingTypeLabel,
+            paymentLink: paymentData.paymentLink,
+            pixCopyPaste: paymentData.pixCopiaECola,
+            boletoLine: paymentData.boletoLinhaDigitavel,
+            bodyText: templateBody,
+          });
+
+          emailJobs.push({
+            companyId: company.id,
+            invoiceId: invoice.id,
+            debtorId: invoice.debtor.id,
+            debtorName: invoice.debtor.name,
+            email: debtorEmail,
+            subject,
+            html,
+            ruleStepId,
+          });
         }
-
-        const templateSlug = this.getTemplateSlugForOffset(daysFromDueDate);
-        const template = templatesBySlug.get(templateSlug) ?? fallbackTemplate;
-        const message = this.buildMessageFromTemplate(template.content, {
-          debtorName: invoice.debtor.name,
-          originalAmount: Number(invoice.originalAmount),
-          dueDate: invoice.dueDate,
-          companyName: company.corporateName,
-          paymentData,
-        });
-
-        jobs.push({
-          invoiceId: invoice.id,
-          companyId: company.id,
-          phoneNumber: phone,
-          instanceName: company.whatsappInstanceId,
-          message,
-          debtorName: invoice.debtor.name,
-        });
       }
 
-      if (jobs.length > 0) {
-        await this.messageQueue.addBulkSendMessageJobs(jobs);
-        await this.logQueuedMessages(jobs);
-        this.logger.log(
-          `Empresa ${company.corporateName}: ${jobs.length} mensagens enfileiradas, ${skippedCount} puladas`,
-        );
-      } else {
-        this.logger.log(
-          `Empresa ${company.corporateName}: nenhuma mensagem para enviar, ${skippedCount} puladas`,
-        );
+      if (whatsAppJobs.length > 0) {
+        await this.messageQueue.addBulkSendMessageJobs(whatsAppJobs);
+        await this.logQueuedMessages(whatsAppJobs);
       }
 
-      return { queued: jobs.length, skipped: skippedCount };
+      if (emailJobs.length > 0) {
+        await this.emailQueue.addBulk(emailJobs);
+      }
+
+      const totalQueued = whatsAppJobs.length + emailJobs.length;
+      this.logger.log(
+        `Empresa ${company.corporateName}: ${totalQueued} mensagens enfileiradas (${whatsAppJobs.length} WhatsApp + ${emailJobs.length} email), ${skippedCount} puladas`,
+      );
+
+      return { queued: totalQueued, skipped: skippedCount };
     } catch (error) {
       this.logger.error(
         `Erro ao executar cobrancas para empresa ${companyId}:`,
@@ -495,6 +832,51 @@ export class BillingService {
       );
       return { queued: 0, skipped: 0 };
     }
+  }
+
+  private async resolveTemplate(
+    companyId: string,
+    templateId: string | null,
+    requireApprovedMeta: boolean,
+  ): Promise<{
+    id: string;
+    slug: string;
+    content: string;
+    metaTemplateName: string | null;
+    metaLanguage: string;
+    paymentButtonEnabled: boolean;
+  } | null> {
+    const approvalFilter = requireApprovedMeta
+      ? { metaStatus: 'APPROVED' }
+      : {};
+
+    if (templateId) {
+      const template = await this.prisma.messageTemplate.findFirst({
+        where: { id: templateId, companyId, isActive: true, ...approvalFilter },
+        select: {
+          id: true,
+          slug: true,
+          content: true,
+          metaTemplateName: true,
+          metaLanguage: true,
+          paymentButtonEnabled: true,
+        },
+      });
+      if (template) return template;
+    }
+
+    return this.prisma.messageTemplate.findFirst({
+      where: { companyId, isActive: true, ...approvalFilter },
+      select: {
+        id: true,
+        slug: true,
+        content: true,
+        metaTemplateName: true,
+        metaLanguage: true,
+        paymentButtonEnabled: true,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
   }
 
   private async ensureInvoicePayment(
@@ -608,6 +990,16 @@ export class BillingService {
     return value === 'PIX' || value === 'BOLETO' || value === 'BOLIX';
   }
 
+  private normalizeEnabledBillingMethods(
+    methods: BillingMethod[] | null | undefined,
+  ): BillingMethod[] {
+    const enabled = (methods ?? []).filter((method) =>
+      this.isBillingMethod(method),
+    );
+
+    return enabled.length > 0 ? enabled : ['PIX'];
+  }
+
   private hasValidPaymentData(
     invoice: {
       gatewayId: string | null;
@@ -615,12 +1007,17 @@ export class BillingService {
       efiTxid: string | null;
       efiChargeId: string | null;
       efiPixCopiaECola: string | null;
+      pixExpiresAt?: Date | null;
       boletoLinhaDigitavel: string | null;
       boletoLink: string | null;
     },
     billingType: BillingMethod,
   ): boolean {
     if (billingType === 'PIX') {
+      if (invoice.pixExpiresAt && invoice.pixExpiresAt <= new Date()) {
+        return false;
+      }
+
       return Boolean(
         invoice.gatewayId &&
         invoice.efiTxid &&
@@ -637,6 +1034,8 @@ export class BillingService {
 
   private buildPaymentMessageData(
     invoice: {
+      id: string;
+      companyId: string;
       pixPayload: string | null;
       efiPixCopiaECola: string | null;
       boletoLinhaDigitavel: string | null;
@@ -649,17 +1048,24 @@ export class BillingService {
     const boletoLink = invoice.boletoLink ?? '';
     const boletoLinhaDigitavel = invoice.boletoLinhaDigitavel ?? '';
     const boletoPdf = invoice.boletoPdf ?? '';
+    const paymentPage = this.paymentLinkService?.createInvoicePaymentPage({
+      companyId: invoice.companyId,
+      invoiceId: invoice.id,
+    });
 
     return {
       billingType,
       billingTypeLabel: this.getBillingMethodLabel(billingType),
-      paymentLink: this.resolvePaymentLink({
-        billingType,
-        pixCopiaECola,
-        boletoLinhaDigitavel,
-        boletoLink,
-        boletoPdf,
-      }),
+      paymentLink:
+        paymentPage?.url ??
+        this.resolvePaymentLink({
+          billingType,
+          pixCopiaECola,
+          boletoLinhaDigitavel,
+          boletoLink,
+          boletoPdf,
+        }),
+      paymentPageToken: paymentPage?.token ?? '',
       pixCopiaECola,
       boletoLinhaDigitavel,
       boletoLink,
@@ -714,6 +1120,40 @@ export class BillingService {
     );
   }
 
+  private async createQueuedAttempt(
+    companyId: string,
+    invoiceId: string,
+    ruleStepId: string,
+    channel: CollectionChannel,
+  ): Promise<boolean> {
+    try {
+      await this.prisma.collectionAttempt.create({
+        data: {
+          companyId,
+          invoiceId,
+          ruleStepId,
+          channel,
+          status: 'QUEUED',
+        },
+      });
+
+      return true;
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return false;
+      }
+
+      throw error;
+    }
+  }
+
+  private isUniqueConstraintError(error: unknown): boolean {
+    return (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === 'P2002'
+    );
+  }
+
   private async createCollectionLog(
     companyId: string,
     invoiceId: string,
@@ -758,6 +1198,20 @@ export class BillingService {
     return 'PIX';
   }
 
+  private normalizeBusinessSegment(
+    value: BusinessSegment | null | undefined,
+  ): BusinessSegment {
+    return value === 'EDUCATION' ? 'EDUCATION' : 'GENERAL';
+  }
+
+  private normalizeNotificationEmails(emails: string[]): string[] {
+    const normalized = emails
+      .map((email) => email.trim().toLowerCase())
+      .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
+
+    return Array.from(new Set(normalized)).slice(0, 10);
+  }
+
   private normalizeDiscountDays(value: number | null | undefined): number {
     if (!Number.isInteger(value) || value === undefined || value === null) {
       return 0;
@@ -794,7 +1248,7 @@ export class BillingService {
 
   private normalizeSettingsInput(
     settings: BillingSettingsInput,
-  ): Omit<BillingSettingsResponse, 'tariffs'> {
+  ): NormalizedBillingSettings {
     const autoDiscountEnabled =
       settings.autoDiscountEnabled ?? DEFAULT_AUTO_DISCOUNT_ENABLED;
 
@@ -823,8 +1277,7 @@ export class BillingService {
         settings.collectionReminderDays,
       ),
       autoGenerateFirstCharge:
-        settings.autoGenerateFirstCharge ??
-        DEFAULT_AUTO_GENERATE_FIRST_CHARGE,
+        settings.autoGenerateFirstCharge ?? DEFAULT_AUTO_GENERATE_FIRST_CHARGE,
       autoDiscountEnabled: true,
       autoDiscountDaysAfterDue: this.normalizeDiscountDays(
         settings.autoDiscountDaysAfterDue,
@@ -838,11 +1291,17 @@ export class BillingService {
   private buildBillingSettingsResponse(
     company: {
       preferredBillingMethod?: BillingMethod | null;
+      enabledBillingMethods?: BillingMethod[] | null;
       collectionReminderDays?: number[] | null;
       autoGenerateFirstCharge?: boolean | null;
       autoDiscountEnabled?: boolean | null;
       autoDiscountDaysAfterDue?: number | null;
       autoDiscountPercentage?: { toNumber(): number } | null;
+      onTimeSplitPercentageBps?: number | null;
+      overdueSplitPercentageBps?: number | null;
+      businessSegment?: BusinessSegment | null;
+      paymentNotificationEnabled?: boolean | null;
+      paymentNotificationEmails?: string[] | null;
     } | null,
   ): BillingSettingsResponse {
     const autoDiscountEnabled = company?.autoDiscountEnabled ?? false;
@@ -850,6 +1309,9 @@ export class BillingService {
     return {
       preferredBillingMethod: this.normalizeBillingMethod(
         company?.preferredBillingMethod,
+      ),
+      enabledBillingMethods: this.normalizeEnabledBillingMethods(
+        company?.enabledBillingMethods,
       ),
       collectionReminderDays: this.normalizeReminderDays(
         company?.collectionReminderDays,
@@ -865,6 +1327,13 @@ export class BillingService {
             company?.autoDiscountPercentage?.toNumber(),
           )
         : null,
+      onTimeSplitPercentageBps: company?.onTimeSplitPercentageBps ?? 0,
+      overdueSplitPercentageBps: company?.overdueSplitPercentageBps ?? 0,
+      businessSegment: this.normalizeBusinessSegment(company?.businessSegment),
+      paymentNotificationEnabled: company?.paymentNotificationEnabled ?? true,
+      paymentNotificationEmails: this.normalizeNotificationEmails(
+        company?.paymentNotificationEmails ?? [],
+      ),
       tariffs: this.buildTariffs(),
     };
   }
@@ -1027,36 +1496,22 @@ export class BillingService {
       paymentData: PaymentMessageData;
     },
   ): string {
-    const valorFormatado = new Intl.NumberFormat('pt-BR', {
-      style: 'currency',
-      currency: 'BRL',
-    }).format(params.originalAmount);
+    const message = this.buildTemplateText(templateContent, params);
 
-    const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      timeZone: 'America/Sao_Paulo',
-    }).format(params.dueDate);
+    return this.ensurePaymentInstruction(message, params.paymentData);
+  }
 
-    const replacements: Record<string, string> = {
-      debtorName: params.debtorName,
-      originalAmount: valorFormatado,
-      dueDate: dataFormatada,
-      companyName: params.companyName,
-      payment_link: params.paymentData.paymentLink,
-      pix_copia_e_cola: params.paymentData.pixCopiaECola,
-      boleto_linha_digitavel: params.paymentData.boletoLinhaDigitavel,
-      boleto_link: params.paymentData.boletoLink,
-      boleto_pdf: params.paymentData.boletoPdf,
-      billing_type: params.paymentData.billingType,
-      metodo_pagamento: params.paymentData.billingTypeLabel,
-      valor: valorFormatado,
-      data_vencimento: dataFormatada,
-      nome_devedor: params.debtorName,
-      nome_empresa: params.companyName,
-    };
-
+  private buildTemplateText(
+    templateContent: string,
+    params: {
+      debtorName: string;
+      originalAmount: number;
+      dueDate: Date;
+      companyName: string;
+      paymentData: PaymentMessageData;
+    },
+  ): string {
+    const replacements = this.buildTemplateReplacements(params);
     const contentWithoutEmptyPaymentLines = this.removeEmptyVariableLines(
       templateContent,
       replacements,
@@ -1077,7 +1532,64 @@ export class BillingService {
       .replace(/\n{3,}/g, '\n\n')
       .trim();
 
-    return this.ensurePaymentInstruction(processedMessage, params.paymentData);
+    return processedMessage;
+  }
+
+  private buildTemplateReplacements(params: {
+    debtorName: string;
+    originalAmount: number;
+    dueDate: Date;
+    companyName: string;
+    paymentData: PaymentMessageData;
+  }): Record<string, string> {
+    const valorFormatado = new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(params.originalAmount);
+
+    const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      timeZone: 'America/Sao_Paulo',
+    }).format(params.dueDate);
+
+    return {
+      debtorName: params.debtorName,
+      originalAmount: valorFormatado,
+      dueDate: dataFormatada,
+      companyName: params.companyName,
+      payment_link: params.paymentData.paymentLink,
+      pix_copia_e_cola: params.paymentData.pixCopiaECola,
+      boleto_linha_digitavel: params.paymentData.boletoLinhaDigitavel,
+      boleto_link: params.paymentData.boletoLink,
+      boleto_pdf: params.paymentData.boletoPdf,
+      billing_type: params.paymentData.billingType,
+      metodo_pagamento: params.paymentData.billingTypeLabel,
+      valor: valorFormatado,
+      data_vencimento: dataFormatada,
+      nome_devedor: params.debtorName,
+      nome_empresa: params.companyName,
+    };
+  }
+
+  private buildTemplateParameters(
+    templateContent: string,
+    replacements: Record<string, string>,
+  ): string[] {
+    return Array.from(
+      templateContent.matchAll(/\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g),
+    )
+      .map((match) => match[1])
+      .filter((variableName): variableName is string => Boolean(variableName))
+      .map((variableName) => replacements[variableName] ?? '');
+  }
+
+  private buildMetaTemplateName(slug: string): string {
+    return `cobrapix_${slug}`
+      .toLowerCase()
+      .replace(/[^a-z0-9_]+/g, '_')
+      .replace(/^_+|_+$/g, '');
   }
 
   private ensurePaymentInstruction(

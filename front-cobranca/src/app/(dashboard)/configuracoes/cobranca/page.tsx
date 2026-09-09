@@ -1,64 +1,46 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
-  CalendarClock,
+  BellRing,
+  Building2,
   CheckCircle2,
-  CirclePlus,
   CreditCard,
+  GraduationCap,
   Loader2,
+  Mail,
   MessageCircle,
   Play,
-  RefreshCcw,
   Save,
-  Trash2,
+  SlidersHorizontal,
 } from "lucide-react";
 import type {
   BillingMethod,
   BillingRunSummary,
   BillingSettings,
+  BusinessSegment,
 } from "@/lib/api-client";
+import {
+  formatPercentageBps,
+  formatPlatformRateSummary,
+  getBillingMethodLabel,
+} from "@/lib/billing-fees";
 import { useApiClient } from "@/lib/use-api-client";
 
-const DEFAULT_OFFSETS = [-2, 0, 2, 7];
-const QUICK_OFFSETS = [-7, -3, -2, -1, 0, 1, 2, 3, 7, 15, 30];
-const MIN_OFFSET = -30;
-const MAX_OFFSET = 365;
 const BILLING_METHODS: BillingMethod[] = ["PIX", "BOLETO", "BOLIX"];
-
-type WhatsAppConnectionStatus = "checking" | "connected" | "disconnected";
-
-function normalizeOffsets(offsets: number[]): number[] {
-  return Array.from(
-    new Set(
-      offsets.filter(
-        (offset) =>
-          Number.isInteger(offset) &&
-          offset >= MIN_OFFSET &&
-          offset <= MAX_OFFSET,
-      ),
-    ),
-  ).sort((left, right) => left - right);
-}
-
-function getMethodLabel(method: BillingMethod): string {
-  if (method === "PIX") return "Pix";
-  if (method === "BOLETO") return "Boleto";
-  return "Bolix";
-}
 
 function getMethodDescription(method: BillingMethod): string {
   if (method === "PIX") {
-    return "Cobrança Pix com tarifa Efí percentual e nossa taxa fixa por transação.";
+    return "Cobrança Pix com tarifa Efí percentual e taxa percentual da plataforma.";
   }
 
   if (method === "BOLETO") {
-    return "Cobrança por boleto com tarifa fixa da Efí somada à taxa fixa da plataforma.";
+    return "Cobrança por boleto com tarifa fixa da Efí e taxa percentual da plataforma.";
   }
 
-  return "Cobrança Bolix com tarifa fixa da Efí somada à taxa fixa da plataforma.";
+  return "Cobrança Bolix com tarifa fixa da Efí e taxa percentual da plataforma.";
 }
 
 function getErrorMessage(
@@ -72,51 +54,23 @@ function getErrorMessage(
   return fallback;
 }
 
-function isWhatsappConnected(data: { state?: string; dbStatus?: string }): boolean {
-  const state = data.state?.toLowerCase();
-  const dbStatus = data.dbStatus?.toUpperCase();
-
-  return state === "open" || state === "connected" || dbStatus === "CONNECTED";
-}
-
-function getBillingRunErrorMessage(error: unknown): string {
-  const message = getErrorMessage(
-    error,
-    "Nao foi possivel executar a regua de cobranca agora.",
+function parseNotificationEmails(value: string): {
+  emails: string[];
+  invalid: string[];
+} {
+  const entries = value
+    .split(/[\n,;]/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  const uniqueEntries = Array.from(new Set(entries));
+  const invalid = uniqueEntries.filter(
+    (email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email),
   );
 
-  if (message.toLowerCase().includes("whatsapp")) {
-    return "WhatsApp nao esta conectado. Conecte o aparelho para executar a regua manual.";
-  }
-
-  return message;
-}
-
-function formatOffset(offset: number): string {
-  if (offset === 0) {
-    return "No vencimento";
-  }
-
-  const absoluteOffset = Math.abs(offset);
-  const dayLabel = absoluteOffset === 1 ? "dia" : "dias";
-  return offset < 0
-    ? `${absoluteOffset} ${dayLabel} antes`
-    : `${absoluteOffset} ${dayLabel} depois`;
-}
-
-function estimateFee(method: BillingMethod, amount: number, settings: BillingSettings): string {
-  const tariff = settings.tariffs[method];
-
-  if (tariff.efiKind === "percentage") {
-    const efiAmount = (amount * tariff.efiValue) / 100;
-    const total = efiAmount + tariff.platformFixedFee;
-    return new Intl.NumberFormat("pt-BR", {
-      style: "currency",
-      currency: "BRL",
-    }).format(total);
-  }
-
-  return tariff.combinedLabel;
+  return {
+    emails: uniqueEntries.filter((email) => !invalid.includes(email)),
+    invalid,
+  };
 }
 
 export default function BillingSettingsPage() {
@@ -124,18 +78,20 @@ export default function BillingSettingsPage() {
   const [settings, setSettings] = useState<BillingSettings | null>(null);
   const [preferredBillingMethod, setPreferredBillingMethod] =
     useState<BillingMethod>("PIX");
-  const [selectedOffsets, setSelectedOffsets] = useState<number[]>([0]);
-  const [customOffset, setCustomOffset] = useState("");
   const [autoGenerateFirstCharge, setAutoGenerateFirstCharge] = useState(true);
   const [autoDiscountEnabled, setAutoDiscountEnabled] = useState(false);
   const [autoDiscountDaysAfterDue, setAutoDiscountDaysAfterDue] = useState("0");
   const [autoDiscountPercentage, setAutoDiscountPercentage] = useState("");
+  const [businessSegment, setBusinessSegment] =
+    useState<BusinessSegment>("GENERAL");
+  const [paymentNotificationEnabled, setPaymentNotificationEnabled] =
+    useState(true);
+  const [paymentNotificationEmails, setPaymentNotificationEmails] =
+    useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [whatsappStatus, setWhatsappStatus] =
-    useState<WhatsAppConnectionStatus>("checking");
   const [runningBilling, setRunningBilling] = useState(false);
   const [billingRunResult, setBillingRunResult] =
     useState<BillingRunSummary | null>(null);
@@ -143,27 +99,6 @@ export default function BillingSettingsPage() {
     null,
   );
   const [billingRunError, setBillingRunError] = useState<string | null>(null);
-
-  const orderedOffsets = useMemo(
-    () => normalizeOffsets(selectedOffsets),
-    [selectedOffsets],
-  );
-  const whatsappConnected = whatsappStatus === "connected";
-
-  const refreshWhatsappStatus = useCallback(async (): Promise<boolean> => {
-    setWhatsappStatus("checking");
-
-    try {
-      const response = await apiClient.getWhatsappStatus();
-      const connected = isWhatsappConnected(response);
-
-      setWhatsappStatus(connected ? "connected" : "disconnected");
-      return connected;
-    } catch {
-      setWhatsappStatus("disconnected");
-      return false;
-    }
-  }, [apiClient]);
 
   useEffect(() => {
     let active = true;
@@ -180,8 +115,11 @@ export default function BillingSettingsPage() {
         }
 
         setSettings(response);
-        setPreferredBillingMethod(response.preferredBillingMethod);
-        setSelectedOffsets(normalizeOffsets(response.collectionReminderDays));
+        setPreferredBillingMethod(
+          response.enabledBillingMethods.includes(response.preferredBillingMethod)
+            ? response.preferredBillingMethod
+            : (response.enabledBillingMethods[0] ?? "PIX"),
+        );
         setAutoGenerateFirstCharge(response.autoGenerateFirstCharge);
         setAutoDiscountEnabled(response.autoDiscountEnabled);
         setAutoDiscountDaysAfterDue(
@@ -189,6 +127,11 @@ export default function BillingSettingsPage() {
         );
         setAutoDiscountPercentage(
           response.autoDiscountPercentage?.toString() ?? "",
+        );
+        setBusinessSegment(response.businessSegment);
+        setPaymentNotificationEnabled(response.paymentNotificationEnabled);
+        setPaymentNotificationEmails(
+          response.paymentNotificationEmails.join("\n"),
         );
       } catch (loadError) {
         if (active) {
@@ -208,62 +151,9 @@ export default function BillingSettingsPage() {
     };
   }, [apiClient]);
 
-  useEffect(() => {
-    void refreshWhatsappStatus();
-  }, [refreshWhatsappStatus]);
-
-  function toggleOffset(offset: number): void {
-    setSelectedOffsets((current) => {
-      if (current.includes(offset)) {
-        const nextOffsets = current.filter((item) => item !== offset);
-        return nextOffsets.length > 0 ? nextOffsets : current;
-      }
-
-      return normalizeOffsets([...current, offset]);
-    });
-    setSuccess(null);
-  }
-
-  function removeOffset(offset: number): void {
-    setSelectedOffsets((current) => {
-      const nextOffsets = current.filter((item) => item !== offset);
-      return nextOffsets.length > 0 ? nextOffsets : current;
-    });
-    setSuccess(null);
-  }
-
-  function applyDefaultOffsets(): void {
-    setSelectedOffsets(DEFAULT_OFFSETS);
-    setSuccess(null);
-  }
-
-  function addCustomOffset(): void {
-    const offset = Number(customOffset);
-
-    if (
-      !Number.isInteger(offset) ||
-      offset < MIN_OFFSET ||
-      offset > MAX_OFFSET
-    ) {
-      setError("Informe um numero inteiro entre -30 e 365.");
-      return;
-    }
-
-    setSelectedOffsets((current) => normalizeOffsets([...current, offset]));
-    setCustomOffset("");
-    setError(null);
-    setSuccess(null);
-  }
-
   async function saveSettings(): Promise<void> {
-    const collectionReminderDays = normalizeOffsets(selectedOffsets);
     const parsedDiscountDays = Number(autoDiscountDaysAfterDue);
     const parsedDiscountPercentage = Number(autoDiscountPercentage);
-
-    if (collectionReminderDays.length === 0) {
-      setError("Mantenha pelo menos um dia de cobranca ativo.");
-      return;
-    }
 
     if (autoDiscountEnabled) {
       if (
@@ -290,26 +180,43 @@ export default function BillingSettingsPage() {
     setSuccess(null);
 
     try {
+      const parsedEmails = parseNotificationEmails(paymentNotificationEmails);
+
+      if (parsedEmails.invalid.length > 0) {
+        setError(`E-mail invalido: ${parsedEmails.invalid[0]}`);
+        setSaving(false);
+        return;
+      }
+
       const saved = await apiClient.updateBillingSettings({
         preferredBillingMethod,
-        collectionReminderDays,
+        collectionReminderDays: settings?.collectionReminderDays ?? [0],
         autoGenerateFirstCharge,
         autoDiscountEnabled,
-        autoDiscountDaysAfterDue: autoDiscountEnabled ? parsedDiscountDays : null,
+        autoDiscountDaysAfterDue: autoDiscountEnabled
+          ? parsedDiscountDays
+          : null,
         autoDiscountPercentage: autoDiscountEnabled
           ? Number(parsedDiscountPercentage.toFixed(2))
           : null,
+        businessSegment,
+        paymentNotificationEnabled,
+        paymentNotificationEmails: parsedEmails.emails,
       });
 
       setSettings(saved);
-      setPreferredBillingMethod(saved.preferredBillingMethod);
-      setSelectedOffsets(normalizeOffsets(saved.collectionReminderDays));
+      setPreferredBillingMethod(
+        saved.enabledBillingMethods.includes(saved.preferredBillingMethod)
+          ? saved.preferredBillingMethod
+          : (saved.enabledBillingMethods[0] ?? "PIX"),
+      );
       setAutoGenerateFirstCharge(saved.autoGenerateFirstCharge);
       setAutoDiscountEnabled(saved.autoDiscountEnabled);
       setAutoDiscountDaysAfterDue(String(saved.autoDiscountDaysAfterDue ?? 0));
-      setAutoDiscountPercentage(
-        saved.autoDiscountPercentage?.toString() ?? "",
-      );
+      setAutoDiscountPercentage(saved.autoDiscountPercentage?.toString() ?? "");
+      setBusinessSegment(saved.businessSegment);
+      setPaymentNotificationEnabled(saved.paymentNotificationEnabled);
+      setPaymentNotificationEmails(saved.paymentNotificationEmails.join("\n"));
       setSuccess("Configuracoes de cobranca salvas.");
     } catch (saveError) {
       setError(getErrorMessage(saveError));
@@ -324,32 +231,26 @@ export default function BillingSettingsPage() {
     setBillingRunMessage(null);
     setBillingRunResult(null);
 
-    const connected = await refreshWhatsappStatus();
-
-    if (!connected) {
-      setBillingRunError(
-        "WhatsApp nao esta conectado. Conecte o aparelho para executar a regua manual.",
-      );
-      setRunningBilling(false);
-      return;
-    }
-
     try {
       const response = await apiClient.runBilling();
       setBillingRunResult(response.summary);
       setBillingRunMessage(response.message);
       setSuccess(null);
     } catch (runError) {
-      const message = getBillingRunErrorMessage(runError);
-      setBillingRunError(message);
-
-      if (message.toLowerCase().includes("whatsapp")) {
-        setWhatsappStatus("disconnected");
-      }
+      setBillingRunError(
+        getErrorMessage(
+          runError,
+          "Nao foi possivel executar a regua de cobranca.",
+        ),
+      );
     } finally {
       setRunningBilling(false);
     }
   }
+
+  const enabledBillingMethods = settings?.enabledBillingMethods.length
+    ? settings.enabledBillingMethods
+    : ["PIX"];
 
   return (
     <main className="min-h-full bg-slate-50">
@@ -360,7 +261,8 @@ export default function BillingSettingsPage() {
               Agenda de cobranca
             </h1>
             <p className="mt-1 text-sm text-slate-600">
-              Escolha o metodo global de cobranca e deixe as tarifas visiveis para a tomada de decisao.
+              Escolha o metodo global de cobranca e deixe as tarifas visiveis
+              para a tomada de decisao.
             </p>
           </div>
 
@@ -393,96 +295,166 @@ export default function BillingSettingsPage() {
         )}
 
         <section className="rounded-md border border-slate-200 bg-white">
+          <div className="flex items-center gap-2 border-b border-slate-200 px-5 py-4">
+            <Building2 size={20} className="text-emerald-600" />
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">
+                Perfil da empresa
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Empresas de educacao liberam os campos de aluno, matricula e
+                turma nas faturas.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-4 p-5 md:grid-cols-2">
+            {[
+              {
+                value: "GENERAL" as const,
+                title: "Geral",
+                description: "Cliente, devedor e fatura no fluxo principal.",
+                icon: Building2,
+              },
+              {
+                value: "EDUCATION" as const,
+                title: "Educacao",
+                description: "Campos opcionais para aluno, matricula e turma.",
+                icon: GraduationCap,
+              },
+            ].map((segment) => {
+              const Icon = segment.icon;
+              const active = businessSegment === segment.value;
+
+              return (
+                <button
+                  key={segment.value}
+                  type="button"
+                  onClick={() => {
+                    setBusinessSegment(segment.value);
+                    setSuccess(null);
+                  }}
+                  className={`rounded-md border px-4 py-4 text-left transition ${
+                    active
+                      ? "border-emerald-300 bg-emerald-50"
+                      : "border-slate-200 bg-white hover:bg-slate-50"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Icon size={18} className="text-emerald-700" />
+                    <p className="text-sm font-semibold text-slate-900">
+                      {segment.title}
+                    </p>
+                  </div>
+                  <p className="mt-2 text-sm text-slate-500">
+                    {segment.description}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="rounded-md border border-slate-200 bg-white">
+          <div className="flex items-center gap-2 border-b border-slate-200 px-5 py-4">
+            <BellRing size={20} className="text-emerald-600" />
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">
+                Baixa de pagamento
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Defina quem recebe o aviso imediato quando uma fatura vira paga.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="space-y-4">
+              <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-4">
+                <input
+                  type="checkbox"
+                  checked={paymentNotificationEnabled}
+                  onChange={(event) => {
+                    setPaymentNotificationEnabled(event.target.checked);
+                    setSuccess(null);
+                  }}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                />
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">
+                    Enviar e-mail imediato
+                  </p>
+                  <p className="mt-1 text-sm text-slate-500">
+                    O historico de baixas continua aparecendo no sistema.
+                  </p>
+                </div>
+              </label>
+
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs font-semibold uppercase text-slate-500">
+                  Destinatarios
+                </span>
+                <textarea
+                  rows={4}
+                  value={paymentNotificationEmails}
+                  onChange={(event) => {
+                    setPaymentNotificationEmails(event.target.value);
+                    setSuccess(null);
+                  }}
+                  placeholder={"financeiro@empresa.com\nsecretaria@empresa.com"}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                />
+              </label>
+            </div>
+
+            <aside className="rounded-md border border-slate-200 bg-slate-50 p-4">
+              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-md bg-white text-emerald-700">
+                <Mail size={20} />
+              </div>
+              <p className="text-sm font-semibold text-slate-900">
+                {paymentNotificationEnabled
+                  ? "Avisos ativos"
+                  : "Avisos pausados"}
+              </p>
+              <p className="mt-2 text-sm text-slate-500">
+                Se a lista estiver vazia, o e-mail principal da empresa sera
+                usado como destino.
+              </p>
+            </aside>
+          </div>
+        </section>
+
+        <section className="rounded-md border border-slate-200 bg-white">
           <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-start gap-2">
-              <Play size={20} className="mt-0.5 text-emerald-600" />
+              <Play size={20} className="text-emerald-600" />
               <div>
                 <h2 className="text-sm font-semibold text-slate-900">
                   Executar regua agora
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Enfileire manualmente as cobrancas elegiveis para os dias ativos da agenda.
+                  Enfileire manualmente as cobrancas elegiveis de acordo com os
+                  perfis e etapas configurados.
                 </p>
               </div>
             </div>
 
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <span
-                className={`inline-flex h-9 items-center justify-center gap-2 rounded-md border px-3 text-xs font-semibold ${
-                  whatsappStatus === "checking"
-                    ? "border-slate-200 bg-slate-50 text-slate-600"
-                    : whatsappConnected
-                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                      : "border-amber-200 bg-amber-50 text-amber-800"
-                }`}
-              >
-                {whatsappStatus === "checking" ? (
-                  <Loader2 className="animate-spin" size={15} />
-                ) : whatsappConnected ? (
-                  <CheckCircle2 size={15} />
-                ) : (
-                  <MessageCircle size={15} />
-                )}
-                {whatsappStatus === "checking"
-                  ? "Verificando WhatsApp"
-                  : whatsappConnected
-                    ? "WhatsApp conectado"
-                    : "WhatsApp desconectado"}
-              </span>
-
-              <button
-                type="button"
-                onClick={() => void refreshWhatsappStatus()}
-                disabled={runningBilling || whatsappStatus === "checking"}
-                title="Atualizar status do WhatsApp"
-                aria-label="Atualizar status do WhatsApp"
-                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <RefreshCcw
-                  size={16}
-                  className={whatsappStatus === "checking" ? "animate-spin" : ""}
-                />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => void runBillingNow()}
-                disabled={
-                  runningBilling ||
-                  whatsappStatus === "checking" ||
-                  !whatsappConnected
-                }
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {runningBilling ? (
-                  <Loader2 className="animate-spin" size={17} />
-                ) : (
-                  <Play size={17} />
-                )}
-                Executar agora
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => void runBillingNow()}
+              disabled={runningBilling}
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {runningBilling ? (
+                <Loader2 className="animate-spin" size={17} />
+              ) : (
+                <Play size={17} />
+              )}
+              Executar agora
+            </button>
           </div>
 
           <div className="space-y-4 p-5">
-            {!whatsappConnected && whatsappStatus !== "checking" && (
-              <div className="flex flex-col gap-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="mt-0.5 shrink-0" size={18} />
-                  <p>
-                    Conecte o WhatsApp antes de rodar a regua. Assim as mensagens podem ser enfileiradas com seguranca.
-                  </p>
-                </div>
-                <Link
-                  href="/configuracoes/whatsapp"
-                  className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-md bg-amber-900 px-3 text-sm font-semibold text-white transition hover:bg-amber-800"
-                >
-                  <MessageCircle size={16} />
-                  Conectar
-                </Link>
-              </div>
-            )}
-
             {billingRunError && (
               <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
                 <AlertTriangle className="mt-0.5 shrink-0" size={18} />
@@ -494,7 +466,9 @@ export default function BillingSettingsPage() {
               <div className="space-y-4">
                 <div className="flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
                   <CheckCircle2 className="mt-0.5 shrink-0" size={18} />
-                  <span>{billingRunMessage ?? "Regua de cobranca executada."}</span>
+                  <span>
+                    {billingRunMessage ?? "Regua de cobranca executada."}
+                  </span>
                 </div>
 
                 <div className="grid gap-3 sm:grid-cols-3">
@@ -536,7 +510,8 @@ export default function BillingSettingsPage() {
                 Primeira cobrança
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Gere e enfileire a primeira cobrança assim que uma fatura for cadastrada.
+                Gere e enfileire a primeira cobrança assim que uma fatura for
+                cadastrada.
               </p>
             </div>
           </div>
@@ -572,7 +547,8 @@ export default function BillingSettingsPage() {
                 Metodo de pagamento
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                A tarifa da Efí é apenas informativa e sempre recebe o adicional fixo de R$ 0,50 da plataforma.
+                A tarifa da Efí é informativa; a taxa da plataforma usa os
+                percentuais configurados para este cliente.
               </p>
             </div>
           </div>
@@ -581,163 +557,84 @@ export default function BillingSettingsPage() {
             {BILLING_METHODS.map((method) => {
               const active = preferredBillingMethod === method;
               const tariff = settings?.tariffs[method];
+              const enabled = enabledBillingMethods.includes(method);
 
               return (
                 <button
                   key={method}
                   type="button"
+                  disabled={!enabled}
                   onClick={() => {
+                    if (!enabled) return;
                     setPreferredBillingMethod(method);
                     setSuccess(null);
                   }}
                   className={`rounded-md border px-4 py-4 text-left transition ${
                     active
                       ? "border-emerald-300 bg-emerald-50"
-                      : "border-slate-200 bg-white hover:bg-slate-50"
+                      : enabled
+                        ? "border-slate-200 bg-white hover:bg-slate-50"
+                        : "border-slate-200 bg-slate-50 opacity-60"
                   }`}
                 >
                   <p className="text-sm font-semibold text-slate-900">
-                    {getMethodLabel(method)}
+                    {getBillingMethodLabel(method)}
                   </p>
                   <p className="mt-2 text-sm text-slate-600">
                     Efí: {tariff?.efiLabel ?? "-"}
                   </p>
                   <p className="mt-1 text-sm text-slate-600">
-                    Plataforma: {tariff?.platformLabel ?? "-"}
+                    Plataforma:{" "}
+                    {settings ? formatPlatformRateSummary(settings) : "-"}
                   </p>
-                  <p className="mt-1 text-sm font-semibold text-slate-900">
-                    Total: {tariff?.combinedLabel ?? "-"}
-                  </p>
-                  {settings && (
-                    <p className="mt-2 text-xs text-slate-500">
-                      Exemplo em R$ 100,00: {estimateFee(method, 100, settings)}
-                    </p>
-                  )}
                   <p className="mt-3 text-xs text-slate-500">
-                    {getMethodDescription(method)}
+                    {enabled ? getMethodDescription(method) : "Nao liberado"}
                   </p>
                 </button>
               );
             })}
+          </div>
+          <div className="border-t border-slate-200 px-5 py-4">
+            <p className="text-sm text-slate-600">
+              Taxa no prazo:{" "}
+              <span className="font-semibold text-slate-900">
+                {settings
+                  ? formatPercentageBps(settings.onTimeSplitPercentageBps)
+                  : "-"}
+              </span>
+              <span className="mx-3 text-slate-300">|</span>
+              Taxa recuperada:{" "}
+              <span className="font-semibold text-slate-900">
+                {settings
+                  ? formatPercentageBps(settings.overdueSplitPercentageBps)
+                  : "-"}
+              </span>
+            </p>
           </div>
         </section>
 
         <section className="rounded-md border border-slate-200 bg-white">
           <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
             <div className="flex items-center gap-2">
-              <CalendarClock size={20} className="text-emerald-600" />
+              <SlidersHorizontal size={20} className="text-emerald-600" />
               <h2 className="text-sm font-semibold text-slate-900">
-                Dias ativos
+                Regua de cobranca
               </h2>
             </div>
-            <button
-              type="button"
-              onClick={applyDefaultOffsets}
+            <Link
+              href="/configuracoes/regua"
               className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
             >
-              Padrao
-            </button>
+              Configurar perfis e etapas
+            </Link>
           </div>
-
-          <div className="grid gap-6 p-5 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="space-y-5">
-              {loading ? (
-                <div className="flex items-center gap-2 text-sm text-slate-500">
-                  <Loader2 className="animate-spin" size={18} />
-                  Carregando agenda
-                </div>
-              ) : (
-                <>
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                    {QUICK_OFFSETS.map((offset) => {
-                      const active = orderedOffsets.includes(offset);
-
-                      return (
-                        <button
-                          key={offset}
-                          type="button"
-                          onClick={() => toggleOffset(offset)}
-                          className={`min-h-20 rounded-md border px-4 py-3 text-left transition ${
-                            active
-                              ? "border-emerald-300 bg-emerald-50 text-emerald-950"
-                              : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                          }`}
-                        >
-                          <span className="block text-sm font-semibold">
-                            {formatOffset(offset)}
-                          </span>
-                          <span className="mt-2 block text-xs text-slate-500">
-                            D
-                            {offset === 0
-                              ? ""
-                              : offset > 0
-                                ? `+${offset}`
-                                : offset}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <div className="flex flex-col gap-2 sm:flex-row">
-                    <input
-                      type="number"
-                      min={MIN_OFFSET}
-                      max={MAX_OFFSET}
-                      step={1}
-                      value={customOffset}
-                      onChange={(event) => setCustomOffset(event.target.value)}
-                      className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 sm:max-w-52"
-                      placeholder="-2, 0, 7..."
-                    />
-                    <button
-                      type="button"
-                      onClick={addCustomOffset}
-                      className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
-                    >
-                      <CirclePlus size={18} />
-                      Adicionar
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-
-            <aside className="rounded-md border border-slate-200 bg-slate-50">
-              <div className="border-b border-slate-200 px-4 py-3">
-                <h2 className="text-sm font-semibold text-slate-900">
-                  Sequencia
-                </h2>
-              </div>
-
-              <div className="space-y-2 p-3">
-                {orderedOffsets.map((offset) => (
-                  <div
-                    key={offset}
-                    className="flex min-h-12 items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3"
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-slate-900">
-                        {formatOffset(offset)}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        D{offset === 0 ? "" : offset > 0 ? `+${offset}` : offset}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => removeOffset(offset)}
-                      disabled={orderedOffsets.length === 1}
-                      aria-label={`Remover ${formatOffset(offset)}`}
-                      title="Remover"
-                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-500 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </aside>
+          <div className="p-5">
+            <p className="text-sm text-slate-500">
+              Os dias de cobranca agora sao gerenciados por perfis de pagador na
+              tela de Regua de Cobranca. La voce pode configurar multiplos
+              canais (WhatsApp e e-mail), delays e janelas de envio para cada
+              perfil.
+            </p>
           </div>
         </section>
 
@@ -749,7 +646,8 @@ export default function BillingSettingsPage() {
                 Desconto automatico
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Defina um desconto global para pagamentos feitos apos o vencimento.
+                Defina um desconto global para pagamentos feitos apos o
+                vencimento.
               </p>
             </div>
           </div>
@@ -771,7 +669,8 @@ export default function BillingSettingsPage() {
                     Ativar desconto automatico
                   </p>
                   <p className="mt-1 text-sm text-slate-500">
-                    Quando ativo, novas cobrancas passam a sair com a regra de desconto configurada.
+                    Quando ativo, novas cobrancas passam a sair com a regra de
+                    desconto configurada.
                   </p>
                 </div>
               </label>
@@ -827,10 +726,11 @@ export default function BillingSettingsPage() {
             <aside className="rounded-md border border-slate-200 bg-slate-50 p-4">
               <h3 className="text-sm font-semibold text-slate-900">Resumo</h3>
               <p className="mt-3 text-sm text-slate-600">
-                Metodo atual: {getMethodLabel(preferredBillingMethod)}
+                Metodo atual: {getBillingMethodLabel(preferredBillingMethod)}
               </p>
               <p className="mt-2 text-sm text-slate-600">
-                Tarifa aplicada: {settings?.tariffs[preferredBillingMethod].combinedLabel ?? "-"}
+                Taxas da plataforma:{" "}
+                {settings ? formatPlatformRateSummary(settings) : "-"}
               </p>
               <p className="mt-3 text-sm text-slate-600">
                 {autoDiscountEnabled

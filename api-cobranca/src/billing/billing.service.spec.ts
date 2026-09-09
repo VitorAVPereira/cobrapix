@@ -4,6 +4,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PaymentService } from '../payment/payment.service';
 import { MessageQueueService, SendMessageJob } from '../queue/message.queue';
 import { SpintaxService } from '../queue/services/spintax.service';
+import { CollectionRuleEngine } from './collection-rule-engine';
+import { EmailQueueService } from '../email/email.queue';
+import { EmailService } from '../email/email.service';
+import { EmailTemplatesService } from '../email/email-templates.service';
 
 function decimal(value: number): { toNumber(): number; valueOf(): number } {
   return { toNumber: () => value, valueOf: () => value };
@@ -20,6 +24,7 @@ interface TestInvoiceOverrides {
   boletoLinhaDigitavel?: string | null;
   boletoLink?: string | null;
   boletoPdf?: string | null;
+  email?: string | null;
 }
 
 function buildCompany(): {
@@ -71,7 +76,7 @@ function buildInvoice(overrides: TestInvoiceOverrides = {}) {
       name: 'Maria Silva',
       document: null,
       phoneNumber: '11999999999',
-      email: null,
+      email: overrides.email ?? null,
       gatewayCustomerId: null,
       useGlobalBillingSettings: true,
       collectionReminderDays: [],
@@ -103,6 +108,25 @@ function createService(input: {
       findUnique: jest.fn().mockResolvedValue(company),
     },
     messageTemplate: {
+      findFirst: jest.fn().mockResolvedValue({
+        id: 'template-1',
+        slug: 'vencimento-hoje',
+        content:
+          input.templateContent ??
+          [
+            'Ola {{nome_devedor}}, sua cobranca de {{valor}} vence em {{data_vencimento}}.',
+            '',
+            'Forma de pagamento: {{metodo_pagamento}}',
+            'Acesse/pague por aqui: {{payment_link}}',
+            'Pix copia e cola: {{pix_copia_e_cola}}',
+            'Linha digitavel: {{boleto_linha_digitavel}}',
+            'Boleto: {{boleto_link}}',
+            'PDF do boleto: {{boleto_pdf}}',
+          ].join('\n'),
+        isActive: true,
+        metaTemplateName: null,
+        metaLanguage: 'pt_BR',
+      }),
       findMany: jest.fn().mockResolvedValue([
         {
           id: 'template-1',
@@ -127,13 +151,20 @@ function createService(input: {
       findMany: jest.fn().mockResolvedValue(invoices),
       findFirst: jest.fn().mockResolvedValue(input.updatedInvoice ?? null),
     },
+    debtor: {
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
     collectionLog: {
       create: jest.fn().mockResolvedValue({ id: 'log-1' }),
+    },
+    collectionAttempt: {
+      create: jest.fn().mockResolvedValue({ id: 'attempt-1' }),
     },
   } as unknown as PrismaService;
 
   const messageQueue = {
     addBulkSendMessageJobs: jest.fn().mockResolvedValue(undefined),
+    addSelectedInitialChargeJobs: jest.fn().mockResolvedValue(undefined),
   } as unknown as MessageQueueService;
 
   const spintaxService = {
@@ -144,18 +175,65 @@ function createService(input: {
     createPayment,
   } as unknown as PaymentService;
 
+  const ruleEngine = {
+    getNextStep: jest.fn().mockResolvedValue({
+      ruleStepId: 'step-1',
+      channel: 'WHATSAPP',
+      templateId: 'template-1',
+      delayDays: 0,
+    }),
+  } as unknown as CollectionRuleEngine;
+
+  const emailQueue = {
+    addBulk: jest.fn().mockResolvedValue(undefined),
+  } as unknown as EmailQueueService;
+
+  const emailService = {
+    buildCollectionEmailHtml: jest.fn().mockReturnValue('<html></html>'),
+  } as unknown as EmailService;
+
+  const emailTemplatesService = {
+    findActiveOrDefault: jest.fn().mockResolvedValue({
+      id: 'email-template-1',
+      slug: 'vencimento-hoje',
+      name: 'Vencimento hoje',
+      subject: '{{nome_empresa}}: cobranca de {{valor}}',
+      content:
+        'Ola {{nome_devedor}}, acesse {{payment_link}} ate {{data_vencimento}}.',
+      isActive: true,
+    }),
+  } as unknown as EmailTemplatesService;
+
   return {
     service: new BillingService(
       prisma,
       messageQueue,
       spintaxService,
       paymentService,
+      ruleEngine,
+      emailQueue,
+      emailService,
+      emailTemplatesService,
     ),
     prisma: prisma as unknown as {
       collectionLog: { create: jest.Mock };
+      debtor: { updateMany: jest.Mock };
     },
     messageQueue: messageQueue as unknown as {
       addBulkSendMessageJobs: jest.Mock;
+      addSelectedInitialChargeJobs: jest.Mock;
+    },
+    ruleEngine: ruleEngine as unknown as {
+      getNextStep: jest.Mock;
+    },
+    emailQueue: emailQueue as unknown as {
+      addBulk: jest.Mock;
+    },
+    emailService: emailService as unknown as {
+      buildCollectionEmailHtml: jest.Mock;
+    },
+    emailTemplatesService: emailTemplatesService as unknown as {
+      findActiveOrDefault: jest.Mock;
     },
     createPayment,
   };
@@ -213,7 +291,7 @@ describe('BillingService', () => {
         data: expect.objectContaining({
           actionType: 'PAYMENT_GENERATED',
           status: 'PENDING',
-        }),
+        }) as unknown,
       }),
     );
     expect(prisma.collectionLog.create).toHaveBeenCalledWith(
@@ -221,7 +299,7 @@ describe('BillingService', () => {
         data: expect.objectContaining({
           actionType: 'WHATSAPP_QUEUED',
           status: 'QUEUED',
-        }),
+        }) as unknown,
       }),
     );
   });
@@ -373,9 +451,52 @@ describe('BillingService', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           actionType: 'PAYMENT_REUSED',
-        }),
+        }) as unknown,
       }),
     );
+  });
+
+  it('atualiza contatos informados antes de enfileirar cobrancas selecionadas', async () => {
+    const invoice = buildInvoice();
+    const { service, messageQueue, prisma } = createService({
+      invoices: [invoice],
+    });
+
+    const result = await service.enqueueSelectedInvoices(
+      'company-1',
+      ['invoice-1'],
+      {
+        channels: ['EMAIL', 'WHATSAPP'],
+        contacts: [
+          {
+            invoiceId: 'invoice-1',
+            email: 'novo@email.com',
+            phoneNumber: '+5511998887777',
+            whatsappOptIn: true,
+          },
+        ],
+      },
+    );
+
+    expect(result).toEqual({ requested: 1, queued: 1, skipped: 0 });
+    expect(prisma.debtor.updateMany).toHaveBeenCalledWith({
+      where: { id: 'debtor-1', companyId: 'company-1' },
+      data: expect.objectContaining({
+        email: 'novo@email.com',
+        phoneNumber: '+5511998887777',
+        whatsappOptIn: true,
+        whatsappOptInAt: expect.any(Date) as Date,
+        whatsappOptInSource: 'manual_send_modal',
+      }) as unknown,
+    });
+    expect(messageQueue.addSelectedInitialChargeJobs).toHaveBeenCalledWith([
+      {
+        invoiceId: 'invoice-1',
+        companyId: 'company-1',
+        source: 'SELECTED',
+        channels: ['EMAIL', 'WHATSAPP'],
+      },
+    ]);
   });
 
   it('nao enfileira mensagem quando a geracao de pagamento falha', async () => {
@@ -400,8 +521,53 @@ describe('BillingService', () => {
           description: expect.stringContaining(
             'gateway indisponivel',
           ) as string,
-        }),
+        }) as unknown,
       }),
     );
+  });
+
+  it('usa template de email ativo para assunto e corpo do envio EMAIL', async () => {
+    const invoice = buildInvoice({
+      email: 'maria@example.com',
+      gatewayId: 'tx-invoice-1',
+      efiTxid: 'tx-invoice-1',
+      efiPixCopiaECola: 'pix-copia-e-cola',
+    });
+    const {
+      service,
+      ruleEngine,
+      emailQueue,
+      emailService,
+      emailTemplatesService,
+    } = createService({
+      invoices: [invoice],
+    });
+    ruleEngine.getNextStep.mockResolvedValue({
+      ruleStepId: 'step-1',
+      channel: 'EMAIL',
+      templateId: 'template-1',
+      delayDays: 0,
+    });
+
+    const result = await service.executeBilling('company-1');
+
+    expect(result).toEqual({ queued: 1, skipped: 0 });
+    expect(emailTemplatesService.findActiveOrDefault).toHaveBeenCalledWith(
+      'company-1',
+      'vencimento-hoje',
+    );
+    expect(emailService.buildCollectionEmailHtml).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bodyText: 'Ola Maria Silva, acesse pix-copia-e-cola ate 28/04/2026.',
+      }),
+    );
+    expect(emailQueue.addBulk).toHaveBeenCalledWith([
+      expect.objectContaining({
+        email: 'maria@example.com',
+        subject: expect.stringMatching(
+          /^Empresa Teste: cobranca de R\$\s150,00$/,
+        ) as string,
+      }),
+    ]);
   });
 });

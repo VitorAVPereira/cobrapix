@@ -1,13 +1,29 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { EfiPaymentResult, EfiService } from './efi.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
+
+interface CancelablePaymentInvoice {
+  id: string;
+  companyId: string;
+  efiTxid: string | null;
+  efiChargeId: string | null;
+}
+
+export interface CancelPaymentResult {
+  providerAction: 'LOCAL_ONLY' | 'PIX_COBV_REMOVED' | 'CHARGE_CANCELED';
+  gatewayStatusRaw: string;
+}
 
 @Injectable()
 export class PaymentService {
   private readonly logger = new Logger(PaymentService.name);
 
-  constructor(private readonly efiService: EfiService) {}
+  constructor(
+    private readonly efiService: EfiService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   async createPayment(
     invoiceId: string,
@@ -25,7 +41,43 @@ export class PaymentService {
       );
     }
 
+    await this.ensureInvoiceCanGeneratePayment(invoiceId, companyId);
+    await this.ensureBillingMethodEnabled(companyId, billingType);
+
     return this.efiService.createPayment(invoiceId, companyId, billingType);
+  }
+
+  async cancelPaymentForInvoice(
+    invoice: CancelablePaymentInvoice,
+  ): Promise<CancelPaymentResult> {
+    if (invoice.efiTxid) {
+      const gatewayStatusRaw = await this.efiService.cancelPixDueCharge(
+        invoice.companyId,
+        invoice.efiTxid,
+      );
+
+      return {
+        providerAction: 'PIX_COBV_REMOVED',
+        gatewayStatusRaw,
+      };
+    }
+
+    if (invoice.efiChargeId) {
+      const gatewayStatusRaw = await this.efiService.cancelCharge(
+        invoice.companyId,
+        invoice.efiChargeId,
+      );
+
+      return {
+        providerAction: 'CHARGE_CANCELED',
+        gatewayStatusRaw,
+      };
+    }
+
+    return {
+      providerAction: 'LOCAL_ONLY',
+      gatewayStatusRaw: 'CANCELED_BY_USER',
+    };
   }
 
   async createPaymentBatch(
@@ -49,26 +101,35 @@ export class PaymentService {
     let success = 0;
     let failed = 0;
 
-    for (const invoiceId of invoiceIds) {
-      try {
-        const result = await this.createPayment(
-          invoiceId,
-          companyId,
-          billingType,
-        );
-        results.push({
-          invoiceId,
-          gatewayId: result.gatewayId,
-          paymentLink: result.paymentLink,
-        });
-        success++;
-      } catch (error) {
-        this.logger.error(
-          `Erro ao criar cobranca Efi para fatura ${invoiceId}: ${
-            error instanceof Error ? error.message : 'erro desconhecido'
-          }`,
-        );
-        failed++;
+    const CHUNK_SIZE = 10;
+    for (let i = 0; i < invoiceIds.length; i += CHUNK_SIZE) {
+      const chunk = invoiceIds.slice(i, i + CHUNK_SIZE);
+      const settled = await Promise.allSettled(
+        chunk.map((invoiceId) =>
+          this.createPayment(invoiceId, companyId, billingType).then(
+            (result) => ({
+              invoiceId,
+              gatewayId: result.gatewayId,
+              paymentLink: result.paymentLink,
+            }),
+          ),
+        ),
+      );
+
+      for (const outcome of settled) {
+        if (outcome.status === 'fulfilled') {
+          results.push(outcome.value);
+          success++;
+        } else {
+          this.logger.error(
+            `Erro ao criar cobranca Efi em lote: ${
+              outcome.reason instanceof Error
+                ? outcome.reason.message
+                : 'erro desconhecido'
+            }`,
+          );
+          failed++;
+        }
       }
     }
 
@@ -113,5 +174,47 @@ export class PaymentService {
 
   isConfigured(): boolean {
     return this.efiService.isConfigured();
+  }
+
+  private async ensureInvoiceCanGeneratePayment(
+    invoiceId: string,
+    companyId: string,
+  ): Promise<void> {
+    const invoice = await this.prisma.invoice.findFirst({
+      where: { id: invoiceId, companyId },
+      select: { status: true },
+    });
+
+    if (!invoice) {
+      throw new HttpException('Fatura nao encontrada.', HttpStatus.NOT_FOUND);
+    }
+
+    if (invoice.status !== 'PENDING') {
+      throw new HttpException(
+        'Apenas faturas pendentes podem gerar cobranca.',
+        HttpStatus.CONFLICT,
+      );
+    }
+  }
+
+  private async ensureBillingMethodEnabled(
+    companyId: string,
+    billingType: BillingType,
+  ): Promise<void> {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { enabledBillingMethods: true },
+    });
+
+    if (!company) {
+      throw new HttpException('Empresa nao encontrada.', HttpStatus.NOT_FOUND);
+    }
+
+    if (!company.enabledBillingMethods.includes(billingType)) {
+      throw new HttpException(
+        'Metodo de cobranca nao habilitado para esta empresa.',
+        HttpStatus.FORBIDDEN,
+      );
+    }
   }
 }

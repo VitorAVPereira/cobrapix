@@ -1,17 +1,34 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { BillingMethod, Prisma, RecurringInvoiceStatus } from '@prisma/client';
+import {
+  BillingMethod,
+  CollectionProfileType,
+  Prisma,
+  RecurringInvoiceStatus,
+} from '@prisma/client';
 import {
   getWhatsAppNumberLookupCandidates,
   normalizeWhatsAppNumber,
 } from '../common/whatsapp-number';
+import {
+  normalizeDebtorDocument,
+  validateDebtorDocument,
+} from '../common/debtor-document';
 import { PrismaService } from '../prisma/prisma.service';
 import { InitialChargeJob, MessageQueueService } from '../queue/message.queue';
+import { PaymentService } from '../payment/payment.service';
 import { BillingType } from './dto/invoice.dto';
 
 const PLATFORM_FIXED_FEE = 0.5;
 const RECURRING_GENERATION_LOOKAHEAD_DAYS = 30;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
+const PAYMENT_HISTORY_TIME_ZONE = 'America/Sao_Paulo';
 
 interface BillingSettingsSnapshot {
   preferredBillingMethod: BillingMethod;
@@ -36,26 +53,37 @@ interface BillingSettingsSnapshot {
 
 interface ImportRow {
   name: string;
+  document: string;
   phone_number: string;
   email?: string;
   original_amount: number;
   due_date: string;
   billing_type: 'PIX' | 'BOLETO' | 'BOLIX';
+  whatsapp_opt_in?: boolean;
+  studentName?: string;
+  studentEnrollment?: string;
+  studentGroup?: string;
 }
 
 interface InvoiceListItem {
   id: string;
   invoiceId: string;
   name: string;
+  document?: string;
   phone_number: string;
   email?: string;
   original_amount: number;
   due_date: string;
   status: string;
   debtorId: string;
+  whatsapp_opt_in: boolean;
   gatewayId: string | null;
   pixPayload: string | null;
   billing_type: string;
+  studentName: string | null;
+  studentEnrollment: string | null;
+  studentGroup: string | null;
+  paidAt: string | null;
   payment: InvoicePaymentSummary;
   createdAt: string;
   recurrence?: {
@@ -64,6 +92,11 @@ interface InvoiceListItem {
     dueDay: number;
     status: RecurringInvoiceStatus;
   };
+  collectionProfile?: {
+    id: string;
+    name: string;
+    profileType: string;
+  } | null;
 }
 
 interface InvoicePaymentSummary {
@@ -80,13 +113,18 @@ interface InvoicePaymentSummary {
 interface CreateInvoiceInput {
   debtorId?: string;
   name?: string;
+  document?: string;
   phone_number?: string;
   email?: string;
+  whatsappOptIn?: boolean;
   original_amount: number;
   due_date?: string;
   billing_type: BillingType;
   recurring?: boolean;
   due_day?: number;
+  studentName?: string;
+  studentEnrollment?: string;
+  studentGroup?: string;
 }
 
 interface RecurringInvoiceListItem {
@@ -94,6 +132,7 @@ interface RecurringInvoiceListItem {
   debtor: {
     debtorId: string;
     name: string;
+    document?: string;
     phone_number: string;
     email?: string;
   };
@@ -113,6 +152,48 @@ interface RecurringInvoiceListItem {
   updatedAt: string;
 }
 
+export type PaymentTimeliness = 'EARLY' | 'ON_DUE_DATE' | 'OVERDUE' | 'UNKNOWN';
+
+export interface DebtorPaymentHistoryItem {
+  invoiceId: string;
+  amount: number;
+  billingType: string;
+  dueDate: string;
+  paidAt: string | null;
+  paidDate: string | null;
+  paidOnOrBeforeDueDate: boolean | null;
+  timeliness: PaymentTimeliness;
+  daysFromDueDate: number | null;
+  daysAfterDue: number | null;
+  daysBeforeDue: number | null;
+  gatewayId: string | null;
+  studentName: string | null;
+  studentEnrollment: string | null;
+  studentGroup: string | null;
+}
+
+export interface DebtorPaymentHistoryResponse {
+  debtor: {
+    debtorId: string;
+    name: string;
+    phone_number: string;
+    email?: string;
+  };
+  summary: {
+    totalPaidInvoices: number;
+    totalPaidAmount: number;
+    paidOnOrBeforeDueDate: number;
+    paidEarly: number;
+    paidOnDueDate: number;
+    paidOverdue: number;
+    unknownTiming: number;
+    averageDaysAfterDue: number;
+    maxDaysAfterDue: number;
+    lastPaymentAt: string | null;
+  };
+  payments: DebtorPaymentHistoryItem[];
+}
+
 interface UpdateRecurringInvoiceInput {
   amount: number;
   billingType: BillingType;
@@ -121,12 +202,16 @@ interface UpdateRecurringInvoiceInput {
 
 interface DebtorUpsertInput {
   name: string;
+  document: string;
   phoneNumber: string;
   email?: string | null;
+  whatsappOptIn?: boolean;
+  collectionProfileId: string;
 }
 
 interface DebtorIdentity {
   id: string;
+  document: string;
 }
 
 interface InvoiceWithRelations {
@@ -134,8 +219,15 @@ interface InvoiceWithRelations {
   debtor: {
     id: string;
     name: string;
+    document: string | null;
     phoneNumber: string;
     email: string | null;
+    whatsappOptIn: boolean;
+    collectionProfile?: {
+      id: string;
+      name: string;
+      profileType: string;
+    } | null;
   };
   originalAmount: { toNumber(): number };
   dueDate: Date;
@@ -150,6 +242,10 @@ interface InvoiceWithRelations {
   boletoLink: string | null;
   boletoPdf: string | null;
   billingType: string;
+  studentName: string | null;
+  studentEnrollment: string | null;
+  studentGroup: string | null;
+  paidAt: Date | null;
   createdAt: Date;
   recurringInvoiceId: string | null;
   recurrencePeriod: string | null;
@@ -164,6 +260,7 @@ interface RecurringInvoiceWithRelations {
   debtor: {
     id: string;
     name: string;
+    document: string | null;
     phoneNumber: string;
     email: string | null;
   };
@@ -183,9 +280,38 @@ interface RecurringInvoiceWithRelations {
   updatedAt: Date;
 }
 
+interface PaymentHistoryInvoice {
+  id: string;
+  originalAmount: { toNumber(): number };
+  dueDate: Date;
+  paidAt: Date | null;
+  gatewayId: string | null;
+  billingType: string;
+  studentName: string | null;
+  studentEnrollment: string | null;
+  studentGroup: string | null;
+}
+
+interface PaymentTimingResult {
+  timeliness: PaymentTimeliness;
+  paidOnOrBeforeDueDate: boolean | null;
+  daysFromDueDate: number | null;
+  daysAfterDue: number | null;
+  daysBeforeDue: number | null;
+}
+
 export interface DebtorSettingsResponse {
   debtorId: string;
   debtorName: string;
+  document: string | null;
+  whatsappOptIn: boolean;
+  whatsappOptInAt: string | null;
+  whatsappOptInSource: string | null;
+  collectionProfile: {
+    id: string;
+    name: string;
+    profileType: CollectionProfileType;
+  } | null;
   useGlobalBillingSettings: boolean;
   customPreferredBillingMethod: BillingMethod | null;
   customCollectionReminderDays: number[];
@@ -199,13 +325,102 @@ export interface DebtorSettingsResponse {
 }
 
 export interface UpdateDebtorSettingsInput {
-  useGlobalBillingSettings: boolean;
+  document?: string | null;
+  useGlobalBillingSettings?: boolean;
+  whatsappOptIn?: boolean;
   preferredBillingMethod?: BillingMethod | null;
   collectionReminderDays?: number[] | null;
   autoGenerateFirstCharge?: boolean | null;
   autoDiscountEnabled?: boolean | null;
   autoDiscountDaysAfterDue?: number | null;
   autoDiscountPercentage?: number | null;
+  collectionProfileId?: string | null;
+}
+
+export interface DebtorCollectionProfileSummary {
+  id: string;
+  name: string;
+  profileType: CollectionProfileType;
+}
+
+export interface CreateDebtorInput {
+  name: string;
+  document: string;
+  phone_number: string;
+  email?: string | null;
+  whatsappOptIn?: boolean;
+  collectionProfileId?: string | null;
+}
+
+export interface UpdateDebtorInput {
+  name?: string;
+  document?: string;
+  phone_number?: string;
+  email?: string | null;
+  whatsappOptIn?: boolean;
+  collectionProfileId?: string | null;
+}
+
+export interface DebtorListParams {
+  page: number;
+  pageSize: number;
+  search?: string;
+  profileId?: string;
+  paymentStatus?: 'all' | 'open' | 'paid' | 'no_open';
+}
+
+export interface DebtorListSummary {
+  totalDebtors: number;
+  openInvoiceAmount: number;
+  openInvoiceCount: number;
+  paidInvoiceAmount: number;
+  paidInvoiceCount: number;
+}
+
+export interface DebtorListItem {
+  debtorId: string;
+  name: string;
+  document: string;
+  phone_number: string;
+  email: string | null;
+  whatsapp_opt_in: boolean;
+  whatsappOptInAt: string | null;
+  collectionProfile: DebtorCollectionProfileSummary;
+  openInvoicesCount: number;
+  openInvoicesAmount: number;
+  paidInvoicesCount: number;
+  paidInvoicesAmount: number;
+  lastInvoiceAt: string | null;
+  lastPaymentAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DebtorListResponse {
+  data: DebtorListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  summary: DebtorListSummary;
+}
+
+interface DebtorWithSummaryRelations {
+  id: string;
+  name: string;
+  document: string | null;
+  phoneNumber: string;
+  email: string | null;
+  whatsappOptIn: boolean;
+  whatsappOptInAt: Date | null;
+  collectionProfile: DebtorCollectionProfileSummary | null;
+  createdAt: Date;
+  updatedAt: Date;
+  invoices: Array<{
+    status: string;
+    originalAmount: { toNumber(): number };
+    createdAt: Date;
+    paidAt: Date | null;
+  }>;
 }
 
 @Injectable()
@@ -215,6 +430,7 @@ export class InvoicesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly messageQueue: MessageQueueService,
+    private readonly paymentService: PaymentService,
   ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
@@ -228,17 +444,108 @@ export class InvoicesService {
   async findAll(companyId: string): Promise<InvoiceListItem[]> {
     const invoices = await this.prisma.invoice.findMany({
       where: { companyId },
-      include: { debtor: true, recurringInvoice: true },
+      include: {
+        debtor: { include: { collectionProfile: true } },
+        recurringInvoice: true,
+      },
       orderBy: { createdAt: 'desc' },
     });
 
     return invoices.map((invoice) => this.mapInvoiceListItem(invoice));
   }
 
+  async findPaginated(
+    companyId: string,
+    params: {
+      page: number;
+      pageSize: number;
+      search?: string;
+      status?: string;
+      debtorId?: string;
+    },
+  ): Promise<{
+    data: InvoiceListItem[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const where: Prisma.InvoiceWhereInput = { companyId };
+
+    if (params.status) {
+      where.status = params.status as 'PENDING' | 'PAID' | 'CANCELED';
+    }
+
+    if (params.debtorId) {
+      where.debtorId = params.debtorId;
+    }
+
+    if (params.search) {
+      where.OR = [
+        { debtor: { name: { contains: params.search, mode: 'insensitive' } } },
+        { debtor: { document: { contains: params.search } } },
+        { debtor: { phoneNumber: { contains: params.search } } },
+        { debtor: { email: { contains: params.search, mode: 'insensitive' } } },
+        { studentName: { contains: params.search, mode: 'insensitive' } },
+        { studentEnrollment: { contains: params.search, mode: 'insensitive' } },
+        { studentGroup: { contains: params.search, mode: 'insensitive' } },
+      ];
+    }
+
+    const [data, total] = await Promise.all([
+      this.prisma.invoice.findMany({
+        where,
+        include: {
+          debtor: { include: { collectionProfile: true } },
+          recurringInvoice: true,
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: (params.page - 1) * params.pageSize,
+        take: params.pageSize,
+      }),
+      this.prisma.invoice.count({ where }),
+    ]);
+
+    return {
+      data: data.map((invoice) => this.mapInvoiceListItem(invoice)),
+      total,
+      page: params.page,
+      pageSize: params.pageSize,
+    };
+  }
+
+  async getCollectionAttempts(companyId: string, invoiceId: string) {
+    return this.prisma.collectionAttempt.findMany({
+      where: { companyId, invoiceId },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        channel: true,
+        status: true,
+        externalMessageId: true,
+        errorDetails: true,
+        createdAt: true,
+        ruleStep: {
+          select: {
+            stepOrder: true,
+            channel: true,
+            delayDays: true,
+            profile: {
+              select: { name: true },
+            },
+          },
+        },
+      },
+    });
+  }
+
   async importCsv(
     companyId: string,
     rows: ImportRow[],
   ): Promise<{ success: boolean; count: number; initialChargeQueued: number }> {
+    const collectionProfileId = await this.resolveRequiredCollectionProfileId(
+      companyId,
+      undefined,
+    );
     const result = await this.prisma.$transaction(async (tx) => {
       let created = 0;
       const invoiceIds: string[] = [];
@@ -246,8 +553,11 @@ export class InvoicesService {
       for (const row of rows) {
         const debtor = await this.upsertDebtor(tx, companyId, {
           name: row.name,
+          document: row.document,
           phoneNumber: row.phone_number,
           email: row.email || null,
+          whatsappOptIn: row.whatsapp_opt_in ?? false,
+          collectionProfileId,
         });
 
         const dueDate = this.parseDueDate(row.due_date);
@@ -260,6 +570,11 @@ export class InvoicesService {
             originalAmount: row.original_amount,
             dueDate,
             billingType: row.billing_type,
+            studentName: this.normalizeOptionalText(row.studentName),
+            studentEnrollment: this.normalizeOptionalText(
+              row.studentEnrollment,
+            ),
+            studentGroup: this.normalizeOptionalText(row.studentGroup),
           },
         });
 
@@ -279,11 +594,215 @@ export class InvoicesService {
     return { success: true, count: result.created, initialChargeQueued };
   }
 
+  async listDebtors(
+    companyId: string,
+    params: DebtorListParams,
+  ): Promise<DebtorListResponse> {
+    await this.backfillMissingDebtorProfiles(companyId);
+
+    const where: Prisma.DebtorWhereInput = { companyId };
+    if (params.profileId) {
+      where.collectionProfileId = params.profileId;
+    }
+
+    if (params.search) {
+      const normalizedDocument = normalizeDebtorDocument(params.search);
+      const normalizedPhone = params.search.replace(/\D/g, '');
+      where.OR = [
+        { name: { contains: params.search, mode: 'insensitive' } },
+        { document: { contains: normalizedDocument || params.search } },
+        { phoneNumber: { contains: normalizedPhone || params.search } },
+        { email: { contains: params.search, mode: 'insensitive' } },
+      ];
+    }
+
+    if (params.paymentStatus === 'open') {
+      where.invoices = { some: { companyId, status: 'PENDING' } };
+    }
+    if (params.paymentStatus === 'paid') {
+      where.invoices = { some: { companyId, status: 'PAID' } };
+    }
+    if (params.paymentStatus === 'no_open') {
+      where.invoices = { none: { companyId, status: 'PENDING' } };
+    }
+
+    const [debtors, summaryDebtors, total] = await Promise.all([
+      this.prisma.debtor.findMany({
+        where,
+        include: {
+          collectionProfile: true,
+          invoices: {
+            where: { companyId, status: { in: ['PENDING', 'PAID'] } },
+            select: {
+              status: true,
+              originalAmount: true,
+              createdAt: true,
+              paidAt: true,
+            },
+          },
+        },
+        orderBy: { updatedAt: 'desc' },
+        skip: (params.page - 1) * params.pageSize,
+        take: params.pageSize,
+      }),
+      this.prisma.debtor.findMany({
+        where,
+        include: {
+          collectionProfile: true,
+          invoices: {
+            where: { companyId, status: { in: ['PENDING', 'PAID'] } },
+            select: {
+              status: true,
+              originalAmount: true,
+              createdAt: true,
+              paidAt: true,
+            },
+          },
+        },
+        orderBy: { updatedAt: 'desc' },
+        skip: undefined,
+        take: undefined,
+      }),
+      this.prisma.debtor.count({ where }),
+    ]);
+    const data = debtors.map((debtor) => this.mapDebtorListItem(debtor));
+    const summaryData = summaryDebtors.map((debtor) =>
+      this.mapDebtorListItem(debtor),
+    );
+
+    return {
+      data,
+      total,
+      page: params.page,
+      pageSize: params.pageSize,
+      summary: this.buildDebtorListSummary(summaryData, total),
+    };
+  }
+
+  async createDebtor(
+    companyId: string,
+    input: CreateDebtorInput,
+  ): Promise<DebtorListItem> {
+    const document = this.normalizeRequiredDebtorDocument(input.document);
+    const phoneNumber = normalizeWhatsAppNumber(input.phone_number);
+    await this.ensureUniqueDebtorPhone(companyId, phoneNumber);
+    const collectionProfileId = await this.resolveRequiredCollectionProfileId(
+      companyId,
+      input.collectionProfileId,
+    );
+    const whatsappOptIn = input.whatsappOptIn === true;
+    const debtor = await this.prisma.debtor.create({
+      data: {
+        companyId,
+        name: input.name,
+        document,
+        phoneNumber,
+        email: input.email || null,
+        whatsappOptIn,
+        whatsappOptInAt: whatsappOptIn ? new Date() : null,
+        whatsappOptInSource: whatsappOptIn ? 'manual-client-page' : null,
+        collectionProfileId,
+      },
+      include: { collectionProfile: true },
+    });
+
+    return this.mapDebtorListItem({ ...debtor, invoices: [] });
+  }
+
+  async updateDebtor(
+    companyId: string,
+    debtorId: string,
+    input: UpdateDebtorInput,
+  ): Promise<DebtorListItem | null> {
+    if (input.collectionProfileId !== undefined) {
+      this.ensureProvidedCollectionProfile(input.collectionProfileId);
+    }
+
+    const debtor = await this.prisma.debtor.findFirst({
+      where: { id: debtorId, companyId },
+      select: { id: true, whatsappOptInAt: true },
+    });
+
+    if (!debtor) {
+      return null;
+    }
+
+    const data: Prisma.DebtorUncheckedUpdateManyInput = {};
+
+    if (input.name !== undefined) {
+      data.name = input.name;
+    }
+
+    if (input.document !== undefined) {
+      data.document = this.normalizeRequiredDebtorDocument(input.document);
+    }
+
+    if (input.phone_number !== undefined) {
+      const phoneNumber = normalizeWhatsAppNumber(input.phone_number);
+      await this.ensureUniqueDebtorPhone(companyId, phoneNumber, debtorId);
+      data.phoneNumber = phoneNumber;
+    }
+
+    if (input.email !== undefined) {
+      data.email = input.email || null;
+    }
+
+    if (input.collectionProfileId !== undefined) {
+      data.collectionProfileId = await this.resolveRequiredCollectionProfileId(
+        companyId,
+        input.collectionProfileId,
+      );
+    }
+
+    if (input.whatsappOptIn !== undefined) {
+      data.whatsappOptIn = input.whatsappOptIn;
+      if (input.whatsappOptIn) {
+        data.whatsappOptInSource = 'manual-client-page';
+        if (!debtor.whatsappOptInAt) {
+          data.whatsappOptInAt = new Date();
+        }
+      } else {
+        data.whatsappOptInAt = null;
+        data.whatsappOptInSource = null;
+      }
+    }
+
+    if (Object.keys(data).length > 0) {
+      await this.prisma.debtor.updateMany({
+        where: { id: debtorId, companyId },
+        data,
+      });
+    }
+
+    const updatedDebtor = await this.prisma.debtor.findFirst({
+      where: { id: debtorId, companyId },
+      include: {
+        collectionProfile: true,
+        invoices: {
+          where: { companyId, status: { in: ['PENDING', 'PAID'] } },
+          select: {
+            status: true,
+            originalAmount: true,
+            createdAt: true,
+            paidAt: true,
+          },
+        },
+      },
+    });
+
+    return updatedDebtor ? this.mapDebtorListItem(updatedDebtor) : null;
+  }
+
   async createInvoice(
     companyId: string,
     input: CreateInvoiceInput,
   ): Promise<InvoiceListItem> {
     const debtorId = input.debtorId;
+    await this.ensureBillingMethodEnabled(companyId, input.billing_type);
+
+    const newDebtorDocument = debtorId
+      ? null
+      : this.normalizeRequiredDebtorDocument(input.document);
 
     if (input.recurring === true) {
       const recurrence = await this.createRecurringInvoice(companyId, input);
@@ -293,12 +812,39 @@ export class InvoicesService {
           recurringInvoiceId: recurrence.recurrenceId,
           recurrencePeriod: recurrence.lastGeneratedPeriod ?? undefined,
         },
-        include: { debtor: true, recurringInvoice: true },
+        include: {
+          debtor: { include: { collectionProfile: true } },
+          recurringInvoice: true,
+        },
         orderBy: { createdAt: 'desc' },
       });
 
       if (!invoice) {
         throw new Error('Nao foi possivel criar a fatura recorrente.');
+      }
+
+      const educationData = this.buildEducationalInvoiceData(input);
+      if (Object.keys(educationData).length > 0) {
+        await this.prisma.invoice.updateMany({
+          where: { id: invoice.id, companyId },
+          data: educationData,
+        });
+
+        const refreshedInvoice = await this.prisma.invoice.findFirst({
+          where: { id: invoice.id, companyId },
+          include: {
+            debtor: { include: { collectionProfile: true } },
+            recurringInvoice: true,
+          },
+        });
+
+        if (!refreshedInvoice) {
+          throw new Error('Nao foi possivel carregar a fatura recorrente.');
+        }
+
+        await this.queueInitialChargeJobs(companyId, [invoice.id], 'RECURRING');
+
+        return this.mapInvoiceListItem(refreshedInvoice);
       }
 
       await this.queueInitialChargeJobs(companyId, [invoice.id], 'RECURRING');
@@ -310,22 +856,31 @@ export class InvoicesService {
     if (!dueDate) {
       throw new Error('Data de vencimento invalida.');
     }
+    const collectionProfileId = debtorId
+      ? null
+      : await this.resolveRequiredCollectionProfileId(companyId, undefined);
 
     const invoice = await this.prisma.$transaction(async (tx) => {
       const debtor = debtorId
         ? await tx.debtor.findFirst({
             where: { id: debtorId, companyId },
-            select: { id: true },
+            select: { id: true, document: true },
           })
         : await this.upsertDebtor(tx, companyId, {
             name: input.name ?? '',
+            document: newDebtorDocument ?? '',
             phoneNumber: input.phone_number ?? '',
             email: input.email ?? null,
+            whatsappOptIn: input.whatsappOptIn ?? false,
+            collectionProfileId:
+              this.ensureProvidedCollectionProfile(collectionProfileId),
           });
 
       if (!debtor) {
         throw new Error('Devedor nao encontrado.');
       }
+
+      this.ensureDebtorDocumentReady(debtor.document);
 
       return tx.invoice.create({
         data: {
@@ -334,8 +889,12 @@ export class InvoicesService {
           originalAmount: input.original_amount,
           dueDate,
           billingType: input.billing_type,
+          ...this.buildEducationalInvoiceData(input),
         },
-        include: { debtor: true, recurringInvoice: true },
+        include: {
+          debtor: { include: { collectionProfile: true } },
+          recurringInvoice: true,
+        },
       });
     });
 
@@ -350,6 +909,78 @@ export class InvoicesService {
     input: Omit<CreateInvoiceInput, 'debtorId'>,
   ): Promise<InvoiceListItem> {
     return this.createInvoice(companyId, { ...input, debtorId });
+  }
+
+  async cancelInvoice(
+    companyId: string,
+    invoiceId: string,
+  ): Promise<InvoiceListItem> {
+    const invoice = await this.prisma.invoice.findFirst({
+      where: { id: invoiceId, companyId },
+      include: {
+        debtor: { include: { collectionProfile: true } },
+        recurringInvoice: true,
+      },
+    });
+
+    if (!invoice) {
+      throw new NotFoundException('Fatura nao encontrada.');
+    }
+
+    if (invoice.status !== 'PENDING') {
+      throw new ConflictException(
+        'Apenas faturas pendentes podem ser canceladas.',
+      );
+    }
+
+    const cancellation = await this.paymentService.cancelPaymentForInvoice({
+      id: invoice.id,
+      companyId: invoice.companyId,
+      efiTxid: invoice.efiTxid,
+      efiChargeId: invoice.efiChargeId,
+    });
+
+    const updatedInvoice = await this.prisma.$transaction(async (tx) => {
+      const updateResult = await tx.invoice.updateMany({
+        where: { id: invoice.id, companyId, status: 'PENDING' },
+        data: {
+          status: 'CANCELED',
+          gatewayStatusRaw: cancellation.gatewayStatusRaw,
+        },
+      });
+
+      if (updateResult.count !== 1) {
+        throw new ConflictException(
+          'A fatura deixou de estar pendente antes do cancelamento local.',
+        );
+      }
+
+      await tx.collectionLog.create({
+        data: {
+          companyId,
+          invoiceId: invoice.id,
+          actionType: 'INVOICE_CANCELED',
+          description: 'Fatura cancelada pelo usuario.',
+          status: 'CANCELED',
+        },
+      });
+
+      const reloadedInvoice = await tx.invoice.findFirst({
+        where: { id: invoice.id, companyId },
+        include: {
+          debtor: { include: { collectionProfile: true } },
+          recurringInvoice: true,
+        },
+      });
+
+      if (!reloadedInvoice) {
+        throw new NotFoundException('Fatura nao encontrada.');
+      }
+
+      return reloadedInvoice;
+    });
+
+    return this.mapInvoiceListItem(updatedInvoice);
   }
 
   async listRecurringInvoices(
@@ -443,6 +1074,13 @@ export class InvoicesService {
     const debtor = await this.prisma.debtor.findFirst({
       where: { id: debtorId, companyId },
       include: {
+        collectionProfile: {
+          select: {
+            id: true,
+            name: true,
+            profileType: true,
+          },
+        },
         company: {
           select: {
             preferredBillingMethod: true,
@@ -476,6 +1114,17 @@ export class InvoicesService {
     return {
       debtorId: debtor.id,
       debtorName: debtor.name,
+      document: debtor.document,
+      whatsappOptIn: debtor.whatsappOptIn,
+      whatsappOptInAt: debtor.whatsappOptInAt?.toISOString() ?? null,
+      whatsappOptInSource: debtor.whatsappOptInSource,
+      collectionProfile: debtor.collectionProfile
+        ? {
+            id: debtor.collectionProfile.id,
+            name: debtor.collectionProfile.name,
+            profileType: debtor.collectionProfile.profileType,
+          }
+        : null,
       useGlobalBillingSettings: debtor.useGlobalBillingSettings,
       customPreferredBillingMethod: debtor.preferredBillingMethod,
       customCollectionReminderDays: this.normalizeReminderDays(
@@ -494,6 +1143,60 @@ export class InvoicesService {
     };
   }
 
+  async getDebtorPaymentHistory(
+    companyId: string,
+    debtorId: string,
+  ): Promise<DebtorPaymentHistoryResponse | null> {
+    const debtor = await this.prisma.debtor.findFirst({
+      where: { id: debtorId, companyId },
+      select: {
+        id: true,
+        name: true,
+        phoneNumber: true,
+        email: true,
+        invoices: {
+          where: {
+            companyId,
+            status: 'PAID',
+          },
+          orderBy: [{ paidAt: 'desc' }, { dueDate: 'desc' }],
+          select: {
+            id: true,
+            originalAmount: true,
+            dueDate: true,
+            paidAt: true,
+            gatewayId: true,
+            billingType: true,
+            studentName: true,
+            studentEnrollment: true,
+            studentGroup: true,
+          },
+        },
+      },
+    });
+
+    if (!debtor) {
+      return null;
+    }
+
+    const payments = debtor.invoices
+      .map((invoice) => this.mapDebtorPaymentHistoryItem(invoice))
+      .sort((left, right) =>
+        this.comparePaymentHistoryItemsByPaymentDate(left, right),
+      );
+
+    return {
+      debtor: {
+        debtorId: debtor.id,
+        name: debtor.name,
+        phone_number: this.normalizePhoneNumberForResponse(debtor.phoneNumber),
+        email: debtor.email || undefined,
+      },
+      summary: this.buildDebtorPaymentHistorySummary(payments),
+      payments,
+    };
+  }
+
   async updateDebtorSettings(
     companyId: string,
     debtorId: string,
@@ -508,49 +1211,249 @@ export class InvoicesService {
       return null;
     }
 
-    const useGlobalBillingSettings = input.useGlobalBillingSettings;
-    const normalizedSettings = useGlobalBillingSettings
-      ? {
-          preferredBillingMethod: null,
-          collectionReminderDays: [],
-          autoGenerateFirstCharge: null,
-          autoDiscountEnabled: null,
-          autoDiscountDaysAfterDue: null,
-          autoDiscountPercentage: null,
-        }
-      : this.buildEffectiveCustomSettings({
-          preferredBillingMethod: input.preferredBillingMethod ?? 'PIX',
-          collectionReminderDays: input.collectionReminderDays ?? [],
-          autoGenerateFirstCharge: input.autoGenerateFirstCharge ?? true,
-          autoDiscountEnabled: input.autoDiscountEnabled ?? false,
-          autoDiscountDaysAfterDue: input.autoDiscountDaysAfterDue ?? null,
-          autoDiscountPercentage: input.autoDiscountPercentage ?? null,
-        });
+    const updateData: Prisma.DebtorUncheckedUpdateManyInput = {};
 
-    await this.prisma.debtor.updateMany({
-      where: { id: debtorId, companyId },
-      data: {
-        useGlobalBillingSettings,
-        preferredBillingMethod: useGlobalBillingSettings
-          ? null
-          : normalizedSettings.preferredBillingMethod,
-        collectionReminderDays: normalizedSettings.collectionReminderDays,
-        autoGenerateFirstCharge: useGlobalBillingSettings
-          ? null
-          : normalizedSettings.autoGenerateFirstCharge,
-        autoDiscountEnabled: useGlobalBillingSettings
-          ? null
-          : normalizedSettings.autoDiscountEnabled,
-        autoDiscountDaysAfterDue: useGlobalBillingSettings
-          ? null
-          : normalizedSettings.autoDiscountDaysAfterDue,
-        autoDiscountPercentage: useGlobalBillingSettings
-          ? null
-          : normalizedSettings.autoDiscountPercentage,
-      },
-    });
+    if (input.document !== undefined) {
+      updateData.document = this.normalizeRequiredDebtorDocument(
+        input.document,
+      );
+    }
+
+    if (input.useGlobalBillingSettings !== undefined) {
+      const useGlobalBillingSettings = input.useGlobalBillingSettings;
+      const normalizedSettings = useGlobalBillingSettings
+        ? {
+            preferredBillingMethod: null,
+            collectionReminderDays: [],
+            autoGenerateFirstCharge: null,
+            autoDiscountEnabled: null,
+            autoDiscountDaysAfterDue: null,
+            autoDiscountPercentage: null,
+          }
+        : this.buildEffectiveCustomSettings({
+            preferredBillingMethod: input.preferredBillingMethod ?? 'PIX',
+            collectionReminderDays: input.collectionReminderDays ?? [],
+            autoGenerateFirstCharge: input.autoGenerateFirstCharge ?? true,
+            autoDiscountEnabled: input.autoDiscountEnabled ?? false,
+            autoDiscountDaysAfterDue: input.autoDiscountDaysAfterDue ?? null,
+            autoDiscountPercentage: input.autoDiscountPercentage ?? null,
+          });
+
+      updateData.useGlobalBillingSettings = useGlobalBillingSettings;
+      updateData.preferredBillingMethod = useGlobalBillingSettings
+        ? null
+        : normalizedSettings.preferredBillingMethod;
+      updateData.collectionReminderDays =
+        normalizedSettings.collectionReminderDays;
+      updateData.autoGenerateFirstCharge = useGlobalBillingSettings
+        ? null
+        : normalizedSettings.autoGenerateFirstCharge;
+      updateData.autoDiscountEnabled = useGlobalBillingSettings
+        ? null
+        : normalizedSettings.autoDiscountEnabled;
+      updateData.autoDiscountDaysAfterDue = useGlobalBillingSettings
+        ? null
+        : normalizedSettings.autoDiscountDaysAfterDue;
+      updateData.autoDiscountPercentage = useGlobalBillingSettings
+        ? null
+        : normalizedSettings.autoDiscountPercentage;
+    }
+
+    if (input.collectionProfileId !== undefined) {
+      updateData.collectionProfileId =
+        await this.resolveRequiredCollectionProfileId(
+          companyId,
+          input.collectionProfileId,
+        );
+    }
+
+    if (input.whatsappOptIn !== undefined) {
+      updateData.whatsappOptIn = input.whatsappOptIn;
+      updateData.whatsappOptInAt = input.whatsappOptIn ? new Date() : null;
+      updateData.whatsappOptInSource = input.whatsappOptIn
+        ? 'debtor_settings'
+        : 'debtor_settings_revoked';
+    }
+
+    if (Object.keys(updateData).length > 0) {
+      await this.prisma.debtor.updateMany({
+        where: { id: debtorId, companyId },
+        data: updateData,
+      });
+    }
 
     return this.getDebtorSettings(companyId, debtorId);
+  }
+
+  private async getDefaultNewDebtorProfile(
+    companyId: string,
+  ): Promise<DebtorCollectionProfileSummary> {
+    const profile = await this.prisma.collectionProfile.findFirst({
+      where: { companyId, profileType: 'NEW', isActive: true },
+      select: { id: true, name: true, profileType: true },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+    });
+
+    if (!profile) {
+      throw new BadRequestException(
+        'Perfil Novo pagador nao encontrado para esta empresa.',
+      );
+    }
+
+    return profile;
+  }
+
+  private ensureProvidedCollectionProfile(
+    collectionProfileId: string | null,
+  ): string {
+    if (collectionProfileId === null || collectionProfileId.trim() === '') {
+      throw new BadRequestException('Perfil de pagador e obrigatorio.');
+    }
+
+    return collectionProfileId;
+  }
+
+  private async resolveRequiredCollectionProfileId(
+    companyId: string,
+    collectionProfileId: string | null | undefined,
+  ): Promise<string> {
+    if (collectionProfileId === undefined) {
+      return (await this.getDefaultNewDebtorProfile(companyId)).id;
+    }
+
+    const requiredCollectionProfileId =
+      this.ensureProvidedCollectionProfile(collectionProfileId);
+
+    const profile = await this.prisma.collectionProfile.findFirst({
+      where: { id: requiredCollectionProfileId, companyId, isActive: true },
+      select: { id: true },
+    });
+
+    if (!profile) {
+      throw new BadRequestException('Perfil de cobranca invalido.');
+    }
+
+    return profile.id;
+  }
+
+  private async backfillMissingDebtorProfiles(
+    companyId: string,
+  ): Promise<void> {
+    const defaultProfile = await this.getDefaultNewDebtorProfile(companyId);
+    await this.prisma.debtor.updateMany({
+      where: { companyId, collectionProfileId: null },
+      data: { collectionProfileId: defaultProfile.id },
+    });
+  }
+
+  private async ensureUniqueDebtorPhone(
+    companyId: string,
+    phoneNumber: string,
+    ignoredDebtorId?: string,
+  ): Promise<void> {
+    const lookupCandidates = getWhatsAppNumberLookupCandidates(phoneNumber);
+    const where: Prisma.DebtorWhereInput = {
+      companyId,
+      phoneNumber: { in: lookupCandidates },
+    };
+
+    if (ignoredDebtorId) {
+      where.id = { not: ignoredDebtorId };
+    }
+
+    const existingDebtors = await this.prisma.debtor.findMany({
+      where,
+      select: { id: true, phoneNumber: true },
+    });
+
+    if (existingDebtors.length > 0) {
+      throw new ConflictException('Ja existe cliente com este WhatsApp.');
+    }
+  }
+
+  private buildDebtorListSummary(
+    data: DebtorListItem[],
+    totalDebtors: number,
+  ): DebtorListSummary {
+    const openInvoiceAmount = data.reduce(
+      (sum, debtor) => sum + debtor.openInvoicesAmount,
+      0,
+    );
+    const paidInvoiceAmount = data.reduce(
+      (sum, debtor) => sum + debtor.paidInvoicesAmount,
+      0,
+    );
+
+    return {
+      totalDebtors,
+      openInvoiceAmount: Number(openInvoiceAmount.toFixed(2)),
+      openInvoiceCount: data.reduce(
+        (sum, debtor) => sum + debtor.openInvoicesCount,
+        0,
+      ),
+      paidInvoiceAmount: Number(paidInvoiceAmount.toFixed(2)),
+      paidInvoiceCount: data.reduce(
+        (sum, debtor) => sum + debtor.paidInvoicesCount,
+        0,
+      ),
+    };
+  }
+
+  private mapDebtorListItem(
+    debtor: DebtorWithSummaryRelations,
+  ): DebtorListItem {
+    if (!debtor.collectionProfile) {
+      throw new BadRequestException('Cliente sem perfil de pagador.');
+    }
+
+    const openInvoices = debtor.invoices.filter(
+      (invoice) => invoice.status === 'PENDING',
+    );
+    const paidInvoices = debtor.invoices.filter(
+      (invoice) => invoice.status === 'PAID',
+    );
+    const sumAmount = (
+      invoices: Array<{ originalAmount: { toNumber(): number } }>,
+    ): number =>
+      Number(
+        invoices
+          .reduce((sum, invoice) => sum + invoice.originalAmount.toNumber(), 0)
+          .toFixed(2),
+      );
+    const lastInvoiceAt =
+      debtor.invoices
+        .map((invoice) => invoice.createdAt)
+        .sort((left, right) => right.getTime() - left.getTime())[0]
+        ?.toISOString() ?? null;
+    const lastPaymentAt =
+      paidInvoices
+        .map((invoice) => invoice.paidAt)
+        .filter((date): date is Date => Boolean(date))
+        .sort((left, right) => right.getTime() - left.getTime())[0]
+        ?.toISOString() ?? null;
+
+    return {
+      debtorId: debtor.id,
+      name: debtor.name,
+      document: debtor.document ?? '',
+      phone_number: this.normalizePhoneNumberForResponse(debtor.phoneNumber),
+      email: debtor.email,
+      whatsapp_opt_in: debtor.whatsappOptIn,
+      whatsappOptInAt: debtor.whatsappOptInAt?.toISOString() ?? null,
+      collectionProfile: {
+        id: debtor.collectionProfile.id,
+        name: debtor.collectionProfile.name,
+        profileType: debtor.collectionProfile.profileType,
+      },
+      openInvoicesCount: openInvoices.length,
+      openInvoicesAmount: sumAmount(openInvoices),
+      paidInvoicesCount: paidInvoices.length,
+      paidInvoicesAmount: sumAmount(paidInvoices),
+      lastInvoiceAt,
+      lastPaymentAt,
+      createdAt: debtor.createdAt.toISOString(),
+      updatedAt: debtor.updatedAt.toISOString(),
+    };
   }
 
   private async queueInitialChargeJobs(
@@ -583,20 +1486,32 @@ export class InvoicesService {
       throw new Error('Dia de vencimento recorrente invalido.');
     }
 
+    const newDebtorDocument = input.debtorId
+      ? null
+      : this.normalizeRequiredDebtorDocument(input.document);
+    const collectionProfileId = input.debtorId
+      ? null
+      : await this.resolveRequiredCollectionProfileId(companyId, undefined);
     const debtor = input.debtorId
       ? await this.prisma.debtor.findFirst({
           where: { id: input.debtorId, companyId },
-          select: { id: true },
+          select: { id: true, document: true },
         })
       : await this.upsertDebtor(this.prisma, companyId, {
           name: input.name ?? '',
+          document: newDebtorDocument ?? '',
           phoneNumber: input.phone_number ?? '',
           email: input.email ?? null,
+          whatsappOptIn: input.whatsappOptIn ?? false,
+          collectionProfileId:
+            this.ensureProvidedCollectionProfile(collectionProfileId),
         });
 
     if (!debtor) {
       throw new Error('Devedor nao encontrado.');
     }
+
+    this.ensureDebtorDocumentReady(debtor.document);
 
     const nextDueDate = this.computeInitialRecurringDueDate(input.due_day);
     const recurrence = await this.prisma.recurringInvoice.create({
@@ -708,6 +1623,7 @@ export class InvoicesService {
       id: invoice.id,
       invoiceId: invoice.id,
       name: invoice.debtor.name,
+      document: invoice.debtor.document ?? undefined,
       phone_number: this.normalizePhoneNumberForResponse(
         invoice.debtor.phoneNumber,
       ),
@@ -716,9 +1632,14 @@ export class InvoicesService {
       due_date: this.formatDateOnly(invoice.dueDate),
       status: invoice.status,
       debtorId: invoice.debtor.id,
+      whatsapp_opt_in: invoice.debtor.whatsappOptIn,
       gatewayId: invoice.gatewayId,
       pixPayload: invoice.pixPayload,
       billing_type: invoice.billingType,
+      studentName: invoice.studentName,
+      studentEnrollment: invoice.studentEnrollment,
+      studentGroup: invoice.studentGroup,
+      paidAt: invoice.paidAt?.toISOString() ?? null,
       payment: this.buildInvoicePaymentSummary(invoice),
       createdAt: invoice.createdAt.toISOString(),
       recurrence:
@@ -732,7 +1653,65 @@ export class InvoicesService {
               status: invoice.recurringInvoice?.status ?? 'ACTIVE',
             }
           : undefined,
+      collectionProfile: invoice.debtor.collectionProfile
+        ? {
+            id: invoice.debtor.collectionProfile.id,
+            name: invoice.debtor.collectionProfile.name,
+            profileType: invoice.debtor.collectionProfile.profileType,
+          }
+        : null,
     };
+  }
+
+  private buildEducationalInvoiceData(input: {
+    studentName?: string;
+    studentEnrollment?: string;
+    studentGroup?: string;
+  }): {
+    studentName?: string;
+    studentEnrollment?: string;
+    studentGroup?: string;
+  } {
+    return {
+      ...(this.normalizeOptionalText(input.studentName)
+        ? { studentName: this.normalizeOptionalText(input.studentName) }
+        : {}),
+      ...(this.normalizeOptionalText(input.studentEnrollment)
+        ? {
+            studentEnrollment: this.normalizeOptionalText(
+              input.studentEnrollment,
+            ),
+          }
+        : {}),
+      ...(this.normalizeOptionalText(input.studentGroup)
+        ? { studentGroup: this.normalizeOptionalText(input.studentGroup) }
+        : {}),
+    };
+  }
+
+  private normalizeOptionalText(value?: string): string | undefined {
+    const normalized = value?.trim();
+    return normalized ? normalized : undefined;
+  }
+
+  private normalizeRequiredDebtorDocument(
+    value: string | null | undefined,
+  ): string {
+    const result = validateDebtorDocument(value);
+
+    if (!result.valid) {
+      throw new Error('CPF/CNPJ do devedor deve ter 11 ou 14 digitos validos.');
+    }
+
+    return result.normalized;
+  }
+
+  private ensureDebtorDocumentReady(value: string | null | undefined): void {
+    const normalized = normalizeDebtorDocument(value ?? '');
+
+    if (!validateDebtorDocument(normalized).valid) {
+      throw new Error('CPF/CNPJ do devedor deve ter 11 ou 14 digitos validos.');
+    }
   }
 
   private async upsertDebtor(
@@ -740,6 +1719,7 @@ export class InvoicesService {
     companyId: string,
     input: DebtorUpsertInput,
   ): Promise<DebtorIdentity> {
+    const document = this.normalizeRequiredDebtorDocument(input.document);
     const phoneNumber = normalizeWhatsAppNumber(input.phoneNumber);
     const lookupCandidates = getWhatsAppNumberLookupCandidates(phoneNumber);
     const existingDebtors = await client.debtor.findMany({
@@ -749,6 +1729,7 @@ export class InvoicesService {
       },
       select: {
         id: true,
+        document: true,
         phoneNumber: true,
       },
     });
@@ -762,23 +1743,38 @@ export class InvoicesService {
         where: { id: existingDebtor.id, companyId },
         data: {
           name: input.name,
+          document,
           phoneNumber,
           email: input.email || null,
+          collectionProfileId: input.collectionProfileId,
+          ...(input.whatsappOptIn === true && {
+            whatsappOptIn: true,
+            whatsappOptInAt: new Date(),
+            whatsappOptInSource: 'manual_import',
+          }),
         },
       });
 
-      return { id: existingDebtor.id };
+      return { id: existingDebtor.id, document };
     }
 
-    return client.debtor.create({
+    const createdDebtor = await client.debtor.create({
       data: {
         companyId,
         name: input.name,
+        document,
         phoneNumber,
         email: input.email || null,
+        whatsappOptIn: input.whatsappOptIn === true,
+        whatsappOptInAt: input.whatsappOptIn === true ? new Date() : null,
+        whatsappOptInSource:
+          input.whatsappOptIn === true ? 'manual_import' : null,
+        collectionProfileId: input.collectionProfileId,
       },
       select: { id: true },
     });
+
+    return { id: createdDebtor.id, document };
   }
 
   private normalizePhoneNumberForResponse(phoneNumber: string): string {
@@ -874,6 +1870,7 @@ export class InvoicesService {
       debtor: {
         debtorId: recurrence.debtor.id,
         name: recurrence.debtor.name,
+        document: recurrence.debtor.document ?? undefined,
         phone_number: this.normalizePhoneNumberForResponse(
           recurrence.debtor.phoneNumber,
         ),
@@ -897,6 +1894,134 @@ export class InvoicesService {
         : null,
       createdAt: recurrence.createdAt.toISOString(),
       updatedAt: recurrence.updatedAt.toISOString(),
+    };
+  }
+
+  private mapDebtorPaymentHistoryItem(
+    invoice: PaymentHistoryInvoice,
+  ): DebtorPaymentHistoryItem {
+    const timing = this.calculatePaymentTiming(invoice.dueDate, invoice.paidAt);
+
+    return {
+      invoiceId: invoice.id,
+      amount: Number(invoice.originalAmount.toNumber().toFixed(2)),
+      billingType: invoice.billingType,
+      dueDate: this.formatDateInTimeZone(invoice.dueDate),
+      paidAt: invoice.paidAt?.toISOString() ?? null,
+      paidDate: invoice.paidAt
+        ? this.formatDateInTimeZone(invoice.paidAt)
+        : null,
+      paidOnOrBeforeDueDate: timing.paidOnOrBeforeDueDate,
+      timeliness: timing.timeliness,
+      daysFromDueDate: timing.daysFromDueDate,
+      daysAfterDue: timing.daysAfterDue,
+      daysBeforeDue: timing.daysBeforeDue,
+      gatewayId: invoice.gatewayId,
+      studentName: invoice.studentName,
+      studentEnrollment: invoice.studentEnrollment,
+      studentGroup: invoice.studentGroup,
+    };
+  }
+
+  private buildDebtorPaymentHistorySummary(
+    payments: DebtorPaymentHistoryItem[],
+  ): DebtorPaymentHistoryResponse['summary'] {
+    const overduePayments = payments.filter(
+      (payment) => payment.timeliness === 'OVERDUE',
+    );
+    const totalOverdueDays = overduePayments.reduce(
+      (sum, payment) => sum + (payment.daysAfterDue ?? 0),
+      0,
+    );
+    const totalPaidAmount = payments.reduce(
+      (sum, payment) => sum + payment.amount,
+      0,
+    );
+
+    return {
+      totalPaidInvoices: payments.length,
+      totalPaidAmount: Number(totalPaidAmount.toFixed(2)),
+      paidOnOrBeforeDueDate: payments.filter(
+        (payment) => payment.paidOnOrBeforeDueDate === true,
+      ).length,
+      paidEarly: payments.filter((payment) => payment.timeliness === 'EARLY')
+        .length,
+      paidOnDueDate: payments.filter(
+        (payment) => payment.timeliness === 'ON_DUE_DATE',
+      ).length,
+      paidOverdue: overduePayments.length,
+      unknownTiming: payments.filter(
+        (payment) => payment.timeliness === 'UNKNOWN',
+      ).length,
+      averageDaysAfterDue:
+        overduePayments.length > 0
+          ? Number((totalOverdueDays / overduePayments.length).toFixed(1))
+          : 0,
+      maxDaysAfterDue: Math.max(
+        0,
+        ...overduePayments.map((payment) => payment.daysAfterDue ?? 0),
+      ),
+      lastPaymentAt: payments[0]?.paidAt ?? null,
+    };
+  }
+
+  private comparePaymentHistoryItemsByPaymentDate(
+    left: DebtorPaymentHistoryItem,
+    right: DebtorPaymentHistoryItem,
+  ): number {
+    const leftTimestamp = left.paidAt ? Date.parse(left.paidAt) : 0;
+    const rightTimestamp = right.paidAt ? Date.parse(right.paidAt) : 0;
+
+    if (rightTimestamp !== leftTimestamp) {
+      return rightTimestamp - leftTimestamp;
+    }
+
+    return right.dueDate.localeCompare(left.dueDate);
+  }
+
+  private calculatePaymentTiming(
+    dueDate: Date,
+    paidAt: Date | null,
+  ): PaymentTimingResult {
+    if (!paidAt) {
+      return {
+        timeliness: 'UNKNOWN',
+        paidOnOrBeforeDueDate: null,
+        daysFromDueDate: null,
+        daysAfterDue: null,
+        daysBeforeDue: null,
+      };
+    }
+
+    const daysFromDueDate =
+      this.getDayIndexInTimeZone(paidAt) - this.getDayIndexInTimeZone(dueDate);
+
+    if (daysFromDueDate < 0) {
+      return {
+        timeliness: 'EARLY',
+        paidOnOrBeforeDueDate: true,
+        daysFromDueDate,
+        daysAfterDue: 0,
+        daysBeforeDue: Math.abs(daysFromDueDate),
+      };
+    }
+
+    if (daysFromDueDate === 0) {
+      return {
+        timeliness: 'ON_DUE_DATE',
+        paidOnOrBeforeDueDate: true,
+        daysFromDueDate,
+        daysAfterDue: 0,
+        daysBeforeDue: 0,
+      };
+    }
+
+    return {
+      timeliness: 'OVERDUE',
+      paidOnOrBeforeDueDate: false,
+      daysFromDueDate,
+      daysAfterDue: daysFromDueDate,
+      daysBeforeDue: 0,
     };
   }
 
@@ -976,6 +2101,61 @@ export class InvoicesService {
 
   private formatDateOnly(date: Date): string {
     return date.toISOString().slice(0, 10);
+  }
+
+  private formatDateInTimeZone(date: Date): string {
+    const parts = this.getDatePartsInTimeZone(date);
+    const month = String(parts.month).padStart(2, '0');
+    const day = String(parts.day).padStart(2, '0');
+
+    return `${parts.year}-${month}-${day}`;
+  }
+
+  private getDayIndexInTimeZone(date: Date): number {
+    const parts = this.getDatePartsInTimeZone(date);
+
+    return Math.floor(
+      Date.UTC(parts.year, parts.month - 1, parts.day) / DAY_IN_MS,
+    );
+  }
+
+  private getDatePartsInTimeZone(date: Date): {
+    year: number;
+    month: number;
+    day: number;
+  } {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: PAYMENT_HISTORY_TIME_ZONE,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const formattedParts = formatter.formatToParts(date);
+    const partMap = new Map<string, string>();
+
+    for (const part of formattedParts) {
+      if (part.type !== 'literal') {
+        partMap.set(part.type, part.value);
+      }
+    }
+
+    const year = Number(partMap.get('year'));
+    const month = Number(partMap.get('month'));
+    const day = Number(partMap.get('day'));
+
+    if (
+      Number.isInteger(year) &&
+      Number.isInteger(month) &&
+      Number.isInteger(day)
+    ) {
+      return { year, month, day };
+    }
+
+    return {
+      year: date.getUTCFullYear(),
+      month: date.getUTCMonth() + 1,
+      day: date.getUTCDate(),
+    };
   }
 
   private normalizeReminderDays(
@@ -1066,6 +2246,24 @@ export class InvoicesService {
         : null,
       tariffs: this.buildTariffs(),
     };
+  }
+
+  private async ensureBillingMethodEnabled(
+    companyId: string,
+    billingType: BillingType,
+  ): Promise<void> {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { enabledBillingMethods: true },
+    });
+
+    if (!company) {
+      throw new Error('Empresa nao encontrada.');
+    }
+
+    if (!company.enabledBillingMethods.includes(billingType)) {
+      throw new Error('Metodo de cobranca nao habilitado para esta empresa.');
+    }
   }
 
   private buildEffectiveCustomSettings(input: {

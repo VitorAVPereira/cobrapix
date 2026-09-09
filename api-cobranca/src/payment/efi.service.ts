@@ -1,13 +1,22 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { GatewayAccount, InvoiceStatus } from '@prisma/client';
+import {
+  GatewayAccount,
+  InvoiceStatus,
+  Prisma,
+  SplitAppliedCategory,
+} from '@prisma/client';
+import { randomBytes } from 'crypto';
 import EfiPay from 'sdk-node-apis-efi';
+import { validateDebtorDocument } from '../common/debtor-document';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateGatewayAccountDto } from './dto/gateway-account.dto';
 import { PaymentCryptoService } from './payment-crypto.service';
+import { PaymentNotificationsService } from './payment-notifications.service';
 
 type EfiEnvironment = 'homologation' | 'production';
 type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
+type PixCreateDueChargeBody = Parameters<EfiPay['pixCreateDueCharge']>[1];
 
 interface EfiCredentials {
   clientId: string;
@@ -75,6 +84,27 @@ interface EfiErrorResponse {
   error_description?: string;
   title?: string;
   detail?: string;
+  violacoes?: Array<{
+    razao?: string;
+    propriedade?: string;
+  }>;
+}
+
+interface PixCobvDebtorAddress {
+  logradouro: string;
+  cidade: string;
+  uf: string;
+  cep: string;
+}
+
+interface PixCobvDebtorPayload {
+  nome: string;
+  cpf?: string;
+  cnpj?: string;
+  logradouro?: string;
+  cidade?: string;
+  uf?: string;
+  cep?: string;
 }
 
 interface PaymentInvoice {
@@ -112,6 +142,8 @@ interface PaymentInvoice {
     autoDiscountEnabled: boolean;
     autoDiscountDaysAfterDue: number | null;
     autoDiscountPercentage: { toNumber(): number } | null;
+    onTimeSplitPercentageBps: number;
+    overdueSplitPercentageBps: number;
   };
 }
 
@@ -119,6 +151,19 @@ interface ResolvedDiscountSettings {
   enabled: boolean;
   daysAfterDue: number | null;
   percentage: number | null;
+}
+
+interface SplitSettingsInput {
+  dueDate: Date;
+  company: {
+    onTimeSplitPercentageBps: number;
+    overdueSplitPercentageBps: number;
+  };
+}
+
+interface ResolvedSplitSettings {
+  percentageBps: number;
+  category: SplitAppliedCategory;
 }
 
 export interface EfiPaymentResult {
@@ -142,6 +187,7 @@ export class EfiService {
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
     private readonly crypto: PaymentCryptoService,
+    private readonly paymentNotifications: PaymentNotificationsService,
   ) {}
 
   async upsertManualGatewayAccount(
@@ -151,11 +197,14 @@ export class EfiService {
     const environment = this.getEnvironment(dto.environment);
     const encryptedClientId = this.crypto.encrypt(dto.efiClientId);
     const encryptedClientSecret = this.crypto.encrypt(dto.efiClientSecret);
-    const encryptedCertificatePassword = dto.efiCertificatePassword
-      ? this.crypto.encrypt(dto.efiCertificatePassword)
+    const certificateBase64 = dto.efiCertificateBase64?.trim() ?? '';
+    const certificatePath = dto.efiCertificatePath?.trim() ?? '';
+    const certificatePassword = dto.efiCertificatePassword ?? '';
+    const encryptedCertificatePassword = certificatePassword
+      ? this.crypto.encrypt(certificatePassword)
       : null;
-    const encryptedCertificate = dto.efiCertificateBase64
-      ? this.crypto.encrypt(dto.efiCertificateBase64)
+    const encryptedCertificate = certificateBase64
+      ? this.crypto.encrypt(certificateBase64)
       : null;
 
     await this.prisma.gatewayAccount.upsert({
@@ -172,7 +221,7 @@ export class EfiService {
         encryptedClientId,
         encryptedClientSecret,
         encryptedCertificate,
-        certificatePath: dto.efiCertificatePath,
+        certificatePath: certificateBase64 ? null : certificatePath || null,
         encryptedCertificatePassword,
       },
       update: {
@@ -185,9 +234,14 @@ export class EfiService {
         pixKey: dto.efiPixKey,
         encryptedClientId,
         encryptedClientSecret,
-        encryptedCertificate,
-        certificatePath: dto.efiCertificatePath,
-        encryptedCertificatePassword,
+        ...(encryptedCertificate
+          ? { encryptedCertificate, certificatePath: null }
+          : certificatePath
+            ? { encryptedCertificate: null, certificatePath }
+            : {}),
+        ...(encryptedCertificatePassword
+          ? { encryptedCertificatePassword }
+          : {}),
         lastError: null,
       },
     });
@@ -214,6 +268,35 @@ export class EfiService {
     }
 
     return this.createPixCobv(invoice, gatewayAccount);
+  }
+
+  async cancelPixDueCharge(companyId: string, txid: string): Promise<string> {
+    const gatewayAccount = await this.getActiveGatewayAccount(companyId);
+    this.ensurePixCertificate(gatewayAccount);
+
+    const client = this.createSdkClient(gatewayAccount);
+    const response = await this.runEfiRequest(
+      () =>
+        client.pixUpdateDueCharge(
+          { txid },
+          { status: 'REMOVIDA_PELO_USUARIO_RECEBEDOR' },
+        ),
+      'cancelar Pix CobV',
+    );
+
+    return response.status ?? 'REMOVIDA_PELO_USUARIO_RECEBEDOR';
+  }
+
+  async cancelCharge(companyId: string, chargeId: string): Promise<string> {
+    const gatewayAccount = await this.getActiveGatewayAccount(companyId);
+    const client = this.createSdkClient(gatewayAccount);
+
+    await this.runEfiRequest(
+      () => client.cancelCharge({ id: chargeId }),
+      'cancelar boleto/Bolix',
+    );
+
+    return 'canceled';
   }
 
   async handlePixWebhook(payload: unknown): Promise<{
@@ -345,23 +428,18 @@ export class EfiService {
     this.ensurePixCertificate(gatewayAccount);
 
     const client = this.createSdkClient(gatewayAccount);
-    const txid = invoice.efiTxid ?? this.generateTxid(invoice.id);
+    const txid = this.isPixExpired(invoice.pixExpiresAt)
+      ? this.generateRenewedTxid(invoice.id)
+      : (invoice.efiTxid ?? this.generateTxid(invoice.id));
     const dueDate = this.formatDate(invoice.dueDate);
     const amount = this.formatAmount(invoice.originalAmount);
-    const debtorDocument = this.onlyDigits(invoice.debtor.document ?? '');
     const discountSettings = this.resolveDiscountSettings(invoice);
     const cobvPayload = {
       calendario: {
         dataDeVencimento: dueDate,
         validadeAposVencimento: 30,
       },
-      devedor: {
-        ...this.buildPixDebtorAddress(invoice),
-        nome: invoice.debtor.name,
-        ...(debtorDocument.length === 14
-          ? { cnpj: debtorDocument }
-          : { cpf: debtorDocument || '00000000000' }),
-      },
+      devedor: this.buildPixDebtorPayload(invoice),
       valor: {
         original: amount,
         ...(discountSettings.enabled
@@ -378,7 +456,11 @@ export class EfiService {
     };
 
     await this.runEfiRequest(
-      () => client.pixCreateDueCharge({ txid }, cobvPayload),
+      () =>
+        client.pixCreateDueCharge(
+          { txid },
+          cobvPayload as unknown as PixCreateDueChargeBody,
+        ),
       'criar Pix CobV',
     );
 
@@ -391,7 +473,9 @@ export class EfiService {
       client,
       gatewayAccount,
       txid,
+      this.resolveSplitSettings(invoice).percentageBps,
     );
+    const splitSettings = this.resolveSplitSettings(invoice);
 
     if (splitConfigId) {
       await this.runEfiRequest(
@@ -422,6 +506,8 @@ export class EfiService {
         efiLocId: detail.loc?.id?.toString(),
         efiPixCopiaECola: pixCopyPaste,
         splitConfigId,
+        splitAppliedPercentageBps: splitSettings.percentageBps,
+        splitAppliedCategory: splitSettings.category,
         gatewayStatusRaw: detail.status,
         discountApplied: this.calculateDiscountAmount(
           invoice.originalAmount,
@@ -461,8 +547,11 @@ export class EfiService {
     const client = this.createSdkClient(gatewayAccount);
     const webhookUrl = this.buildWebhookUrl('/webhooks/efi/cobrancas');
     const customer = this.buildBoletoCustomer(invoice);
-    const marketplaceRepasses =
-      this.buildBoletoMarketplaceRepasses(gatewayAccount);
+    const splitSettings = this.resolveSplitSettings(invoice);
+    const marketplaceRepasses = this.buildBoletoMarketplaceRepasses(
+      gatewayAccount,
+      splitSettings.percentageBps,
+    );
     const discountSettings = this.resolveDiscountSettings(invoice);
     const boletoDiscount =
       discountSettings.enabled && discountSettings.percentage !== null
@@ -536,6 +625,8 @@ export class EfiService {
         boletoLink,
         boletoPdf,
         efiPixCopiaECola: chargeData?.pix?.qrcode,
+        splitAppliedPercentageBps: splitSettings.percentageBps,
+        splitAppliedCategory: splitSettings.category,
         gatewayStatusRaw: chargeData?.status,
         discountApplied: this.calculateDiscountAmount(
           invoice.originalAmount,
@@ -571,11 +662,12 @@ export class EfiService {
     client: EfiPay,
     gatewayAccount: GatewayAccount,
     txid: string,
+    platformPercentage: number,
   ): Promise<string | null> {
     const platformPayeeCode = this.config.get<string>(
       'EFI_PLATFORM_PAYEE_CODE',
     );
-    const platformPercentage = this.getPlatformSplitPercentage();
+    this.ensureValidSplitPercentage(platformPercentage);
 
     if (
       platformPercentage === 0 ||
@@ -628,11 +720,12 @@ export class EfiService {
 
   private buildBoletoMarketplaceRepasses(
     gatewayAccount: GatewayAccount,
+    platformPercentage: number,
   ): Array<{ payee_code: string; percentage: number }> {
     const platformPayeeCode = this.config.get<string>(
       'EFI_PLATFORM_PAYEE_CODE',
     );
-    const platformPercentage = this.getPlatformSplitPercentage();
+    this.ensureValidSplitPercentage(platformPercentage);
 
     if (
       platformPercentage === 0 ||
@@ -650,10 +743,29 @@ export class EfiService {
     ];
   }
 
+  resolveSplitSettings(input: SplitSettingsInput): ResolvedSplitSettings {
+    const today = this.formatDate(new Date());
+    const dueDate = this.formatDate(input.dueDate);
+    const category: SplitAppliedCategory =
+      dueDate < today ? 'OVERDUE' : 'ON_TIME';
+
+    return {
+      category,
+      percentageBps:
+        category === 'OVERDUE'
+          ? input.company.overdueSplitPercentageBps
+          : input.company.onTimeSplitPercentageBps,
+    };
+  }
+
   private buildExistingPixResult(
     invoice: PaymentInvoice,
   ): EfiPaymentResult | null {
     if (!invoice.efiTxid || !invoice.efiPixCopiaECola) {
+      return null;
+    }
+
+    if (this.isPixExpired(invoice.pixExpiresAt)) {
       return null;
     }
 
@@ -673,6 +785,10 @@ export class EfiService {
       return null;
     }
 
+    if (this.isPixExpired(invoice.pixExpiresAt)) {
+      return null;
+    }
+
     return {
       gatewayId: invoice.efiChargeId,
       chargeId: invoice.efiChargeId,
@@ -682,6 +798,11 @@ export class EfiService {
       expiresAt: invoice.pixExpiresAt ?? invoice.dueDate,
       paymentLink: invoice.boletoLink ?? '',
     };
+  }
+
+  private isPixExpired(expiresAt: Date | null): boolean {
+    if (!expiresAt) return false;
+    return new Date() > expiresAt;
   }
 
   private resolveDiscountSettings(
@@ -780,9 +901,7 @@ export class EfiService {
       });
     }
 
-    return this.prisma.gatewayAccount.findFirst({
-      where: { provider: 'EFI', status: 'ACTIVE' },
-    });
+    return null;
   }
 
   private createSdkClient(gatewayAccount: GatewayAccount): EfiPay {
@@ -861,15 +980,17 @@ export class EfiService {
 
     if (this.isRecord(error)) {
       const efiError = error as EfiErrorResponse;
-      return (
+      const message =
         efiError.error_description ??
         efiError.detail ??
         efiError.mensagem ??
         efiError.message ??
         efiError.error ??
         efiError.title ??
-        'erro desconhecido'
-      );
+        'erro desconhecido';
+      const violations = this.formatEfiViolations(efiError.violacoes);
+
+      return violations ? `${message} ${violations}` : message;
     }
 
     if (error instanceof Error) {
@@ -879,23 +1000,72 @@ export class EfiService {
     return 'erro desconhecido';
   }
 
-  private buildPixDebtorAddress(invoice: PaymentInvoice): {
-    logradouro: string;
-    cidade: string;
-    uf: string;
-    cep: string;
-  } {
+  private formatEfiViolations(
+    violations: EfiErrorResponse['violacoes'],
+  ): string {
+    if (!violations || violations.length === 0) {
+      return '';
+    }
+
+    const details = violations
+      .map((violation) => {
+        const property = violation.propriedade?.trim();
+        const reason = violation.razao?.trim();
+
+        if (property && reason) {
+          return `${property}: ${reason}`;
+        }
+
+        return reason ?? property ?? null;
+      })
+      .filter((violation): violation is string => violation !== null);
+
+    return details.length > 0 ? `Violacoes: ${details.join(' | ')}` : '';
+  }
+
+  private buildPixDebtorAddress(
+    invoice: PaymentInvoice,
+  ): PixCobvDebtorAddress | null {
+    const logradouro = invoice.company.addressStreet?.trim();
+    const cidade = invoice.company.addressCity?.trim();
+    const uf = invoice.company.addressState?.trim().toUpperCase();
+    const cep = this.onlyDigits(invoice.company.addressPostalCode ?? '');
+
+    if (!logradouro || !cidade || !uf || cep.length !== 8) {
+      return null;
+    }
+
     return {
-      logradouro: invoice.company.addressStreet ?? 'Nao informado',
-      cidade: invoice.company.addressCity ?? 'Sao Paulo',
-      uf: invoice.company.addressState ?? 'SP',
-      cep: this.onlyDigits(invoice.company.addressPostalCode ?? '00000000'),
+      logradouro,
+      cidade,
+      uf,
+      cep,
+    };
+  }
+
+  private buildPixDebtorPayload(invoice: PaymentInvoice): PixCobvDebtorPayload {
+    const debtorDocument = this.normalizeRequiredDebtorDocument(
+      invoice.debtor.document,
+    );
+
+    const address = this.buildPixDebtorAddress(invoice);
+
+    return {
+      ...(address ?? {}),
+      nome: invoice.debtor.name,
+      ...(debtorDocument.length === 14
+        ? { cnpj: debtorDocument }
+        : { cpf: debtorDocument }),
     };
   }
 
   private buildBoletoCustomer(invoice: PaymentInvoice): {
-    name: string;
+    name?: string;
     cpf?: string;
+    juridical_person?: {
+      corporate_name: string;
+      cnpj: string;
+    };
     email?: string;
     phone_number?: string;
     address: {
@@ -907,9 +1077,10 @@ export class EfiService {
       state: string;
     };
   } {
-    return {
-      name: invoice.debtor.name,
-      cpf: this.onlyDigits(invoice.debtor.document ?? '00000000000'),
+    const debtorDocument = this.normalizeRequiredDebtorDocument(
+      invoice.debtor.document,
+    );
+    const customer = {
       email: invoice.debtor.email ?? undefined,
       phone_number: this.onlyDigits(invoice.debtor.phoneNumber),
       address: {
@@ -922,6 +1093,22 @@ export class EfiService {
         city: invoice.company.addressCity ?? 'Sao Paulo',
         state: invoice.company.addressState ?? 'SP',
       },
+    };
+
+    if (debtorDocument.length === 14) {
+      return {
+        ...customer,
+        juridical_person: {
+          corporate_name: invoice.debtor.name,
+          cnpj: debtorDocument,
+        },
+      };
+    }
+
+    return {
+      ...customer,
+      name: invoice.debtor.name,
+      cpf: debtorDocument,
     };
   }
 
@@ -983,13 +1170,28 @@ export class EfiService {
       notificationToken?: string;
     },
   ): Promise<void> {
+    const currentInvoice = await this.prisma.invoice.findFirst({
+      where: { id: invoiceId, companyId },
+      select: { id: true, paidAt: true },
+    });
+
+    if (!currentInvoice) {
+      return;
+    }
+
+    const data: Prisma.InvoiceUpdateManyMutationInput = {
+      status,
+      gatewayStatusRaw: context.gatewayStatusRaw,
+      notificationToken: context.notificationToken,
+    };
+
+    if (status === 'PAID') {
+      data.paidAt = currentInvoice.paidAt ?? new Date();
+    }
+
     await this.prisma.invoice.updateMany({
       where: { id: invoiceId, companyId },
-      data: {
-        status,
-        gatewayStatusRaw: context.gatewayStatusRaw,
-        notificationToken: context.notificationToken,
-      },
+      data,
     });
 
     await this.createLog(
@@ -999,6 +1201,10 @@ export class EfiService {
       context.description,
       status,
     );
+
+    if (status === 'PAID') {
+      await this.paymentNotifications.notifyPaidInvoice(companyId, invoiceId);
+    }
   }
 
   private async createLog(
@@ -1021,11 +1227,24 @@ export class EfiService {
 
   private buildWebhookUrl(path: string): string {
     const baseUrl = this.config.get<string>('EFI_WEBHOOK_BASE_URL') ?? '';
-    return `${baseUrl.replace(/\/$/, '')}${path}`;
+    const url = new URL(
+      path.replace(/^\//, ''),
+      `${baseUrl.replace(/\/$/, '')}/`,
+    );
+    url.searchParams.set(
+      'token',
+      this.config.getOrThrow<string>('EFI_WEBHOOK_SECRET'),
+    );
+
+    return url.toString();
   }
 
   private generateTxid(invoiceId: string): string {
     return invoiceId.replace(/-/g, '').slice(0, 32);
+  }
+
+  private generateRenewedTxid(invoiceId: string): string {
+    return `${invoiceId.replace(/-/g, '').slice(0, 24)}${randomBytes(4).toString('hex')}`;
   }
 
   private formatDate(date: Date): string {
@@ -1093,23 +1312,17 @@ export class EfiService {
     return target;
   }
 
-  private getPlatformSplitPercentage(): number {
-    const percentage = Number(
-      this.config.get<string>('EFI_PLATFORM_SPLIT_PERCENTAGE') ?? '0',
-    );
-
+  private ensureValidSplitPercentage(percentage: number): void {
     if (
       !Number.isInteger(percentage) ||
       percentage < 0 ||
       percentage >= 10000
     ) {
       throw new HttpException(
-        'EFI_PLATFORM_SPLIT_PERCENTAGE deve estar entre 0 e 9999.',
+        'Percentual de split da empresa deve estar entre 0 e 9999.',
         HttpStatus.SERVICE_UNAVAILABLE,
       );
     }
-
-    return percentage;
   }
 
   private formatBasisPointsAsPercent(value: number): string {
@@ -1118,6 +1331,19 @@ export class EfiService {
 
   private onlyDigits(value: string): string {
     return value.replace(/\D/g, '');
+  }
+
+  private normalizeRequiredDebtorDocument(value: string | null): string {
+    const result = validateDebtorDocument(value);
+
+    if (!result.valid) {
+      throw new HttpException(
+        'CPF/CNPJ do devedor obrigatorio para emitir cobrancas Efi.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    return result.normalized;
   }
 
   private isRecord(value: unknown): value is Record<string, unknown> {

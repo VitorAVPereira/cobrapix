@@ -10,6 +10,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Length,
   Matches,
   Max,
@@ -30,12 +31,20 @@ export class CreateInvoiceDto {
   name?: string;
 
   @ValidateIf((dto: CreateInvoiceDto) => !dto.debtorId)
+  @IsString()
+  document?: string;
+
+  @ValidateIf((dto: CreateInvoiceDto) => !dto.debtorId)
   @Matches(/^\+?[\d\s().-]{10,24}$/)
   phone_number?: string;
 
   @ValidateIf((dto: CreateInvoiceDto) => !dto.debtorId)
   @IsEmail()
   email?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  whatsappOptIn?: boolean;
 
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)
@@ -58,6 +67,21 @@ export class CreateInvoiceDto {
   @Min(1)
   @Max(31)
   due_day?: number;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 120)
+  studentName?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 60)
+  studentEnrollment?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 80)
+  studentGroup?: string;
 }
 
 export class CreateDebtorInvoiceDto {
@@ -82,6 +106,72 @@ export class CreateDebtorInvoiceDto {
   @Min(1)
   @Max(31)
   due_day?: number;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 120)
+  studentName?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 60)
+  studentEnrollment?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 80)
+  studentGroup?: string;
+}
+
+export class CreateDebtorDto {
+  @IsString()
+  @Length(2, 120)
+  name!: string;
+
+  @IsString()
+  document!: string;
+
+  @Matches(/^\+?[\d\s().-]{10,24}$/)
+  phone_number!: string;
+
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  whatsappOptIn?: boolean;
+
+  @IsOptional()
+  @IsUUID('4')
+  collectionProfileId?: string;
+}
+
+export class UpdateDebtorDto {
+  @IsOptional()
+  @IsString()
+  @Length(2, 120)
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  document?: string;
+
+  @IsOptional()
+  @Matches(/^\+?[\d\s().-]{10,24}$/)
+  phone_number?: string;
+
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  whatsappOptIn?: boolean;
+
+  @IsOptional()
+  @IsUUID('4')
+  collectionProfileId?: string;
 }
 
 export class UpdateRecurringInvoiceDto {
@@ -100,14 +190,23 @@ export class UpdateRecurringInvoiceDto {
 }
 
 export class UpdateDebtorSettingsDto {
-  @IsBoolean()
-  useGlobalBillingSettings!: boolean;
+  @IsOptional()
+  @IsString()
+  document?: string;
 
-  @ValidateIf((dto: UpdateDebtorSettingsDto) => !dto.useGlobalBillingSettings)
+  @IsOptional()
+  @IsBoolean()
+  useGlobalBillingSettings?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  whatsappOptIn?: boolean;
+
+  @IsOptional()
   @IsIn(['PIX', 'BOLETO', 'BOLIX'])
   preferredBillingMethod?: BillingType;
 
-  @ValidateIf((dto: UpdateDebtorSettingsDto) => !dto.useGlobalBillingSettings)
+  @IsOptional()
   @IsArray()
   @ArrayMinSize(1)
   @ArrayMaxSize(12)
@@ -117,17 +216,19 @@ export class UpdateDebtorSettingsDto {
   @Max(365, { each: true })
   collectionReminderDays?: number[];
 
-  @ValidateIf((dto: UpdateDebtorSettingsDto) => !dto.useGlobalBillingSettings)
+  @IsOptional()
   @IsBoolean()
   autoGenerateFirstCharge?: boolean;
 
-  @ValidateIf((dto: UpdateDebtorSettingsDto) => !dto.useGlobalBillingSettings)
+  @IsOptional()
   @IsBoolean()
   autoDiscountEnabled?: boolean;
 
   @ValidateIf(
     (dto: UpdateDebtorSettingsDto) =>
-      !dto.useGlobalBillingSettings && dto.autoDiscountEnabled === true,
+      dto.autoDiscountEnabled === true ||
+      (dto.autoDiscountDaysAfterDue !== undefined &&
+        dto.autoDiscountDaysAfterDue !== null),
   )
   @IsInt()
   @Min(0)
@@ -136,10 +237,16 @@ export class UpdateDebtorSettingsDto {
 
   @ValidateIf(
     (dto: UpdateDebtorSettingsDto) =>
-      !dto.useGlobalBillingSettings && dto.autoDiscountEnabled === true,
+      dto.autoDiscountEnabled === true ||
+      (dto.autoDiscountPercentage !== undefined &&
+        dto.autoDiscountPercentage !== null),
   )
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)
   @Max(100)
   autoDiscountPercentage?: number;
+
+  @IsOptional()
+  @IsUUID('4')
+  collectionProfileId?: string;
 }

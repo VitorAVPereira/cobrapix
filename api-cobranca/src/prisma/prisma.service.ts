@@ -15,6 +15,7 @@ export class PrismaService
   implements OnModuleInit, OnModuleDestroy
 {
   private readonly logger = new Logger(PrismaService.name);
+  private readonly pool: Pool;
 
   constructor(config: ConfigService) {
     const pool = new Pool({
@@ -22,6 +23,7 @@ export class PrismaService
     });
     const adapter = new PrismaPg(pool);
     super({ adapter });
+    this.pool = pool;
   }
 
   async onModuleInit(): Promise<void> {
@@ -31,6 +33,7 @@ export class PrismaService
 
   async onModuleDestroy(): Promise<void> {
     await this.$disconnect();
+    await this.pool.end();
     this.logger.log('Prisma desconectado');
   }
 }

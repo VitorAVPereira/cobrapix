@@ -1,8 +1,9 @@
 import { Module, ValidationPipe } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_PIPE } from '@nestjs/core';
+import { APP_FILTER, APP_PIPE } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { validateEnv } from './config/env.validation';
+import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
 import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
@@ -12,6 +13,9 @@ import { BillingModule } from './billing/billing.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { PaymentModule } from './payment/payment.module';
 import { TemplatesModule } from './templates/templates.module';
+import { EmailModule } from './email/email.module';
+import { AdminModule } from './admin/admin.module';
+import { BullInfrastructureModule } from './queue/bull-infrastructure.module';
 
 @Module({
   imports: [
@@ -21,6 +25,7 @@ import { TemplatesModule } from './templates/templates.module';
       cache: true,
     }),
     ScheduleModule.forRoot(),
+    BullInfrastructureModule,
     PrismaModule,
     HealthModule,
     AuthModule,
@@ -30,11 +35,23 @@ import { TemplatesModule } from './templates/templates.module';
     WebhooksModule,
     PaymentModule,
     TemplatesModule,
+    EmailModule,
+    AdminModule,
   ],
   providers: [
     {
+      provide: APP_FILTER,
+      useClass: GlobalExceptionFilter,
+    },
+    {
       provide: APP_PIPE,
-      useClass: ValidationPipe,
+      useFactory: () =>
+        new ValidationPipe({
+          whitelist: true,
+          forbidNonWhitelisted: true,
+          transform: true,
+          transformOptions: { enableImplicitConversion: true },
+        }),
     },
   ],
 })

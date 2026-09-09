@@ -12,6 +12,18 @@ enum InvoiceStatus {
   CANCELED
 }
 
+enum BusinessSegment {
+  GENERAL
+  EDUCATION
+}
+
+enum PaymentNotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  READ
+}
+
 enum SubscriptionStatus {
   TRIAL
   ACTIVE
@@ -26,10 +38,36 @@ enum WhatsappStatus {
   PENDING
 }
 
+enum WhatsappProvider {
+  META_CLOUD
+}
+
+enum WhatsAppTemplateCategory {
+  UTILITY
+  MARKETING
+  AUTHENTICATION
+}
+
 enum BillingMethod {
   PIX
   BOLETO
   BOLIX
+}
+
+enum UserRole {
+  PLATFORM_ADMIN
+  COMPANY_ADMIN
+}
+
+enum CompanyStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum SplitAppliedCategory {
+  ON_TIME
+  OVERDUE
 }
 
 enum RecurringInvoiceStatus {
@@ -37,17 +75,69 @@ enum RecurringInvoiceStatus {
   PAUSED
 }
 
+enum MessagingLimitTier {
+  TIER_50
+  TIER_250
+  TIER_1K
+  TIER_10K
+  TIER_100K
+  TIER_UNLIMITED
+}
+
+enum WhatsAppInteractionDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum CollectionProfileType {
+  NEW
+  GOOD
+  DOUBTFUL
+  BAD
+}
+
+enum CollectionChannel {
+  EMAIL
+  WHATSAPP
+}
+
+enum CollectionAttemptStatus {
+  QUEUED
+  SENT
+  FAILED
+  DELIVERED
+  OPENED
+  CLICKED
+}
+
+enum ConversationStatus {
+  NEW
+  IN_PROGRESS
+  CLOSED
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageTemplateCopyCodeSource {
+  AUTO
+  PIX_COPY_PASTE
+  BOLETO_LINE_DIGITABLE
+}
+
 model Company {
-  id                           String         @id @default(uuid())
+  id                           String              @id @default(uuid())
   corporateName                String
-  document                     String         @unique
-  email                        String         @unique
+  document                     String              @unique
+  email                        String              @unique
   phoneNumber                  String
   gatewayToken                 String?
-  gatewayProvider              String         @default("EFI")
+  gatewayProvider              String              @default("EFI")
   gatewayAccountId             String?
   gatewayApiKey                String?
-  gatewayStatus                String         @default("PENDING")
+  gatewayStatus                String              @default("PENDING")
   legalRepresentative          String?
   legalRepresentativeCpf       String?
   legalRepresentativeBirthDate DateTime?
@@ -60,29 +150,61 @@ model Company {
   bankName                     String?
   bankAgency                   String?
   bankAccount                  String?
-  maxDiscountsPerDebtor        Int            @default(1)
-  discountTriggerDay           Int            @default(15)
-  collectionReminderDays       Int[]          @default([0])
-  autoGenerateFirstCharge      Boolean        @default(true)
-  autoDiscountEnabled          Boolean        @default(false)
+  maxDiscountsPerDebtor        Int                 @default(1)
+  discountTriggerDay           Int                 @default(15)
+  collectionReminderDays       Int[]               @default([0])
+  autoGenerateFirstCharge      Boolean             @default(true)
+  autoDiscountEnabled          Boolean             @default(false)
   autoDiscountDaysAfterDue     Int?
-  autoDiscountPercentage       Decimal?       @db.Decimal(5, 2)
-  preferredBillingMethod       BillingMethod  @default(PIX)
+  autoDiscountPercentage       Decimal?            @db.Decimal(5, 2)
+  preferredBillingMethod       BillingMethod       @default(PIX)
+  whatsappProvider             WhatsappProvider    @default(META_CLOUD)
   whatsappInstanceId           String?
-  whatsappStatus               WhatsappStatus @default(DISCONNECTED)
+  whatsappStatus               WhatsappStatus      @default(DISCONNECTED)
+  metaPhoneNumberId            String?
+  metaBusinessAccountId        String?
+  metaBusinessPhoneNumber      String?
+  metaAccessTokenEncrypted     String?             @db.Text
+  metaDefaultLanguage          String              @default("pt_BR")
+  messagingLimitTier           MessagingLimitTier?
+  messagingLimitUpdatedAt      DateTime?
+  resendApiKeyEncrypted        String?             @db.Text
+  resendWebhookSecretEncrypted String?             @db.Text
+  resendFromEmail              String?
+  erpApiKeyHash                String?
+  erpWebhookUrl                String?
+  erpEnabledEvents             String[]            @default([])
+  businessSegment              BusinessSegment     @default(GENERAL)
+  paymentNotificationEnabled   Boolean             @default(true)
+  paymentNotificationEmails    String[]            @default([])
+  status                       CompanyStatus       @default(ACTIVE)
+  enabledBillingMethods        BillingMethod[]     @default([PIX, BOLETO, BOLIX])
+  onTimeSplitPercentageBps     Int                 @default(0)
+  overdueSplitPercentageBps    Int                 @default(0)
 
-  templates           MessageTemplate[]
-  users               User[]
-  debtors             Debtor[]
-  invoices            Invoice[]
-  recurringInvoices   RecurringInvoice[]
-  collectionLogs      CollectionLog[]
-  subscription        Subscription?
-  paymentGateway      GatewayAccount?
-  originalBankAccount OriginalBankAccount?
+  templates            MessageTemplate[]
+  emailTemplates       EmailTemplate[]
+  users                User[]
+  debtors              Debtor[]
+  invoices             Invoice[]
+  paymentNotifications PaymentNotification[]
+  recurringInvoices    RecurringInvoice[]
+  collectionLogs       CollectionLog[]
+  subscription         Subscription?
+  paymentGateway       GatewayAccount?
+  originalBankAccount  OriginalBankAccount?
+  messagingUsage       MessagingUsage[]
+  whatsappInteractions WhatsAppInteraction[]
+  collectionProfiles   CollectionProfile[]
+  collectionAttempts   CollectionAttempt[]
+  emailEvents          EmailEvent[]
+  conversations        WhatsAppConversation[]
+  auditLogs            AuditLog[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([whatsappStatus, whatsappInstanceId])
 }
 
 model GatewayAccount {
@@ -129,70 +251,112 @@ model OriginalBankAccount {
 }
 
 model Debtor {
-  id                           String   @id @default(uuid())
-  companyId                    String
-  company                      Company  @relation(fields: [companyId], references: [id])
-  name                         String
-  document                     String?
-  phoneNumber                  String
-  email                        String?
-  gatewayCustomerId            String?
-  useGlobalBillingSettings     Boolean  @default(true)
-  collectionReminderDays       Int[]    @default([])
-  autoGenerateFirstCharge      Boolean?
-  autoDiscountEnabled          Boolean?
-  autoDiscountDaysAfterDue     Int?
-  autoDiscountPercentage       Decimal? @db.Decimal(5, 2)
-  preferredBillingMethod       BillingMethod?
+  id                       String             @id @default(uuid())
+  companyId                String
+  company                  Company            @relation(fields: [companyId], references: [id])
+  name                     String
+  document                 String?
+  phoneNumber              String
+  email                    String?
+  whatsappOptIn            Boolean            @default(false)
+  whatsappOptInAt          DateTime?
+  whatsappOptInSource      String?
+  gatewayCustomerId        String?
+  useGlobalBillingSettings Boolean            @default(true)
+  collectionReminderDays   Int[]              @default([])
+  autoGenerateFirstCharge  Boolean?
+  autoDiscountEnabled      Boolean?
+  autoDiscountDaysAfterDue Int?
+  autoDiscountPercentage   Decimal?           @db.Decimal(5, 2)
+  preferredBillingMethod   BillingMethod?
+  collectionProfileId      String?
+  collectionProfile        CollectionProfile? @relation(fields: [collectionProfileId], references: [id])
+  externalDebtorId         String?
 
-  invoices Invoice[]
+  invoices          Invoice[]
   recurringInvoices RecurringInvoice[]
+  conversations     WhatsAppConversation[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([companyId, phoneNumber])
+  @@unique([companyId, externalDebtorId])
   @@index([companyId])
 }
 
 model Invoice {
-  id        String  @id @default(uuid())
-  companyId String
-  company   Company @relation(fields: [companyId], references: [id])
-  debtorId  String
-  debtor    Debtor  @relation(fields: [debtorId], references: [id])
+  id                 String            @id @default(uuid())
+  companyId          String
+  company            Company           @relation(fields: [companyId], references: [id])
+  debtorId           String
+  debtor             Debtor            @relation(fields: [debtorId], references: [id])
   recurringInvoiceId String?
   recurringInvoice   RecurringInvoice? @relation(fields: [recurringInvoiceId], references: [id])
 
-  originalAmount       Decimal       @db.Decimal(10, 2)
-  dueDate              DateTime
-  status               InvoiceStatus @default(PENDING)
-  gatewayId            String?       @unique
-  pixPayload           String?       @db.Text
-  pixExpiresAt         DateTime?
-  efiTxid              String?       @unique
-  efiChargeId          String?       @unique
-  efiLocId             String?
-  efiPixCopiaECola     String?       @db.Text
-  boletoLinhaDigitavel String?
-  boletoLink           String?       @db.Text
-  boletoPdf            String?       @db.Text
-  splitConfigId        String?
-  notificationToken    String?
-  gatewayStatusRaw     String?
-  discountApplied      Decimal?      @db.Decimal(10, 2)
-  billingType          String        @default("PIX")
-  recurrencePeriod     String?
+  originalAmount            Decimal               @db.Decimal(10, 2)
+  dueDate                   DateTime
+  status                    InvoiceStatus         @default(PENDING)
+  gatewayId                 String?               @unique
+  pixPayload                String?               @db.Text
+  pixExpiresAt              DateTime?
+  efiTxid                   String?               @unique
+  efiChargeId               String?               @unique
+  efiLocId                  String?
+  efiPixCopiaECola          String?               @db.Text
+  boletoLinhaDigitavel      String?
+  boletoLink                String?               @db.Text
+  boletoPdf                 String?               @db.Text
+  splitConfigId             String?
+  notificationToken         String?
+  gatewayStatusRaw          String?
+  discountApplied           Decimal?              @db.Decimal(10, 2)
+  splitAppliedPercentageBps Int?
+  splitAppliedCategory      SplitAppliedCategory?
+  billingType               String                @default("PIX")
+  recurrencePeriod          String?
+  externalInvoiceId         String?
+  externalRef               String?
+  studentName               String?
+  studentEnrollment         String?
+  studentGroup              String?
+  paidAt                    DateTime?
 
-  collectionLogs CollectionLog[]
+  collectionLogs       CollectionLog[]
+  collectionAttempts   CollectionAttempt[]
+  emailEvents          EmailEvent[]
+  paymentNotifications PaymentNotification[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([recurringInvoiceId, recurrencePeriod])
+  @@unique([companyId, externalInvoiceId])
   @@index([companyId])
   @@index([debtorId])
   @@index([recurringInvoiceId])
-  @@unique([recurringInvoiceId, recurrencePeriod])
+  @@index([companyId, status, dueDate])
+  @@index([status, dueDate])
+}
+
+model PaymentNotification {
+  id              String                    @id @default(uuid())
+  companyId       String
+  company         Company                   @relation(fields: [companyId], references: [id])
+  invoiceId       String
+  invoice         Invoice                   @relation(fields: [invoiceId], references: [id])
+  status          PaymentNotificationStatus @default(PENDING)
+  recipientEmails String[]                  @default([])
+  errorMessage    String?                   @db.Text
+  summary         Json
+  sentAt          DateTime?
+  readAt          DateTime?
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+
+  @@unique([companyId, invoiceId])
+  @@index([companyId, status, createdAt])
+  @@index([invoiceId])
 }
 
 model RecurringInvoice {
@@ -233,20 +397,42 @@ model CollectionLog {
 
   @@index([companyId])
   @@index([invoiceId])
+  @@index([companyId, actionType, createdAt])
 }
 
 model User {
-  id        String  @id @default(uuid())
-  email     String  @unique
-  password  String
-  name      String?
-  companyId String
-  company   Company @relation(fields: [companyId], references: [id])
+  id                    String                 @id @default(uuid())
+  email                 String                 @unique
+  password              String
+  name                  String?
+  companyId             String
+  company               Company                @relation(fields: [companyId], references: [id])
+  role                  UserRole               @default(COMPANY_ADMIN)
+  mustChangePassword    Boolean                @default(false)
+  tokenVersion          Int                    @default(0)
+  assignedConversations WhatsAppConversation[]
+  auditLogs             AuditLog[]
+  passwordResetTokens   PasswordResetToken[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([companyId])
+  @@unique([id, companyId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  companyId String
+  userId    String
+  user      User      @relation(fields: [userId, companyId], references: [id, companyId], onDelete: Cascade)
+  tokenHash String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@unique([companyId, tokenHash])
+  @@index([companyId, userId])
 }
 
 model Plan {
@@ -272,15 +458,206 @@ model Subscription {
 }
 
 model MessageTemplate {
-  id        String   @id @default(uuid())
-  name      String // Nome para o lojista (ex: "Aviso de Vencimento")
-  slug      String // Identificador interno (ex: "vencimento-hoje", "atraso-5-dias")
-  content   String   @db.Text // O texto com Spintax e variáveis
-  isActive  Boolean  @default(true)
-  companyId String
-  company   Company  @relation(fields: [companyId], references: [id])
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                    String                        @id @default(uuid())
+  name                  String // Nome para o lojista (ex: "Aviso de Vencimento")
+  slug                  String // Identificador interno (ex: "vencimento-hoje", "atraso-5-dias")
+  content               String                        @db.Text // O texto com Spintax e variáveis
+  footerText            String?                       @db.Text
+  paymentButtonEnabled  Boolean                       @default(true)
+  paymentButtonLabel    String                        @default("Abrir pagamento")
+  copyCodeButtonEnabled Boolean                       @default(false)
+  copyCodeSource        MessageTemplateCopyCodeSource @default(AUTO)
+  isActive              Boolean                       @default(true)
+  metaTemplateName      String?
+  metaLanguage          String                        @default("pt_BR")
+  category              WhatsAppTemplateCategory      @default(UTILITY)
+  metaStatus            String                        @default("LOCAL")
+  metaRejectedReason    String?                       @db.Text
+  lastMetaSyncAt        DateTime?
+  companyId             String
+  company               Company                       @relation(fields: [companyId], references: [id])
+  ruleSteps             CollectionRuleStep[]
+  createdAt             DateTime                      @default(now())
+  updatedAt             DateTime                      @updatedAt
 
   @@unique([companyId, slug])
+}
+
+model EmailTemplate {
+  id                String    @id @default(uuid())
+  name              String
+  slug              String
+  subject           String
+  content           String    @db.Text
+  isActive          Boolean   @default(true)
+  resendTemplateId  String?
+  resendAlias       String?
+  resendStatus      String    @default("local")
+  resendPublishedAt DateTime?
+  lastResendSyncAt  DateTime?
+  resendError       String?   @db.Text
+  deletedAt         DateTime?
+  companyId         String
+  company           Company   @relation(fields: [companyId], references: [id])
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([companyId, slug])
+  @@index([companyId, deletedAt])
+  @@index([resendTemplateId])
+}
+
+model MessagingUsage {
+  id          String   @id @default(uuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id])
+  phoneNumber String
+  sentAt      DateTime @default(now())
+
+  @@unique([companyId, phoneNumber])
+  @@index([companyId, sentAt])
+}
+
+model WhatsAppInteraction {
+  id          String                       @id @default(uuid())
+  companyId   String
+  company     Company                      @relation(fields: [companyId], references: [id])
+  phoneNumber String
+  direction   WhatsAppInteractionDirection
+  status      String?
+  messageId   String?
+  rawPayload  Json?
+  receivedAt  DateTime                     @default(now())
+
+  @@index([companyId, receivedAt])
+  @@index([companyId, phoneNumber])
+}
+
+model CollectionProfile {
+  id             String                @id @default(uuid())
+  companyId      String
+  company        Company               @relation(fields: [companyId], references: [id])
+  name           String
+  profileType    CollectionProfileType
+  isDefault      Boolean               @default(false)
+  isActive       Boolean               @default(true)
+  daysOverdueMin Int?
+  daysOverdueMax Int?
+  steps          CollectionRuleStep[]
+  debtors        Debtor[]
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  @@unique([companyId, name])
+  @@index([companyId, isDefault])
+}
+
+model CollectionRuleStep {
+  id            String              @id @default(uuid())
+  profileId     String
+  profile       CollectionProfile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  stepOrder     Int
+  channel       CollectionChannel
+  templateId    String?
+  template      MessageTemplate?    @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  delayDays     Int                 @default(0)
+  sendTimeStart String?
+  sendTimeEnd   String?
+  isActive      Boolean             @default(true)
+  attempts      CollectionAttempt[]
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@unique([profileId, stepOrder, channel])
+  @@index([profileId, stepOrder])
+}
+
+model CollectionAttempt {
+  id                String                  @id @default(uuid())
+  companyId         String
+  company           Company                 @relation(fields: [companyId], references: [id])
+  invoiceId         String
+  invoice           Invoice                 @relation(fields: [invoiceId], references: [id])
+  ruleStepId        String
+  ruleStep          CollectionRuleStep      @relation(fields: [ruleStepId], references: [id])
+  channel           CollectionChannel
+  status            CollectionAttemptStatus @default(QUEUED)
+  externalMessageId String?
+  errorDetails      String?                 @db.Text
+  createdAt         DateTime                @default(now())
+
+  @@unique([companyId, invoiceId, ruleStepId, channel])
+  @@index([companyId, createdAt])
+  @@index([invoiceId])
+  @@index([externalMessageId])
+}
+
+model EmailEvent {
+  id             String   @id @default(uuid())
+  companyId      String
+  company        Company  @relation(fields: [companyId], references: [id])
+  svixId         String   @unique
+  emailMessageId String
+  eventType      String
+  invoiceId      String?
+  invoice        Invoice? @relation(fields: [invoiceId], references: [id])
+  recipientEmail String
+  rawPayload     Json?
+  occurredAt     DateTime
+  createdAt      DateTime @default(now())
+
+  @@index([companyId, occurredAt])
+  @@index([emailMessageId])
+}
+
+model WhatsAppConversation {
+  id                     String             @id @default(uuid())
+  companyId              String
+  company                Company            @relation(fields: [companyId], references: [id])
+  debtorId               String?
+  debtor                 Debtor?            @relation(fields: [debtorId], references: [id])
+  phoneNumber            String
+  status                 ConversationStatus @default(NEW)
+  assigneeId             String?
+  assignee               User?              @relation(fields: [assigneeId], references: [id])
+  lastInboundAt          DateTime?
+  serviceWindowExpiresAt DateTime?
+  lastMessagePreview     String?
+  unreadCount            Int                @default(0)
+  messages               WhatsAppMessage[]
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  @@unique([companyId, phoneNumber])
+  @@index([companyId, status, updatedAt])
+}
+
+model WhatsAppMessage {
+  id             String               @id @default(uuid())
+  conversationId String
+  conversation   WhatsAppConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  direction      MessageDirection
+  content        String               @db.Text
+  messageId      String?              @unique
+  status         String?
+  readAt         DateTime?
+  createdAt      DateTime             @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  companyId  String
+  company    Company  @relation(fields: [companyId], references: [id])
+  action     String
+  entityType String
+  entityId   String
+  changes    Json?
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  createdAt  DateTime @default(now())
+
+  @@index([companyId, createdAt])
+  @@index([entityType, entityId])
 }

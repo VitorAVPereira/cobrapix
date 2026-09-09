@@ -17,6 +17,10 @@ import type {
   BillingSettings,
   RecurringInvoice,
 } from "@/lib/api-client";
+import {
+  formatBillingMethodRateLabel,
+  getBillingMethodLabel,
+} from "@/lib/billing-fees";
 import { useApiClient } from "@/lib/use-api-client";
 import { formatWhatsAppNumber } from "@/lib/whatsapp-number";
 
@@ -30,8 +34,6 @@ interface ApiErrorData {
   details?: string[];
   message?: string;
 }
-
-const paymentMethods: BillingMethod[] = ["PIX", "BOLETO", "BOLIX"];
 
 function getErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error) {
@@ -67,18 +69,6 @@ function formatDate(value: string | null): string {
 
   const [year, month, day] = value.split("-");
   return `${day}/${month}/${year}`;
-}
-
-function getMethodLabel(method: BillingMethod): string {
-  if (method === "BOLETO") {
-    return "Boleto";
-  }
-
-  if (method === "BOLIX") {
-    return "Bolix";
-  }
-
-  return "PIX";
 }
 
 export default function DevedoresRecorrentesPage() {
@@ -117,6 +107,10 @@ export default function DevedoresRecorrentesPage() {
     }
   }, [apiClient]);
 
+  const enabledBillingMethods: BillingMethod[] = settings?.enabledBillingMethods.length
+    ? settings.enabledBillingMethods
+    : ["PIX"];
+
   useEffect(() => {
     void fetchData();
   }, [fetchData]);
@@ -145,10 +139,14 @@ export default function DevedoresRecorrentesPage() {
   }, [recurrences, searchQuery]);
 
   function openEditModal(recurrence: RecurringInvoice): void {
+    const billingType = enabledBillingMethods.includes(recurrence.billingType)
+      ? recurrence.billingType
+      : (enabledBillingMethods[0] ?? "PIX");
+
     setSelectedRecurrence(recurrence);
     setEditForm({
       amount: String(recurrence.amount),
-      billingType: recurrence.billingType,
+      billingType,
       dueDay: String(recurrence.dueDay),
     });
   }
@@ -299,7 +297,7 @@ export default function DevedoresRecorrentesPage() {
                         {formatCurrency(recurrence.amount)}
                       </td>
                       <td className="px-5 py-4 text-slate-600">
-                        {getMethodLabel(recurrence.billingType)}
+                        {getBillingMethodLabel(recurrence.billingType)}
                       </td>
                       <td className="px-5 py-4 text-slate-600">
                         Dia {recurrence.dueDay}
@@ -450,13 +448,10 @@ export default function DevedoresRecorrentesPage() {
                   }
                   className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                 >
-                  {paymentMethods.map((method) => {
-                    const tariff = settings?.tariffs[method];
-                    const label = getMethodLabel(method);
-
+                  {enabledBillingMethods.map((method) => {
                     return (
                       <option key={method} value={method}>
-                        {tariff ? `${label} - ${tariff.combinedLabel}` : label}
+                        {formatBillingMethodRateLabel(method, settings)}
                       </option>
                     );
                   })}

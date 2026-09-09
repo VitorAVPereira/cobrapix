@@ -1,215 +1,216 @@
 import {
+  Body,
   Controller,
   Get,
   HttpException,
   HttpStatus,
-  Logger,
+  Param,
   Post,
+  Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { PrismaService } from '../prisma/prisma.service';
+import { ThrottleGuard } from '../common/guards/throttle.guard';
+import { MessagingLimitService } from '../queue/services/messaging-limit.service';
+import { WhatsAppConversationService } from './conversation.service';
+import { ConfigureMetaWhatsappDto } from './dto/configure-meta-whatsapp.dto';
 import { WhatsappService } from './whatsapp.service';
 
 interface AuthenticatedUser {
   companyId: string;
+  userId?: string;
 }
 
 @Controller('whatsapp')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ThrottleGuard)
 export class WhatsappController {
-  private readonly logger = new Logger(WhatsappController.name);
-
   constructor(
     private readonly whatsappService: WhatsappService,
-    private readonly prisma: PrismaService,
+    private readonly messagingLimitService: MessagingLimitService,
+    private readonly conversationService: WhatsAppConversationService,
   ) {}
 
-  @Post('instance')
-  async createInstance(@GetUser() user: AuthenticatedUser) {
+  @Get('unread-count')
+  async getUnreadCount(@GetUser() user: AuthenticatedUser) {
+    const count = await this.conversationService.getUnreadCount(user.companyId);
+    return { count };
+  }
+
+  @Get('conversations')
+  async listConversations(
+    @GetUser() user: AuthenticatedUser,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    const validStatuses = ['NEW', 'IN_PROGRESS', 'CLOSED'];
+    const normalizedStatus = validStatuses.includes(status ?? '')
+      ? (status as 'NEW' | 'IN_PROGRESS' | 'CLOSED')
+      : undefined;
+
+    return this.conversationService.listConversations(user.companyId, {
+      status: normalizedStatus,
+      search: search?.trim() || undefined,
+      page: page ? parseInt(page, 10) : undefined,
+      pageSize: pageSize ? parseInt(pageSize, 10) : undefined,
+    });
+  }
+
+  @Get('conversations/:id')
+  async getConversation(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    const conv = await this.conversationService.getConversation(
+      user.companyId,
+      id,
+    );
+    if (!conv) {
+      throw new HttpException('Conversa nao encontrada.', HttpStatus.NOT_FOUND);
+    }
+    return conv;
+  }
+
+  @Get('conversations/:id/messages')
+  async getMessages(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.conversationService.getMessages(user.companyId, id);
+  }
+
+  @Post('conversations/:id/reply')
+  async reply(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: { content: string },
+  ) {
+    if (!body.content?.trim()) {
+      throw new HttpException('Mensagem vazia.', HttpStatus.BAD_REQUEST);
+    }
+
     try {
-      const instanceName = `cobrapix_${user.companyId}`;
-
-      const createResult =
-        await this.whatsappService.createInstance(instanceName);
-
-      await this.prisma.company.update({
-        where: { id: user.companyId },
-        data: {
-          whatsappInstanceId: instanceName,
-          whatsappStatus: 'PENDING',
-        },
-      });
-
-      await this.waitForEvolutionBoot();
-
-      const connectResult =
-        await this.whatsappService.connectInstance(instanceName);
-
-      if (connectResult.state === 'open' || createResult.state === 'open') {
-        await this.prisma.company.update({
-          where: { id: user.companyId },
-          data: { whatsappStatus: 'CONNECTED' },
-        });
-
-        return {
-          qrCode: null,
-          instanceName,
-          pairingCode: connectResult.pairingCode ?? createResult.pairingCode,
-          state: 'open' as const,
-          dbStatus: 'CONNECTED' as const,
-        };
-      }
-
-      const qrCode = connectResult.qrCode ?? createResult.qrCode;
-
-      if (!qrCode) {
-        this.logger.warn(
-          `[Evolution API] Instância ${instanceName} ainda sem QR code disponível`,
-        );
-        throw new HttpException(
-          'O motor do WhatsApp ainda está iniciando. Tente novamente em alguns segundos.',
-          HttpStatus.SERVICE_UNAVAILABLE,
-        );
-      }
-
-      return {
-        qrCode,
-        instanceName,
-        pairingCode: connectResult.pairingCode ?? createResult.pairingCode,
-        state: 'connecting' as const,
-        dbStatus: 'PENDING' as const,
-      };
+      await this.conversationService.sendReply(
+        user.companyId,
+        id,
+        body.content.trim(),
+        user.userId ?? user.companyId,
+      );
+      return { success: true };
     } catch (error) {
-      if (error instanceof HttpException) {
-        throw error;
-      }
+      throw new HttpException(
+        error instanceof Error ? error.message : 'Falha ao enviar resposta.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+  }
 
+  @Put('conversations/:id/status')
+  async updateStatus(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: { status: string },
+  ) {
+    const validStatuses = ['NEW', 'IN_PROGRESS', 'CLOSED'];
+    if (!validStatuses.includes(body.status)) {
+      throw new HttpException('Status invalido.', HttpStatus.BAD_REQUEST);
+    }
+
+    await this.conversationService.updateStatus(
+      user.companyId,
+      id,
+      body.status as 'NEW' | 'IN_PROGRESS' | 'CLOSED',
+    );
+    return { success: true };
+  }
+
+  @Put('conversations/:id/assignee')
+  async updateAssignee(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: { assigneeId: string | null },
+  ) {
+    await this.conversationService.updateAssignee(
+      user.companyId,
+      id,
+      body.assigneeId,
+    );
+    return { success: true };
+  }
+
+  @Post('meta')
+  async configureMeta(
+    @GetUser() user: AuthenticatedUser,
+    @Body() dto: ConfigureMetaWhatsappDto,
+  ): Promise<unknown> {
+    try {
+      return await this.whatsappService.configureMetaIntegration(
+        user.companyId,
+        dto,
+      );
+    } catch (error) {
       throw new HttpException(
         error instanceof Error
           ? error.message
-          : 'Erro ao criar instância do WhatsApp',
+          : 'Erro ao configurar Meta Cloud API.',
         HttpStatus.BAD_GATEWAY,
       );
     }
+  }
+
+  @Post('instance')
+  async createInstance(
+    @GetUser() user: AuthenticatedUser,
+    @Body() dto: ConfigureMetaWhatsappDto,
+  ): Promise<unknown> {
+    return this.configureMeta(user, dto);
   }
 
   @Get('status')
-  async getStatus(@GetUser() user: AuthenticatedUser) {
-    try {
-      const company = await this.prisma.company.findUnique({
-        where: { id: user.companyId },
-        select: { whatsappInstanceId: true, whatsappStatus: true },
-      });
-
-      if (!company?.whatsappInstanceId) {
-        return {
-          state: 'close' as const,
-          dbStatus: company?.whatsappStatus ?? 'DISCONNECTED',
-        };
-      }
-
-      if (company.whatsappStatus === 'CONNECTED') {
-        return { state: 'open' as const, dbStatus: 'CONNECTED' as const };
-      }
-
-      try {
-        const result = await this.whatsappService.getConnectionState(
-          company.whatsappInstanceId,
-        );
-
-        if (result.state === 'open') {
-          await this.prisma.company.update({
-            where: { id: user.companyId },
-            data: { whatsappStatus: 'CONNECTED' },
-          });
-
-          return { state: 'open' as const, dbStatus: 'CONNECTED' as const };
-        }
-
-        if (result.state === 'close') {
-          await this.prisma.company.update({
-            where: { id: user.companyId },
-            data: { whatsappStatus: 'DISCONNECTED' },
-          });
-
-          return {
-            state: 'close' as const,
-            dbStatus: 'DISCONNECTED' as const,
-          };
-        }
-
-        return {
-          state: 'connecting' as const,
-          dbStatus: company.whatsappStatus,
-        };
-      } catch (evolutionError) {
-        this.logger.warn(
-          `Falha ao consultar status da Evolution para ${company.whatsappInstanceId}: ${
-            evolutionError instanceof Error
-              ? evolutionError.message
-              : 'erro desconhecido'
-          }`,
-        );
-
-        const fallbackState =
-          company.whatsappStatus === 'DISCONNECTED' ? 'close' : 'connecting';
-
-        return {
-          state: fallbackState,
-          dbStatus: company.whatsappStatus,
-        };
-      }
-    } catch {
-      throw new HttpException(
-        'Erro interno ao consultar status do WhatsApp.',
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
+  async getStatus(@GetUser() user: AuthenticatedUser): Promise<unknown> {
+    return this.whatsappService.getStatus(user.companyId);
   }
 
   @Post('disconnect')
-  async disconnect(@GetUser() user: AuthenticatedUser) {
-    try {
-      const company = await this.prisma.company.findUnique({
-        where: { id: user.companyId },
-        select: { whatsappInstanceId: true },
-      });
+  async disconnect(
+    @GetUser() user: AuthenticatedUser,
+  ): Promise<{ success: boolean }> {
+    await this.whatsappService.disconnect(user.companyId);
+    return { success: true };
+  }
 
-      if (!company?.whatsappInstanceId) {
-        throw new HttpException(
-          'Nenhuma instância do WhatsApp está ativa.',
-          HttpStatus.BAD_REQUEST,
-        );
-      }
+  @Get('usage')
+  async getUsage(@GetUser() user: AuthenticatedUser) {
+    const [dailyStatus, interactions] = await Promise.all([
+      this.messagingLimitService.canSend(user.companyId),
+      this.messagingLimitService.getInteractionStats(user.companyId),
+    ]);
 
-      await this.whatsappService.logoutInstance(company.whatsappInstanceId);
+    return {
+      tier: dailyStatus.tier,
+      dailyLimit: dailyStatus.limit,
+      dailyUsage: dailyStatus.usage,
+      remaining: dailyStatus.remaining,
+      interactions,
+    };
+  }
 
-      await this.prisma.company.update({
-        where: { id: user.companyId },
-        data: {
-          whatsappInstanceId: null,
-          whatsappStatus: 'DISCONNECTED',
-        },
-      });
+  @Post('sync-tier')
+  async syncTier(@GetUser() user: AuthenticatedUser) {
+    const tier = await this.messagingLimitService.syncTierFromMeta(
+      user.companyId,
+    );
 
-      return { success: true };
-    } catch (error) {
-      if (error instanceof HttpException) {
-        throw error;
-      }
-
+    if (!tier) {
       throw new HttpException(
-        error instanceof Error
-          ? error.message
-          : 'Erro ao desconectar WhatsApp.',
+        'Nao foi possivel sincronizar o tier com a Meta',
         HttpStatus.BAD_GATEWAY,
       );
     }
-  }
 
-  private async waitForEvolutionBoot(): Promise<void> {
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    return { tier };
   }
 }

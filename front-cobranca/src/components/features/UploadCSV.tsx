@@ -4,6 +4,8 @@ import { useCallback, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import Papa from "papaparse";
 import { AlertCircle, Download, FileType, UploadCloud } from "lucide-react";
+import type { CollectionProfileType } from "@/lib/api-client";
+import { normalizeRequiredDebtorDocument } from "@/lib/debtor-document";
 import { normalizeWhatsAppNumber } from "@/lib/whatsapp-number";
 
 export type PaymentMethod = "PIX" | "BOLETO" | "BOLIX";
@@ -20,6 +22,11 @@ export interface ParsedDebtor {
   billing_type?: PaymentMethod;
   status?: string;
   debtorId?: string;
+  whatsapp_opt_in?: boolean;
+  studentName?: string | null;
+  studentEnrollment?: string | null;
+  studentGroup?: string | null;
+  paidAt?: string | null;
   payment?: {
     generated: boolean;
     method: PaymentMethod;
@@ -36,10 +43,16 @@ export interface ParsedDebtor {
     dueDay: number;
     status: "ACTIVE" | "PAUSED";
   };
+  collectionProfile?: {
+    id: string;
+    name: string;
+    profileType: CollectionProfileType;
+  } | null;
 }
 
 interface UploadCSVProps {
   onUploadSuccess: (data: ParsedDebtor[]) => void;
+  showEducationFields?: boolean;
 }
 
 function normalizePaymentMethod(value: string): PaymentMethod | null {
@@ -64,13 +77,142 @@ function normalizePaymentMethod(value: string): PaymentMethod | null {
   return null;
 }
 
-export function UploadCSV({ onUploadSuccess }: UploadCSVProps) {
+function getFirstCellValue(
+  row: Record<string, string | undefined>,
+  keys: string[],
+): string {
+  for (const key of keys) {
+    const value = row[key]?.trim();
+
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+export function parseInvoiceCsvRows(
+  rawData: Array<Record<string, string | undefined>>,
+): ParsedDebtor[] {
+  return rawData.map((row, index) => {
+    const nome = getFirstCellValue(row, ["Nome", "nome"]);
+    const documentoRaw = getFirstCellValue(row, [
+      "CPF/CNPJ",
+      "cpf_cnpj",
+      "cpfCnpj",
+      "document",
+    ]);
+    let zap = getFirstCellValue(row, ["WhatsApp", "whatsapp", "telefone"]);
+    const emailRaw = getFirstCellValue(row, ["Email", "email"]);
+    const valorRaw = getFirstCellValue(row, ["Valor", "valor"]);
+    const vencimento = getFirstCellValue(row, ["Vencimento", "vencimento"]);
+    const formaPagamentoRaw = getFirstCellValue(row, [
+      "Forma de Pagamento",
+      "forma_de_pagamento",
+      "formaPagamento",
+      "pagamento",
+      "billing_type",
+    ]);
+    const optInRaw = getFirstCellValue(row, [
+      "Opt-in WhatsApp",
+      "opt_in_whatsapp",
+      "whatsapp_opt_in",
+    ]);
+    const studentName = getFirstCellValue(row, [
+      "Aluno",
+      "aluno",
+      "studentName",
+      "student_name",
+    ]);
+    const studentEnrollment = getFirstCellValue(row, [
+      "Matricula",
+      "matricula",
+      "studentEnrollment",
+      "student_enrollment",
+    ]);
+    const studentGroup = getFirstCellValue(row, [
+      "Turma/Curso",
+      "Turma",
+      "turma",
+      "Curso",
+      "curso",
+      "studentGroup",
+      "student_group",
+    ]);
+
+    if (
+      !nome ||
+      !documentoRaw ||
+      !zap ||
+      !emailRaw ||
+      !valorRaw ||
+      !vencimento
+    ) {
+      throw new Error(
+        `Linha ${index + 2}: Faltam dados obrigatorios. Verifique as colunas.`,
+      );
+    }
+
+    const document = normalizeRequiredDebtorDocument(documentoRaw);
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw)) {
+      throw new Error(
+        `Linha ${index + 2}: O email de ${nome} parece invalido (${emailRaw}).`,
+      );
+    }
+
+    try {
+      zap = normalizeWhatsAppNumber(zap);
+    } catch {
+      throw new Error(
+        `Linha ${index + 2}: O WhatsApp de ${nome} parece invalido (${zap}).`,
+      );
+    }
+
+    const valorNumerico = parseFloat(valorRaw.replace(",", "."));
+    if (isNaN(valorNumerico)) {
+      throw new Error(
+        `Linha ${index + 2}: O valor de ${nome} nao e um numero valido.`,
+      );
+    }
+
+    const formaPagamento = normalizePaymentMethod(formaPagamentoRaw);
+    if (!formaPagamento) {
+      throw new Error(
+        `Linha ${index + 2}: Forma de pagamento invalida. Use PIX, BOLETO ou BOLIX.`,
+      );
+    }
+
+    return {
+      name: nome,
+      document,
+      phone_number: zap,
+      email: emailRaw,
+      original_amount: valorNumerico,
+      due_date: vencimento,
+      billing_type: formaPagamento,
+      whatsapp_opt_in: ["SIM", "TRUE", "1", "YES"].includes(
+        optInRaw.toUpperCase(),
+      ),
+      studentName: studentName || undefined,
+      studentEnrollment: studentEnrollment || undefined,
+      studentGroup: studentGroup || undefined,
+    };
+  });
+}
+
+export function UploadCSV({
+  onUploadSuccess,
+  showEducationFields = false,
+}: UploadCSVProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const downloadTemplate = (): void => {
-    const templateContent =
-      "Nome,WhatsApp,Email,Valor,Vencimento,Forma de Pagamento\nJoao Silva,+5511999999999,joao@email.com,150.50,2025-12-01,BOLIX";
+    const templateContent = showEducationFields
+      ? "Nome,CPF/CNPJ,WhatsApp,Email,Valor,Vencimento,Forma de Pagamento,Opt-in WhatsApp,Aluno,Matricula,Turma/Curso\nResponsavel Silva,12345678909,+5511999999999,responsavel@email.com,150.50,2026-12-01,BOLIX,SIM,Joao Silva,2026-001,7A"
+      : "Nome,CPF/CNPJ,WhatsApp,Email,Valor,Vencimento,Forma de Pagamento,Opt-in WhatsApp\nJoao Silva,12345678909,+5511999999999,joao@email.com,150.50,2026-12-01,BOLIX,SIM";
     const blob = new Blob([templateContent], {
       type: "text/csv;charset=utf-8;",
     });
@@ -98,69 +240,10 @@ export function UploadCSV({ onUploadSuccess }: UploadCSVProps) {
         skipEmptyLines: true,
         complete: (results) => {
           try {
-            const rawData = results.data as Record<string, string>[];
-
-            const validData: ParsedDebtor[] = rawData.map((row, index) => {
-              const nome = row.Nome?.trim() || row.nome?.trim();
-              let zap =
-                row.WhatsApp?.trim() ||
-                row.whatsapp?.trim() ||
-                row.telefone?.trim();
-              const emailRaw = row.Email?.trim() || row.email?.trim() || "";
-              const valorRaw = row.Valor?.trim() || row.valor?.trim();
-              const vencimento =
-                row.Vencimento?.trim() || row.vencimento?.trim();
-              const formaPagamentoRaw =
-                row["Forma de Pagamento"]?.trim() ||
-                row.forma_de_pagamento?.trim() ||
-                row.formaPagamento?.trim() ||
-                row.pagamento?.trim() ||
-                row.billing_type?.trim() ||
-                "";
-
-              if (!nome || !zap || !emailRaw || !valorRaw || !vencimento) {
-                throw new Error(
-                  `Linha ${index + 2}: Faltam dados obrigatorios. Verifique as colunas.`,
-                );
-              }
-
-              if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw)) {
-                throw new Error(
-                  `Linha ${index + 2}: O email de ${nome} parece invalido (${emailRaw}).`,
-                );
-              }
-
-              try {
-                zap = normalizeWhatsAppNumber(zap);
-              } catch {
-                throw new Error(
-                  `Linha ${index + 2}: O WhatsApp de ${nome} parece invalido (${zap}).`,
-                );
-              }
-
-              const valorNumerico = parseFloat(valorRaw.replace(",", "."));
-              if (isNaN(valorNumerico)) {
-                throw new Error(
-                  `Linha ${index + 2}: O valor de ${nome} nao e um numero valido.`,
-                );
-              }
-
-              const formaPagamento = normalizePaymentMethod(formaPagamentoRaw);
-              if (!formaPagamento) {
-                throw new Error(
-                  `Linha ${index + 2}: Forma de pagamento invalida. Use PIX, BOLETO ou BOLIX.`,
-                );
-              }
-
-              return {
-                name: nome,
-                phone_number: zap,
-                email: emailRaw,
-                original_amount: valorNumerico,
-                due_date: vencimento,
-                billing_type: formaPagamento,
-              };
-            });
+            const rawData = results.data as Array<
+              Record<string, string | undefined>
+            >;
+            const validData = parseInvoiceCsvRows(rawData);
 
             onUploadSuccess(validData);
             setIsProcessing(false);
