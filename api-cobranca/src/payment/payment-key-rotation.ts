@@ -8,6 +8,7 @@ export function rotateEncryptedFields<T extends Record<string, string | null>>(
   let changed = false;
   for (const name of Object.keys(fields) as Array<keyof T>) {
     const encrypted = fields[name];
+    if (encrypted === undefined) throw new Error('Campo criptografado ausente');
     if (encrypted === null) continue;
     const plaintext = crypto.decrypt(encrypted);
     if (crypto.getEnvelopeKeyVersion(encrypted) === crypto.activeKeyVersion)
