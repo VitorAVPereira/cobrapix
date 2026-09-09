@@ -19,8 +19,8 @@ export async function rotatePaymentSecrets(
   options: RotationOptions = {},
 ): Promise<RotationSummary> {
   const batchSize = options.batchSize ?? 100;
-  if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 500)
-    throw new Error('Lote deve conter entre 1 e 500 empresas');
+  if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 100)
+    throw new Error('Lote deve conter entre 1 e 100 empresas');
   if (crypto.activeKeyVersion === 'legacy')
     throw new Error('Configure uma chave versionada antes da rotação');
   const summary: RotationSummary = {
