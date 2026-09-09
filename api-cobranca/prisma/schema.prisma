@@ -7,9 +7,60 @@ datasource db {
 }
 
 enum InvoiceStatus {
+  DRAFT
   PENDING
   PAID
   CANCELED
+}
+
+enum EfiOnboardingStatus {
+  DRAFT
+  NOTICE_PENDING
+  AWAITING_REPRESENTATIVE
+  EFI_PROCESSING
+  SUBMISSION_UNCERTAIN
+  PROVISIONING
+  ACTIVE
+  REFUSED
+  CORRECTION_REQUIRED
+  CONFIGURATION_ERROR
+  DISCONNECTED
+}
+
+enum PaymentFeeKind {
+  FIXED
+  PERCENTAGE
+}
+
+enum PaymentChargeStatus {
+  DRAFT
+  PENDING
+  ACTIVE
+  PAID
+  CANCELED
+  EXPIRED
+  REPLACED
+  FAILED
+  REFUNDED
+}
+
+enum IntegrationHealthStatus {
+  UNKNOWN
+  HEALTHY
+  DEGRADED
+  UNAVAILABLE
+}
+
+enum PlatformIntegration {
+  META
+  RESEND
+  EFI_ONBOARDING
+  EFI_PAYMENTS
+}
+
+enum CommunicationChannel {
+  WHATSAPP
+  EMAIL
 }
 
 enum BusinessSegment {
@@ -130,6 +181,7 @@ enum MessageTemplateCopyCodeSource {
 model Company {
   id                           String              @id @default(uuid())
   corporateName                String
+  tradeName                    String?
   document                     String              @unique
   email                        String              @unique
   phoneNumber                  String
@@ -182,24 +234,28 @@ model Company {
   onTimeSplitPercentageBps     Int                 @default(0)
   overdueSplitPercentageBps    Int                 @default(0)
 
-  templates            MessageTemplate[]
-  emailTemplates       EmailTemplate[]
-  users                User[]
-  debtors              Debtor[]
-  invoices             Invoice[]
-  paymentNotifications PaymentNotification[]
-  recurringInvoices    RecurringInvoice[]
-  collectionLogs       CollectionLog[]
-  subscription         Subscription?
-  paymentGateway       GatewayAccount?
-  originalBankAccount  OriginalBankAccount?
-  messagingUsage       MessagingUsage[]
-  whatsappInteractions WhatsAppInteraction[]
-  collectionProfiles   CollectionProfile[]
-  collectionAttempts   CollectionAttempt[]
-  emailEvents          EmailEvent[]
-  conversations        WhatsAppConversation[]
-  auditLogs            AuditLog[]
+  templates             MessageTemplate[]
+  emailTemplates        EmailTemplate[]
+  users                 User[]
+  debtors               Debtor[]
+  invoices              Invoice[]
+  paymentNotifications  PaymentNotification[]
+  recurringInvoices     RecurringInvoice[]
+  collectionLogs        CollectionLog[]
+  subscription          Subscription?
+  paymentGateway        GatewayAccount?
+  originalBankAccount   OriginalBankAccount?
+  messagingUsage        MessagingUsage[]
+  whatsappInteractions  WhatsAppInteraction[]
+  collectionProfiles    CollectionProfile[]
+  collectionAttempts    CollectionAttempt[]
+  emailEvents           EmailEvent[]
+  conversations         WhatsAppConversation[]
+  auditLogs             AuditLog[]
+  efiOnboarding         EfiOnboarding?
+  paymentFeeVersions    PaymentFeeVersion[]
+  paymentCharges        PaymentCharge[]
+  communicationMessages CommunicationMessage[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -208,22 +264,28 @@ model Company {
 }
 
 model GatewayAccount {
-  id                           String  @id @default(uuid())
-  companyId                    String  @unique
-  company                      Company @relation(fields: [companyId], references: [id])
-  provider                     String  @default("EFI")
-  environment                  String  @default("homologation")
-  status                       String  @default("PENDING")
+  id                           String                  @id @default(uuid())
+  companyId                    String                  @unique
+  company                      Company                 @relation(fields: [companyId], references: [id])
+  provider                     String                  @default("EFI")
+  environment                  String                  @default("homologation")
+  status                       String                  @default("PENDING")
   payeeCode                    String
   efiAccountNumber             String
   efiAccountDigit              String?
   pixKey                       String
-  encryptedClientId            String  @db.Text
-  encryptedClientSecret        String  @db.Text
-  encryptedCertificate         String? @db.Text
+  encryptedClientId            String                  @db.Text
+  encryptedClientSecret        String                  @db.Text
+  encryptedCertificate         String?                 @db.Text
   certificatePath              String?
-  encryptedCertificatePassword String? @db.Text
-  lastError                    String? @db.Text
+  encryptedCertificatePassword String?                 @db.Text
+  credentialKeyVersion         String                  @default("legacy")
+  certificateExpiresAt         DateTime?
+  certificateFingerprint       String?
+  healthStatus                 IntegrationHealthStatus @default(UNKNOWN)
+  lastValidatedAt              DateTime?
+  consecutiveFailures          Int                     @default(0)
+  lastError                    String?                 @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -273,9 +335,10 @@ model Debtor {
   collectionProfile        CollectionProfile? @relation(fields: [collectionProfileId], references: [id])
   externalDebtorId         String?
 
-  invoices          Invoice[]
-  recurringInvoices RecurringInvoice[]
-  conversations     WhatsAppConversation[]
+  invoices              Invoice[]
+  recurringInvoices     RecurringInvoice[]
+  conversations         WhatsAppConversation[]
+  communicationMessages CommunicationMessage[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -322,10 +385,12 @@ model Invoice {
   studentGroup              String?
   paidAt                    DateTime?
 
-  collectionLogs       CollectionLog[]
-  collectionAttempts   CollectionAttempt[]
-  emailEvents          EmailEvent[]
-  paymentNotifications PaymentNotification[]
+  collectionLogs        CollectionLog[]
+  collectionAttempts    CollectionAttempt[]
+  emailEvents           EmailEvent[]
+  paymentNotifications  PaymentNotification[]
+  paymentCharges        PaymentCharge[]
+  communicationMessages CommunicationMessage[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -337,6 +402,197 @@ model Invoice {
   @@index([recurringInvoiceId])
   @@index([companyId, status, dueDate])
   @@index([status, dueDate])
+}
+
+model EfiOnboarding {
+  id                                String              @id @default(uuid())
+  companyId                         String              @unique
+  company                           Company             @relation(fields: [companyId], references: [id])
+  status                            EfiOnboardingStatus @default(DRAFT)
+  simplifiedAccountRequestId        String?             @unique
+  submissionIdempotencyKey          String?             @unique
+  submissionAttempts                Int                 @default(0)
+  noticeAttempts                    Int                 @default(0)
+  provisioningAttempts              Int                 @default(0)
+  reminderAttempts                  Int                 @default(0)
+  lastReminderAt                    DateTime?
+  nextReminderAt                    DateTime?
+  retryBlockedUntil                 DateTime?
+  lastProgressAt                    DateTime            @default(now())
+  submittedAt                       DateTime?
+  noticeAcceptedAt                  DateTime?
+  refusalAt                         DateTime?
+  adminAlertedAt                    DateTime?
+  activatedAt                       DateTime?
+  disconnectedAt                    DateTime?
+  sensitiveDataExpiresAt            DateTime?
+  sensitiveDataDeletedAt            DateTime?
+  sanitizedErrorCode                String?
+  sanitizedErrorMessage             String?             @db.Text
+  consentAcceptedAt                 DateTime?
+  draftRevision                     Int                 @default(0)
+  consentDraftRevision              Int?
+  consentUserId                     String?
+  consentIpAddress                  String?
+  authorizationTextVersion          String?
+  termsVersion                      String?
+  privacyPolicyVersion              String?
+  submittedCompanyDocument          String?
+  provisioningCheckpoint            Json?
+  representativeNameEncrypted       String?             @db.Text
+  representativeCpfEncrypted        String?             @db.Text
+  representativeBirthDateEncrypted  String?             @db.Text
+  representativeMotherNameEncrypted String?             @db.Text
+  representativeEmailEncrypted      String?             @db.Text
+  representativePhoneEncrypted      String?             @db.Text
+  sensitiveDataKeyVersion           String?
+  createdAt                         DateTime            @default(now())
+  updatedAt                         DateTime            @updatedAt
+
+  @@index([status, updatedAt])
+  @@index([nextReminderAt])
+  @@index([sensitiveDataExpiresAt])
+}
+
+model PaymentFeeVersion {
+  id                     String          @id @default(uuid())
+  companyId              String?
+  company                Company?        @relation(fields: [companyId], references: [id])
+  scopeKey               String
+  billingMethod          BillingMethod
+  version                Int
+  efiFeeKind             PaymentFeeKind
+  efiFeeAmountCents      Int?
+  efiFeeBasisPoints      Int?
+  platformFeeKind        PaymentFeeKind
+  platformFeeAmountCents Int?
+  platformFeeBasisPoints Int?
+  effectiveFrom          DateTime
+  effectiveUntil         DateTime?
+  createdByUserId        String?
+  createdAt              DateTime        @default(now())
+  paymentCharges         PaymentCharge[]
+
+  @@unique([scopeKey, billingMethod, version])
+  @@index([companyId, billingMethod, effectiveFrom])
+  @@index([scopeKey, billingMethod, effectiveFrom])
+}
+
+model PaymentCharge {
+  id                        String                       @id @default(uuid())
+  companyId                 String
+  company                   Company                      @relation(fields: [companyId], references: [id])
+  invoiceId                 String
+  invoice                   Invoice                      @relation(fields: [invoiceId], references: [id])
+  feeVersionId              String
+  feeVersion                PaymentFeeVersion            @relation(fields: [feeVersionId], references: [id])
+  replacesChargeId          String?                      @unique
+  replacesCharge            PaymentCharge?               @relation("ChargeReplacement", fields: [replacesChargeId], references: [id])
+  replacementCharge         PaymentCharge?               @relation("ChargeReplacement")
+  billingMethod             BillingMethod
+  status                    PaymentChargeStatus          @default(DRAFT)
+  grossAmountCents          Int
+  estimatedEfiFeeCents      Int
+  estimatedPlatformFeeCents Int
+  effectiveEfiFeeCents      Int?
+  effectivePlatformFeeCents Int?
+  feeSnapshot               Json
+  gatewayId                 String?                      @unique
+  efiTxid                   String?                      @unique
+  efiChargeId               String?                      @unique
+  efiLocId                  String?
+  splitConfigId             String?
+  pixPayload                String?                      @db.Text
+  boletoLine                String?
+  paymentUrl                String?                      @db.Text
+  gatewayStatusRaw          String?
+  issuedAt                  DateTime?
+  paidAt                    DateTime?
+  canceledAt                DateTime?
+  expiresAt                 DateTime?
+  createdAt                 DateTime                     @default(now())
+  updatedAt                 DateTime                     @updatedAt
+  statusHistory             PaymentChargeStatusHistory[]
+
+  @@index([companyId, status, createdAt])
+  @@index([invoiceId, createdAt])
+  @@index([feeVersionId])
+}
+
+model PaymentChargeStatusHistory {
+  id               String               @id @default(uuid())
+  paymentChargeId  String
+  paymentCharge    PaymentCharge        @relation(fields: [paymentChargeId], references: [id], onDelete: Restrict)
+  previousStatus   PaymentChargeStatus?
+  status           PaymentChargeStatus
+  providerStatus   String?
+  sanitizedDetails Json?
+  occurredAt       DateTime             @default(now())
+
+  @@index([paymentChargeId, occurredAt])
+}
+
+model PlatformIntegrationState {
+  id                  String                  @id @default(uuid())
+  integration         PlatformIntegration     @unique
+  enabled             Boolean                 @default(false)
+  healthStatus        IntegrationHealthStatus @default(UNKNOWN)
+  pausedAt            DateTime?
+  pauseReason         String?                 @db.Text
+  lastCheckedAt       DateTime?
+  lastHealthyAt       DateTime?
+  consecutiveFailures Int                     @default(0)
+  sanitizedLastError  String?                 @db.Text
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+
+  @@index([healthStatus, updatedAt])
+}
+
+model CommunicationConversation {
+  id                     String                 @id @default(uuid())
+  channel                CommunicationChannel
+  recipientHash          String
+  recipientEncrypted     String?                @db.Text
+  status                 ConversationStatus     @default(NEW)
+  lastInboundAt          DateTime?
+  serviceWindowExpiresAt DateTime?
+  lastMessagePreview     String?
+  unreadCount            Int                    @default(0)
+  retentionExpiresAt     DateTime
+  recipientAnonymizedAt  DateTime?
+  messages               CommunicationMessage[]
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+
+  @@unique([channel, recipientHash])
+  @@index([status, updatedAt])
+  @@index([retentionExpiresAt])
+}
+
+model CommunicationMessage {
+  id                 String                    @id @default(uuid())
+  conversationId     String
+  conversation       CommunicationConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  companyId          String?
+  company            Company?                  @relation(fields: [companyId], references: [id])
+  invoiceId          String?
+  invoice            Invoice?                  @relation(fields: [invoiceId], references: [id])
+  debtorId           String?
+  debtor             Debtor?                   @relation(fields: [debtorId], references: [id])
+  direction          MessageDirection
+  content            String                    @db.Text
+  externalMessageId  String?                   @unique
+  status             String?
+  readAt             DateTime?
+  retentionExpiresAt DateTime
+  anonymizedAt       DateTime?
+  createdAt          DateTime                  @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([companyId, direction, createdAt])
+  @@index([invoiceId])
+  @@index([retentionExpiresAt])
 }
 
 model PaymentNotification {
@@ -417,8 +673,8 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([companyId])
   @@unique([id, companyId])
+  @@index([companyId])
 }
 
 model PasswordResetToken {
@@ -647,17 +903,19 @@ model WhatsAppMessage {
 }
 
 model AuditLog {
-  id         String   @id @default(uuid())
-  companyId  String
-  company    Company  @relation(fields: [companyId], references: [id])
-  action     String
-  entityType String
-  entityId   String
-  changes    Json?
-  userId     String?
-  user       User?    @relation(fields: [userId], references: [id])
-  createdAt  DateTime @default(now())
+  id                 String    @id @default(uuid())
+  companyId          String
+  company            Company   @relation(fields: [companyId], references: [id])
+  action             String
+  entityType         String
+  entityId           String
+  changes            Json?
+  userId             String?
+  user               User?     @relation(fields: [userId], references: [id])
+  createdAt          DateTime  @default(now())
+  retentionExpiresAt DateTime?
 
   @@index([companyId, createdAt])
   @@index([entityType, entityId])
+  @@index([retentionExpiresAt])
 }
