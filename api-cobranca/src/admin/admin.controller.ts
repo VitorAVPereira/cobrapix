@@ -17,10 +17,13 @@ import {
 import { AdminAnalyticsQueryDto } from './dto/admin-analytics-query.dto';
 import {
   CreateAdminClientDto,
-  ResetClientPasswordDto,
   UpdateAdminClientDto,
 } from './dto/admin-client.dto';
-import { AdminClientResponse, AdminService } from './admin.service';
+import {
+  AdminClientResponse,
+  AdminService,
+  CreateAdminClientResponse,
+} from './admin.service';
 import { PlatformAdminGuard } from './guards/platform-admin.guard';
 
 @Controller('admin/clients')
@@ -51,7 +54,7 @@ export class AdminController {
   @Post()
   async createClient(
     @Body() dto: CreateAdminClientDto,
-  ): Promise<AdminClientResponse> {
+  ): Promise<CreateAdminClientResponse> {
     return this.adminService.createClient(dto);
   }
 
@@ -66,8 +69,7 @@ export class AdminController {
   @Post(':id/reset-password')
   async resetPassword(
     @Param('id') id: string,
-    @Body() dto: ResetClientPasswordDto,
   ): Promise<{ userId: string; temporaryPassword: string }> {
-    return this.adminService.resetPassword(id, dto);
+    return this.adminService.resetPassword(id);
   }
 }

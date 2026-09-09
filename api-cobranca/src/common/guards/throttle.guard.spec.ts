@@ -108,6 +108,31 @@ describe('ThrottleGuard', () => {
     guard.onModuleDestroy();
   });
 
+  it('bloqueia solicitações repetidas de recuperação para o mesmo e-mail', async () => {
+    const guard = buildGuard();
+    const response = new TestResponse();
+    const request: TestRequest = {
+      method: 'POST',
+      path: '/auth/forgot-password',
+      ip: '203.0.113.20',
+      body: { email: 'admin@cliente.com' },
+      socket: {},
+    };
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await expect(
+        guard.canActivate(buildContext(request, response)),
+      ).resolves.toBe(true);
+    }
+
+    await expect(
+      guard.canActivate(buildContext(request, response)),
+    ).rejects.toMatchObject({ status: HttpStatus.TOO_MANY_REQUESTS });
+    expect(response.headers.get('Retry-After')).toBeDefined();
+
+    guard.onModuleDestroy();
+  });
+
   it('ignora rotas sem regra de rate limiting', async () => {
     const guard = buildGuard();
     const context = buildContext({

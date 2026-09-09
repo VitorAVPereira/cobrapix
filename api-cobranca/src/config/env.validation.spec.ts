@@ -9,9 +9,11 @@ function buildValidConfig(
       PORT: '3001',
       DATABASE_URL: 'postgresql://user:password@localhost:5432/cobrapix',
       JWT_SECRET: 'jwt_secret_with_at_least_32_characters',
-      FRONTEND_URL: 'http://localhost:3000',
+      FRONTEND_URL: 'https://app.cobrapix.test',
       EFI_ENV: 'homologation',
       EFI_WEBHOOK_SECRET: 'efi_webhook_secret_with_32_characters',
+      AUTH_RESEND_API_KEY: 're_test_platform_key',
+      AUTH_EMAIL_FROM: 'CobraPix <acesso@cobrapix.test>',
     },
     overrides,
   );
@@ -48,5 +50,55 @@ describe('validateEnv', () => {
         }),
       ),
     ).toThrow('RESEND_WEBHOOK_SECRET deve comecar com whsec_');
+  });
+
+  it('rejeita produção sem configuração de e-mail de recuperação', () => {
+    expect(() =>
+      validateEnv(
+        buildValidConfig({
+          NODE_ENV: 'production',
+          AUTH_RESEND_API_KEY: undefined,
+          AUTH_EMAIL_FROM: undefined,
+        }),
+      ),
+    ).toThrow('AUTH_RESEND_API_KEY é obrigatória em produção');
+  });
+
+  it('rejeita FRONTEND_URL sem HTTPS em produção', () => {
+    expect(() =>
+      validateEnv(
+        buildValidConfig({
+          NODE_ENV: 'production',
+          FRONTEND_URL: 'http://app.cobrapix.test',
+        }),
+      ),
+    ).toThrow('FRONTEND_URL deve usar HTTPS em produção');
+  });
+
+  it('permite FRONTEND_URL local com HTTP em desenvolvimento', () => {
+    const env = validateEnv(
+      buildValidConfig({
+        NODE_ENV: 'development',
+        FRONTEND_URL: 'http://localhost:3000',
+      }),
+    );
+
+    expect(env.FRONTEND_URL).toBe('http://localhost:3000');
+  });
+
+  it('rejeita remetente de autenticação sem endereço de e-mail válido', () => {
+    expect(() =>
+      validateEnv(
+        buildValidConfig({
+          AUTH_EMAIL_FROM: 'remetente-invalido',
+        }),
+      ),
+    ).toThrow('AUTH_EMAIL_FROM deve conter um e-mail válido');
+  });
+
+  it('rejeita quantidade negativa de proxies confiáveis', () => {
+    expect(() =>
+      validateEnv(buildValidConfig({ TRUST_PROXY_HOPS: -1 })),
+    ).toThrow('TRUST_PROXY_HOPS');
   });
 });

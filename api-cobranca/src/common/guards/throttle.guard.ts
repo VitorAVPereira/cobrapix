@@ -50,6 +50,18 @@ export class ThrottleGuard implements CanActivate, OnModuleDestroy {
       scope: 'ip',
     },
     {
+      points: 5,
+      duration: 15 * 60,
+      keyPrefix: 'throttle:auth:password-recovery:credential',
+      scope: 'login',
+    },
+    {
+      points: 30,
+      duration: 15 * 60,
+      keyPrefix: 'throttle:auth:password-recovery:ip',
+      scope: 'ip',
+    },
+    {
       points: 100,
       duration: 60,
       keyPrefix: 'throttle:payments',
@@ -191,6 +203,17 @@ export class ThrottleGuard implements CanActivate, OnModuleDestroy {
         'throttle:auth:login:credential',
         'throttle:auth:login:ip',
       ]);
+    }
+
+    if (method === 'POST' && path === '/auth/forgot-password') {
+      return this.findConfigs([
+        'throttle:auth:password-recovery:credential',
+        'throttle:auth:password-recovery:ip',
+      ]);
+    }
+
+    if (method === 'POST' && path === '/auth/reset-password') {
+      return this.findConfigs(['throttle:auth:password-recovery:ip']);
     }
 
     if (path.startsWith('/payments')) {

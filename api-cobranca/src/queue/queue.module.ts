@@ -1,6 +1,5 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
-import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MessageQueueService } from './message.queue';
 import { MessageWorkerService } from './workers/message.worker';
 import { QueueController } from './queue.controller';
@@ -11,21 +10,12 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { PaymentModule } from '../payment/payment.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { EmailModule } from '../email/email.module';
+import { BullInfrastructureModule } from './bull-infrastructure.module';
 
 @Module({
   imports: [
     PrismaModule,
-    BullModule.forRootAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        connection: {
-          host: configService.get<string>('REDIS_HOST') || 'localhost',
-          port: configService.get<number>('REDIS_PORT') || 6379,
-          password: configService.get<string>('REDIS_PASSWORD'),
-        },
-      }),
-    }),
+    BullInfrastructureModule,
     BullModule.registerQueue({
       name: 'whatsapp-messages',
       defaultJobOptions: {

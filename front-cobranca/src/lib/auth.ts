@@ -1,5 +1,6 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
+import { revalidateAuthToken } from "./auth-session";
 
 export type UserRole = "PLATFORM_ADMIN" | "COMPANY_ADMIN";
 
@@ -8,6 +9,8 @@ declare module "next-auth" {
     companyId: string;
     access_token: string;
     role: UserRole;
+    mustChangePassword: boolean;
+    tokenVersion: number;
   }
 
   interface Session {
@@ -18,6 +21,9 @@ declare module "next-auth" {
       name?: string | null;
       companyId: string;
       role: UserRole;
+      mustChangePassword: boolean;
+      tokenVersion: number;
+      authInvalidated: boolean;
     };
   }
 }
@@ -28,6 +34,9 @@ declare module "@auth/core/jwt" {
     userId?: string;
     access_token?: string;
     role?: UserRole;
+    mustChangePassword?: boolean;
+    tokenVersion?: number;
+    authInvalidated?: boolean;
   }
 }
 
@@ -44,6 +53,8 @@ interface LoginResponse {
     name?: string | null;
     companyId: string;
     role: UserRole;
+    mustChangePassword: boolean;
+    tokenVersion: number;
   };
 }
 
@@ -93,6 +104,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             name: data.user.name,
             companyId: data.user.companyId,
             role: data.user.role,
+            mustChangePassword: data.user.mustChangePassword,
+            tokenVersion: data.user.tokenVersion,
             access_token: data.access_token,
           };
         } catch (error: unknown) {
@@ -103,20 +116,27 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     }),
   ],
   callbacks: {
-    jwt({ token, user }) {
+    async jwt({ token, user }) {
       if (user) {
         token.companyId = user.companyId;
         token.userId = user.id;
         token.access_token = user.access_token;
         token.role = user.role;
+        token.mustChangePassword = user.mustChangePassword;
+        token.tokenVersion = user.tokenVersion;
+        token.authInvalidated = false;
+        return token;
       }
-      return token;
+      return revalidateAuthToken(token, AUTH_API_URL);
     },
     session({ session, token }) {
       session.user.companyId = token.companyId as string;
       session.user.id = token.userId as string;
       session.access_token = token.access_token;
       session.user.role = (token.role ?? "COMPANY_ADMIN") as UserRole;
+      session.user.mustChangePassword = token.mustChangePassword ?? false;
+      session.user.tokenVersion = token.tokenVersion ?? 0;
+      session.user.authInvalidated = token.authInvalidated ?? false;
       return session;
     },
   },

@@ -6,6 +6,8 @@ export interface AuthenticatedUser {
   name?: string | null;
   companyId: string;
   role: UserRole;
+  mustChangePassword: boolean;
+  tokenVersion: number;
 }
 
 export interface JwtPayload {
@@ -15,4 +17,10 @@ export interface JwtPayload {
   companyId: string;
   name?: string | null;
   role?: UserRole;
+  mustChangePassword: boolean;
+  tokenVersion: number;
+}
+
+export interface MessageResponse {
+  message: string;
 }

@@ -12,9 +12,15 @@ import { AuthService } from './auth.service';
 import { LocalAuthGuard } from './guards/local-auth.guard';
 import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { LoginDto } from './dto/login.dto';
+import {
+  ChangePasswordDto,
+  ForgotPasswordDto,
+  ResetPasswordDto,
+} from './dto/password.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { GetUser } from './decorators/get-user.decorator';
-import type { AuthenticatedUser } from './auth.types';
+import { AllowPasswordChangeRequired } from './decorators/allow-password-change-required.decorator';
+import type { AuthenticatedUser, MessageResponse } from './auth.types';
 
 @Controller('auth')
 export class AuthController {
@@ -43,7 +49,33 @@ export class AuthController {
     };
   }
 
+  @UseGuards(ThrottleGuard)
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  forgotPassword(@Body() dto: ForgotPasswordDto): Promise<MessageResponse> {
+    return this.authService.forgotPassword(dto);
+  }
+
+  @UseGuards(ThrottleGuard)
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  resetPassword(@Body() dto: ResetPasswordDto): Promise<MessageResponse> {
+    return this.authService.resetPassword(dto);
+  }
+
   @UseGuards(JwtAuthGuard)
+  @AllowPasswordChangeRequired()
+  @Post('change-password')
+  @HttpCode(HttpStatus.OK)
+  changePassword(
+    @GetUser() user: AuthenticatedUser,
+    @Body() dto: ChangePasswordDto,
+  ): Promise<MessageResponse> {
+    return this.authService.changePassword(user, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @AllowPasswordChangeRequired()
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   logout(@Res({ passthrough: true }) res: Response): { message: string } {
@@ -52,6 +84,7 @@ export class AuthController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @AllowPasswordChangeRequired()
   @Post('session')
   @HttpCode(HttpStatus.OK)
   getSession(@GetUser() user: AuthenticatedUser): unknown {
@@ -62,6 +95,8 @@ export class AuthController {
         name: user.name,
         companyId: user.companyId,
         role: user.role,
+        mustChangePassword: user.mustChangePassword,
+        tokenVersion: user.tokenVersion,
       },
     };
   }

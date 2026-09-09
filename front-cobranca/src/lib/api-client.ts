@@ -820,7 +820,6 @@ export interface CreateAdminClientInput {
   firstUser: {
     name: string;
     email: string;
-    password: string;
   };
   billing: {
     enabledBillingMethods: BillingMethod[];
@@ -838,6 +837,28 @@ export interface CreateAdminClientInput {
     erpWebhookUrl?: string | null;
     erpEnabledEvents?: string[];
   };
+}
+
+export interface MessageResponse {
+  message: string;
+}
+
+export interface ResetPasswordInput {
+  token: string;
+  password: string;
+  passwordConfirmation: string;
+}
+
+export interface ChangePasswordInput {
+  currentPassword: string;
+  password: string;
+  passwordConfirmation: string;
+}
+
+export interface CreateAdminClientResponse {
+  client: AdminClient;
+  temporaryPassword: string;
+  integrationWarnings: string[];
 }
 
 export interface UpdateAdminClientInput {
@@ -1048,6 +1069,27 @@ class ApiClient {
     return this.fetch("/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
+    });
+  }
+
+  async forgotPassword(email: string): Promise<MessageResponse> {
+    return this.fetch<MessageResponse>("/auth/forgot-password", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  async resetPassword(data: ResetPasswordInput): Promise<MessageResponse> {
+    return this.fetch<MessageResponse>("/auth/reset-password", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async changePassword(data: ChangePasswordInput): Promise<MessageResponse> {
+    return this.fetch<MessageResponse>("/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify(data),
     });
   }
 
@@ -1572,10 +1614,12 @@ class ApiClient {
     );
   }
 
-  async createAdminClient(data: CreateAdminClientInput): Promise<AdminClient> {
+  async createAdminClient(
+    data: CreateAdminClientInput,
+  ): Promise<CreateAdminClientResponse> {
     const payload = normalizeCreateAdminClientPayload(data);
 
-    return this.fetch<AdminClient>("/admin/clients", {
+    return this.fetch<CreateAdminClientResponse>("/admin/clients", {
       method: "POST",
       body: JSON.stringify(payload),
     });

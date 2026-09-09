@@ -64,10 +64,6 @@ export class AdminFirstUserDto {
 
   @IsEmail()
   email!: string;
-
-  @IsString()
-  @Length(8, 120)
-  password!: string;
 }
 
 export class AdminBillingDto {
@@ -456,11 +452,4 @@ export class UpdateAdminClientDto {
   @ValidateNested()
   @Type(() => AdminEfiUpdateDto)
   efi?: AdminEfiUpdateDto;
-}
-
-export class ResetClientPasswordDto {
-  @IsOptional()
-  @IsString()
-  @Length(8, 120)
-  password?: string;
 }

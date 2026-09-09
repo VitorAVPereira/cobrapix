@@ -1,3 +1,4 @@
+import { HttpStatus } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { AdminService } from './admin.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -118,8 +119,13 @@ describe('AdminService', () => {
       company: {
         create: companyCreate,
       },
+      user: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
     } as unknown as PrismaService;
-    const configureMetaIntegration = jest.fn().mockResolvedValue(undefined);
+    const configureMetaIntegration = jest
+      .fn()
+      .mockRejectedValue(new Error('provedor indisponível'));
     const upsertManualGatewayAccount = jest.fn().mockResolvedValue(undefined);
     const service = new AdminService(
       prisma,
@@ -141,8 +147,7 @@ describe('AdminService', () => {
       },
       firstUser: {
         name: 'Admin Cliente',
-        email: 'admin@cliente.com',
-        password: 'senha-temporaria',
+        email: '  Admin@Cliente.COM ',
       },
       billing: {
         enabledBillingMethods: ['PIX', 'BOLETO'],
@@ -191,8 +196,10 @@ describe('AdminService', () => {
           overdueSplitPercentageBps: 1200,
           users: {
             create: expect.objectContaining({
+              email: 'admin@cliente.com',
               password: expect.stringMatching(/^\$2/) as string,
               role: UserRole.COMPANY_ADMIN,
+              mustChangePassword: true,
             }) as unknown,
           },
         }) as unknown,
@@ -206,8 +213,50 @@ describe('AdminService', () => {
       'company-1',
       expect.objectContaining({ efiClientSecret: 'efi-secret' }),
     );
-    expect(JSON.stringify(result)).not.toContain('meta-secret');
-    expect(JSON.stringify(result)).not.toContain('efi-secret');
+    expect(result.temporaryPassword).toMatch(/^[A-Za-z0-9_-]{12}$/);
+    expect(result.integrationWarnings).toEqual([
+      'Cliente criado, mas a integração com a Meta não pôde ser configurada.',
+    ]);
+    expect(result.client.id).toBe('company-1');
+    expect(JSON.stringify(result.client)).not.toContain('meta-secret');
+    expect(JSON.stringify(result.client)).not.toContain('efi-secret');
+  });
+
+  it('não cria login duplicado que difere apenas por maiúsculas', async () => {
+    const companyCreate = jest.fn();
+    const prisma = {
+      company: { create: companyCreate },
+      user: { findFirst: jest.fn().mockResolvedValue({ id: 'existing-user' }) },
+    } as unknown as PrismaService;
+    const service = new AdminService(
+      prisma,
+      { configureMetaIntegration: jest.fn() } as unknown as WhatsappService,
+      { upsertManualGatewayAccount: jest.fn() } as unknown as EfiService,
+      {
+        encrypt: jest.fn(),
+        decrypt: jest.fn(),
+      } as unknown as PaymentCryptoService,
+    );
+
+    await expect(
+      service.createClient({
+        company: {
+          corporateName: 'Cliente Duplicado',
+          document: '11222333000181',
+          email: 'financeiro@cliente.com',
+          phoneNumber: '11999999999',
+          status: 'ACTIVE',
+        },
+        firstUser: { name: 'Admin', email: 'ADMIN@CLIENTE.COM' },
+        billing: {
+          enabledBillingMethods: ['PIX'],
+          preferredBillingMethod: 'PIX',
+          onTimeSplitPercentageBps: 0,
+          overdueSplitPercentageBps: 0,
+        },
+      }),
+    ).rejects.toMatchObject({ status: HttpStatus.CONFLICT });
+    expect(companyCreate).not.toHaveBeenCalled();
   });
 
   it('edita configuracoes completas do cliente e nao retorna segredos novos', async () => {
@@ -399,5 +448,48 @@ describe('AdminService', () => {
     expect(result.hasEfiClientId).toBe(true);
     expect(result.hasEfiClientSecret).toBe(true);
     expect(result.hasEfiCertificate).toBe(true);
+  });
+
+  it('reset administrativo gera senha temporária e revoga sessões anteriores', async () => {
+    const userFindFirst = jest.fn().mockResolvedValue({ id: 'user-1' });
+    const userUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const passwordResetDeleteMany = jest.fn().mockResolvedValue({ count: 2 });
+    const transactionClient = {
+      user: { updateMany: userUpdateMany },
+      passwordResetToken: { deleteMany: passwordResetDeleteMany },
+    };
+    const prisma = {
+      user: {
+        findFirst: userFindFirst,
+      },
+      $transaction: jest.fn(
+        async (callback: (client: typeof transactionClient) => Promise<void>) =>
+          callback(transactionClient),
+      ),
+    } as unknown as PrismaService;
+    const service = new AdminService(
+      prisma,
+      { configureMetaIntegration: jest.fn() } as unknown as WhatsappService,
+      { upsertManualGatewayAccount: jest.fn() } as unknown as EfiService,
+      {
+        encrypt: jest.fn(),
+        decrypt: jest.fn(),
+      } as unknown as PaymentCryptoService,
+    );
+
+    const result = await service.resetPassword('company-1');
+
+    expect(result.temporaryPassword).toMatch(/^[A-Za-z0-9_-]{12}$/);
+    expect(userUpdateMany).toHaveBeenCalledWith({
+      where: { id: 'user-1', companyId: 'company-1' },
+      data: {
+        password: expect.stringMatching(/^\$2/) as string,
+        mustChangePassword: true,
+        tokenVersion: { increment: 1 },
+      },
+    });
+    expect(passwordResetDeleteMany).toHaveBeenCalledWith({
+      where: { companyId: 'company-1', userId: 'user-1' },
+    });
   });
 });

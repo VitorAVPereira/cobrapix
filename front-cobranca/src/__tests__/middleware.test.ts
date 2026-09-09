@@ -8,6 +8,8 @@ type MockMiddlewareRequest = {
   auth: {
     user?: {
       role?: MockUserRole;
+      mustChangePassword?: boolean;
+      authInvalidated?: boolean;
     };
   } | null;
 };
@@ -62,9 +64,10 @@ const mockedNextResponse = NextResponse as unknown as MockNextResponse;
 function createRequest(
   pathname: string,
   role: MockUserRole | null,
+  overrides: { mustChangePassword?: boolean; authInvalidated?: boolean } = {},
 ): MockMiddlewareRequest {
   return {
-    auth: role ? { user: { role } } : null,
+    auth: role ? { user: { role, ...overrides } } : null,
     nextUrl: {
       pathname,
     },
@@ -74,7 +77,8 @@ function createRequest(
 
 function runMiddleware(request: MockMiddlewareRequest): MockMiddlewareResult {
   return middleware(
-    request as Parameters<typeof middleware>[0],
+    request as unknown as Parameters<typeof middleware>[0],
+    {} as Parameters<typeof middleware>[1],
   ) as unknown as MockMiddlewareResult;
 }
 
@@ -90,5 +94,16 @@ describe("middleware", () => {
 
     expect(result).toEqual({ kind: "next" });
     expect(mockedNextResponse.redirect).not.toHaveBeenCalled();
+  });
+
+  it("redirects a backend-revoked NextAuth session to login", () => {
+    const result = runMiddleware(
+      createRequest("/cobrancas", "COMPANY_ADMIN", { authInvalidated: true }),
+    );
+
+    expect(result).toEqual({
+      kind: "redirect",
+      url: "http://localhost:3000/login?sessionExpired=1",
+    });
   });
 });

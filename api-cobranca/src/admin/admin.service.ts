@@ -1,4 +1,4 @@
-import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import {
   BillingMethod,
   BusinessSegment,
@@ -16,7 +16,6 @@ import { WhatsappService } from '../whatsapp/whatsapp.service';
 import {
   AdminEfiUpdateDto,
   CreateAdminClientDto,
-  ResetClientPasswordDto,
   UpdateAdminClientDto,
 } from './dto/admin-client.dto';
 
@@ -136,8 +135,16 @@ export interface AdminClientResponse {
   updatedAt: Date;
 }
 
+export interface CreateAdminClientResponse {
+  client: AdminClientResponse;
+  temporaryPassword: string;
+  integrationWarnings: string[];
+}
+
 @Injectable()
 export class AdminService {
+  private readonly logger = new Logger(AdminService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly whatsappService: WhatsappService,
@@ -159,9 +166,27 @@ export class AdminService {
     return this.toClientResponse(company);
   }
 
-  async createClient(dto: CreateAdminClientDto): Promise<AdminClientResponse> {
-    const passwordHash = await bcrypt.hash(dto.firstUser.password, 10);
+  async createClient(
+    dto: CreateAdminClientDto,
+  ): Promise<CreateAdminClientResponse> {
+    const normalizedUserEmail = dto.firstUser.email.trim().toLowerCase();
+    const existingUser = await this.prisma.user.findFirst({
+      where: {
+        email: { equals: normalizedUserEmail, mode: 'insensitive' },
+      },
+      select: { id: true },
+    });
+    if (existingUser) {
+      throw new HttpException(
+        'Já existe um usuário cadastrado com este e-mail.',
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    const temporaryPassword = this.generateTemporaryPassword();
+    const passwordHash = await bcrypt.hash(temporaryPassword, 10);
     const integrationData = this.buildIntegrationUpdateData(dto.integrations);
+    const integrationWarnings: string[] = [];
 
     const company = await this.prisma.company.create({
       data: {
@@ -177,10 +202,11 @@ export class AdminService {
         ...integrationData,
         users: {
           create: {
-            email: dto.firstUser.email,
+            email: normalizedUserEmail,
             name: dto.firstUser.name,
             password: passwordHash,
             role: UserRole.COMPANY_ADMIN,
+            mustChangePassword: true,
           },
         },
       },
@@ -188,14 +214,39 @@ export class AdminService {
     });
 
     if (dto.meta) {
-      await this.whatsappService.configureMetaIntegration(company.id, dto.meta);
+      try {
+        await this.whatsappService.configureMetaIntegration(
+          company.id,
+          dto.meta,
+        );
+      } catch {
+        this.logger.warn(
+          `Cliente ${company.id} criado sem concluir a integração Meta.`,
+        );
+        integrationWarnings.push(
+          'Cliente criado, mas a integração com a Meta não pôde ser configurada.',
+        );
+      }
     }
 
     if (dto.efi) {
-      await this.efiService.upsertManualGatewayAccount(company.id, dto.efi);
+      try {
+        await this.efiService.upsertManualGatewayAccount(company.id, dto.efi);
+      } catch {
+        this.logger.warn(
+          `Cliente ${company.id} criado sem concluir a integração Efí.`,
+        );
+        integrationWarnings.push(
+          'Cliente criado, mas a integração com a Efí não pôde ser configurada.',
+        );
+      }
     }
 
-    return this.toClientResponse(company);
+    return {
+      client: this.toClientResponse(company),
+      temporaryPassword,
+      integrationWarnings,
+    };
   }
 
   async updateClient(
@@ -225,7 +276,6 @@ export class AdminService {
 
   async resetPassword(
     companyId: string,
-    dto: ResetClientPasswordDto,
   ): Promise<{ userId: string; temporaryPassword: string }> {
     const user = await this.prisma.user.findFirst({
       where: { companyId, role: UserRole.COMPANY_ADMIN },
@@ -240,12 +290,27 @@ export class AdminService {
       );
     }
 
-    const temporaryPassword = dto.password ?? this.generateTemporaryPassword();
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: {
-        password: await bcrypt.hash(temporaryPassword, 10),
-      },
+    const temporaryPassword = this.generateTemporaryPassword();
+    await this.prisma.$transaction(async (transaction) => {
+      const updated = await transaction.user.updateMany({
+        where: { id: user.id, companyId },
+        data: {
+          password: await bcrypt.hash(temporaryPassword, 10),
+          mustChangePassword: true,
+          tokenVersion: { increment: 1 },
+        },
+      });
+
+      if (updated.count !== 1) {
+        throw new HttpException(
+          'Nao foi possivel resetar a senha do usuario.',
+          HttpStatus.CONFLICT,
+        );
+      }
+
+      await transaction.passwordResetToken.deleteMany({
+        where: { companyId, userId: user.id },
+      });
     });
 
     return { userId: user.id, temporaryPassword };

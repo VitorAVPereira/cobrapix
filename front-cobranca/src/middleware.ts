@@ -28,7 +28,21 @@ export default auth((req) => {
   }
 
   const role = req.auth.user?.role;
+  if (req.auth.user?.authInvalidated) {
+    return NextResponse.redirect(new URL("/login?sessionExpired=1", req.url));
+  }
   const isPlatformAdmin = role === "PLATFORM_ADMIN";
+  const mustChangePassword = req.auth.user?.mustChangePassword ?? false;
+  const isFirstAccessPath = pathname === "/primeiro-acesso";
+
+  if (mustChangePassword && !isFirstAccessPath && !isApiRoute) {
+    return NextResponse.redirect(new URL("/primeiro-acesso", req.url));
+  }
+
+  if (!mustChangePassword && isFirstAccessPath) {
+    const destination = isPlatformAdmin ? "/admin/clientes" : "/cobrancas";
+    return NextResponse.redirect(new URL(destination, req.url));
+  }
 
   if (
     !isApiRoute &&
@@ -58,6 +72,6 @@ export default auth((req) => {
 
 export const config = {
   matcher: [
-    "/((?!login|api/auth|api/webhooks|_next/static|_next/image|favicon.ico).*)",
+    "/((?!login|esqueci-senha|redefinir-senha|api/auth|api/webhooks|_next/static|_next/image|favicon.ico).*)",
   ],
 };

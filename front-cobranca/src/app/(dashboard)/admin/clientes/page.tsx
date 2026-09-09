@@ -59,7 +59,6 @@ interface ClientFormState {
   gatewayStatus: string;
   userName: string;
   userEmail: string;
-  userPassword: string;
   enabledBillingMethods: BillingMethod[];
   preferredBillingMethod: BillingMethod;
   maxDiscountsPerDebtor: string;
@@ -122,7 +121,6 @@ const initialForm: ClientFormState = {
   gatewayStatus: "PENDING",
   userName: "",
   userEmail: "",
-  userPassword: "",
   enabledBillingMethods: ["PIX"],
   preferredBillingMethod: "PIX",
   maxDiscountsPerDebtor: "1",
@@ -250,6 +248,11 @@ interface ConfirmationChange {
   sensitive: boolean;
 }
 
+interface TemporaryAccessNotice {
+  password: string;
+  warnings: string[];
+}
+
 function readCertificateFileAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -294,6 +297,8 @@ export default function AdminClientsPage() {
   );
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [temporaryAccess, setTemporaryAccess] =
+    useState<TemporaryAccessNotice | null>(null);
   const [editingClient, setEditingClient] = useState<AdminClient | null>(null);
   const [pendingPayload, setPendingPayload] =
     useState<UpdateAdminClientInput | null>(null);
@@ -786,7 +791,6 @@ export default function AdminClientsPage() {
       firstUser: {
         name: form.userName,
         email: form.userEmail,
-        password: form.userPassword,
       },
       billing: {
         enabledBillingMethods: form.enabledBillingMethods,
@@ -870,10 +874,14 @@ export default function AdminClientsPage() {
     }
 
     try {
-      await apiClient.createAdminClient(payload);
+      const result = await apiClient.createAdminClient(payload);
       setForm(initialForm);
       setCertificateFileName(null);
       setMessage("Cliente cadastrado.");
+      setTemporaryAccess({
+        password: result.temporaryPassword,
+        warnings: result.integrationWarnings,
+      });
       await loadClients();
     } catch (saveError: unknown) {
       setError(getErrorMessage(saveError, "Nao foi possivel cadastrar cliente."));
@@ -888,7 +896,11 @@ export default function AdminClientsPage() {
 
     try {
       const result = await apiClient.resetAdminClientPassword(clientId);
-      setMessage(`Senha temporaria: ${result.temporaryPassword}`);
+      setMessage("Senha redefinida.");
+      setTemporaryAccess({
+        password: result.temporaryPassword,
+        warnings: [],
+      });
     } catch (resetError: unknown) {
       setError(getErrorMessage(resetError, "Nao foi possivel resetar a senha."));
     }
@@ -925,6 +937,34 @@ export default function AdminClientsPage() {
             Atualizar
           </button>
         </header>
+
+        {temporaryAccess && (
+          <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="font-semibold">Senha temporaria: {temporaryAccess.password}</p>
+                <p className="mt-1 text-xs">
+                  Guarde esta senha agora. Ela não será exibida novamente e o usuário deverá trocá-la no primeiro acesso.
+                </p>
+                {temporaryAccess.warnings.length > 0 && (
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
+                    {temporaryAccess.warnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setTemporaryAccess(null)}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-amber-100"
+                aria-label="Fechar aviso de senha temporaria"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          </div>
+        )}
 
         {(error || message) && (
           <div
@@ -1063,7 +1103,9 @@ export default function AdminClientsPage() {
                 <div className="grid gap-3 md:grid-cols-3">
                   <Input label="Nome admin" value={form.userName} onChange={(value) => updateField("userName", value)} required />
                   <Input label="E-mail admin" type="email" value={form.userEmail} onChange={(value) => updateField("userEmail", value)} required />
-                  <Input label="Senha temporaria" type="password" value={form.userPassword} onChange={(value) => updateField("userPassword", value)} required />
+                  <p className="text-xs leading-5 text-slate-500 md:col-span-2">
+                    A senha temporaria sera gerada automaticamente e exibida uma unica vez apos o cadastro.
+                  </p>
                 </div>
               )}
 

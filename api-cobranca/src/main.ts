@@ -1,11 +1,17 @@
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import helmet from 'helmet';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+  });
+  const config = app.get(ConfigService);
+  const trustedProxyHops = config.get<number>('TRUST_PROXY_HOPS', 0);
+  app.set('trust proxy', trustedProxyHops);
   app.use(helmet());
   app.enableCors({
     origin: process.env.ALLOWED_ORIGINS?.split(',') || [
@@ -27,7 +33,6 @@ async function bootstrap(): Promise<void> {
   // e o pool WebSocket do Neon feche graciosamente.
   app.enableShutdownHooks();
 
-  const config = app.get(ConfigService);
   const port = config.get<number>('PORT', 3001);
 
   await app.listen(port);

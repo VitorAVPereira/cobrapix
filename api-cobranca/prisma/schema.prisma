@@ -408,13 +408,31 @@ model User {
   companyId             String
   company               Company                @relation(fields: [companyId], references: [id])
   role                  UserRole               @default(COMPANY_ADMIN)
+  mustChangePassword    Boolean                @default(false)
+  tokenVersion          Int                    @default(0)
   assignedConversations WhatsAppConversation[]
   auditLogs             AuditLog[]
+  passwordResetTokens   PasswordResetToken[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([companyId])
+  @@unique([id, companyId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  companyId String
+  userId    String
+  user      User      @relation(fields: [userId, companyId], references: [id, companyId], onDelete: Cascade)
+  tokenHash String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@unique([companyId, tokenHash])
+  @@index([companyId, userId])
 }
 
 model Plan {

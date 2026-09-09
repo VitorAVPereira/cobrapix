@@ -15,6 +15,7 @@ import { PaymentModule } from './payment/payment.module';
 import { TemplatesModule } from './templates/templates.module';
 import { EmailModule } from './email/email.module';
 import { AdminModule } from './admin/admin.module';
+import { BullInfrastructureModule } from './queue/bull-infrastructure.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { AdminModule } from './admin/admin.module';
       cache: true,
     }),
     ScheduleModule.forRoot(),
+    BullInfrastructureModule,
     PrismaModule,
     HealthModule,
     AuthModule,

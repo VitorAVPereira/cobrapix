@@ -51,7 +51,6 @@ function createAdminClientInput(): CreateAdminClientInput {
     firstUser: {
       name: "Admin Empresa",
       email: "admin@empresa.com",
-      password: "senha123",
     },
     billing: {
       enabledBillingMethods: ["PIX"],
@@ -117,6 +116,22 @@ describe("ApiClient admin clients", () => {
     expect(payload.efi?.efiCertificatePath).toBe("");
     expect(payload.efi?.efiCertificateBase64).toBe("Y2VydGlmaWNhZG8=");
     expect(payload.efi?.efiCertificatePassword).toBe("senha-certificado");
+  });
+
+  it("returns the generated temporary password when creating a client", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        client: createAdminClientFixture(),
+        temporaryPassword: "TempSenha1",
+      }),
+    } as Response);
+    const apiClient = new ApiClient("http://api.test", "token");
+
+    const result = await apiClient.createAdminClient(createAdminClientInput());
+
+    expect(result.client.id).toBe("company-1");
+    expect(result.temporaryPassword).toBe("TempSenha1");
   });
 
   it("updates an admin client using PUT and normalizes Efi certificate base64", async () => {

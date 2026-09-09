@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {
   AdminClient,
+  CreateAdminClientResponse,
   CreateAdminClientInput,
   UpdateAdminClientInput,
 } from "@/lib/api-client";
@@ -14,7 +15,7 @@ const mockGetAdminClients = jest.fn() as jest.MockedFunction<
   () => Promise<AdminClient[]>
 >;
 const mockCreateAdminClient = jest.fn() as jest.MockedFunction<
-  (data: CreateAdminClientInput) => Promise<AdminClient>
+  (data: CreateAdminClientInput) => Promise<CreateAdminClientResponse>
 >;
 const mockResetAdminClientPassword = jest.fn() as jest.MockedFunction<
   (clientId: string) => Promise<{ userId: string; temporaryPassword: string }>
@@ -83,7 +84,6 @@ async function fillRequiredClientFields(): Promise<void> {
   await user.type(screen.getByLabelText("Telefone"), "11999999999");
   await user.type(screen.getByLabelText("Nome admin"), "Admin Empresa");
   await user.type(screen.getByLabelText("E-mail admin"), "admin@empresa.com");
-  await user.type(screen.getByLabelText("Senha temporaria"), "senha123");
   await user.type(screen.getByLabelText("Efí client ID"), "client-id");
   await user.type(screen.getByLabelText("Efí client secret"), "client-secret");
   await user.type(screen.getByLabelText("Efí payee code"), "payee-code");
@@ -102,7 +102,11 @@ describe("AdminClientsPage", () => {
     mockUpdateAdminClient.mockReset();
     mockResetAdminClientPassword.mockReset();
     mockGetAdminClients.mockResolvedValue([]);
-    mockCreateAdminClient.mockResolvedValue(createAdminClientFixture());
+    mockCreateAdminClient.mockResolvedValue({
+      client: createAdminClientFixture(),
+      temporaryPassword: "TempSenha1",
+      integrationWarnings: [],
+    });
     mockUpdateAdminClient.mockResolvedValue({
       ...createAdminClientFixture(),
       corporateName: "Empresa Editada",
@@ -115,6 +119,16 @@ describe("AdminClientsPage", () => {
 
   it("uploads the Efi certificate and sends it when creating an admin client", async () => {
     const user = userEvent.setup();
+    mockGetAdminClients
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error("Falha ao recarregar clientes"));
+    mockCreateAdminClient.mockResolvedValue({
+      client: createAdminClientFixture(),
+      temporaryPassword: "TempSenha1",
+      integrationWarnings: [
+        "Cliente criado, mas a integração com a Meta não pôde ser configurada.",
+      ],
+    });
 
     render(<AdminClientsPage />);
 
@@ -128,6 +142,13 @@ describe("AdminClientsPage", () => {
     await user.click(screen.getByRole("button", { name: /cadastrar cliente/i }));
 
     await waitFor(() => expect(mockCreateAdminClient).toHaveBeenCalledTimes(1));
+    expect(
+      await screen.findByText(/senha temporaria: tempsenha1/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Falha ao recarregar clientes")).toBeInTheDocument();
+    expect(
+      screen.getByText(/integração com a Meta não pôde ser configurada/i),
+    ).toBeInTheDocument();
 
     const payload = mockCreateAdminClient.mock.calls[0]?.[0];
     expect(payload?.efi?.efiCertificateBase64).toBe(
