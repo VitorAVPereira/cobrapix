@@ -34,4 +34,16 @@
 ## Commits
 
 - `1349a2e feat: add Efi onboarding payment domain schema`
-- The report itself is committed separately so it can name the functional commit exactly.
+- `b3eedfd docs: record Efi schema task verification`
+- `4e1b367 fix: enforce tenant integrity in payment domain`
+
+## Review fix round 1
+
+- Added composite candidate keys and foreign keys so `PaymentCharge.companyId` must match its invoice, and a replacement must belong to the same company and invoice.
+- Added a PostgreSQL trigger that accepts global or same-company fee versions while rejecting cross-company fee overrides and billing-method mismatches.
+- Added composite message-context foreign keys and a check requiring `companyId` whenever an invoice or debtor is present.
+- Bound onboarding consent to `(consentUserId, companyId)`. Fee creators now use a normal restrictive `User.id` foreign key because a platform administrator may belong to another company.
+- Tightened `validatePaymentFeeComponent` to reject unknown keys. RED had two expected failures for extra `typo` properties; GREEN passed 18 tests.
+- Added executable integration coverage in `prisma/tests/efi-onboarding-domain-integrity.sql`.
+- Started an isolated PostgreSQL 16 container on localhost, applied all 25 migrations with a local-only `DIRECT_URL`, and ran the integrity SQL under `ON_ERROR_STOP`. It passed the valid global-fee case and rejected cross-tenant consent, invoice, fee, replacement and communication contexts plus a mismatched billing method. The transaction rolled back and the ephemeral container was removed. No configured or remote database was contacted.
+- Final verification after the fixes: Prisma validate/generate passed, TypeScript build typecheck passed, focused ESLint passed, and the full API suite passed 36 suites / 227 tests.
