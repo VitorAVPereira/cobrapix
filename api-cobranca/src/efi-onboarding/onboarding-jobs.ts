@@ -17,12 +17,22 @@ export class OnboardingJobs {
     kind: OnboardingJobKind,
     attempt = 0,
     delay = 0,
+    recover = false,
   ): Promise<void> {
+    const jobId = `efi-${kind}-${companyId}-${attempt}`;
+    if (recover) {
+      const existing = await this.queue.getJob(jobId);
+      if (existing) {
+        const state = await existing.getState();
+        if (state !== 'completed' && state !== 'failed') return;
+        await existing.remove();
+      }
+    }
     await this.queue.add(
       kind,
       { companyId, attempt },
       {
-        jobId: `efi-${kind}-${companyId}-${attempt}`,
+        jobId,
         delay,
         attempts: 3,
         backoff: { type: 'exponential', delay: 60_000 },

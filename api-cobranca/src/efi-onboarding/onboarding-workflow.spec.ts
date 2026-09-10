@@ -7,6 +7,9 @@ import { OnboardingNotifications } from './onboarding-notifications';
 import { OnboardingJobs } from './onboarding-jobs';
 
 describe('onboarding submission workflow', () => {
+  afterEach((): void => {
+    jest.useRealTimers();
+  });
   const crypto = new PaymentCryptoService(
     new ConfigService({ PAYMENT_SECRET_KEY: '11'.repeat(32) }),
   );
@@ -104,16 +107,36 @@ describe('onboarding submission workflow', () => {
   });
 
   it('never calls Efí while WhatsApp fails and exhausts the three delayed retries', async () => {
+    jest.useFakeTimers({ now: new Date('2026-09-09T12:00:00Z') });
     const { workflow, row, notice, submit, scheduled } = fixture();
     notice.mockRejectedValue(new Error('temporary'));
-    for (let attempt = 0; attempt < 4; attempt++)
+    for (let attempt = 0; attempt < 4; attempt++) {
       await workflow.submit('tenant');
+      jest.setSystemTime(
+        Date.now() + ([300_000, 1800_000, 7200_000, 0][attempt] ?? 0),
+      );
+    }
     expect(submit).not.toHaveBeenCalled();
     expect(row.status).toBe('CORRECTION_REQUIRED');
     const delays = scheduled.mock.calls.map(
       (call: unknown[]): unknown => call[3],
     );
     expect(delays).toEqual([300_000, 1800_000, 7200_000]);
+  });
+
+  it('ignores an early retry until the persisted notice deadline', async () => {
+    const { workflow, notice } = fixture();
+    notice.mockRejectedValue(new Error('temporary'));
+    await workflow.submit('tenant');
+    await workflow.submit('tenant');
+    expect(notice).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores stale jobs from a prior draft revision', async () => {
+    const { workflow, notice, submit } = fixture();
+    await workflow.submit('tenant', 0);
+    expect(notice).not.toHaveBeenCalled();
+    expect(submit).not.toHaveBeenCalled();
   });
 
   it('persists ambiguous submission state and never retries the Efí POST', async () => {

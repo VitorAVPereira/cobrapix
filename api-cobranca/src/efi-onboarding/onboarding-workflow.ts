@@ -10,6 +10,7 @@ import {
 import { OnboardingNotifications } from './onboarding-notifications';
 import { OnboardingJobs } from './onboarding-jobs';
 import { functionalRefusal } from './onboarding-policy';
+import { readCheckpoint } from './onboarding-checkpoint';
 
 const NOTICE_DELAYS = [5 * 60_000, 30 * 60_000, 2 * 60 * 60_000] as const;
 type OnboardingWithCompany = EfiOnboarding & { company: Company };
@@ -23,15 +24,23 @@ export class OnboardingWorkflow {
     private readonly notifications: OnboardingNotifications,
     private readonly jobs: OnboardingJobs,
   ) {}
-  async submit(companyId: string): Promise<void> {
+  async submit(companyId: string, expectedRevision?: number): Promise<void> {
     const row = await this.prisma.efiOnboarding.findUnique({
       where: { companyId },
       include: { company: true },
     });
     if (
       !row ||
+      (expectedRevision !== undefined &&
+        row.draftRevision !== expectedRevision) ||
       row.status !== 'NOTICE_PENDING' ||
       !(await this.openingEnabled())
+    )
+      return;
+    const checkpoint = readCheckpoint(row.provisioningCheckpoint);
+    if (
+      typeof checkpoint.noticeRetryAt === 'string' &&
+      new Date(checkpoint.noticeRetryAt).getTime() > Date.now()
     )
       return;
     let applicant: EfiApplicant;
@@ -161,13 +170,23 @@ export class OnboardingWorkflow {
           'CORRECTION_REQUIRED',
           'NOTICE_FAILED',
         );
-      else
+      else {
+        await this.prisma.efiOnboarding.updateMany({
+          where: { companyId: row.companyId, status: 'NOTICE_PENDING' },
+          data: {
+            provisioningCheckpoint: {
+              ...readCheckpoint(row.provisioningCheckpoint),
+              noticeRetryAt: new Date(Date.now() + delay).toISOString(),
+            },
+          },
+        });
         await this.jobs.schedule(
           row.companyId,
           'submit',
           row.draftRevision * 100 + attempt,
           delay,
         );
+      }
       return false;
     }
   }

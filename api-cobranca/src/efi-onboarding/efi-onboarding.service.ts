@@ -133,6 +133,7 @@ export class EfiOnboardingService {
           noticeAcceptedAt: null,
           noticeAttempts: 0,
           provisioningAttempts: 0,
+          provisioningCheckpoint: Prisma.DbNull,
           reminderAttempts: 0,
           nextReminderAt: null,
           adminAlertedAt: null,
