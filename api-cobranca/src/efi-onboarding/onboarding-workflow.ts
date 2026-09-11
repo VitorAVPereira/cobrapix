@@ -93,7 +93,6 @@ export class OnboardingWorkflow {
           sanitizedErrorMessage: null,
         },
       });
-      await this.audit(companyId, row.id, 'EFI_SUBMITTED');
     } catch (error: unknown) {
       if (error instanceof EfiOpeningError && !error.uncertain) {
         const status =
@@ -117,6 +116,7 @@ export class OnboardingWorkflow {
       );
       return;
     }
+    await this.audit(companyId, row.id, 'EFI_SUBMITTED');
     await this.jobs.schedule(
       companyId,
       'remind',

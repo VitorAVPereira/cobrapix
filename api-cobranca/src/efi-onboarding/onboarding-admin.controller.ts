@@ -10,7 +10,14 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Matches,
+  MinLength,
+} from 'class-validator';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GetUser } from '../auth/decorators/get-user.decorator';
@@ -22,7 +29,9 @@ class EnabledDto {
   @IsBoolean() enabled!: boolean;
 }
 class ManualRecoveryDto {
-  @IsString() @MaxLength(128) requestId!: string;
+  @IsString() @MinLength(1) @MaxLength(128) requestId!: string;
+  @IsOptional() @IsBoolean() ownershipVerified?: boolean;
+  @IsOptional() @Matches(/^\d{14}$/) verifiedCompanyDocument?: string;
   @IsOptional() @IsString() @MaxLength(2_000_000) certificateBase64?: string;
   @IsOptional() @IsString() @MaxLength(256) certificatePassword?: string;
 }
@@ -81,5 +90,13 @@ export class OnboardingAdminController {
   }
   @Get('integrations/health') health(): Promise<unknown> {
     return this.service.integrationHealth();
+  }
+  @Put('integrations/meta') meta(@Body() body: EnabledDto): Promise<unknown> {
+    return this.service.setEnabled('META', body.enabled);
+  }
+  @Put('integrations/resend') resend(
+    @Body() body: EnabledDto,
+  ): Promise<unknown> {
+    return this.service.setEnabled('RESEND', body.enabled);
   }
 }

@@ -62,39 +62,29 @@ export class OnboardingLifecycle {
     const checkpoint = readCheckpoint(row.provisioningCheckpoint);
     const threshold = days <= 7 ? 7 : days <= 15 ? 15 : 30;
     const alertKey = `certificateAlert${threshold}`;
-    if (checkpoint[alertKey] !== account.certificateFingerprint) {
-      await this.notifications.alert(
-        companyId,
-        `EFI_CERTIFICATE_EXPIRES_${threshold}_DAYS`,
-      );
-      checkpoint[alertKey] = account.certificateFingerprint;
-      await this.prisma.efiOnboarding.updateMany({
-        where: { companyId, status: 'ACTIVE' },
-        data: { provisioningCheckpoint: checkpoint },
-      });
-    }
-    if (checkpoint.renewalRequestedFor === account.certificateFingerprint)
-      return;
-    const current = await this.prisma.efiOnboarding.findUnique({
-      where: { companyId },
-      select: { updatedAt: true, provisioningCheckpoint: true },
-    });
-    if (
-      !current ||
-      readCheckpoint(current.provisioningCheckpoint).renewalRequestedFor ===
-        account.certificateFingerprint
-    )
-      return;
+    const needsAlert = checkpoint[alertKey] !== account.certificateFingerprint;
+    const needsRenewal =
+      checkpoint.renewalRequestedFor !== account.certificateFingerprint;
+    if (!needsAlert && !needsRenewal) return;
+    // Alert bookkeeping and the irreversible POST claim must share one CAS.
+    // Never write a checkpoint built from an older snapshot after a network call.
     const claimed = await this.prisma.efiOnboarding.updateMany({
-      where: { companyId, status: 'ACTIVE', updatedAt: current.updatedAt },
+      where: { companyId, status: 'ACTIVE', updatedAt: row.updatedAt },
       data: {
         provisioningCheckpoint: {
           ...checkpoint,
+          [alertKey]: account.certificateFingerprint,
           renewalRequestedFor: account.certificateFingerprint,
         },
       },
     });
     if (claimed.count !== 1) return;
+    if (needsAlert)
+      await this.notifications.alert(
+        companyId,
+        `EFI_CERTIFICATE_EXPIRES_${threshold}_DAYS`,
+      );
+    if (!needsRenewal) return;
     try {
       const certificate = inspectEfiCertificate(
         await this.opening.createCertificate(row.simplifiedAccountRequestId),
@@ -108,8 +98,12 @@ export class OnboardingLifecycle {
         certificateExpiresAt: certificate.expiresAt,
         certificateFingerprint: certificate.fingerprint,
       };
-      await this.prisma.gatewayAccount.update({
-        where: { companyId },
+      const saved = await this.prisma.gatewayAccount.updateMany({
+        where: {
+          companyId,
+          status: 'ACTIVE',
+          certificateFingerprint: account.certificateFingerprint,
+        },
         data: {
           encryptedCertificate: candidate.encryptedCertificate,
           certificateExpiresAt: certificate.expiresAt,
@@ -118,7 +112,9 @@ export class OnboardingLifecycle {
           lastError: null,
         },
       });
-      await this.health.validate(companyId);
+      if (saved.count !== 1) return;
+      if (!(await this.health.validate(companyId)))
+        throw new Error('EFI_RENEWAL_VALIDATION_FAILED');
     } catch {
       await this.notifications.alert(
         companyId,
@@ -128,32 +124,8 @@ export class OnboardingLifecycle {
     }
   }
   async disconnect(companyId: string, userId: string): Promise<void> {
-    const account = await this.prisma.gatewayAccount.findUnique({
-      where: { companyId },
-    });
-    let removalFailed = false;
-    try {
-      if (account?.pixKey && account.encryptedCertificate)
-        await this.gateway.removeWebhook(account);
-    } catch {
-      removalFailed = true;
-    }
-    await this.prisma.$transaction(async (tx): Promise<void> => {
-      if (account)
-        await tx.gatewayAccount.update({
-          where: { companyId },
-          data: {
-            status: 'DISABLED',
-            healthStatus: 'UNAVAILABLE',
-            encryptedClientId: '',
-            encryptedClientSecret: '',
-            encryptedCertificate: null,
-            encryptedCertificatePassword: null,
-            certificatePath: null,
-            pixKey: '',
-            lastError: removalFailed ? 'EFI_WEBHOOK_REMOVAL_REQUIRED' : null,
-          },
-        });
+    // Invalidate workers and discard secrets before waiting on any provider request.
+    const account = await this.prisma.$transaction(async (tx) => {
       await tx.efiOnboarding.updateMany({
         where: { companyId },
         data: {
@@ -169,6 +141,23 @@ export class OnboardingLifecycle {
           sensitiveDataKeyVersion: null,
         },
       });
+      const current = await tx.gatewayAccount.findUnique({
+        where: { companyId },
+      });
+      await tx.gatewayAccount.updateMany({
+        where: { companyId },
+        data: {
+          status: 'DISABLED',
+          healthStatus: 'UNAVAILABLE',
+          encryptedClientId: '',
+          encryptedClientSecret: '',
+          encryptedCertificate: null,
+          encryptedCertificatePassword: null,
+          certificatePath: null,
+          pixKey: '',
+          lastError: null,
+        },
+      });
       await tx.auditLog.create({
         data: {
           companyId,
@@ -179,8 +168,17 @@ export class OnboardingLifecycle {
           retentionExpiresAt: new Date(Date.now() + 5 * 365.25 * 86400_000),
         },
       });
+      return current;
     });
-    if (removalFailed)
+    try {
+      if (account?.pixKey && account.encryptedCertificate)
+        await this.gateway.removeWebhook(account);
+    } catch {
+      await this.prisma.gatewayAccount.updateMany({
+        where: { companyId, status: 'DISABLED' },
+        data: { lastError: 'EFI_WEBHOOK_REMOVAL_REQUIRED' },
+      });
       await this.notifications.alert(companyId, 'EFI_WEBHOOK_REMOVAL_REQUIRED');
+    }
   }
 }

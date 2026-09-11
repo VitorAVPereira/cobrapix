@@ -11,6 +11,11 @@ import { OnboardingNotifications } from './onboarding-notifications';
 import { readCheckpoint } from './onboarding-checkpoint';
 
 const DELAYS = [60_000, 5 * 60_000, 15 * 60_000, 30 * 60_000, 60 * 60_000];
+interface ProvisionLease {
+  companyId: string;
+  revision: number;
+  attempt: number;
+}
 class ProvisioningError extends Error {
   constructor(
     readonly code: string,
@@ -66,6 +71,12 @@ export class OnboardingProvisioner {
     });
     if (claimed.count !== 1) return;
     checkpoint.provisionRetryAt = lease;
+    const owner: ProvisionLease = {
+      companyId,
+      revision: row.draftRevision,
+      attempt: index,
+    };
+    let provisionedAccount: GatewayAccount | null = null;
     try {
       if (
         !row.simplifiedAccountRequestId ||
@@ -94,39 +105,47 @@ export class OnboardingProvisioner {
         encryptedClientSecret: this.crypto.encrypt(credentials.clientSecret),
         credentialKeyVersion: this.crypto.activeKeyVersion,
       };
-      let account = await this.prisma.gatewayAccount.upsert({
-        where: { companyId },
-        create: { companyId, ...data, pixKey: '' },
-        update: data,
-      });
+      let account = await this.withLease(owner, (tx) =>
+        tx.gatewayAccount.upsert({
+          where: { companyId },
+          create: { companyId, ...data, pixKey: '' },
+          update: data,
+        }),
+      );
+      provisionedAccount = account;
       if (!account.encryptedCertificate) {
         if (checkpoint.certificateRequested)
           throw new ProvisioningError('EFI_CERTIFICATE_UNCERTAIN', true);
         checkpoint.certificateRequested = true;
-        await this.checkpoint(companyId, checkpoint);
+        await this.checkpoint(owner, checkpoint);
         const base64 = await this.opening.createCertificate(
           row.simplifiedAccountRequestId,
         );
         const certificate = inspectEfiCertificate(base64);
-        account = await this.prisma.gatewayAccount.update({
-          where: { companyId },
-          data: {
-            encryptedCertificate: this.crypto.encrypt(certificate.base64),
-            certificatePath: null,
-            encryptedCertificatePassword: null,
-            certificateExpiresAt: certificate.expiresAt,
-            certificateFingerprint: certificate.fingerprint,
-          },
-        });
+        account = await this.withLease(owner, (tx) =>
+          tx.gatewayAccount.update({
+            where: { companyId },
+            data: {
+              encryptedCertificate: this.crypto.encrypt(certificate.base64),
+              certificatePath: null,
+              encryptedCertificatePassword: null,
+              certificateExpiresAt: certificate.expiresAt,
+              certificateFingerprint: certificate.fingerprint,
+            },
+          }),
+        );
+        provisionedAccount = account;
       } else {
         inspectEfiCertificate(
           this.crypto.decrypt(account.encryptedCertificate),
         );
       }
-      account = await this.ensureEvp(account, checkpoint);
+      account = await this.ensureEvp(account, checkpoint, owner);
+      provisionedAccount = account;
+      await this.checkpoint(owner, checkpoint);
       await this.gateway.configureWebhooks(account);
       checkpoint.webhooksConfigured = true;
-      await this.checkpoint(companyId, checkpoint);
+      await this.checkpoint(owner, checkpoint);
       await this.gateway.validate(account);
       await this.prisma.$transaction(
         async (tx: Prisma.TransactionClient): Promise<void> => {
@@ -178,6 +197,26 @@ export class OnboardingProvisioner {
         },
       );
     } catch (error: unknown) {
+      const latest = await this.prisma.efiOnboarding.findUnique({
+        where: { companyId },
+        select: { status: true },
+      });
+      if (latest?.status === 'DISCONNECTED') {
+        if (
+          provisionedAccount?.pixKey &&
+          provisionedAccount.encryptedCertificate
+        ) {
+          try {
+            await this.gateway.removeWebhook(provisionedAccount);
+          } catch {
+            await this.notifications.alert(
+              companyId,
+              'EFI_WEBHOOK_REMOVAL_REQUIRED',
+            );
+          }
+        }
+        return;
+      }
       const code =
         error instanceof ProvisioningError
           ? error.code
@@ -215,6 +254,7 @@ export class OnboardingProvisioner {
   private async ensureEvp(
     account: GatewayAccount,
     checkpoint: Prisma.JsonObject,
+    owner: ProvisionLease,
   ): Promise<GatewayAccount> {
     if (account.pixKey) return account;
     let key: string | undefined;
@@ -233,29 +273,56 @@ export class OnboardingProvisioner {
     } else {
       checkpoint.evpBefore = await this.gateway.listEvp(account);
       checkpoint.evpRequested = true;
-      await this.checkpoint(account.companyId, checkpoint);
+      await this.checkpoint(owner, checkpoint);
       key = await this.gateway.createEvp(account);
     }
     if (!key || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(key))
       throw new ProvisioningError('EFI_EVP_INVALID', true);
     // Global uniqueness check is an internal financial invariant, never a tenant-visible lookup.
-    const owner = await this.prisma.gatewayAccount.findFirst({
+    const keyOwner = await this.prisma.gatewayAccount.findFirst({
       where: { pixKey: key, companyId: { not: account.companyId } },
       select: { id: true },
     });
-    if (owner) throw new ProvisioningError('EFI_EVP_ALREADY_BOUND', true);
-    return this.prisma.gatewayAccount.update({
-      where: { companyId: account.companyId },
-      data: { pixKey: key },
-    });
+    if (keyOwner) throw new ProvisioningError('EFI_EVP_ALREADY_BOUND', true);
+    return this.withLease(owner, (tx) =>
+      tx.gatewayAccount.update({
+        where: { companyId: account.companyId },
+        data: { pixKey: key },
+      }),
+    );
+  }
+
+  private async withLease<T>(
+    owner: ProvisionLease,
+    action: (tx: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    return this.prisma.$transaction(
+      async (tx: Prisma.TransactionClient): Promise<T> => {
+        // Lock the onboarding row before touching secrets, using the same order as disconnect.
+        const claimed = await tx.efiOnboarding.updateMany({
+          where: {
+            companyId: owner.companyId,
+            status: 'PROVISIONING',
+            draftRevision: owner.revision,
+            provisioningAttempts: owner.attempt,
+          },
+          data: { lastProgressAt: new Date() },
+        });
+        if (claimed.count !== 1)
+          throw new ProvisioningError('EFI_PROVISIONING_STALE', true);
+        return action(tx);
+      },
+    );
   }
   private async checkpoint(
-    companyId: string,
+    owner: ProvisionLease,
     data: Prisma.JsonObject,
   ): Promise<void> {
-    await this.prisma.efiOnboarding.updateMany({
-      where: { companyId, status: 'PROVISIONING' },
-      data: { provisioningCheckpoint: data },
+    await this.withLease(owner, async (tx): Promise<void> => {
+      await tx.efiOnboarding.updateMany({
+        where: { companyId: owner.companyId, status: 'PROVISIONING' },
+        data: { provisioningCheckpoint: data },
+      });
     });
   }
 }

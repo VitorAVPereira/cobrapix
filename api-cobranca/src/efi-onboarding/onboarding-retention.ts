@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -37,18 +38,40 @@ export class OnboardingRetention {
       },
     });
     // A conversation's expiry must cover its most recent message; deleting identity earlier would break the central inbox.
-    await this.prisma.communicationConversation.updateMany({
-      where: {
-        retentionExpiresAt: { lte: now },
-        recipientAnonymizedAt: null,
-        messages: { none: { retentionExpiresAt: { gt: now } } },
-      },
-      data: {
-        recipientEncrypted: null,
-        lastMessagePreview: null,
-        recipientAnonymizedAt: now,
-      },
-    });
+    let cursor: string | undefined;
+    do {
+      const expiredConversations =
+        await this.prisma.communicationConversation.findMany({
+          where: {
+            retentionExpiresAt: { lte: now },
+            recipientAnonymizedAt: null,
+            messages: { none: { retentionExpiresAt: { gt: now } } },
+          },
+          select: { id: true },
+          take: 1000,
+          orderBy: { id: 'asc' },
+          ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+        });
+      for (const conversation of expiredConversations)
+        await this.prisma.communicationConversation.updateMany({
+          where: {
+            id: conversation.id,
+            retentionExpiresAt: { lte: now },
+            recipientAnonymizedAt: null,
+            messages: { none: { retentionExpiresAt: { gt: now } } },
+          },
+          data: {
+            recipientHash: `anonymized:${randomUUID()}`,
+            recipientEncrypted: null,
+            lastMessagePreview: null,
+            recipientAnonymizedAt: now,
+          },
+        });
+      cursor =
+        expiredConversations.length === 1000
+          ? expiredConversations.at(-1)?.id
+          : undefined;
+    } while (cursor);
     await this.prisma.auditLog.deleteMany({
       where: { retentionExpiresAt: { lte: now } },
     });

@@ -46,7 +46,21 @@ describe('durable Efí provisioning', () => {
       updateMany: jest.fn(
         (args: {
           data: Record<string, unknown>;
+          where?: Record<string, unknown>;
         }): Promise<{ count: number }> => {
+          for (const key of [
+            'status',
+            'draftRevision',
+            'provisioningAttempts',
+          ]) {
+            const expected = args.where?.[key];
+            if (
+              expected !== undefined &&
+              typeof expected !== 'object' &&
+              row[key] !== expected
+            )
+              return Promise.resolve({ count: 0 });
+          }
           Object.assign(row, args.data);
           return Promise.resolve({ count: 1 });
         },
@@ -186,5 +200,24 @@ describe('durable Efí provisioning', () => {
     expect(alert).toHaveBeenCalled();
     expect(schedule).toHaveBeenCalledTimes(4);
     expect(JSON.stringify(row)).not.toContain('provider secret');
+  });
+  it('does not restore secrets after disconnect while certificate creation is in flight', async () => {
+    const { service, row, account, opening, gateway } = fixture();
+    opening.createCertificate.mockImplementation((): Promise<string> => {
+      row.status = 'DISCONNECTED';
+      Object.assign(account, {
+        status: 'DISABLED',
+        encryptedClientId: '',
+        encryptedClientSecret: '',
+        encryptedCertificate: null,
+        pixKey: '',
+      });
+      return Promise.resolve('p12');
+    });
+    await service.run('tenant', 101);
+    expect(row.status).toBe('DISCONNECTED');
+    expect(account.encryptedCertificate).toBeNull();
+    expect(account.encryptedClientSecret).toBe('');
+    expect(gateway.configureWebhooks).not.toHaveBeenCalled();
   });
 });

@@ -144,6 +144,8 @@ export class OnboardingAdminService {
     userId: string,
     input: {
       requestId: string;
+      ownershipVerified?: boolean;
+      verifiedCompanyDocument?: string;
       certificateBase64?: string;
       certificatePassword?: string;
     },
@@ -154,16 +156,28 @@ export class OnboardingAdminService {
     });
     if (
       !row ||
-      !['SUBMISSION_UNCERTAIN', 'CONFIGURATION_ERROR'].includes(row.status) ||
+      !['SUBMISSION_UNCERTAIN', 'CONFIGURATION_ERROR', 'ACTIVE'].includes(
+        row.status,
+      ) ||
       !row.submittedCompanyDocument ||
       row.company.document !== row.submittedCompanyDocument
     )
       this.fail('EFI_MANUAL_NOT_ALLOWED');
+    if (row.status === 'ACTIVE' && !input.certificateBase64)
+      this.fail('EFI_CERTIFICATE_REQUIRED');
     if (
       row.simplifiedAccountRequestId &&
       row.simplifiedAccountRequestId !== input.requestId
     )
       this.fail('EFI_REQUEST_MISMATCH');
+    // The public credential response does not contain the owner's CNPJ.
+    // An unbound request therefore requires an explicit, attributable portal check.
+    if (
+      !row.simplifiedAccountRequestId &&
+      (input.ownershipVerified !== true ||
+        input.verifiedCompanyDocument !== row.submittedCompanyDocument)
+    )
+      this.fail('EFI_OWNERSHIP_VERIFICATION_REQUIRED');
     const credentials = await this.client.getCredentials(input.requestId);
     if (!credentials.active) this.fail('EFI_ACCOUNT_NOT_ACTIVE');
     const certificate = input.certificateBase64
@@ -224,6 +238,12 @@ export class OnboardingAdminService {
             changes: {
               requestId: input.requestId,
               certificateSupplied: Boolean(certificate),
+              ...(!row.simplifiedAccountRequestId
+                ? {
+                    ownershipVerification: 'ADMIN_EFI_PORTAL_ATTESTATION',
+                    verifiedCompanyDocument: input.verifiedCompanyDocument,
+                  }
+                : {}),
             },
             retentionExpiresAt: new Date(Date.now() + 5 * 365.25 * 86400_000),
           },
@@ -233,10 +253,15 @@ export class OnboardingAdminService {
     return this.retry(companyId, userId);
   }
   async setEnabled(
-    integration: 'EFI_ONBOARDING' | 'EFI_PAYMENTS',
+    integration: PlatformIntegration,
     enabled: boolean,
   ): Promise<unknown> {
     if (enabled && integration === 'EFI_ONBOARDING') {
+      if (
+        this.config.get<string>('NODE_ENV') === 'production' &&
+        this.config.get<string>('EFI_LEGAL_APPROVED') !== 'true'
+      )
+        this.fail('EFI_LEGAL_APPROVAL_REQUIRED');
       const url = new URL(
         this.config.get<string>('EFI_WEBHOOK_BASE_URL') ?? '',
       );
@@ -260,7 +285,8 @@ export class OnboardingAdminService {
     return Object.values(PlatformIntegration).map((integration) => ({
       integration,
       enabled:
-        rows.find((row) => row.integration === integration)?.enabled ?? false,
+        rows.find((row) => row.integration === integration)?.enabled ??
+        (integration === 'META' || integration === 'RESEND'),
       healthStatus:
         rows.find((row) => row.integration === integration)?.healthStatus ??
         'UNKNOWN',
