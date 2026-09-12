@@ -209,7 +209,7 @@ model Company {
   autoDiscountEnabled          Boolean             @default(false)
   autoDiscountDaysAfterDue     Int?
   autoDiscountPercentage       Decimal?            @db.Decimal(5, 2)
-  preferredBillingMethod       BillingMethod       @default(PIX)
+  preferredBillingMethod       BillingMethod       @default(BOLIX)
   whatsappProvider             WhatsappProvider    @default(META_CLOUD)
   whatsappInstanceId           String?
   whatsappStatus               WhatsappStatus      @default(DISCONNECTED)
@@ -230,12 +230,13 @@ model Company {
   paymentNotificationEnabled   Boolean             @default(true)
   paymentNotificationEmails    String[]            @default([])
   status                       CompanyStatus       @default(ACTIVE)
-  enabledBillingMethods        BillingMethod[]     @default([PIX, BOLETO, BOLIX])
+  enabledBillingMethods        BillingMethod[]     @default([PIX, BOLIX])
   onTimeSplitPercentageBps     Int                 @default(0)
   overdueSplitPercentageBps    Int                 @default(0)
 
   templates             MessageTemplate[]
   emailTemplates        EmailTemplate[]
+  templatePreferences   CompanyTemplatePreference[]
   users                 User[]
   debtors               Debtor[]
   invoices              Invoice[]
@@ -360,7 +361,7 @@ model Invoice {
 
   originalAmount            Decimal               @db.Decimal(10, 2)
   dueDate                   DateTime
-  status                    InvoiceStatus         @default(PENDING)
+  status                    InvoiceStatus         @default(DRAFT)
   gatewayId                 String?               @unique
   pixPayload                String?               @db.Text
   pixExpiresAt              DateTime?
@@ -769,6 +770,70 @@ model EmailTemplate {
   @@unique([companyId, slug])
   @@index([companyId, deletedAt])
   @@index([resendTemplateId])
+}
+
+model GlobalMessageTemplate {
+  id                    String                        @id @default(uuid())
+  name                  String
+  slug                  String                        @unique
+  content               String                        @db.Text
+  footerText            String?                       @db.Text
+  paymentButtonEnabled  Boolean                       @default(true)
+  paymentButtonLabel    String                        @default("Abrir pagamento")
+  copyCodeButtonEnabled Boolean                       @default(false)
+  copyCodeSource        MessageTemplateCopyCodeSource @default(AUTO)
+  isActive              Boolean                       @default(true)
+  metaTemplateName      String?
+  metaLanguage          String                        @default("pt_BR")
+  category              WhatsAppTemplateCategory      @default(UTILITY)
+  metaStatus            String                        @default("LOCAL")
+  metaRejectedReason    String?                       @db.Text
+  lastMetaSyncAt        DateTime?
+  preferences           CompanyTemplatePreference[]
+  createdAt             DateTime                      @default(now())
+  updatedAt             DateTime                      @updatedAt
+}
+
+model GlobalEmailTemplate {
+  id                String                      @id @default(uuid())
+  name              String
+  slug              String                      @unique
+  subject           String
+  content           String                      @db.Text
+  isActive          Boolean                     @default(true)
+  resendTemplateId  String?
+  resendAlias       String?
+  resendStatus      String                      @default("local")
+  resendPublishedAt DateTime?
+  lastResendSyncAt  DateTime?
+  resendError       String?                     @db.Text
+  preferences       CompanyTemplatePreference[]
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+
+  @@index([resendTemplateId])
+}
+
+model CompanyTemplatePreference {
+  id                      String                 @id @default(uuid())
+  companyId               String
+  company                 Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  channel                 CollectionChannel
+  slug                    String
+  isActive                Boolean                @default(true)
+  greeting                String?                @db.VarChar(80)
+  instructions            String?                @db.VarChar(280)
+  signature               String?                @db.VarChar(120)
+  globalMessageTemplateId String?
+  globalMessageTemplate   GlobalMessageTemplate? @relation(fields: [globalMessageTemplateId], references: [id], onDelete: Cascade)
+  globalEmailTemplateId   String?
+  globalEmailTemplate     GlobalEmailTemplate?   @relation(fields: [globalEmailTemplateId], references: [id], onDelete: Cascade)
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
+
+  @@unique([companyId, channel, slug])
+  @@index([globalMessageTemplateId])
+  @@index([globalEmailTemplateId])
 }
 
 model MessagingUsage {
