@@ -1,4 +1,5 @@
 "use client";
+import { useFinancialActivation } from "@/components/features/financial-activation-context";
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -23,13 +24,12 @@ import type {
   BusinessSegment,
 } from "@/lib/api-client";
 import {
-  formatPercentageBps,
   formatPlatformRateSummary,
   getBillingMethodLabel,
 } from "@/lib/billing-fees";
 import { useApiClient } from "@/lib/use-api-client";
 
-const BILLING_METHODS: BillingMethod[] = ["PIX", "BOLETO", "BOLIX"];
+const BILLING_METHODS: BillingMethod[] = ["PIX", "BOLIX"];
 
 function getMethodDescription(method: BillingMethod): string {
   if (method === "PIX") {
@@ -74,6 +74,7 @@ function parseNotificationEmails(value: string): {
 }
 
 export default function BillingSettingsPage() {
+  const {canIssue}=useFinancialActivation();
   const apiClient = useApiClient();
   const [settings, setSettings] = useState<BillingSettings | null>(null);
   const [preferredBillingMethod, setPreferredBillingMethod] =
@@ -226,6 +227,7 @@ export default function BillingSettingsPage() {
   }
 
   async function runBillingNow(): Promise<void> {
+    if(!canIssue)return;
     setRunningBilling(true);
     setBillingRunError(null);
     setBillingRunMessage(null);
@@ -249,8 +251,8 @@ export default function BillingSettingsPage() {
   }
 
   const enabledBillingMethods = settings?.enabledBillingMethods.length
-    ? settings.enabledBillingMethods
-    : ["PIX"];
+    ? settings.enabledBillingMethods.filter((method) => method !== "BOLETO")
+    : ["BOLIX"];
 
   return (
     <main className="min-h-full bg-slate-50">
@@ -442,7 +444,7 @@ export default function BillingSettingsPage() {
             <button
               type="button"
               onClick={() => void runBillingNow()}
-              disabled={runningBilling}
+              disabled={!canIssue || runningBilling}
               className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {runningBilling ? (
@@ -581,11 +583,7 @@ export default function BillingSettingsPage() {
                     {getBillingMethodLabel(method)}
                   </p>
                   <p className="mt-2 text-sm text-slate-600">
-                    Efí: {tariff?.efiLabel ?? "-"}
-                  </p>
-                  <p className="mt-1 text-sm text-slate-600">
-                    Plataforma:{" "}
-                    {settings ? formatPlatformRateSummary(settings) : "-"}
+                    Taxa: {tariff?.combinedLabel ?? "Não configurada"}
                   </p>
                   <p className="mt-3 text-xs text-slate-500">
                     {enabled ? getMethodDescription(method) : "Nao liberado"}
@@ -594,23 +592,7 @@ export default function BillingSettingsPage() {
               );
             })}
           </div>
-          <div className="border-t border-slate-200 px-5 py-4">
-            <p className="text-sm text-slate-600">
-              Taxa no prazo:{" "}
-              <span className="font-semibold text-slate-900">
-                {settings
-                  ? formatPercentageBps(settings.onTimeSplitPercentageBps)
-                  : "-"}
-              </span>
-              <span className="mx-3 text-slate-300">|</span>
-              Taxa recuperada:{" "}
-              <span className="font-semibold text-slate-900">
-                {settings
-                  ? formatPercentageBps(settings.overdueSplitPercentageBps)
-                  : "-"}
-              </span>
-            </p>
-          </div>
+
         </section>
 
         <section className="rounded-md border border-slate-200 bg-white">

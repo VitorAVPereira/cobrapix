@@ -3,6 +3,7 @@
  * O frontend nao acessa banco diretamente; toda persistencia passa por aqui.
  */
 
+import type { EfiDraftInput, EfiOnboardingState } from "./efi-onboarding";
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
 export interface ApiError extends Error {
@@ -68,6 +69,14 @@ export interface CreatePaymentResponse {
   paymentLink?: string | null;
 }
 
+export interface PaymentFeeQuote {
+  billingMethod: BillingMethod;
+  grossAmountCents: number;
+  totalFeeCents: number;
+  netAmountCents: number;
+  feeLabel: string;
+}
+
 export interface InvoicePaymentStatusResponse {
   invoiceId: string;
   status: string;
@@ -98,8 +107,6 @@ export interface BillingSettings {
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue: number | null;
   autoDiscountPercentage: number | null;
-  onTimeSplitPercentageBps: number;
-  overdueSplitPercentageBps: number;
   businessSegment: BusinessSegment;
   paymentNotificationEnabled: boolean;
   paymentNotificationEmails: string[];
@@ -107,12 +114,8 @@ export interface BillingSettings {
     BillingMethod,
     {
       method: BillingMethod;
-      efiLabel: string;
-      platformLabel: string;
       combinedLabel: string;
-      efiKind: "percentage" | "fixed";
-      efiValue: number;
-      platformFixedFee: number;
+      configured: boolean;
     }
   >;
 }
@@ -162,6 +165,13 @@ export interface BillingMetrics {
 }
 
 export interface InvoicePaymentSummary {
+  financialSummary?: {
+    grossAmountCents: number;
+    totalFeeCents: number;
+    netAmountCents: number;
+    estimated: boolean;
+    status: string;
+  } | null;
   generated: boolean;
   method: BillingMethod;
   pixCopyPaste: string | null;
@@ -539,7 +549,10 @@ export interface MessageTemplate {
   metaStatus: string;
   metaRejectedReason: string | null;
   lastMetaSyncAt: string | null;
-  companyId: string;
+  greeting?: string;
+  instructions?: string;
+  signature?: string;
+  companyId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -557,16 +570,15 @@ export interface EmailTemplate {
   resendPublishedAt: string | null;
   lastResendSyncAt: string | null;
   resendError: string | null;
-  deletedAt: string | null;
-  companyId: string;
+  greeting: string;
+  instructions: string;
+  signature: string;
   createdAt: string;
   updatedAt: string;
 }
 
 export type MessageTemplateCopyCodeSource =
-  | "AUTO"
-  | "PIX_COPY_PASTE"
-  | "BOLETO_LINE_DIGITABLE";
+  "AUTO" | "PIX_COPY_PASTE" | "BOLETO_LINE_DIGITABLE";
 
 export type MessageTemplateSlug =
   | "cobranca-emissao"
@@ -577,26 +589,17 @@ export type MessageTemplateSlug =
   | "atraso-critico";
 
 export interface SaveMessageTemplateInput {
-  name: string;
-  slug: MessageTemplateSlug;
-  content: string;
-  footerText?: string | null;
-  paymentButtonEnabled?: boolean;
-  paymentButtonLabel?: string;
-  copyCodeButtonEnabled?: boolean;
-  copyCodeSource?: MessageTemplateCopyCodeSource;
   isActive?: boolean;
-  metaTemplateName?: string;
-  metaLanguage?: string;
-  category?: "UTILITY" | "MARKETING" | "AUTHENTICATION";
+  greeting?: string;
+  instructions?: string;
+  signature?: string;
 }
 
 export interface SaveEmailTemplateInput {
-  name: string;
-  slug: MessageTemplateSlug;
-  subject: string;
-  content: string;
   isActive?: boolean;
+  greeting?: string;
+  instructions?: string;
+  signature?: string;
 }
 
 export interface GatewayAccountInput {
@@ -691,8 +694,6 @@ export interface AdminClient {
   autoDiscountEnabled?: boolean;
   autoDiscountDaysAfterDue?: number | null;
   autoDiscountPercentage?: number | null;
-  onTimeSplitPercentageBps: number;
-  overdueSplitPercentageBps: number;
   businessSegment?: BusinessSegment;
   paymentNotificationEnabled?: boolean;
   paymentNotificationEmails?: string[];
@@ -752,12 +753,7 @@ export interface AdminClient {
 }
 
 export type AdminAnalyticsPeriod =
-  | "current_month"
-  | "today"
-  | "7d"
-  | "30d"
-  | "year"
-  | "custom";
+  "current_month" | "today" | "7d" | "30d" | "year" | "custom";
 
 export interface AdminClientAnalyticsMetrics {
   totalChargedAmount: number;
@@ -824,8 +820,6 @@ export interface CreateAdminClientInput {
   billing: {
     enabledBillingMethods: BillingMethod[];
     preferredBillingMethod: BillingMethod;
-    onTimeSplitPercentageBps: number;
-    overdueSplitPercentageBps: number;
   };
   meta?: ConfigureMetaWhatsappInput;
   efi?: GatewayAccountInput;
@@ -886,8 +880,6 @@ export interface UpdateAdminClientInput {
   billing?: {
     enabledBillingMethods?: BillingMethod[];
     preferredBillingMethod?: BillingMethod;
-    onTimeSplitPercentageBps?: number;
-    overdueSplitPercentageBps?: number;
     maxDiscountsPerDebtor?: number;
     discountTriggerDay?: number;
     collectionReminderDays?: number[];
@@ -962,6 +954,30 @@ function normalizeUpdateAdminClientPayload(
 }
 
 class ApiClient {
+  getEfiOnboarding(): Promise<EfiOnboardingState> {
+    return this.fetch("/onboarding/efi");
+  }
+  saveEfiDraft(input: EfiDraftInput): Promise<EfiOnboardingState> {
+    return this.fetch("/onboarding/efi/draft", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  }
+  submitEfiOnboarding(retry = false): Promise<EfiOnboardingState> {
+    return this.fetch(`/onboarding/efi/${retry ? "retry" : "submit"}`, {
+      method: "POST",
+    });
+  }
+  financialAdmin<T>(
+    path: string,
+    method: "GET" | "POST" | "PUT" | "PATCH" = "GET",
+    body?: unknown,
+  ): Promise<T> {
+    return this.fetch(path, {
+      method,
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+  }
   private baseUrl: string;
   private token: string | null;
   private requireAuth: boolean;
@@ -1296,6 +1312,27 @@ class ApiClient {
       method: "POST",
       body: JSON.stringify(data),
     });
+  }
+
+  async getPaymentFeeQuote(
+    billingMethod: BillingMethod,
+    amountCents: number,
+  ): Promise<PaymentFeeQuote> {
+    const query = new URLSearchParams({
+      billingMethod,
+      amountCents: String(amountCents),
+    });
+    return this.fetch<PaymentFeeQuote>(`/payments/fees?${query.toString()}`);
+  }
+
+  async replaceExpiredPayment(
+    invoiceId: string,
+    dueDate: string,
+  ): Promise<CreatePaymentResponse> {
+    return this.fetch<CreatePaymentResponse>(
+      `/payments/invoice/${invoiceId}/replace`,
+      { method: "POST", body: JSON.stringify({ dueDate }) },
+    );
   }
 
   async getInvoicePaymentStatus(

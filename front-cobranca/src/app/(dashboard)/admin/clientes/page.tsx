@@ -1,24 +1,19 @@
 "use client";
 
 import {
-  ChangeEvent,
   FormEvent,
   useCallback,
   useEffect,
-  useMemo,
   useState,
 } from "react";
 import { useSession } from "next-auth/react";
 import {
   Building2,
-  FileCheck2,
   KeyRound,
-  Loader2,
   Pencil,
   Plus,
   RefreshCw,
   X,
-  Upload,
 } from "lucide-react";
 import {
   AdminClient,
@@ -32,7 +27,7 @@ import {
 } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 
-const billingMethods: BillingMethod[] = ["PIX", "BOLETO", "BOLIX"];
+const billingMethods: BillingMethod[] = ["PIX", "BOLIX"];
 const statusOptions: CompanyStatus[] = ["ACTIVE", "INACTIVE", "SUSPENDED"];
 const businessSegmentOptions: BusinessSegment[] = ["GENERAL", "EDUCATION"];
 const whatsappStatusOptions: WhatsappStatus[] = [
@@ -68,8 +63,6 @@ interface ClientFormState {
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue: string;
   autoDiscountPercentage: string;
-  onTimeSplitPercentage: string;
-  overdueSplitPercentage: string;
   businessSegment: BusinessSegment;
   paymentNotificationEnabled: boolean;
   paymentNotificationEmails: string;
@@ -121,8 +114,8 @@ const initialForm: ClientFormState = {
   gatewayStatus: "PENDING",
   userName: "",
   userEmail: "",
-  enabledBillingMethods: ["PIX"],
-  preferredBillingMethod: "PIX",
+  enabledBillingMethods: ["PIX", "BOLIX"],
+  preferredBillingMethod: "BOLIX",
   maxDiscountsPerDebtor: "1",
   discountTriggerDay: "15",
   collectionReminderDays: "0",
@@ -130,8 +123,6 @@ const initialForm: ClientFormState = {
   autoDiscountEnabled: false,
   autoDiscountDaysAfterDue: "",
   autoDiscountPercentage: "",
-  onTimeSplitPercentage: "3.50",
-  overdueSplitPercentage: "12.00",
   businessSegment: "GENERAL",
   paymentNotificationEnabled: true,
   paymentNotificationEmails: "",
@@ -173,26 +164,12 @@ const initialForm: ClientFormState = {
   bankAccountDigit: "",
 };
 
-const CERTIFICATE_ACCEPT =
-  ".p12,.pfx,.pem,application/x-pkcs12,application/pkcs12,application/octet-stream";
-
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
-function percentToBps(value: string): number {
-  const parsed = Number(value.replace(",", "."));
-  if (!Number.isFinite(parsed)) return 0;
-  return Math.round(parsed * 100);
-}
 
-function formatBps(value: number): string {
-  return `${(value / 100).toFixed(2)}%`;
-}
 
-function bpsToPercentInput(value: number): string {
-  return (value / 100).toFixed(2);
-}
 
 function methodLabel(method: BillingMethod): string {
   if (method === "BOLETO") return "Boleto";
@@ -253,37 +230,6 @@ interface TemporaryAccessNotice {
   warnings: string[];
 }
 
-function readCertificateFileAsBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-
-    reader.onerror = () => {
-      reject(new Error("Nao foi possivel ler o certificado selecionado."));
-    };
-
-    reader.onload = () => {
-      const result = reader.result;
-
-      if (typeof result !== "string") {
-        reject(new Error("O certificado selecionado nao pode ser lido."));
-        return;
-      }
-
-      const commaIndex = result.indexOf(",");
-      const base64 = commaIndex >= 0 ? result.slice(commaIndex + 1) : result;
-
-      if (!base64) {
-        reject(new Error("O certificado selecionado esta vazio."));
-        return;
-      }
-
-      resolve(base64);
-    };
-
-    reader.readAsDataURL(file);
-  });
-}
-
 export default function AdminClientsPage() {
   const apiClient = useApiClient();
   const { data: session } = useSession();
@@ -291,10 +237,6 @@ export default function AdminClientsPage() {
   const [form, setForm] = useState<ClientFormState>(initialForm);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [isReadingCertificate, setIsReadingCertificate] = useState(false);
-  const [certificateFileName, setCertificateFileName] = useState<string | null>(
-    null,
-  );
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [temporaryAccess, setTemporaryAccess] =
@@ -308,11 +250,6 @@ export default function AdminClientsPage() {
 
   const isPlatformAdmin = session?.user.role === "PLATFORM_ADMIN";
   const isEditing = Boolean(editingClient);
-  const canSubmitEfi = useMemo(
-    () => Boolean(form.efiClientId && form.efiClientSecret && form.efiPayeeCode),
-    [form.efiClientId, form.efiClientSecret, form.efiPayeeCode],
-  );
-
   const loadClients = useCallback(async (): Promise<void> => {
     setIsLoading(true);
     setError(null);
@@ -386,8 +323,6 @@ export default function AdminClientsPage() {
         client.autoDiscountPercentage === undefined
           ? ""
           : String(client.autoDiscountPercentage),
-      onTimeSplitPercentage: bpsToPercentInput(client.onTimeSplitPercentageBps),
-      overdueSplitPercentage: bpsToPercentInput(client.overdueSplitPercentageBps),
       businessSegment: client.businessSegment ?? "GENERAL",
       paymentNotificationEnabled: client.paymentNotificationEnabled ?? true,
       paymentNotificationEmails: client.paymentNotificationEmails?.join("\n") ?? "",
@@ -435,7 +370,6 @@ export default function AdminClientsPage() {
     setEditingClient(client);
     setPendingPayload(null);
     setPendingChanges([]);
-    setCertificateFileName(null);
     setError(null);
     setMessage(null);
     setForm(clientToForm(client));
@@ -445,7 +379,6 @@ export default function AdminClientsPage() {
     setEditingClient(null);
     setPendingPayload(null);
     setPendingChanges([]);
-    setCertificateFileName(null);
     setForm(initialForm);
     setError(null);
     setMessage(null);
@@ -460,7 +393,6 @@ export default function AdminClientsPage() {
         phoneNumber: form.phoneNumber,
         status: form.status,
         gatewayProvider: form.gatewayProvider,
-        gatewayStatus: form.gatewayStatus,
         legalRepresentative: form.legalRepresentative,
         legalRepresentativeCpf: form.legalRepresentativeCpf,
         legalRepresentativeBirthDate: form.legalRepresentativeBirthDate || null,
@@ -477,8 +409,6 @@ export default function AdminClientsPage() {
       billing: {
         enabledBillingMethods: form.enabledBillingMethods,
         preferredBillingMethod: form.preferredBillingMethod,
-        onTimeSplitPercentageBps: percentToBps(form.onTimeSplitPercentage),
-        overdueSplitPercentageBps: percentToBps(form.overdueSplitPercentage),
         maxDiscountsPerDebtor: parseIntInput(form.maxDiscountsPerDebtor, 1),
         discountTriggerDay: parseIntInput(form.discountTriggerDay, 15),
         collectionReminderDays: parseNumberList(form.collectionReminderDays),
@@ -494,75 +424,18 @@ export default function AdminClientsPage() {
         paymentNotificationEnabled: form.paymentNotificationEnabled,
         paymentNotificationEmails: parseEmailList(form.paymentNotificationEmails),
       },
-      whatsapp: {
-        whatsappProvider: "META_CLOUD",
-        whatsappInstanceId: form.metaPhoneNumberId || null,
-        whatsappStatus: form.whatsappStatus,
-        metaPhoneNumberId: form.metaPhoneNumberId || null,
-        metaBusinessAccountId: form.metaBusinessAccountId || null,
-        metaBusinessPhoneNumber: form.metaBusinessPhoneNumber || null,
-        metaDefaultLanguage: form.metaDefaultLanguage,
-        messagingLimitTier: form.messagingLimitTier || null,
-      },
       integrations: {
-        resendFromEmail: form.resendFromEmail || null,
         erpWebhookUrl: form.erpWebhookUrl || null,
         erpEnabledEvents: parseEmailList(form.erpEnabledEvents),
       },
-      efi: {
-        environment: form.efiEnvironment,
-        gatewayStatus: form.efiGatewayStatus,
-        efiPayeeCode: form.efiPayeeCode,
-        efiAccountNumber: form.efiAccountNumber,
-        efiAccountDigit: form.efiAccountDigit,
-        efiPixKey: form.efiPixKey,
-      },
     };
 
-    if (form.metaAccessToken.trim()) {
-      payload.whatsapp = {
-        ...payload.whatsapp,
-        metaAccessToken: form.metaAccessToken,
-      };
-    }
-    if (form.resendApiKey.trim()) {
-      payload.integrations = {
-        ...payload.integrations,
-        resendApiKey: form.resendApiKey,
-      };
-    }
-    if (form.resendWebhookSecret.trim()) {
-      payload.integrations = {
-        ...payload.integrations,
-        resendWebhookSecret: form.resendWebhookSecret,
-      };
-    }
     if (form.erpApiKey.trim()) {
       payload.integrations = {
         ...payload.integrations,
         erpApiKey: form.erpApiKey,
       };
     }
-    if (form.efiClientId.trim()) {
-      payload.efi = { ...payload.efi, efiClientId: form.efiClientId };
-    }
-    if (form.efiClientSecret.trim()) {
-      payload.efi = { ...payload.efi, efiClientSecret: form.efiClientSecret };
-    }
-    if (form.efiCertificateBase64.trim()) {
-      payload.efi = {
-        ...payload.efi,
-        efiCertificateBase64: form.efiCertificateBase64,
-        efiCertificatePath: "",
-      };
-    }
-    if (form.efiCertificatePassword.trim()) {
-      payload.efi = {
-        ...payload.efi,
-        efiCertificatePassword: form.efiCertificatePassword,
-      };
-    }
-
     return payload;
   }
 
@@ -599,7 +472,6 @@ export default function AdminClientsPage() {
     addChange("E-mail empresa", client.email, form.email);
     addChange("Telefone", client.phoneNumber, form.phoneNumber);
     addChange("Status", client.status, form.status);
-    addChange("Status gateway", client.gatewayStatus, form.gatewayStatus);
     addChange(
       "Metodos liberados",
       client.enabledBillingMethods.map(methodLabel).join(", "),
@@ -611,37 +483,11 @@ export default function AdminClientsPage() {
       methodLabel(form.preferredBillingMethod),
     );
     addChange(
-      "Taxa no prazo",
-      formatBps(client.onTimeSplitPercentageBps),
-      formatBps(percentToBps(form.onTimeSplitPercentage)),
-    );
-    addChange(
-      "Taxa recuperada",
-      formatBps(client.overdueSplitPercentageBps),
-      formatBps(percentToBps(form.overdueSplitPercentage)),
-    );
-    addChange(
       "Emails de notificacao",
       client.paymentNotificationEmails?.join(", ") ?? "",
       parseEmailList(form.paymentNotificationEmails).join(", "),
     );
     addChange("Status WhatsApp", client.whatsappStatus, form.whatsappStatus);
-    addChange("Meta phone number ID", client.metaPhoneNumberId, form.metaPhoneNumberId);
-    addChange(
-      "Meta business account ID",
-      client.metaBusinessAccountId,
-      form.metaBusinessAccountId,
-    );
-    addChange(
-      "WhatsApp comercial",
-      client.metaBusinessPhoneNumber,
-      form.metaBusinessPhoneNumber,
-    );
-    addChange("Efi ambiente", client.efi.environment, form.efiEnvironment);
-    addChange("Efi status", client.efi.status, form.efiGatewayStatus);
-    addChange("Efi payee code", client.efi.payeeCode, form.efiPayeeCode);
-    addChange("Conta Efi", client.efi.accountNumber, form.efiAccountNumber);
-    addChange("Chave Pix", client.efi.pixKey, form.efiPixKey);
     addChange("Responsavel legal", client.legalRepresentative, form.legalRepresentative);
     addChange("CPF responsavel", client.legalRepresentativeCpf, form.legalRepresentativeCpf);
     addChange("CEP", client.addressPostalCode, form.postalCode);
@@ -653,33 +499,7 @@ export default function AdminClientsPage() {
     addChange("Banco", client.bankName, form.bankName);
     addChange("Agencia", client.bankAgency, form.bankAgency);
     addChange("Conta bancaria", client.bankAccount, form.bankAccount);
-    addSecretChange("Meta token", client.hasMetaAccessToken, form.metaAccessToken);
-    addSecretChange("Resend API key", client.hasResendApiKey, form.resendApiKey);
-    addSecretChange(
-      "Resend webhook signing secret",
-      client.hasResendWebhookSecret,
-      form.resendWebhookSecret,
-    );
     addSecretChange("ERP API key", client.hasErpApiKey, form.erpApiKey);
-    addSecretChange("Efi client ID", client.hasEfiClientId, form.efiClientId);
-    addSecretChange(
-      "Efi client secret",
-      client.hasEfiClientSecret,
-      form.efiClientSecret,
-    );
-    addSecretChange(
-      "Senha certificado Efi",
-      client.hasEfiCertificatePassword,
-      form.efiCertificatePassword,
-    );
-    if (form.efiCertificateBase64) {
-      changes.push({
-        label: "Certificado Efi",
-        current: client.hasEfiCertificate ? "Protegido" : "Vazio",
-        next: certificateFileName ?? "Novo certificado selecionado",
-        sensitive: true,
-      });
-    }
 
     return changes;
   }
@@ -719,62 +539,13 @@ export default function AdminClientsPage() {
     }
   }
 
-  async function handleCertificateChange(
-    event: ChangeEvent<HTMLInputElement>,
-  ): Promise<void> {
-    const file = event.target.files?.[0];
-    setError(null);
-    setMessage(null);
-
-    if (!file) {
-      setCertificateFileName(null);
-      setForm((current) => ({ ...current, efiCertificateBase64: "" }));
-      return;
-    }
-
-    setIsReadingCertificate(true);
-
-    try {
-      const certificateBase64 = await readCertificateFileAsBase64(file);
-      setCertificateFileName(file.name);
-      setForm((current) => ({
-        ...current,
-        efiCertificateBase64: certificateBase64,
-      }));
-    } catch (readError: unknown) {
-      event.target.value = "";
-      setCertificateFileName(null);
-      setForm((current) => ({ ...current, efiCertificateBase64: "" }));
-      setError(
-        getErrorMessage(readError, "Nao foi possivel carregar o certificado."),
-      );
-    } finally {
-      setIsReadingCertificate(false);
-    }
-  }
-
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setError(null);
     setMessage(null);
 
-    if (isReadingCertificate) {
-      setError("Aguarde a leitura do certificado antes de salvar o cliente.");
-      return;
-    }
-
     if (editingClient) {
       prepareUpdateConfirmation();
-      return;
-    }
-
-    if (canSubmitEfi && !form.efiCertificateBase64) {
-      setError("Envie o certificado Efí antes de cadastrar a conta do cliente.");
-      return;
-    }
-
-    if (canSubmitEfi && !form.efiCertificatePassword) {
-      setError("Informe a senha do certificado Efí.");
       return;
     }
 
@@ -795,88 +566,27 @@ export default function AdminClientsPage() {
       billing: {
         enabledBillingMethods: form.enabledBillingMethods,
         preferredBillingMethod: form.preferredBillingMethod,
-        onTimeSplitPercentageBps: percentToBps(form.onTimeSplitPercentage),
-        overdueSplitPercentageBps: percentToBps(form.overdueSplitPercentage),
       },
     };
 
     if (
-      form.metaPhoneNumberId &&
-      form.metaBusinessAccountId &&
-      form.metaAccessToken
-    ) {
-      payload.meta = {
-        phoneNumberId: form.metaPhoneNumberId,
-        businessAccountId: form.metaBusinessAccountId,
-        accessToken: form.metaAccessToken,
-        businessPhoneNumber: form.metaBusinessPhoneNumber || undefined,
-        defaultLanguage: "pt_BR",
-      };
-    }
-
-    if (
-      form.resendApiKey.trim() ||
-      form.resendWebhookSecret.trim() ||
-      form.resendFromEmail.trim() ||
       form.erpApiKey.trim() ||
       form.erpWebhookUrl.trim() ||
       form.erpEnabledEvents.trim()
     ) {
       payload.integrations = {
-        resendFromEmail: form.resendFromEmail || null,
         erpWebhookUrl: form.erpWebhookUrl || null,
         erpEnabledEvents: parseEmailList(form.erpEnabledEvents),
       };
 
-      if (form.resendApiKey.trim()) {
-        payload.integrations.resendApiKey = form.resendApiKey;
-      }
-      if (form.resendWebhookSecret.trim()) {
-        payload.integrations.resendWebhookSecret = form.resendWebhookSecret;
-      }
       if (form.erpApiKey.trim()) {
         payload.integrations.erpApiKey = form.erpApiKey;
       }
     }
 
-    if (canSubmitEfi) {
-      payload.efi = {
-        corporateName: form.corporateName,
-        cnpj: form.document,
-        email: form.email,
-        phoneNumber: form.phoneNumber,
-        legalRepresentative: form.legalRepresentative,
-        legalRepresentativeCpf: form.legalRepresentativeCpf,
-        legalRepresentativeBirthDate: form.legalRepresentativeBirthDate,
-        postalCode: form.postalCode,
-        street: form.street,
-        number: form.number,
-        district: form.district,
-        city: form.city,
-        state: form.state.toUpperCase(),
-        bankName: form.bankName,
-        bankAgency: form.bankAgency,
-        bankAccount: form.bankAccount,
-        bankAccountDigit: form.bankAccountDigit,
-        bankAccountType: "CHECKING",
-        environment: "homologation",
-        efiClientId: form.efiClientId,
-        efiClientSecret: form.efiClientSecret,
-        efiPayeeCode: form.efiPayeeCode,
-        efiAccountNumber: form.efiAccountNumber,
-        efiAccountDigit: form.efiAccountDigit,
-        efiPixKey: form.efiPixKey,
-        efiCertificatePath: "",
-        efiCertificatePassword: form.efiCertificatePassword,
-        efiCertificateBase64: form.efiCertificateBase64,
-        gatewayStatus: "ACTIVE",
-      };
-    }
-
     try {
       const result = await apiClient.createAdminClient(payload);
       setForm(initialForm);
-      setCertificateFileName(null);
       setMessage("Cliente cadastrado.");
       setTemporaryAccess({
         password: result.temporaryPassword,
@@ -1026,10 +736,7 @@ export default function AdminClientsPage() {
                             .map(methodLabel)
                             .join(", ")}
                         </td>
-                        <td className="px-4 py-3 text-slate-700">
-                          <p>No prazo: {formatBps(client.onTimeSplitPercentageBps)}</p>
-                          <p>Recuperada: {formatBps(client.overdueSplitPercentageBps)}</p>
-                        </td>
+                        <td className="px-4 py-3 text-slate-700"><a href="/admin/payment-fees" className="text-emerald-700 underline">Consultar tarifas</a></td>
                         <td className="px-4 py-3 text-slate-700">
                           <p>{client.status}</p>
                           <p className="text-xs text-slate-500">
@@ -1128,12 +835,9 @@ export default function AdminClientsPage() {
                     ))}
                   </select>
                 </label>
-                <Input label="Taxa no prazo (%)" value={form.onTimeSplitPercentage} onChange={(value) => updateField("onTimeSplitPercentage", value)} required />
-                <Input label="Taxa recuperada (%)" value={form.overdueSplitPercentage} onChange={(value) => updateField("overdueSplitPercentage", value)} required />
               </div>
 
               <div className="grid gap-3 md:grid-cols-3">
-                <Input label="Status gateway" value={form.gatewayStatus} onChange={(value) => updateField("gatewayStatus", value)} />
                 <Input label="Descontos por devedor" value={form.maxDiscountsPerDebtor} onChange={(value) => updateField("maxDiscountsPerDebtor", value)} />
                 <Input label="Dia gatilho desconto" value={form.discountTriggerDay} onChange={(value) => updateField("discountTriggerDay", value)} />
                 <Input label="Dias da regua" value={form.collectionReminderDays} onChange={(value) => updateField("collectionReminderDays", value)} />
@@ -1268,72 +972,12 @@ export default function AdminClientsPage() {
                     ))}
                   </select>
                 </label>
-                <Input label="Meta phone number ID" value={form.metaPhoneNumberId} onChange={(value) => updateField("metaPhoneNumberId", value)} />
-                <Input label="Meta business account ID" value={form.metaBusinessAccountId} onChange={(value) => updateField("metaBusinessAccountId", value)} />
-                <Input label="Meta token" type="password" value={form.metaAccessToken} onChange={(value) => updateField("metaAccessToken", value)} placeholder={isEditing ? "Mantem token atual se vazio" : undefined} />
-                <Input label="WhatsApp comercial" value={form.metaBusinessPhoneNumber} onChange={(value) => updateField("metaBusinessPhoneNumber", value)} />
-                <Input label="Idioma Meta" value={form.metaDefaultLanguage} onChange={(value) => updateField("metaDefaultLanguage", value)} />
               </div>
 
               <div className="grid gap-3 md:grid-cols-2">
-                <Input label="Resend API key" type="password" value={form.resendApiKey} onChange={(value) => updateField("resendApiKey", value)} placeholder={isEditing ? "Mantem chave atual se vazio" : undefined} />
-                <Input label="Resend webhook signing secret" type="password" value={form.resendWebhookSecret} onChange={(value) => updateField("resendWebhookSecret", value)} placeholder={isEditing ? "Mantem secret atual se vazio" : "whsec_..."} />
-                <Input label="E-mail remetente Resend" type="email" value={form.resendFromEmail} onChange={(value) => updateField("resendFromEmail", value)} />
                 <Input label="ERP API key" type="password" value={form.erpApiKey} onChange={(value) => updateField("erpApiKey", value)} placeholder={isEditing ? "Mantem chave atual se vazio" : undefined} />
                 <Input label="ERP webhook URL" value={form.erpWebhookUrl} onChange={(value) => updateField("erpWebhookUrl", value)} />
                 <Input label="Eventos ERP" value={form.erpEnabledEvents} onChange={(value) => updateField("erpEnabledEvents", value)} />
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <label className="flex flex-col gap-1.5">
-                  <span className="text-xs font-semibold uppercase text-slate-500">
-                    Ambiente Efí
-                  </span>
-                  <select
-                    value={form.efiEnvironment}
-                    onChange={(event) =>
-                      updateField(
-                        "efiEnvironment",
-                        event.target.value as "homologation" | "production",
-                      )
-                    }
-                    className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                  >
-                    <option value="homologation">homologation</option>
-                    <option value="production">production</option>
-                  </select>
-                </label>
-                <Input label="Status conta Efí" value={form.efiGatewayStatus} onChange={(value) => updateField("efiGatewayStatus", value as ClientFormState["efiGatewayStatus"])} />
-                <Input label="Efí client ID" value={form.efiClientId} onChange={(value) => updateField("efiClientId", value)} placeholder={isEditing ? "Mantem client ID atual se vazio" : undefined} />
-                <Input label="Efí client secret" type="password" value={form.efiClientSecret} onChange={(value) => updateField("efiClientSecret", value)} placeholder={isEditing ? "Mantem secret atual se vazio" : undefined} />
-                <Input label="Efí payee code" value={form.efiPayeeCode} onChange={(value) => updateField("efiPayeeCode", value)} />
-                <Input label="Senha do certificado" type="password" value={form.efiCertificatePassword} onChange={(value) => updateField("efiCertificatePassword", value)} required={!isEditing && canSubmitEfi} placeholder={isEditing ? "Mantem senha atual se vazio" : undefined} />
-                <Input label="Chave Pix" value={form.efiPixKey} onChange={(value) => updateField("efiPixKey", value)} />
-                <Input label="Conta Efí" value={form.efiAccountNumber} onChange={(value) => updateField("efiAccountNumber", value)} />
-                <Input label="Digito conta Efí" value={form.efiAccountDigit} onChange={(value) => updateField("efiAccountDigit", value)} />
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                <label className="flex flex-col gap-1.5">
-                  <span className="text-xs font-semibold uppercase text-slate-500">
-                    Certificado Efí
-                  </span>
-                  <input
-                    required={!isEditing && canSubmitEfi && !form.efiCertificateBase64}
-                    type="file"
-                    accept={CERTIFICATE_ACCEPT}
-                    disabled={isSaving || isReadingCertificate}
-                    onChange={(event) => {
-                      void handleCertificateChange(event);
-                    }}
-                    className="block h-10 w-full rounded-md border border-slate-300 bg-white text-sm text-slate-900 outline-none transition file:mr-4 file:h-full file:border-0 file:bg-slate-100 file:px-4 file:text-sm file:font-semibold file:text-slate-700 hover:file:bg-slate-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-100 disabled:text-slate-500"
-                  />
-                </label>
-
-                <CertificateStatus
-                  fileName={certificateFileName}
-                  isReading={isReadingCertificate}
-                />
               </div>
 
               <div className="grid gap-3 md:grid-cols-2">
@@ -1354,19 +998,15 @@ export default function AdminClientsPage() {
 
               <button
                 type="submit"
-                disabled={isSaving || isReadingCertificate}
+                disabled={isSaving}
                 className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {isReadingCertificate ? (
-                  <Loader2 className="animate-spin" size={16} />
-                ) : isEditing ? (
+                {isEditing ? (
                   <Pencil size={16} />
                 ) : (
                   <Plus size={16} />
                 )}
-                {isReadingCertificate
-                  ? "Lendo certificado"
-                  : isSaving
+                {isSaving
                     ? "Salvando..."
                     : isEditing
                       ? "Salvar alteracoes"
@@ -1390,7 +1030,6 @@ export default function AdminClientsPage() {
     </main>
   );
 }
-
 function ConfirmationModal({
   changes,
   isSaving,
@@ -1468,46 +1107,6 @@ function ConfirmationModal({
             {isSaving ? "Salvando..." : "Confirmar"}
           </button>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function CertificateStatus({
-  fileName,
-  isReading,
-}: {
-  fileName: string | null;
-  isReading: boolean;
-}) {
-  const hasCertificate = Boolean(fileName);
-  const statusClass = hasCertificate
-    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-    : "border-amber-200 bg-amber-50 text-amber-700";
-  const statusText = fileName
-    ? `Novo certificado selecionado: ${fileName}`
-    : "Nenhum certificado selecionado";
-
-  return (
-    <div
-      className={`flex min-h-10 items-start gap-3 rounded-md border p-3 text-sm ${statusClass}`}
-    >
-      {isReading ? (
-        <Loader2 className="mt-0.5 shrink-0 animate-spin" size={17} />
-      ) : hasCertificate ? (
-        <FileCheck2 className="mt-0.5 shrink-0" size={17} />
-      ) : (
-        <Upload className="mt-0.5 shrink-0" size={17} />
-      )}
-      <div className="min-w-0">
-        <p className="break-words font-semibold">
-          {isReading ? "Lendo certificado" : statusText}
-        </p>
-        <p className="mt-0.5 text-xs leading-5">
-          {hasCertificate
-            ? "O arquivo sera enviado protegido para o backend."
-            : "Selecione o arquivo .p12 ou .pfx da Efí."}
-        </p>
       </div>
     </div>
   );

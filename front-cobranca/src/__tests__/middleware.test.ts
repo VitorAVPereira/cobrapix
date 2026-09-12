@@ -35,11 +35,9 @@ jest.mock("next/server", () => ({
       kind: "redirect",
       url: url.toString(),
     })),
-    next: jest.fn(
-      (): MockMiddlewareResult => ({
-        kind: "next",
-      }),
-    ),
+    next: jest.fn((): MockMiddlewareResult => ({
+      kind: "next",
+    })),
     json: jest.fn(
       (body: unknown, init?: ResponseInit): MockMiddlewareResult => ({
         body,
@@ -51,7 +49,8 @@ jest.mock("next/server", () => ({
 }));
 
 jest.mock("@/lib/auth", () => ({
-  auth: (handler: MockMiddlewareHandler) =>
+  auth:
+    (handler: MockMiddlewareHandler) =>
     (request: MockMiddlewareRequest): MockMiddlewareResult =>
       handler(request),
 }));
@@ -83,6 +82,15 @@ function runMiddleware(request: MockMiddlewareRequest): MockMiddlewareResult {
 }
 
 describe("middleware", () => {
+  it("allows the platform bootstrap administrator to change the temporary password", () => {
+    expect(
+      runMiddleware(
+        createRequest("/primeiro-acesso", "PLATFORM_ADMIN", {
+          mustChangePassword: true,
+        }),
+      ),
+    ).toEqual({ kind: "next" });
+  });
   beforeEach(() => {
     jest.clearAllMocks();
   });
@@ -104,6 +112,33 @@ describe("middleware", () => {
     expect(result).toEqual({
       kind: "redirect",
       url: "http://localhost:3000/login?sessionExpired=1",
+    });
+  });
+});
+
+describe("financial onboarding route authorization", () => {
+  it.each([
+    "/admin/efi-onboarding",
+    "/admin/payment-fees",
+    "/admin/communications",
+    "/admin/templates",
+  ])("permits platform admins and rejects tenant access to %s", (path) => {
+    expect(runMiddleware(createRequest(path, "PLATFORM_ADMIN"))).toEqual({
+      kind: "next",
+    });
+    expect(runMiddleware(createRequest(path, "COMPANY_ADMIN"))).toEqual({
+      kind: "redirect",
+      url: "http://localhost:3000/",
+    });
+  });
+  it("sends the legacy bank connection link to the automated assistant", () => {
+    expect(
+      runMiddleware(
+        createRequest("/configuracoes/conecte-seu-banco", "COMPANY_ADMIN"),
+      ),
+    ).toEqual({
+      kind: "redirect",
+      url: "http://localhost:3000/onboarding/efi",
     });
   });
 });

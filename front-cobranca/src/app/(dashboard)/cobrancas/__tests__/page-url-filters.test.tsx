@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import CobrancasPage from "../page";
 
 const getInvoices = jest.fn();
@@ -60,8 +60,6 @@ describe("CobrancasPage URL filters", () => {
       autoDiscountEnabled: false,
       autoDiscountDaysAfterDue: null,
       autoDiscountPercentage: null,
-      onTimeSplitPercentageBps: 350,
-      overdueSplitPercentageBps: 1200,
       businessSegment: "GENERAL",
       paymentNotificationEnabled: true,
       paymentNotificationEmails: [],
@@ -83,5 +81,27 @@ describe("CobrancasPage URL filters", () => {
     expect(
       screen.getByText(/filtradas pelo cliente selecionado/i),
     ).toBeInTheDocument();
+  });
+
+  it("keeps Bolix as default and hides traditional Boleto even with legacy settings", async () => {
+    getBillingSettings.mockResolvedValueOnce({
+      preferredBillingMethod: "BOLETO",
+      enabledBillingMethods: ["PIX", "BOLETO", "BOLIX"],
+      collectionReminderDays: [0],
+      autoGenerateFirstCharge: false,
+      autoDiscountEnabled: false,
+      autoDiscountDaysAfterDue: null,
+      autoDiscountPercentage: null,
+      businessSegment: "GENERAL",
+      paymentNotificationEnabled: true,
+      paymentNotificationEmails: [],
+      tariffs: {},
+    });
+    render(<CobrancasPage />);
+    await waitFor(() => expect(getBillingSettings).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: /Adicionar Manual/i }));
+    expect(screen.queryByRole("option", { name: /^Boleto$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Bolix/i })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Bolix/i }).closest("select")).toHaveValue("BOLIX");
   });
 });

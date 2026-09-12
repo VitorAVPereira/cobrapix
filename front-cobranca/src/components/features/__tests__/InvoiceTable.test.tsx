@@ -24,12 +24,14 @@ function buildInvoice(status: string): ParsedDebtor {
 function renderTable(options?: {
   data?: ParsedDebtor[];
   onCancelInvoice?: jest.Mock;
+  canIssue?: boolean;
 }): void {
   const data = options?.data ?? [buildInvoice("PENDING")];
   const pagination: PaginationState = { pageIndex: 0, pageSize: 20 };
 
   render(
     <InvoiceTable
+      canIssue={options?.canIssue}
       data={data}
       pageCount={1}
       total={data.length}
@@ -53,7 +55,9 @@ function getEnabledCancelButton(): HTMLButtonElement {
   const buttons = screen.getAllByRole("button", {
     name: /cancelar cobrança/i,
   });
-  const enabledButton = buttons.find((button) => !button.hasAttribute("disabled"));
+  const enabledButton = buttons.find(
+    (button) => !button.hasAttribute("disabled"),
+  );
 
   if (!(enabledButton instanceof HTMLButtonElement)) {
     throw new Error("Expected an enabled cancel button.");
@@ -82,7 +86,7 @@ describe("InvoiceTable cancel action", () => {
         status: "EXPIRED",
       },
     };
-    renderTable({ data: [invoice] });
+    renderTable({ data: [invoice], canIssue: true });
     const buttons = screen.getAllByRole("button", {
       name: "Substituir cobrança vencida",
     });

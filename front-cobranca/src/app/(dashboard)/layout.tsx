@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Sidebar } from "@/components/ui/Sidebar";
 import { Menu } from "lucide-react";
+import { FinancialActivationProvider } from "@/components/features/FinancialActivation";
 
 export default function DashboardLayout({
   children,
@@ -29,7 +30,9 @@ export default function DashboardLayout({
           </span>
         </header>
 
-        <main className="flex-1 overflow-y-auto">{children}</main>
+        <main className="flex-1 overflow-y-auto">
+          <FinancialActivationProvider>{children}</FinancialActivationProvider>
+        </main>
       </div>
     </div>
   );

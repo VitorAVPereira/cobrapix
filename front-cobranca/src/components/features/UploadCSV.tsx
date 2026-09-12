@@ -57,10 +57,6 @@ function normalizePaymentMethod(value: string): PaymentMethod | null {
     return "PIX";
   }
 
-  if (normalized === "BOLETO") {
-    return "BOLETO";
-  }
-
   if (normalized === "BOLIX") {
     return "BOLIX";
   }
@@ -171,7 +167,7 @@ export function parseInvoiceCsvRows(
     const formaPagamento = normalizePaymentMethod(formaPagamentoRaw);
     if (!formaPagamento) {
       throw new Error(
-        `Linha ${index + 2}: Forma de pagamento invalida. Use PIX, BOLETO ou BOLIX.`,
+        `Linha ${index + 2}: Forma de pagamento invalida. Use PIX ou BOLIX.`,
       );
     }
 
