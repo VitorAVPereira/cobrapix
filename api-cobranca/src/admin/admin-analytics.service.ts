@@ -3,7 +3,6 @@ import {
   CollectionAttemptStatus,
   CollectionChannel,
   CompanyStatus,
-  InvoiceStatus,
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -336,7 +335,9 @@ export class AdminAnalyticsService {
       const metrics = metricsByCompany.get(companyId);
       if (!metrics || ticket.count === 0) continue;
 
-      metrics.averageTicketAmount = this.roundMoney(ticket.total / ticket.count);
+      metrics.averageTicketAmount = this.roundMoney(
+        ticket.total / ticket.count,
+      );
     }
   }
 

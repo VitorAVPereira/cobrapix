@@ -166,7 +166,7 @@ export class ThrottleGuard implements CanActivate, OnModuleDestroy {
 
       if (result.remainingPoints <= 1) {
         this.logger.warn(
-          `Rate limit proximo em ${config.keyPrefix} para ${key}: ${result.remainingPoints} restantes`,
+          `Rate limit proximo em ${config.keyPrefix}: ${result.remainingPoints} restantes`,
         );
       }
 

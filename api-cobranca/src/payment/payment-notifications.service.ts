@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PaymentNotificationStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { PaymentCryptoService } from './payment-crypto.service';
+import { ConfigService } from '@nestjs/config';
 import {
   formatResendFromAddress,
   ResendMailerService,
@@ -28,8 +28,6 @@ interface PaidInvoiceRecord {
     email: string;
     paymentNotificationEnabled: boolean;
     paymentNotificationEmails: string[];
-    resendApiKeyEncrypted: string | null;
-    resendFromEmail: string | null;
   };
 }
 
@@ -90,7 +88,7 @@ export class PaymentNotificationsService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly crypto: PaymentCryptoService,
+    private readonly config: ConfigService,
     private readonly resendMailer: ResendMailerService,
   ) {}
 
@@ -116,8 +114,6 @@ export class PaymentNotificationsService {
             email: true,
             paymentNotificationEnabled: true,
             paymentNotificationEmails: true,
-            resendApiKeyEncrypted: true,
-            resendFromEmail: true,
           },
         },
       },
@@ -290,23 +286,17 @@ export class PaymentNotificationsService {
       throw new Error('Nenhum destinatario configurado para alerta.');
     }
 
-    if (!invoice.company.resendApiKeyEncrypted) {
-      throw new Error('Resend API key nao configurada para esta empresa.');
-    }
-
-    if (!invoice.company.resendFromEmail) {
-      throw new Error('Remetente Resend nao configurado para esta empresa.');
-    }
-
-    const apiKey = this.crypto.decrypt(invoice.company.resendApiKeyEncrypted);
+    const apiKey = this.config.getOrThrow<string>('RESEND_API_KEY');
     const fromEmail = formatResendFromAddress(
-      invoice.company.corporateName,
-      invoice.company.resendFromEmail,
+      'CifraMais',
+      this.config.getOrThrow<string>('RESEND_FROM_EMAIL'),
     );
 
     await this.resendMailer.sendEmail({
       apiKey,
       from: fromEmail,
+      replyTo: this.config.getOrThrow<string>('RESEND_REPLY_TO'),
+      idempotencyKey: 'payment-confirmed-' + invoice.id,
       to: recipients,
       subject: this.buildEmailSubject(invoice),
       html: this.buildPaymentEmailHtml(invoice, paidAt),

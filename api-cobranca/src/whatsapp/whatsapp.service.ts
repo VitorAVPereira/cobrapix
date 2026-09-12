@@ -1,3 +1,4 @@
+import { assertChannelAvailable } from '../communications/channel-availability';
 import {
   ForbiddenException,
   HttpException,
@@ -72,9 +73,10 @@ interface SendTemplateMessageInput {
 }
 
 interface SendTextMessageInput {
-  companyId: string;
+  companyId: string | null;
   phoneNumber: string;
   text: string;
+  recordHistory?: boolean;
 }
 
 interface CreateOfficialTemplateInput {
@@ -286,6 +288,7 @@ export class WhatsappService {
   async sendTemplateMessage(
     input: SendTemplateMessageInput,
   ): Promise<{ messageId: string; status: string | null }> {
+    await assertChannelAvailable(this.prisma, 'META');
     const phoneNumberId = this.requireConfig('META_PHONE_NUMBER_ID');
     const accessToken = this.requireConfig('META_ACCESS_TOKEN');
 
@@ -346,15 +349,21 @@ export class WhatsappService {
       throw new Error('Meta Cloud API nao retornou ID da mensagem.');
     }
 
-    await this.recordOutbound({
-      companyId: input.companyId,
-      invoiceId: input.invoiceId,
-      debtorId: input.debtorId,
-      phoneNumber: input.phoneNumber,
-      content: input.content ?? `Template: ${input.templateName}`,
-      externalMessageId: message.id,
-      status: message.message_status ?? null,
-    });
+    try {
+      await this.recordOutbound({
+        companyId: input.companyId,
+        invoiceId: input.invoiceId,
+        debtorId: input.debtorId,
+        phoneNumber: input.phoneNumber,
+        content: input.content ?? `Template: ${input.templateName}`,
+        externalMessageId: message.id,
+        status: message.message_status ?? null,
+      });
+    } catch {
+      this.logger.error(
+        `Falha ao persistir historico WhatsApp aceito (${message.id})`,
+      );
+    }
 
     return {
       messageId: message.id,
@@ -365,6 +374,7 @@ export class WhatsappService {
   async sendTextMessage(
     input: SendTextMessageInput,
   ): Promise<{ messageId: string; status: string | null }> {
+    await assertChannelAvailable(this.prisma, 'META');
     const phoneNumberId = this.requireConfig('META_PHONE_NUMBER_ID');
     const accessToken = this.requireConfig('META_ACCESS_TOKEN');
 
@@ -391,13 +401,20 @@ export class WhatsappService {
       throw new Error('Meta Cloud API nao retornou ID da mensagem.');
     }
 
-    await this.recordOutbound({
-      companyId: input.companyId,
-      phoneNumber: input.phoneNumber,
-      content: input.text,
-      externalMessageId: message.id,
-      status: message.message_status ?? null,
-    });
+    if (input.recordHistory !== false)
+      try {
+        await this.recordOutbound({
+          companyId: input.companyId,
+          phoneNumber: input.phoneNumber,
+          content: input.text,
+          externalMessageId: message.id,
+          status: message.message_status ?? null,
+        });
+      } catch {
+        this.logger.error(
+          `Falha ao persistir historico WhatsApp aceito (${message.id})`,
+        );
+      }
 
     return {
       messageId: message.id,
@@ -668,7 +685,7 @@ export class WhatsappService {
   }
 
   private async recordOutbound(input: {
-    companyId: string;
+    companyId: string | null;
     invoiceId?: string;
     debtorId?: string;
     phoneNumber: string;
@@ -775,6 +792,9 @@ export class WhatsappService {
   }
 
   private mapGraphErrorStatus(status: number): HttpStatus {
+    if (status === 429 || status >= 500) {
+      return status as HttpStatus;
+    }
     if (status >= 400 && status < 500) {
       return HttpStatus.BAD_REQUEST;
     }

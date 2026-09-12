@@ -72,12 +72,15 @@ export class WebhooksService {
     return this.efiService.handlePixWebhook(payload);
   }
 
-  async handleEfiChargesWebhook(payload: unknown): Promise<{
+  async handleEfiChargesWebhook(
+    payload: unknown,
+    companyId?: string,
+  ): Promise<{
     processed: boolean;
     invoiceId?: string;
     status?: string;
   }> {
-    return this.efiService.handleChargesWebhook(payload);
+    return this.efiService.handleChargesWebhook(payload, companyId);
   }
 
   verifyMetaWebhook(params: {

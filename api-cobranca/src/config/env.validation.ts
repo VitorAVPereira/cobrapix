@@ -37,6 +37,7 @@ export const envSchema = z
       .min(32, 'JWT_SECRET deve ter pelo menos 32 caracteres'),
     FRONTEND_URL: z.string().url().default('http://localhost:3000'),
     EFI_ENV: z.enum(['homologation', 'production']).default('homologation'),
+    EFI_LEGAL_APPROVED: z.enum(['true', 'false']).default('false'),
     EFI_OPENING_CLIENT_ID: z.string().min(1).optional(),
     EFI_OPENING_CLIENT_SECRET: z.string().min(1).optional(),
     EFI_OPENING_CERT_PATH: z.string().min(1).optional(),
@@ -65,6 +66,7 @@ export const envSchema = z
       .max(10000)
       .default(0),
     EFI_WEBHOOK_BASE_URL: z.string().url().optional(),
+    EFI_CHARGES_WEBHOOK_BASE_URL: z.string().url().optional(),
     EFI_WEBHOOK_SECRET: z
       .string()
       .min(32, 'EFI_WEBHOOK_SECRET deve ter pelo menos 32 caracteres'),
@@ -98,6 +100,7 @@ export const envSchema = z
       'EFI_OPENING_CLIENT_ID',
       'EFI_OPENING_CLIENT_SECRET',
       'EFI_OPENING_CERT_PATH',
+      'EFI_CHARGES_WEBHOOK_BASE_URL',
       'EFI_PLATFORM_CLIENT_ID',
       'EFI_PLATFORM_CLIENT_SECRET',
       'EFI_PLATFORM_CERT_PATH',
@@ -119,6 +122,7 @@ export const envSchema = z
       }
       for (const field of [
         'EFI_WEBHOOK_BASE_URL',
+        'EFI_CHARGES_WEBHOOK_BASE_URL',
         'META_WEBHOOK_BASE_URL',
       ] as const) {
         if (env[field] && !env[field].startsWith('https://'))

@@ -34,6 +34,7 @@ function buildValidConfig(
       EFI_PLATFORM_ACCOUNT_NUMBER: '12345',
       EFI_PLATFORM_CNPJ: '12345678000190',
       EFI_WEBHOOK_BASE_URL: 'https://efi.example.test',
+      EFI_CHARGES_WEBHOOK_BASE_URL: 'https://api.example.test',
       PAYMENT_ENCRYPTION_KEYS: JSON.stringify({ v1: '11'.repeat(32) }),
       PAYMENT_ACTIVE_KEY_VERSION: 'v1',
     },

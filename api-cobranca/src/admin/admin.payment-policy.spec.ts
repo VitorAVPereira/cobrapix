@@ -39,13 +39,16 @@ describe('AdminService payment method policy', () => {
     expect(companyUpdate).not.toHaveBeenCalled();
   });
 
-  it('rejects enabling historical boleto before consulting fees', async () => {
+  it('rejects enabling traditional boleto before looking up fees', async () => {
     const { service, resolveActiveVersion, companyUpdate } = fixture();
+    resolveActiveVersion.mockRejectedValue(
+      new Error('FEE_CONFIGURATION_MISSING'),
+    );
     await expect(
       service.updateClient('company-1', {
-        billing: { enabledBillingMethods: ['BOLETO' as never] },
+        billing: { enabledBillingMethods: ['BOLETO' as 'BOLIX'] },
       }),
-    ).rejects.toMatchObject({ status: 403 });
+    ).rejects.toThrow('Novas cobranças devem usar Pix ou Bolix.');
     expect(resolveActiveVersion).not.toHaveBeenCalled();
     expect(companyUpdate).not.toHaveBeenCalled();
   });

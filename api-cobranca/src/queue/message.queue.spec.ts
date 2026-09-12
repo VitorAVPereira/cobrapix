@@ -16,9 +16,11 @@ describe('MessageQueueService', () => {
       },
     ]);
 
-    const jobs = addBulk.mock.calls[0]?.[0] as
-      | Array<{ opts: { jobId: string } }>
-      | undefined;
+    const typedAddBulk = addBulk as jest.Mock<
+      Promise<unknown[]>,
+      [Array<{ opts: { jobId: string } }>]
+    >;
+    const jobs = typedAddBulk.mock.calls[0]?.[0];
 
     expect(jobs?.[0]?.opts.jobId).toBeDefined();
     expect(jobs?.[0]?.opts.jobId).not.toContain(':');

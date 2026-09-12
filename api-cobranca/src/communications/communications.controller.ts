@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   Patch,
+  Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -14,6 +15,11 @@ import type { AuthenticatedUser } from '../auth/auth.types';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CommunicationsService } from './communications.service';
 import { CommunicationsQueryDto } from './dto/communications-query.dto';
+import { IsEnum } from 'class-validator';
+import { ReplyConversationDto } from './dto/reply-conversation.dto';
+class ConversationStatusDto {
+  @IsEnum(ConversationStatus) status!: ConversationStatus;
+}
 
 @Controller('communications')
 @UseGuards(JwtAuthGuard)
@@ -44,8 +50,17 @@ export class CommunicationsController {
   @UseGuards(PlatformAdminGuard)
   updateStatus(
     @Param('id') id: string,
-    @Body('status') status: ConversationStatus,
+    @Body() body: ConversationStatusDto,
   ): Promise<unknown> {
-    return this.service.updateAdminStatus(id, status);
+    return this.service.updateAdminStatus(id, body.status);
+  }
+
+  @Post('admin/conversations/:id/replies')
+  @UseGuards(PlatformAdminGuard)
+  reply(
+    @Param('id') id: string,
+    @Body() body: ReplyConversationDto,
+  ): Promise<unknown> {
+    return this.service.replyToAdminConversation(id, body);
   }
 }

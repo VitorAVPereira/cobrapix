@@ -1,3 +1,4 @@
+import { assertChannelAvailable } from '../communications/channel-availability';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { CollectionAttemptStatus, InvoiceStatus, Prisma } from '@prisma/client';
@@ -79,6 +80,7 @@ export class EmailService {
       select: { id: true },
     });
     if (!company) throw new Error('Empresa nao encontrada.');
+    await assertChannelAvailable(this.prisma, 'RESEND');
     const apiKey = this.requireConfig('RESEND_API_KEY');
     const fromEmail = this.requireConfig('RESEND_FROM_EMAIL');
     const replyTo = this.requireConfig('RESEND_REPLY_TO');

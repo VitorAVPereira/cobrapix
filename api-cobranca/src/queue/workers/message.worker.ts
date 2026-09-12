@@ -75,6 +75,7 @@ interface InitialChargeInvoice {
   };
   company: {
     corporateName: string;
+    tradeName: string | null;
     preferredBillingMethod: BillingMethod;
     autoGenerateFirstCharge: boolean;
     whatsappStatus: string;
@@ -105,6 +106,9 @@ interface MessageTemplateRecord {
   metaLanguage: string;
   metaStatus: string;
   paymentButtonEnabled: boolean;
+  greeting: string;
+  instructions: string;
+  signature: string;
 }
 
 @Injectable()
@@ -354,7 +358,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
           boletoLink: true,
           billingType: true,
           debtor: { select: { name: true } },
-          company: { select: { corporateName: true } },
+          company: { select: { corporateName: true, tradeName: true } },
         },
       });
 
@@ -379,7 +383,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
 
       const html = this.emailService.buildCollectionEmailHtml({
         debtorName: invoice.debtor.name,
-        companyName: invoice.company.corporateName,
+        companyName: invoice.company.tradeName ?? invoice.company.corporateName,
         amount,
         dueDate,
         paymentMethod: method,
@@ -409,7 +413,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         debtorId: data.debtorId,
         debtorName: data.debtorName,
         email: debtor.email,
-        subject: `[${invoice.company.corporateName}] Cobranca pendente`,
+        subject: `[${invoice.company.tradeName ?? invoice.company.corporateName}] Cobranca pendente`,
         html,
         ruleStepId: data.ruleStepId,
       });
@@ -576,15 +580,15 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       debtorName: invoice.debtor.name,
       originalAmount: Number(invoice.originalAmount),
       dueDate: invoice.dueDate,
-      companyName: invoice.company.corporateName,
+      companyName: invoice.company.tradeName ?? invoice.company.corporateName,
       paymentData,
     });
     let queuedCount = 0;
 
     if (channels.includes('WHATSAPP')) {
       if (
-        invoice.company.whatsappStatus !== 'CONNECTED' ||
-        !invoice.company.metaPhoneNumberId
+        !this.configService.get<string>('META_ACCESS_TOKEN') ||
+        !this.configService.get<string>('META_PHONE_NUMBER_ID')
       ) {
         await this.createCollectionLog(
           invoice.companyId,
@@ -604,6 +608,9 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
             'SKIPPED',
           );
         } else {
+          replacements.saudacao = template.greeting;
+          replacements.instrucoes = template.instructions;
+          replacements.assinatura = template.signature;
           const phoneNumber = this.normalizePhone(invoice.debtor.phoneNumber);
           const templateParameters =
             this.whatsappService.buildTemplateParameters(
@@ -617,7 +624,8 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
             debtorName: invoice.debtor.name,
             originalAmount: Number(invoice.originalAmount),
             dueDate: invoice.dueDate,
-            companyName: invoice.company.corporateName,
+            companyName:
+              invoice.company.tradeName ?? invoice.company.corporateName,
             paymentData,
           });
 
@@ -626,7 +634,9 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
             companyId: invoice.companyId,
             debtorId: invoice.debtor.id,
             phoneNumber,
-            senderKey: invoice.company.metaPhoneNumberId,
+            senderKey: this.configService.getOrThrow<string>(
+              'META_PHONE_NUMBER_ID',
+            ),
             templateName,
             templateLanguage: template.metaLanguage,
             templateParameters,
@@ -665,26 +675,33 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
             invoice.companyId,
             null,
           );
+        const personalizedEmailContent = emailTemplate.content
+          .replace(/{{\s*saudacao\s*}}/g, emailTemplate.greeting)
+          .replace(/{{\s*instrucoes\s*}}/g, emailTemplate.instructions)
+          .replace(/{{\s*assinatura\s*}}/g, emailTemplate.signature);
         const subject = this.buildTemplateText(emailTemplate.subject, {
           debtorName: invoice.debtor.name,
           originalAmount: Number(invoice.originalAmount),
           dueDate: invoice.dueDate,
-          companyName: invoice.company.corporateName,
+          companyName:
+            invoice.company.tradeName ?? invoice.company.corporateName,
           paymentData,
         });
         const bodyText = this.ensurePaymentInstruction(
-          this.buildTemplateText(emailTemplate.content, {
+          this.buildTemplateText(personalizedEmailContent, {
             debtorName: invoice.debtor.name,
             originalAmount: Number(invoice.originalAmount),
             dueDate: invoice.dueDate,
-            companyName: invoice.company.corporateName,
+            companyName:
+              invoice.company.tradeName ?? invoice.company.corporateName,
             paymentData,
           }),
           paymentData,
         );
         const html = this.emailService.buildCollectionEmailHtml({
           debtorName: invoice.debtor.name,
-          companyName: invoice.company.corporateName,
+          companyName:
+            invoice.company.tradeName ?? invoice.company.corporateName,
           amount: new Intl.NumberFormat('pt-BR', {
             style: 'currency',
             currency: 'BRL',
@@ -770,6 +787,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         company: {
           select: {
             corporateName: true,
+            tradeName: true,
             preferredBillingMethod: true,
             autoGenerateFirstCharge: true,
             whatsappStatus: true,
@@ -875,9 +893,8 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     const candidateSlugs = Array.from(
       new Set([targetSlug, 'vencimento-hoje', 'cobranca-emissao']),
     );
-    const templates = await this.prisma.messageTemplate.findMany({
+    const templates = await this.prisma.globalMessageTemplate.findMany({
       where: {
-        companyId: invoice.companyId,
         slug: { in: candidateSlugs },
         isActive: true,
         metaStatus: 'APPROVED',
@@ -891,15 +908,44 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         paymentButtonEnabled: true,
       },
     });
-    const templatesBySlug = new Map(
-      templates.map((template) => [template.slug, template]),
+    const preferences = await this.prisma.companyTemplatePreference.findMany({
+      where: {
+        companyId: invoice.companyId,
+        channel: 'WHATSAPP',
+        slug: { in: candidateSlugs },
+      },
+    });
+    const preferenceBySlug = new Map(
+      preferences.map((preference) => [preference.slug, preference]),
+    );
+    const templatesBySlug = new Map<string, MessageTemplateRecord>(
+      templates
+        .filter(
+          (template) => preferenceBySlug.get(template.slug)?.isActive !== false,
+        )
+        .map((template): [string, MessageTemplateRecord] => {
+          const preference = preferenceBySlug.get(template.slug);
+          return [
+            template.slug,
+            {
+              ...template,
+              greeting: preference?.greeting ?? 'Olá',
+              instructions:
+                preference?.instructions ??
+                'Use o botão abaixo para acessar o pagamento seguro.',
+              signature:
+                preference?.signature ??
+                `Equipe ${invoice.company.tradeName ?? invoice.company.corporateName}`,
+            },
+          ];
+        }),
     );
 
     return (
       templatesBySlug.get(targetSlug) ??
       templatesBySlug.get('vencimento-hoje') ??
       templatesBySlug.get('cobranca-emissao') ??
-      templates[0] ??
+      templatesBySlug.values().next().value ??
       null
     );
   }
@@ -1142,6 +1188,9 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       data_vencimento: dataFormatada,
       nome_devedor: params.debtorName,
       nome_empresa: params.companyName,
+      saudacao: 'Olá',
+      instrucoes: 'Use o botão abaixo para acessar o pagamento seguro.',
+      assinatura: `Equipe ${params.companyName}`,
     };
   }
 

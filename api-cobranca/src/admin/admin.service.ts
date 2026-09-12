@@ -172,6 +172,7 @@ export class AdminService {
   async createClient(
     dto: CreateAdminClientDto,
   ): Promise<CreateAdminClientResponse> {
+    this.rejectLegacyIntegrations(dto);
     await this.validateEnabledMethods('', dto.billing.enabledBillingMethods);
     const normalizedUserEmail = dto.firstUser.email.trim().toLowerCase();
     const existingUser = await this.prisma.user.findFirst({
@@ -257,6 +258,7 @@ export class AdminService {
     id: string,
     dto: UpdateAdminClientDto,
   ): Promise<AdminClientResponse> {
+    this.rejectLegacyIntegrations(dto);
     if (dto.billing?.enabledBillingMethods)
       await this.validateEnabledMethods(id, dto.billing.enabledBillingMethods);
     const company = await this.findClientOrThrow(id);
@@ -589,6 +591,35 @@ export class AdminService {
     }
 
     return data;
+  }
+
+  private rejectLegacyIntegrations(
+    dto: CreateAdminClientDto | UpdateAdminClientDto,
+  ): void {
+    const update = dto as UpdateAdminClientDto;
+    if (
+      dto.meta ||
+      dto.efi ||
+      update.whatsapp ||
+      update.company?.gatewayStatus !== undefined ||
+      dto.integrations?.resendApiKey !== undefined ||
+      dto.integrations?.resendWebhookSecret !== undefined ||
+      dto.integrations?.resendFromEmail !== undefined
+    ) {
+      throw new HttpException(
+        'Canais são centrais. Utilize a ativação financeira validada para a conta Efí.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (
+      dto.billing?.onTimeSplitPercentageBps !== undefined ||
+      dto.billing?.overdueSplitPercentageBps !== undefined
+    ) {
+      throw new HttpException(
+        'Utilize versões de tarifas por meio de pagamento.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
   }
 
   private async validateEnabledMethods(

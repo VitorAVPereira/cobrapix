@@ -1,3 +1,4 @@
+import { PaymentFeeService } from '../payment-fees/payment-fee.service';
 import { HttpStatus } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { AdminService } from './admin.service';
@@ -85,371 +86,117 @@ const baseCompanyRecord = {
   },
 };
 
-describe('AdminService', () => {
-  it('cria cliente com primeiro usuario, metodos, taxas e credenciais sem retornar segredos', async () => {
-    const companyCreate = jest.fn().mockResolvedValue({
-      id: 'company-1',
-      corporateName: 'Cliente Teste',
-      document: '11222333000181',
-      email: 'financeiro@cliente.com',
-      phoneNumber: '11999999999',
-      status: 'ACTIVE',
-      enabledBillingMethods: ['PIX', 'BOLETO'],
-      onTimeSplitPercentageBps: 350,
-      overdueSplitPercentageBps: 1200,
-      gatewayStatus: 'ACTIVE',
-      whatsappStatus: 'CONNECTED',
-      createdAt: new Date('2026-05-01T12:00:00.000Z'),
-      updatedAt: new Date('2026-05-01T12:00:00.000Z'),
-      users: [
-        {
-          id: 'user-1',
-          email: 'admin@cliente.com',
-          name: 'Admin Cliente',
-          role: UserRole.COMPANY_ADMIN,
-        },
-      ],
-      paymentGateway: {
-        id: 'gateway-1',
-        status: 'ACTIVE',
-        environment: 'homologation',
-      },
-    });
+describe('AdminService financial onboarding', () => {
+  function fixture(existingUser = false) {
     const prisma = {
       company: {
-        create: companyCreate,
+        create: jest.fn().mockResolvedValue(baseCompanyRecord),
+        findUnique: jest.fn().mockResolvedValue(baseCompanyRecord),
+        update: jest.fn(),
       },
       user: {
-        findFirst: jest.fn().mockResolvedValue(null),
+        findFirst: jest
+          .fn()
+          .mockResolvedValue(existingUser ? { id: 'user-1' } : null),
       },
-    } as unknown as PrismaService;
-    const configureMetaIntegration = jest
-      .fn()
-      .mockRejectedValue(new Error('provedor indisponível'));
-    const upsertManualGatewayAccount = jest.fn().mockResolvedValue(undefined);
+      gatewayAccount: { update: jest.fn() },
+    };
+    const fees = {
+      resolveActiveVersion: jest.fn().mockResolvedValue({ id: 'fee-1' }),
+    };
     const service = new AdminService(
-      prisma,
-      { configureMetaIntegration } as unknown as WhatsappService,
-      { upsertManualGatewayAccount } as unknown as EfiService,
-      {
-        encrypt: jest.fn(),
-        decrypt: jest.fn(),
-      } as unknown as PaymentCryptoService,
+      prisma as unknown as PrismaService,
+      {} as WhatsappService,
+      {} as EfiService,
+      {} as PaymentCryptoService,
+      fees as unknown as PaymentFeeService,
     );
-
-    const result = await service.createClient({
-      company: {
-        corporateName: 'Cliente Teste',
-        document: '11.222.333/0001-81',
-        email: 'financeiro@cliente.com',
-        phoneNumber: '(11) 99999-9999',
-        status: 'ACTIVE',
-      },
-      firstUser: {
-        name: 'Admin Cliente',
-        email: '  Admin@Cliente.COM ',
-      },
-      billing: {
-        enabledBillingMethods: ['PIX', 'BOLETO'],
-        preferredBillingMethod: 'PIX',
-        onTimeSplitPercentageBps: 350,
-        overdueSplitPercentageBps: 1200,
-      },
-      meta: {
-        phoneNumberId: '123',
-        businessAccountId: '456',
-        accessToken: 'meta-secret',
-        defaultLanguage: 'pt_BR',
-      },
-      efi: {
-        corporateName: 'Cliente Teste',
-        cnpj: '11222333000181',
-        email: 'financeiro@cliente.com',
-        phoneNumber: '11999999999',
-        legalRepresentative: 'Pessoa Responsavel',
-        legalRepresentativeCpf: '12345678901',
-        legalRepresentativeBirthDate: '1990-01-01',
-        postalCode: '01001000',
-        street: 'Rua Teste',
-        number: '100',
-        district: 'Centro',
-        city: 'Sao Paulo',
-        state: 'SP',
-        bankName: 'Banco Teste',
-        bankAgency: '0001',
-        bankAccount: '12345',
-        environment: 'homologation',
-        efiClientId: 'efi-client',
-        efiClientSecret: 'efi-secret',
-        efiPayeeCode: 'payee-1',
-        efiAccountNumber: '12345',
-        efiPixKey: 'pix-key',
-      },
-    });
-
-    expect(companyCreate).toHaveBeenCalledWith(
+    return { service, prisma, fees };
+  }
+  const input = {
+    company: {
+      corporateName: 'Cliente Teste',
+      document: '11.222.333/0001-81',
+      email: 'financeiro@cliente.com',
+      phoneNumber: '11999999999',
+    },
+    firstUser: { name: 'Admin', email: '  ADMIN@CLIENTE.COM ' },
+    billing: {
+      enabledBillingMethods: ['PIX' as const],
+      preferredBillingMethod: 'PIX' as const,
+    },
+  };
+  it('creates a company with temporary password and validates the tariff before enabling a method', async () => {
+    const { service, prisma, fees } = fixture();
+    const result = await service.createClient(input);
+    expect(fees.resolveActiveVersion).toHaveBeenCalledWith('', 'PIX');
+    expect(prisma.company.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
           document: '11222333000181',
-          enabledBillingMethods: ['PIX', 'BOLETO'],
-          onTimeSplitPercentageBps: 350,
-          overdueSplitPercentageBps: 1200,
           users: {
             create: expect.objectContaining({
               email: 'admin@cliente.com',
-              password: expect.stringMatching(/^\$2/) as string,
-              role: UserRole.COMPANY_ADMIN,
               mustChangePassword: true,
             }) as unknown,
           },
         }) as unknown,
       }),
     );
-    expect(configureMetaIntegration).toHaveBeenCalledWith(
-      'company-1',
-      expect.objectContaining({ accessToken: 'meta-secret' }),
-    );
-    expect(upsertManualGatewayAccount).toHaveBeenCalledWith(
-      'company-1',
-      expect.objectContaining({ efiClientSecret: 'efi-secret' }),
-    );
     expect(result.temporaryPassword).toMatch(/^[A-Za-z0-9_-]{12}$/);
-    expect(result.integrationWarnings).toEqual([
-      'Cliente criado, mas a integração com a Meta não pôde ser configurada.',
-    ]);
-    expect(result.client.id).toBe('company-1');
-    expect(JSON.stringify(result.client)).not.toContain('meta-secret');
-    expect(JSON.stringify(result.client)).not.toContain('efi-secret');
-  });
-
-  it('não cria login duplicado que difere apenas por maiúsculas', async () => {
-    const companyCreate = jest.fn();
-    const prisma = {
-      company: { create: companyCreate },
-      user: { findFirst: jest.fn().mockResolvedValue({ id: 'existing-user' }) },
-    } as unknown as PrismaService;
-    const service = new AdminService(
-      prisma,
-      { configureMetaIntegration: jest.fn() } as unknown as WhatsappService,
-      { upsertManualGatewayAccount: jest.fn() } as unknown as EfiService,
-      {
-        encrypt: jest.fn(),
-        decrypt: jest.fn(),
-      } as unknown as PaymentCryptoService,
+    expect(JSON.stringify(result.client)).not.toContain(
+      'encrypted-client-secret',
     );
-
-    await expect(
-      service.createClient({
-        company: {
-          corporateName: 'Cliente Duplicado',
-          document: '11222333000181',
-          email: 'financeiro@cliente.com',
-          phoneNumber: '11999999999',
-          status: 'ACTIVE',
-        },
-        firstUser: { name: 'Admin', email: 'ADMIN@CLIENTE.COM' },
-        billing: {
-          enabledBillingMethods: ['PIX'],
-          preferredBillingMethod: 'PIX',
-          onTimeSplitPercentageBps: 0,
-          overdueSplitPercentageBps: 0,
-        },
-      }),
-    ).rejects.toMatchObject({ status: HttpStatus.CONFLICT });
-    expect(companyCreate).not.toHaveBeenCalled();
   });
-
-  it('edita configuracoes completas do cliente e nao retorna segredos novos', async () => {
-    const companyFindUnique = jest
-      .fn()
-      .mockResolvedValueOnce(baseCompanyRecord)
-      .mockResolvedValueOnce({
-        ...baseCompanyRecord,
-        corporateName: 'Empresa Editada',
-        gatewayStatus: 'ACTIVE',
-        paymentNotificationEmails: ['financeiro@editada.com'],
-        resendFromEmail: 'cobranca@editada.com',
-      });
-    const companyUpdate = jest.fn().mockResolvedValue(undefined);
-    const gatewayAccountUpdate = jest.fn().mockResolvedValue(undefined);
-    const prisma = {
-      company: {
-        findUnique: companyFindUnique,
-        update: companyUpdate,
-      },
-      gatewayAccount: {
-        update: gatewayAccountUpdate,
-      },
-    } as unknown as PrismaService;
-    const encrypt = jest
-      .fn()
-      .mockImplementation((value: string) => `encrypted:${value}`);
-    const service = new AdminService(
-      prisma,
-      { configureMetaIntegration: jest.fn() } as unknown as WhatsappService,
-      { upsertManualGatewayAccount: jest.fn() } as unknown as EfiService,
-      { encrypt, decrypt: jest.fn() } as unknown as PaymentCryptoService,
-    );
-
-    const result = await service.updateClient('company-1', {
-      company: {
-        corporateName: 'Empresa Editada',
-        document: '12.345.678/0001-90',
-        email: 'financeiro@editada.com',
-        phoneNumber: '(11) 98888-7777',
-        gatewayStatus: 'ACTIVE',
-        legalRepresentative: 'Nova Pessoa',
-        legalRepresentativeCpf: '123.456.789-00',
-        legalRepresentativeBirthDate: '1991-02-03',
-        addressPostalCode: '01002-000',
-        addressStreet: 'Rua Editada',
-        addressNumber: '456',
-        addressDistrict: 'Bairro Editado',
-        addressCity: 'Campinas',
-        addressState: 'SP',
-        bankName: 'Banco Editado',
-        bankAgency: '0002',
-        bankAccount: '98765',
-        status: 'ACTIVE',
-      },
-      billing: {
-        enabledBillingMethods: ['PIX', 'BOLETO'],
-        preferredBillingMethod: 'BOLETO',
-        onTimeSplitPercentageBps: 250,
-        overdueSplitPercentageBps: 900,
-        maxDiscountsPerDebtor: 2,
-        discountTriggerDay: 10,
-        collectionReminderDays: [0, 3, 7],
-        autoGenerateFirstCharge: false,
-        autoDiscountEnabled: true,
-        autoDiscountDaysAfterDue: 5,
-        autoDiscountPercentage: 7.5,
-      },
-      notifications: {
-        businessSegment: 'EDUCATION',
-        paymentNotificationEnabled: true,
-        paymentNotificationEmails: ['financeiro@editada.com'],
-      },
-      whatsapp: {
-        whatsappStatus: 'CONNECTED',
-        metaPhoneNumberId: 'phone-edited',
-        metaBusinessAccountId: 'business-edited',
-        metaBusinessPhoneNumber: '551188887777',
-        metaDefaultLanguage: 'pt_BR',
-        messagingLimitTier: 'TIER_250',
-        metaAccessToken: 'new-meta-secret-token-with-more-than-forty-chars',
-      },
-      integrations: {
-        resendFromEmail: 'cobranca@editada.com',
-        resendApiKey: 'new-resend-secret',
-        resendWebhookSecret: 'whsec_new-resend-webhook-secret',
-        erpWebhookUrl: 'https://erp.editada/webhook',
-        erpEnabledEvents: ['invoice.paid'],
-        erpApiKey: 'new-erp-secret',
-      },
-      efi: {
-        environment: 'production',
-        status: 'ACTIVE',
-        efiPayeeCode: 'payee-editado',
-        efiAccountNumber: '98765',
-        efiAccountDigit: '0',
-        efiPixKey: 'pix-editado@empresa.com',
-        efiClientId: 'new-efi-client',
-        efiClientSecret: 'new-efi-secret',
-        efiCertificateBase64: 'bmV3LWNlcnQ=',
-        efiCertificatePassword: 'new-cert-password',
-      },
+  it('rejects a case-insensitive duplicate login', async () => {
+    const { service, prisma } = fixture(true);
+    await expect(service.createClient(input)).rejects.toMatchObject({
+      status: HttpStatus.CONFLICT,
     });
-
-    expect(companyUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'company-1' },
-        data: expect.objectContaining({
-          corporateName: 'Empresa Editada',
-          document: '12345678000190',
-          gatewayStatus: 'ACTIVE',
-          legalRepresentativeCpf: '12345678900',
-          addressPostalCode: '01002000',
-          paymentNotificationEmails: ['financeiro@editada.com'],
-          resendFromEmail: 'cobranca@editada.com',
-          resendApiKeyEncrypted: 'encrypted:new-resend-secret',
-          resendWebhookSecretEncrypted:
-            'encrypted:whsec_new-resend-webhook-secret',
-          erpApiKeyHash: expect.stringMatching(/^[a-f0-9]{64}$/) as string,
-        }) as unknown,
-      }),
-    );
-    expect(gatewayAccountUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { companyId: 'company-1' },
-        data: expect.objectContaining({
-          environment: 'production',
-          status: 'ACTIVE',
-          payeeCode: 'payee-editado',
-          encryptedClientSecret: 'encrypted:new-efi-secret',
-          encryptedCertificate: 'encrypted:bmV3LWNlcnQ=',
-          encryptedCertificatePassword: 'encrypted:new-cert-password',
-        }) as unknown,
-      }),
-    );
-    expect(result.hasMetaAccessToken).toBe(true);
-    expect(result.hasResendApiKey).toBe(true);
-    expect(result.hasResendWebhookSecret).toBe(true);
-    expect(result.hasErpApiKey).toBe(true);
-    expect(result.hasEfiClientSecret).toBe(true);
-    expect(JSON.stringify(result)).not.toContain('new-efi-secret');
-    expect(JSON.stringify(result)).not.toContain('new-meta-secret-token');
-    expect(JSON.stringify(result)).not.toContain('new-resend-secret');
-    expect(JSON.stringify(result)).not.toContain('whsec_new-resend-webhook');
+    expect(prisma.company.create).not.toHaveBeenCalled();
   });
-
-  it('mantem segredos existentes quando a edicao nao envia novos valores sensiveis', async () => {
-    const companyFindUnique = jest
-      .fn()
-      .mockResolvedValueOnce(baseCompanyRecord)
-      .mockResolvedValueOnce(baseCompanyRecord);
-    const companyUpdate = jest.fn().mockResolvedValue(undefined);
-    const gatewayAccountUpdate = jest.fn().mockResolvedValue(undefined);
-    const prisma = {
-      company: {
-        findUnique: companyFindUnique,
-        update: companyUpdate,
-      },
-      gatewayAccount: {
-        update: gatewayAccountUpdate,
-      },
-    } as unknown as PrismaService;
-    const encrypt = jest.fn();
-    const service = new AdminService(
-      prisma,
-      { configureMetaIntegration: jest.fn() } as unknown as WhatsappService,
-      { upsertManualGatewayAccount: jest.fn() } as unknown as EfiService,
-      { encrypt, decrypt: jest.fn() } as unknown as PaymentCryptoService,
+  it('rejects enabling methods without current fees', async () => {
+    const { service, prisma, fees } = fixture();
+    fees.resolveActiveVersion.mockRejectedValueOnce(
+      new Error('FEE_CONFIGURATION_MISSING'),
     );
-
+    await expect(service.createClient(input)).rejects.toThrow(
+      'FEE_CONFIGURATION_MISSING',
+    );
+    expect(prisma.company.create).not.toHaveBeenCalled();
+  });
+  it.each([
+    { efi: { status: 'ACTIVE' } },
+    { company: { gatewayStatus: 'ACTIVE' } },
+    { whatsapp: { metaAccessToken: 'secret' } },
+    { integrations: { resendApiKey: 'secret' } },
+    { billing: { onTimeSplitPercentageBps: 100 } },
+  ])(
+    'rejects obsolete gateway/secret/tariff updates before writing',
+    async (dto) => {
+      const { service, prisma } = fixture();
+      await expect(
+        service.updateClient('company-1', dto),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(prisma.company.update).not.toHaveBeenCalled();
+      expect(prisma.gatewayAccount.update).not.toHaveBeenCalled();
+    },
+  );
+  it('updates business settings without touching financial credentials', async () => {
+    const { service, prisma } = fixture();
     const result = await service.updateClient('company-1', {
-      efi: {
-        status: 'ACTIVE',
-        efiPayeeCode: 'payee-sem-segredo',
-      },
+      company: { corporateName: 'Empresa Atualizada' },
     });
-
-    expect(gatewayAccountUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.not.objectContaining({
-          encryptedClientId: expect.any(String) as string,
-          encryptedClientSecret: expect.any(String) as string,
-          encryptedCertificate: expect.any(String) as string,
-          encryptedCertificatePassword: expect.any(String) as string,
-        }) as unknown,
-      }),
-    );
-    expect(encrypt).not.toHaveBeenCalled();
-    expect(result.hasEfiClientId).toBe(true);
-    expect(result.hasEfiClientSecret).toBe(true);
-    expect(result.hasEfiCertificate).toBe(true);
+    expect(prisma.company.update).toHaveBeenCalledWith({
+      where: { id: 'company-1' },
+      data: { corporateName: 'Empresa Atualizada' },
+    });
+    expect(prisma.gatewayAccount.update).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain('encrypted-client-secret');
   });
+});
 
+describe('Admin password reset', () => {
   it('reset administrativo gera senha temporária e revoga sessões anteriores', async () => {
     const userFindFirst = jest.fn().mockResolvedValue({ id: 'user-1' });
     const userUpdateMany = jest.fn().mockResolvedValue({ count: 1 });

@@ -24,6 +24,7 @@ interface WebhookTransactionMock {
 }
 
 interface EmailServicePrismaMock {
+  platformIntegrationState: { findUnique: jest.Mock };
   invoice: {
     findFirst: jest.Mock;
   };
@@ -60,6 +61,7 @@ function createService(company: {
   resendFromEmail: string | null;
 }) {
   const prisma: EmailServicePrismaMock = {
+    platformIntegrationState: { findUnique: jest.fn().mockResolvedValue(null) },
     invoice: {
       findFirst: jest.fn().mockResolvedValue({ status: 'PENDING' }),
     },

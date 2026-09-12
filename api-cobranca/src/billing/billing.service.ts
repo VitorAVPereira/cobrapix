@@ -17,6 +17,7 @@ import { CollectionRuleEngine } from './collection-rule-engine';
 import { EmailQueueService } from '../email/email.queue';
 import { EmailService } from '../email/email.service';
 import { EmailTemplatesService } from '../email/email-templates.service';
+import { TemplatesService } from '../templates/templates.service';
 
 const DEFAULT_COLLECTION_REMINDER_DAYS = [0];
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -152,6 +153,7 @@ export class BillingService {
     private emailQueue: EmailQueueService,
     private emailService: EmailService,
     private emailTemplatesService: EmailTemplatesService,
+    private templatesService: TemplatesService,
     private whatsappService?: WhatsappService,
     private paymentLinkService?: PublicPaymentLinkService,
     private fees?: PaymentFeeService,
@@ -712,9 +714,12 @@ export class BillingService {
             debtorName: invoice.debtor.name,
             originalAmount: Number(invoice.originalAmount),
             dueDate: invoice.dueDate,
-            companyName: company.corporateName,
+            companyName: company.tradeName ?? company.corporateName,
             paymentData,
           });
+          replacements.saudacao = template.greeting;
+          replacements.instrucoes = template.instructions;
+          replacements.assinatura = template.signature;
           const templateParameters = this.whatsappService
             ?.buildTemplateParameters
             ? this.whatsappService.buildTemplateParameters(
@@ -730,7 +735,7 @@ export class BillingService {
             debtorName: invoice.debtor.name,
             originalAmount: Number(invoice.originalAmount),
             dueDate: invoice.dueDate,
-            companyName: company.corporateName,
+            companyName: company.tradeName ?? company.corporateName,
             paymentData,
           });
 
@@ -771,11 +776,15 @@ export class BillingService {
             debtorName: invoice.debtor.name,
             originalAmount: Number(invoice.originalAmount),
             dueDate: invoice.dueDate,
-            companyName: company.corporateName,
+            companyName: company.tradeName ?? company.corporateName,
             paymentData,
           };
+          const emailContent = emailTemplate.content
+            .replace(/{{\s*saudacao\s*}}/g, emailTemplate.greeting)
+            .replace(/{{\s*instrucoes\s*}}/g, emailTemplate.instructions)
+            .replace(/{{\s*assinatura\s*}}/g, emailTemplate.signature);
           const templateBody = this.buildTemplateText(
-            emailTemplate.content,
+            emailContent,
             renderParams,
           );
           const subject = this.buildTemplateText(
@@ -795,7 +804,7 @@ export class BillingService {
 
           const html = this.emailService.buildCollectionEmailHtml({
             debtorName: invoice.debtor.name,
-            companyName: company.corporateName,
+            companyName: company.tradeName ?? company.corporateName,
             amount: new Intl.NumberFormat('pt-BR', {
               style: 'currency',
               currency: 'BRL',
@@ -861,38 +870,29 @@ export class BillingService {
     metaTemplateName: string | null;
     metaLanguage: string;
     paymentButtonEnabled: boolean;
+    greeting: string;
+    instructions: string;
+    signature: string;
   } | null> {
-    const approvalFilter = requireApprovedMeta
-      ? { metaStatus: 'APPROVED' }
-      : {};
-
+    let slug: string | null = null;
     if (templateId) {
-      const template = await this.prisma.messageTemplate.findFirst({
-        where: { id: templateId, companyId, isActive: true, ...approvalFilter },
-        select: {
-          id: true,
-          slug: true,
-          content: true,
-          metaTemplateName: true,
-          metaLanguage: true,
-          paymentButtonEnabled: true,
-        },
+      const selected = await this.prisma.messageTemplate.findFirst({
+        where: { id: templateId, companyId },
+        select: { slug: true },
       });
-      if (template) return template;
+      slug = selected?.slug ?? null;
     }
-
-    return this.prisma.messageTemplate.findFirst({
-      where: { companyId, isActive: true, ...approvalFilter },
-      select: {
-        id: true,
-        slug: true,
-        content: true,
-        metaTemplateName: true,
-        metaLanguage: true,
-        paymentButtonEnabled: true,
-      },
-      orderBy: { createdAt: 'asc' },
-    });
+    const targetSlug = slug ?? 'vencimento-hoje';
+    if (requireApprovedMeta)
+      return this.templatesService.resolveApproved(companyId, targetSlug);
+    const catalog = await this.templatesService.findAll(companyId);
+    return (
+      catalog.find(
+        (template) => template.slug === targetSlug && template.isActive,
+      ) ??
+      catalog.find((template) => template.isActive) ??
+      null
+    );
   }
 
   private async ensureInvoicePayment(
@@ -1593,6 +1593,9 @@ export class BillingService {
       data_vencimento: dataFormatada,
       nome_devedor: params.debtorName,
       nome_empresa: params.companyName,
+      saudacao: 'Olá',
+      instrucoes: 'Use o botão abaixo para acessar o pagamento seguro.',
+      assinatura: `Equipe ${params.companyName}`,
     };
   }
 

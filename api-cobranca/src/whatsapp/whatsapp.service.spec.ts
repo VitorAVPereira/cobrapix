@@ -5,16 +5,20 @@ import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 interface PrismaMock {
+  platformIntegrationState: { findUnique: jest.Mock };
   company: {
     findFirst: jest.Mock;
   };
   messageTemplate: {
     updateMany: jest.Mock;
   };
+  communicationConversation: { upsert: jest.Mock };
+  communicationMessage: { upsert: jest.Mock };
 }
 
 function createPrismaMock(): PrismaMock {
   return {
+    platformIntegrationState: { findUnique: jest.fn().mockResolvedValue(null) },
     company: {
       findFirst: jest.fn().mockResolvedValue({
         metaBusinessAccountId: '123456789',
@@ -24,6 +28,10 @@ function createPrismaMock(): PrismaMock {
     messageTemplate: {
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
+    communicationConversation: {
+      upsert: jest.fn().mockResolvedValue({ id: 'conversation-1' }),
+    },
+    communicationMessage: { upsert: jest.fn() },
   };
 }
 
@@ -32,6 +40,7 @@ function createService(prisma: PrismaMock): WhatsappService {
     {
       get: jest.fn((key: string, fallback?: string) => {
         if (key === 'META_BUSINESS_ACCOUNT_ID') return '123456789';
+        if (key === 'META_PHONE_NUMBER_ID') return 'phone-123';
         if (key === 'META_ACCESS_TOKEN') return 'plain-token';
         return fallback;
       }),
@@ -39,6 +48,7 @@ function createService(prisma: PrismaMock): WhatsappService {
     prisma as unknown as PrismaService,
     {
       decrypt: jest.fn().mockReturnValue('plain-token'),
+      encrypt: jest.fn().mockReturnValue('encrypted-recipient'),
     } as unknown as PaymentCryptoService,
   );
 }
@@ -157,7 +167,8 @@ describe('WhatsappService createOfficialTemplate', () => {
     });
 
     const fetchBody = JSON.parse(
-      fetchMock.mock.calls[0]?.[1]?.body as string,
+      (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0]?.[1]
+        ?.body as string,
     ) as {
       components: Array<{
         type: string;
@@ -233,6 +244,52 @@ describe('WhatsappService createOfficialTemplate', () => {
     });
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('WhatsappService sendTemplateMessage', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('preserva 429 da Meta para o chamador aplicar retry', async () => {
+    const service = createService(createPrismaMock());
+    jest.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: 'rate limited' } }), {
+        status: 429,
+      }),
+    );
+
+    await expect(
+      service.sendTemplateMessage({
+        companyId: 'company-1',
+        phoneNumber: '5511999999999',
+        templateName: 'notice',
+        languageCode: 'pt_BR',
+        bodyParameters: [],
+      }),
+    ).rejects.toMatchObject({ status: 429 });
+  });
+
+  it('nao repete envio aceito quando o historico local falha', async () => {
+    const prisma = createPrismaMock();
+    prisma.communicationConversation.upsert.mockRejectedValue(
+      new Error('db unavailable'),
+    );
+    const service = createService(prisma);
+    jest.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ messages: [{ id: 'wamid-1' }] }), {
+        status: 200,
+      }),
+    );
+
+    await expect(
+      service.sendTemplateMessage({
+        companyId: 'company-1',
+        phoneNumber: '5511999999999',
+        templateName: 'notice',
+        languageCode: 'pt_BR',
+        bodyParameters: [],
+      }),
+    ).resolves.toEqual({ messageId: 'wamid-1', status: null });
   });
 });
 
