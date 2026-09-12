@@ -1,5 +1,9 @@
 # Abertura Automatizada de Contas Efí — Plano de Implementação
 
+## Decisão posterior do produto (12/09/2026)
+
+Por orientação expressa do usuário, Bolix é o padrão e Pix permanece disponível. Boleto tradicional não será habilitado para novas emissões; seu histórico e callbacks permanecem compatíveis. Esta decisão substitui as referências abaixo a três modalidades novas e à homologação de seis variantes: validar as quatro combinações Pix/Bolix com taxa fixa/percentual. As tarifas reais continuam configuradas pela administração.
+
 ## Resumo
 
 **Objetivo:** automatizar o onboarding financeiro de novos clientes PJ, provisionando uma conta Efí completa antes de liberar Pix, Boleto e Bolix.
