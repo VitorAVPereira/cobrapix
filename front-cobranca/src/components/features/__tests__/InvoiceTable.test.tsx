@@ -63,6 +63,32 @@ function getEnabledCancelButton(): HTMLButtonElement {
 }
 
 describe("InvoiceTable cancel action", () => {
+  it("allows manual replacement when Efí expired the current charge", () => {
+    const invoice = buildInvoice("CANCELED");
+    invoice.payment = {
+      generated: true,
+      method: "PIX",
+      pixCopyPaste: "pix",
+      boletoLine: null,
+      boletoUrl: null,
+      boletoPdf: null,
+      paymentLink: null,
+      expiresAt: "2020-01-01T00:00:00.000Z",
+      financialSummary: {
+        grossAmountCents: 15000,
+        totalFeeCents: 250,
+        netAmountCents: 14750,
+        estimated: true,
+        status: "EXPIRED",
+      },
+    };
+    renderTable({ data: [invoice] });
+    const buttons = screen.getAllByRole("button", {
+      name: "Substituir cobrança vencida",
+    });
+    buttons.forEach((button) => expect(button).toBeEnabled());
+    expect(screen.getAllByText(/Taxa:/)).toHaveLength(2);
+  });
   it("calls cancel handler for a pending invoice", async () => {
     const user = userEvent.setup();
     const onCancelInvoice = jest.fn();

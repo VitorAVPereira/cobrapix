@@ -6,10 +6,13 @@ import {
 } from "../billing-fees";
 
 const settings = {
-  onTimeSplitPercentageBps: 150,
-  overdueSplitPercentageBps: 1200,
+  preferredBillingMethod: "PIX",
   tariffs: {
-    PIX: { combinedLabel: "1,19% + R$ 0,50" },
+    PIX: {
+      method: "PIX",
+      combinedLabel: "1,19% + R$ 0,50",
+      configured: true,
+    },
   },
 } as unknown as BillingSettings;
 
@@ -18,15 +21,13 @@ describe("billing fee formatting", () => {
     expect(formatPercentageBps(150)).toBe("1,50%");
   });
 
-  it("builds the platform rate summary from client percentages", () => {
-    expect(formatPlatformRateSummary(settings)).toBe(
-      "No prazo: 1,50% | Recuperada: 12,00%",
-    );
+  it("uses the centrally configured tariff summary", () => {
+    expect(formatPlatformRateSummary(settings)).toBe("1,19% + R$ 0,50");
   });
 
-  it("does not use the fixed combined tariff label for payment method options", () => {
+  it("uses the combined tariff label for payment method options", () => {
     expect(formatBillingMethodRateLabel("PIX", settings)).toBe(
-      "Pix - No prazo: 1,50% | Recuperada: 12,00%",
+      "Pix · Taxa 1,19% + R$ 0,50",
     );
   });
 });

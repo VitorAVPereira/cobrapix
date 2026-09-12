@@ -4,7 +4,7 @@ import { useCallback, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import Papa from "papaparse";
 import { AlertCircle, Download, FileType, UploadCloud } from "lucide-react";
-import type { CollectionProfileType } from "@/lib/api-client";
+import type { CollectionProfileType, InvoicePaymentSummary } from "@/lib/api-client";
 import { normalizeRequiredDebtorDocument } from "@/lib/debtor-document";
 import { normalizeWhatsAppNumber } from "@/lib/whatsapp-number";
 
@@ -27,16 +27,7 @@ export interface ParsedDebtor {
   studentEnrollment?: string | null;
   studentGroup?: string | null;
   paidAt?: string | null;
-  payment?: {
-    generated: boolean;
-    method: PaymentMethod;
-    pixCopyPaste: string | null;
-    boletoLine: string | null;
-    boletoUrl: string | null;
-    boletoPdf: string | null;
-    paymentLink: string | null;
-    expiresAt: string | null;
-  };
+  payment?: InvoicePaymentSummary;
   recurrence?: {
     recurrenceId: string;
     period: string;
