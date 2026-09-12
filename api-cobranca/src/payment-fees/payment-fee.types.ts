@@ -22,7 +22,7 @@ export function validatePaymentFeeComponent(
   if (value.kind === 'FIXED') {
     return (
       hasOnlyKeys(value, ['kind', 'amountCents']) &&
-      isIntegerInRange(value.amountCents, 0)
+      isIntegerInRange(value.amountCents, 0, 2147483647)
     );
   }
 

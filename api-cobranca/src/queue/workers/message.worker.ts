@@ -533,6 +533,11 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async processInitialChargeJob(data: InitialChargeJob): Promise<void> {
+    const onboarding = await this.prisma.efiOnboarding.findUnique({
+      where: { companyId: data.companyId },
+      select: { status: true },
+    });
+    if (onboarding?.status !== 'ACTIVE') return;
     const invoice = await this.loadInitialChargeInvoice(data);
 
     if (!invoice) {
@@ -731,7 +736,9 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       where: {
         id: data.invoiceId,
         companyId: data.companyId,
-        status: 'PENDING',
+        status: {
+          in: data.source === 'SELECTED' ? ['PENDING'] : ['DRAFT', 'PENDING'],
+        },
       },
       select: {
         id: true,

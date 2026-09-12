@@ -20,13 +20,25 @@ export class EfiGatewayClient {
   async configureWebhooks(account: GatewayAccount): Promise<void> {
     await this.sdk(account).pixConfigWebhook(
       { chave: account.pixKey },
-      { webhookUrl: `${this.webhookBase()}/webhooks/efi/pix` },
+      { webhookUrl: `${this.webhookBase()}/webhooks/efi/pix?ignorar=` },
     );
     // Cobranças registers notification_url per charge, not per account. The same validated URL is mandatory at issuance.
     this.chargesWebhookUrl(account.companyId);
   }
   chargesWebhookUrl(companyId: string): string {
-    return `${this.webhookBase()}/webhooks/efi/cobrancas?companyId=${encodeURIComponent(companyId)}`;
+    const url = new URL(
+      this.config.get<string>('EFI_CHARGES_WEBHOOK_BASE_URL') ?? '',
+    );
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      url.pathname !== '/'
+    )
+      throw new Error('EFI_CHARGES_WEBHOOK_URL_INVALID');
+    return `${url.origin}/webhooks/efi/cobrancas?companyId=${encodeURIComponent(companyId)}`;
   }
   async validate(account: GatewayAccount): Promise<void> {
     const client = this.sdk(account);
@@ -34,7 +46,9 @@ export class EfiGatewayClient {
     const inicio = new Date(Date.now() - 3600_000).toISOString();
     await client.pixListDueCharges({ inicio, fim });
     const webhook = await client.pixDetailWebhook({ chave: account.pixKey });
-    if (webhook.webhookUrl !== `${this.webhookBase()}/webhooks/efi/pix`)
+    if (
+      webhook.webhookUrl !== `${this.webhookBase()}/webhooks/efi/pix?ignorar=`
+    )
       throw new Error('EFI_WEBHOOK_MISMATCH');
     await client.listPlans({ limit: 1 });
     const cnpj = this.config.get<string>('EFI_PLATFORM_CNPJ');

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpException, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import {
   BillingMethod,
@@ -7,6 +7,7 @@ import {
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { PaymentFeeService } from '../payment-fees/payment-fee.service';
 import { PaymentService } from '../payment/payment.service';
 import { PublicPaymentLinkService } from '../payment/payment-link.service';
 import { MessageQueueService, SendMessageJob } from '../queue/message.queue';
@@ -21,7 +22,6 @@ const DEFAULT_COLLECTION_REMINDER_DAYS = [0];
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_AUTO_GENERATE_FIRST_CHARGE = true;
 const DEFAULT_AUTO_DISCOUNT_ENABLED = false;
-const PLATFORM_FIXED_FEE = 0.5;
 
 interface BillingExecutionResult {
   queued: number;
@@ -61,12 +61,8 @@ export interface BillingMetricsResponse {
 
 interface TariffDetails {
   method: BillingMethod;
-  efiLabel: string;
-  platformLabel: string;
   combinedLabel: string;
-  efiKind: 'percentage' | 'fixed';
-  efiValue: number;
-  platformFixedFee: number;
+  configured: boolean;
 }
 
 export interface BillingSettingsResponse {
@@ -77,8 +73,6 @@ export interface BillingSettingsResponse {
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue: number | null;
   autoDiscountPercentage: number | null;
-  onTimeSplitPercentageBps: number;
-  overdueSplitPercentageBps: number;
   businessSegment: BusinessSegment;
   paymentNotificationEnabled: boolean;
   paymentNotificationEmails: string[];
@@ -160,6 +154,7 @@ export class BillingService {
     private emailTemplatesService: EmailTemplatesService,
     private whatsappService?: WhatsappService,
     private paymentLinkService?: PublicPaymentLinkService,
+    private fees?: PaymentFeeService,
   ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_9AM)
@@ -219,6 +214,7 @@ export class BillingService {
   }
 
   async executeBilling(companyId: string): Promise<BillingExecutionResult> {
+    await this.assertFinancialActive(companyId);
     return this.queueBillingForCompany(companyId);
   }
 
@@ -227,6 +223,7 @@ export class BillingService {
     invoiceIds: string[],
     options: SelectedBillingOptions = {},
   ): Promise<SelectedBillingExecutionResult> {
+    await this.assertFinancialActive(companyId);
     const uniqueInvoiceIds = Array.from(new Set(invoiceIds));
     const channels = this.normalizeSelectedChannels(options.channels);
 
@@ -457,15 +454,16 @@ export class BillingService {
         autoDiscountEnabled: true,
         autoDiscountDaysAfterDue: true,
         autoDiscountPercentage: true,
-        onTimeSplitPercentageBps: true,
-        overdueSplitPercentageBps: true,
         businessSegment: true,
         paymentNotificationEnabled: true,
         paymentNotificationEmails: true,
       },
     });
 
-    return this.buildBillingSettingsResponse(company);
+    return this.buildBillingSettingsResponse(
+      company,
+      await this.buildTariffs(companyId),
+    );
   }
 
   async updateSettings(
@@ -490,6 +488,18 @@ export class BillingService {
       throw new Error('Metodo de cobranca nao habilitado para esta empresa.');
     }
 
+    if (!this.fees)
+      throw new HttpException(
+        {
+          code: 'FEE_CONFIGURATION_MISSING',
+          message: 'Tarifas indisponíveis.',
+        },
+        409,
+      );
+    await this.fees.resolveActiveVersion(
+      companyId,
+      normalizedSettings.preferredBillingMethod,
+    );
     const updateData: Prisma.CompanyUpdateInput = {
       preferredBillingMethod: normalizedSettings.preferredBillingMethod,
       collectionReminderDays: normalizedSettings.collectionReminderDays,
@@ -527,21 +537,27 @@ export class BillingService {
         autoDiscountEnabled: true,
         autoDiscountDaysAfterDue: true,
         autoDiscountPercentage: true,
-        onTimeSplitPercentageBps: true,
-        overdueSplitPercentageBps: true,
         businessSegment: true,
         paymentNotificationEnabled: true,
         paymentNotificationEmails: true,
       },
     });
 
-    return this.buildBillingSettingsResponse(company);
+    return this.buildBillingSettingsResponse(
+      company,
+      await this.buildTariffs(companyId),
+    );
   }
 
   private async queueBillingForCompany(
     companyId: string,
   ): Promise<BillingExecutionResult> {
     try {
+      const onboarding = await this.prisma.efiOnboarding.findUnique({
+        where: { companyId },
+        select: { status: true },
+      });
+      if (onboarding?.status !== 'ACTIVE') return { queued: 0, skipped: 0 };
       const company = await this.prisma.company.findUnique({
         where: { id: companyId },
       });
@@ -1297,12 +1313,11 @@ export class BillingService {
       autoDiscountEnabled?: boolean | null;
       autoDiscountDaysAfterDue?: number | null;
       autoDiscountPercentage?: { toNumber(): number } | null;
-      onTimeSplitPercentageBps?: number | null;
-      overdueSplitPercentageBps?: number | null;
       businessSegment?: BusinessSegment | null;
       paymentNotificationEnabled?: boolean | null;
       paymentNotificationEmails?: string[] | null;
     } | null,
+    tariffs: Record<BillingMethod, TariffDetails>,
   ): BillingSettingsResponse {
     const autoDiscountEnabled = company?.autoDiscountEnabled ?? false;
 
@@ -1312,7 +1327,7 @@ export class BillingService {
       ),
       enabledBillingMethods: this.normalizeEnabledBillingMethods(
         company?.enabledBillingMethods,
-      ),
+      ).filter((method) => tariffs[method].configured),
       collectionReminderDays: this.normalizeReminderDays(
         company?.collectionReminderDays,
       ),
@@ -1327,14 +1342,12 @@ export class BillingService {
             company?.autoDiscountPercentage?.toNumber(),
           )
         : null,
-      onTimeSplitPercentageBps: company?.onTimeSplitPercentageBps ?? 0,
-      overdueSplitPercentageBps: company?.overdueSplitPercentageBps ?? 0,
       businessSegment: this.normalizeBusinessSegment(company?.businessSegment),
       paymentNotificationEnabled: company?.paymentNotificationEnabled ?? true,
       paymentNotificationEmails: this.normalizeNotificationEmails(
         company?.paymentNotificationEmails ?? [],
       ),
-      tariffs: this.buildTariffs(),
+      tariffs,
     };
   }
 
@@ -1388,36 +1401,46 @@ export class BillingService {
     return value ? Number(value.toNumber().toFixed(2)) : 0;
   }
 
-  private buildTariffs(): Record<BillingMethod, TariffDetails> {
-    return {
-      PIX: {
-        method: 'PIX',
-        efiLabel: '1,19%',
-        platformLabel: 'R$ 0,50',
-        combinedLabel: '1,19% + R$ 0,50',
-        efiKind: 'percentage',
-        efiValue: 1.19,
-        platformFixedFee: PLATFORM_FIXED_FEE,
-      },
-      BOLETO: {
-        method: 'BOLETO',
-        efiLabel: 'R$ 3,45',
-        platformLabel: 'R$ 0,50',
-        combinedLabel: 'R$ 3,95',
-        efiKind: 'fixed',
-        efiValue: 3.45,
-        platformFixedFee: PLATFORM_FIXED_FEE,
-      },
-      BOLIX: {
-        method: 'BOLIX',
-        efiLabel: 'R$ 3,45',
-        platformLabel: 'R$ 0,50',
-        combinedLabel: 'R$ 3,95',
-        efiKind: 'fixed',
-        efiValue: 3.45,
-        platformFixedFee: PLATFORM_FIXED_FEE,
-      },
+  private async assertFinancialActive(companyId: string): Promise<void> {
+    const onboarding = await this.prisma.efiOnboarding.findUnique({
+      where: { companyId },
+      select: { status: true },
+    });
+    if (onboarding?.status !== 'ACTIVE')
+      throw new HttpException(
+        {
+          code: 'EFI_ONBOARDING_REQUIRED',
+          message: 'Conclua a ativação financeira antes de disparar cobranças.',
+        },
+        409,
+      );
+  }
+
+  private async buildTariffs(
+    companyId: string,
+  ): Promise<Record<BillingMethod, TariffDetails>> {
+    const resolve = async (method: BillingMethod): Promise<TariffDetails> => {
+      if (!this.fees)
+        return { method, combinedLabel: 'Não configurada', configured: false };
+      try {
+        const version = await this.fees.resolveActiveVersion(companyId, method);
+        return {
+          method,
+          combinedLabel: this.fees.formatCombinedLabel(version),
+          configured: true,
+        };
+      } catch (error: unknown) {
+        if (!(error instanceof HttpException) || error.getStatus() !== 409)
+          throw error;
+        return { method, combinedLabel: 'Não configurada', configured: false };
+      }
     };
+    const [PIX, BOLETO, BOLIX] = await Promise.all([
+      resolve('PIX'),
+      resolve('BOLETO'),
+      resolve('BOLIX'),
+    ]);
+    return { PIX, BOLETO, BOLIX };
   }
 
   private getTemplateSlugsForOffsets(offsets: number[]): string[] {
