@@ -32,7 +32,7 @@ describe("parseInvoiceCsvRows", () => {
           Email: "financeiro@escola.com",
           Valor: "250.00",
           Vencimento: "2026-12-01",
-          "Forma de Pagamento": "BOLETO",
+          "Forma de Pagamento": "BOLIX",
         },
       ])[0]?.document,
     ).toBe("11222333000181");
@@ -69,4 +69,8 @@ describe("parseInvoiceCsvRows", () => {
       ]),
     ).toThrow("CPF/CNPJ");
   });
+});
+
+it("rejeita boleto tradicional em novas importações", () => {
+  expect(() => parseInvoiceCsvRows([{Nome: "Maria Silva", cpf_cnpj: "12345678909", WhatsApp: "+5511999999999", Email: "maria@email.com", Valor: "150", Vencimento: "2026-12-01", "Forma de Pagamento": "BOLETO"}])).toThrow("Use PIX ou BOLIX");
 });

@@ -1,5 +1,13 @@
-import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { assertChannelAvailable } from '../communications/channel-availability';
+import {
+  ForbiddenException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHash } from 'crypto';
 import type {
   MessageTemplate,
   MessageTemplateCopyCodeSource,
@@ -59,12 +67,16 @@ interface SendTemplateMessageInput {
   languageCode: string;
   bodyParameters: string[];
   buttonUrlSuffix?: string | null;
+  invoiceId?: string;
+  debtorId?: string;
+  content?: string;
 }
 
 interface SendTextMessageInput {
-  companyId: string;
+  companyId: string | null;
   phoneNumber: string;
   text: string;
+  recordHistory?: boolean;
 }
 
 interface CreateOfficialTemplateInput {
@@ -186,6 +198,10 @@ export class WhatsappService {
     verifiedName: string | null;
     qualityRating: string | null;
   }> {
+    throw new ForbiddenException(
+      'A integracao Meta e administrada pela plataforma.',
+    );
+    /* istanbul ignore next -- legado inacessivel durante a transicao */
     const profile = await this.graphFetch<MetaPhoneNumberProfile>(
       `/${dto.phoneNumberId}?fields=id,display_phone_number,verified_name,quality_rating`,
       dto.accessToken,
@@ -220,7 +236,7 @@ export class WhatsappService {
     };
   }
 
-  async getStatus(companyId: string): Promise<{
+  getStatus(companyId: string): Promise<{
     provider: 'META_CLOUD';
     state: 'open' | 'close';
     dbStatus: 'CONNECTED' | 'DISCONNECTED' | 'PENDING';
@@ -231,39 +247,31 @@ export class WhatsappService {
     webhookUrl: string;
     templatesRequired: true;
   }> {
-    const company = await this.prisma.company.findUnique({
-      where: { id: companyId },
-      select: {
-        whatsappStatus: true,
-        metaPhoneNumberId: true,
-        metaBusinessAccountId: true,
-        metaBusinessPhoneNumber: true,
-        metaDefaultLanguage: true,
-        metaAccessTokenEncrypted: true,
-      },
-    });
-
-    const configured = Boolean(
-      company?.metaPhoneNumberId && company.metaAccessTokenEncrypted,
+    void companyId;
+    const connected = Boolean(
+      this.configService.get<string>('META_ACCESS_TOKEN')?.trim() &&
+      this.configService.get<string>('META_PHONE_NUMBER_ID')?.trim(),
     );
-    const connected = configured && company?.whatsappStatus === 'CONNECTED';
-
-    return {
+    return Promise.resolve({
       provider: 'META_CLOUD',
       state: connected ? 'open' : 'close',
-      dbStatus: connected
-        ? 'CONNECTED'
-        : (company?.whatsappStatus ?? 'DISCONNECTED'),
-      phoneNumberId: company?.metaPhoneNumberId ?? null,
-      businessAccountId: company?.metaBusinessAccountId ?? null,
-      businessPhoneNumber: company?.metaBusinessPhoneNumber ?? null,
-      defaultLanguage: company?.metaDefaultLanguage ?? 'pt_BR',
+      dbStatus: connected ? 'CONNECTED' : 'DISCONNECTED',
+      phoneNumberId: null,
+      businessAccountId: null,
+      businessPhoneNumber: null,
+      defaultLanguage:
+        this.configService.get<string>('META_DEFAULT_LANGUAGE') ?? 'pt_BR',
       webhookUrl: this.buildWebhookUrl('/webhooks/meta'),
       templatesRequired: true,
-    };
+    });
   }
 
   async disconnect(companyId: string): Promise<void> {
+    void companyId;
+    throw new ForbiddenException(
+      'A integracao Meta e administrada pela plataforma.',
+    );
+    /* istanbul ignore next -- legado inacessivel durante a transicao */
     await this.prisma.company.update({
       where: { id: companyId },
       data: {
@@ -280,21 +288,9 @@ export class WhatsappService {
   async sendTemplateMessage(
     input: SendTemplateMessageInput,
   ): Promise<{ messageId: string; status: string | null }> {
-    const company = await this.prisma.company.findFirst({
-      where: {
-        id: input.companyId,
-        whatsappProvider: 'META_CLOUD',
-        whatsappStatus: 'CONNECTED',
-      },
-      select: {
-        metaPhoneNumberId: true,
-        metaAccessTokenEncrypted: true,
-      },
-    });
-
-    if (!company?.metaPhoneNumberId || !company.metaAccessTokenEncrypted) {
-      throw new Error('Meta Cloud API nao configurada para esta empresa.');
-    }
+    await assertChannelAvailable(this.prisma, 'META');
+    const phoneNumberId = this.requireConfig('META_PHONE_NUMBER_ID');
+    const accessToken = this.requireConfig('META_ACCESS_TOKEN');
 
     const components = [
       ...(input.bodyParameters.length > 0
@@ -340,8 +336,8 @@ export class WhatsappService {
     };
 
     const response = await this.graphFetch<MetaMessageResponse>(
-      `/${company.metaPhoneNumberId}/messages`,
-      this.crypto.decrypt(company.metaAccessTokenEncrypted),
+      `/${phoneNumberId}/messages`,
+      accessToken,
       {
         method: 'POST',
         body: JSON.stringify(body),
@@ -353,6 +349,22 @@ export class WhatsappService {
       throw new Error('Meta Cloud API nao retornou ID da mensagem.');
     }
 
+    try {
+      await this.recordOutbound({
+        companyId: input.companyId,
+        invoiceId: input.invoiceId,
+        debtorId: input.debtorId,
+        phoneNumber: input.phoneNumber,
+        content: input.content ?? `Template: ${input.templateName}`,
+        externalMessageId: message.id,
+        status: message.message_status ?? null,
+      });
+    } catch {
+      this.logger.error(
+        `Falha ao persistir historico WhatsApp aceito (${message.id})`,
+      );
+    }
+
     return {
       messageId: message.id,
       status: message.message_status ?? null,
@@ -362,25 +374,13 @@ export class WhatsappService {
   async sendTextMessage(
     input: SendTextMessageInput,
   ): Promise<{ messageId: string; status: string | null }> {
-    const company = await this.prisma.company.findFirst({
-      where: {
-        id: input.companyId,
-        whatsappProvider: 'META_CLOUD',
-        whatsappStatus: 'CONNECTED',
-      },
-      select: {
-        metaPhoneNumberId: true,
-        metaAccessTokenEncrypted: true,
-      },
-    });
-
-    if (!company?.metaPhoneNumberId || !company.metaAccessTokenEncrypted) {
-      throw new Error('Meta Cloud API nao configurada para esta empresa.');
-    }
+    await assertChannelAvailable(this.prisma, 'META');
+    const phoneNumberId = this.requireConfig('META_PHONE_NUMBER_ID');
+    const accessToken = this.requireConfig('META_ACCESS_TOKEN');
 
     const response = await this.graphFetch<MetaMessageResponse>(
-      `/${company.metaPhoneNumberId}/messages`,
-      this.crypto.decrypt(company.metaAccessTokenEncrypted),
+      `/${phoneNumberId}/messages`,
+      accessToken,
       {
         method: 'POST',
         body: JSON.stringify({
@@ -401,6 +401,21 @@ export class WhatsappService {
       throw new Error('Meta Cloud API nao retornou ID da mensagem.');
     }
 
+    if (input.recordHistory !== false)
+      try {
+        await this.recordOutbound({
+          companyId: input.companyId,
+          phoneNumber: input.phoneNumber,
+          content: input.text,
+          externalMessageId: message.id,
+          status: message.message_status ?? null,
+        });
+      } catch {
+        this.logger.error(
+          `Falha ao persistir historico WhatsApp aceito (${message.id})`,
+        );
+      }
+
     return {
       messageId: message.id,
       status: message.message_status ?? null,
@@ -410,29 +425,12 @@ export class WhatsappService {
   async createOfficialTemplate(
     input: CreateOfficialTemplateInput,
   ): Promise<MetaTemplateResponse> {
-    const company = await this.prisma.company.findFirst({
-      where: {
-        id: input.companyId,
-        whatsappProvider: 'META_CLOUD',
-        whatsappStatus: 'CONNECTED',
-      },
-      select: {
-        metaBusinessAccountId: true,
-        metaAccessTokenEncrypted: true,
-      },
-    });
-
-    if (!company?.metaBusinessAccountId || !company.metaAccessTokenEncrypted) {
-      throw new HttpException(
-        'Configure a Meta Cloud API antes de enviar templates oficiais.',
-        HttpStatus.BAD_REQUEST,
-      );
-    }
-
     const officialTemplate = this.buildOfficialTemplatePayload(input.template);
+    const businessAccountId = this.requireConfig('META_BUSINESS_ACCOUNT_ID');
+    const accessToken = this.requireConfig('META_ACCESS_TOKEN');
     const response = await this.graphFetch<MetaTemplateResponse>(
-      `/${company.metaBusinessAccountId}/message_templates`,
-      this.crypto.decrypt(company.metaAccessTokenEncrypted),
+      `/${businessAccountId}/message_templates`,
+      accessToken,
       {
         method: 'POST',
         body: JSON.stringify({
@@ -461,28 +459,13 @@ export class WhatsappService {
   async listOfficialTemplateStatuses(
     companyId: string,
   ): Promise<OfficialTemplateStatus[]> {
-    const company = await this.prisma.company.findFirst({
-      where: {
-        id: companyId,
-        whatsappProvider: 'META_CLOUD',
-        whatsappStatus: 'CONNECTED',
-      },
-      select: {
-        metaBusinessAccountId: true,
-        metaAccessTokenEncrypted: true,
-      },
-    });
-
-    if (!company?.metaBusinessAccountId || !company.metaAccessTokenEncrypted) {
-      throw new HttpException(
-        'Configure a Meta Cloud API antes de sincronizar templates oficiais.',
-        HttpStatus.BAD_REQUEST,
-      );
-    }
+    void companyId;
+    const businessAccountId = this.requireConfig('META_BUSINESS_ACCOUNT_ID');
+    const accessToken = this.requireConfig('META_ACCESS_TOKEN');
 
     const response = await this.graphFetch<MetaTemplateListResponse>(
-      `/${company.metaBusinessAccountId}/message_templates?fields=name,language,status,rejected_reason&limit=100`,
-      this.crypto.decrypt(company.metaAccessTokenEncrypted),
+      `/${businessAccountId}/message_templates?fields=name,language,status,rejected_reason&limit=100`,
+      accessToken,
       { method: 'GET' },
     );
     const templates = Array.isArray(response.data) ? response.data : [];
@@ -695,6 +678,57 @@ export class WhatsappService {
       .filter((variableName): variableName is string => Boolean(variableName));
   }
 
+  private requireConfig(name: string): string {
+    const value = this.configService.get<string>(name)?.trim();
+    if (!value) throw new Error(`${name} nao configurada.`);
+    return value;
+  }
+
+  private async recordOutbound(input: {
+    companyId: string | null;
+    invoiceId?: string;
+    debtorId?: string;
+    phoneNumber: string;
+    content: string;
+    externalMessageId: string;
+    status: string | null;
+  }): Promise<void> {
+    const recipient = input.phoneNumber.replace(/\D/g, '');
+    const recipientHash = createHash('sha256').update(recipient).digest('hex');
+    const retentionExpiresAt = new Date();
+    retentionExpiresAt.setUTCFullYear(retentionExpiresAt.getUTCFullYear() + 5);
+    const conversation = await this.prisma.communicationConversation.upsert({
+      where: { channel_recipientHash: { channel: 'WHATSAPP', recipientHash } },
+      create: {
+        channel: 'WHATSAPP',
+        recipientHash,
+        recipientEncrypted: this.crypto.encrypt(recipient),
+        lastMessagePreview: input.content.slice(0, 255),
+        retentionExpiresAt,
+      },
+      update: {
+        lastMessagePreview: input.content.slice(0, 255),
+        retentionExpiresAt,
+      },
+      select: { id: true },
+    });
+    await this.prisma.communicationMessage.upsert({
+      where: { externalMessageId: input.externalMessageId },
+      create: {
+        conversationId: conversation.id,
+        companyId: input.companyId,
+        invoiceId: input.invoiceId,
+        debtorId: input.debtorId,
+        direction: 'OUTBOUND',
+        content: input.content,
+        externalMessageId: input.externalMessageId,
+        status: input.status,
+        retentionExpiresAt,
+      },
+      update: { status: input.status },
+    });
+  }
+
   private async graphFetch<T>(
     path: string,
     accessToken: string,
@@ -758,6 +792,9 @@ export class WhatsappService {
   }
 
   private mapGraphErrorStatus(status: number): HttpStatus {
+    if (status === 429 || status >= 500) {
+      return status as HttpStatus;
+    }
     if (status >= 400 && status < 500) {
       return HttpStatus.BAD_REQUEST;
     }

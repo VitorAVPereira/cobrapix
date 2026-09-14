@@ -36,6 +36,7 @@ import {
 export type InvoiceRowAction = "generate" | "resend" | "status" | "cancel";
 
 interface InvoiceTableProps {
+  canIssue?: boolean;
   data: ParsedDebtor[];
   pageCount: number;
   total: number;
@@ -114,6 +115,7 @@ export function InvoiceTable({
   onViewPaymentHistory,
   runningInvoiceAction,
   showEducationFields = false,
+  canIssue = false,
 }: InvoiceTableProps) {
   const [copiedPaymentAction, setCopiedPaymentAction] = useState<string | null>(
     null,
@@ -174,7 +176,7 @@ export function InvoiceTable({
   }
 
   function runSelectedInvoices(): void {
-    if (selectedIds.length === 0) {
+    if (!canIssue || selectedIds.length === 0) {
       return;
     }
 
@@ -182,6 +184,9 @@ export function InvoiceTable({
   }
 
   const checkStatus = (row: ParsedDebtor) => {
+    if (row.status === "DRAFT") {
+      return { label: "Rascunho", color: "bg-slate-100 text-slate-600 border-slate-200", icon: Clock };
+    }
     if (row.status === "PAID") {
       return {
         label: "Pago",
@@ -352,6 +357,28 @@ export function InvoiceTable({
             currency: "BRL",
           }).format(invoice.original_amount)}
         </p>
+        {invoice.payment?.financialSummary && (
+          <div className="text-xs text-slate-500">
+            <p>
+              Taxa:{" "}
+              {(
+                invoice.payment.financialSummary.totalFeeCents / 100
+              ).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+            </p>
+            <p>
+              Líquido
+              {invoice.payment.financialSummary.estimated
+                ? " estimado"
+                : ""}:{" "}
+              {(
+                invoice.payment.financialSummary.netAmountCents / 100
+              ).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+            </p>
+            {invoice.payment.financialSummary.status === "REFUNDED" && (
+              <p className="text-amber-700">Estornada na Efí</p>
+            )}
+          </div>
+        )}
         <div className="flex items-center gap-1.5 text-xs text-slate-500">
           <CalendarDays size={14} className="shrink-0" />
           <span className="tabular-nums">
@@ -452,6 +479,13 @@ export function InvoiceTable({
   ): ReactNode {
     const invoiceId = getInvoiceId(invoice);
     const isClosed = invoice.status === "PAID" || invoice.status === "CANCELED";
+    const chargeStatus = invoice.payment?.financialSummary?.status;
+    const replacing = Boolean(
+      invoice.payment?.generated &&
+      invoice.payment.expiresAt &&
+      new Date(invoice.payment.expiresAt) < new Date() &&
+      (chargeStatus === "EXPIRED" || (chargeStatus === "ACTIVE" && !isClosed)),
+    );
     const canCancel = invoice.status === "PENDING";
     const activeAction =
       runningInvoiceAction?.invoiceId === invoiceId
@@ -473,22 +507,32 @@ export function InvoiceTable({
         <button
           type="button"
           onClick={() => onGeneratePayment(invoice)}
-          disabled={!invoiceId || isClosed || isBusy}
+          disabled={
+            !canIssue || !invoiceId || (isClosed && !replacing) || isBusy
+          }
           className={`${buttonBase} border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100`}
-          title="Gerar cobrança no gateway"
-          aria-label="Gerar cobrança"
+          title={
+            replacing
+              ? "Substituir cobrança vencida"
+              : "Gerar cobrança no gateway"
+          }
+          aria-label={
+            replacing ? "Substituir cobrança vencida" : "Gerar cobrança"
+          }
         >
           {activeAction === "generate" ? (
             <Loader2 size={14} className="animate-spin" />
           ) : (
             <CreditCard size={14} />
           )}
-          <span className={hideTextClass}>Gerar</span>
+          <span className={hideTextClass}>
+            {replacing ? "Substituir" : "Gerar"}
+          </span>
         </button>
         <button
           type="button"
           onClick={() => onResendInvoice(invoice)}
-          disabled={!invoiceId || isClosed || isBusy}
+          disabled={!canIssue || !invoiceId || isClosed || isBusy}
           className={`${buttonBase} border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100`}
           title="Reenviar cobrança"
           aria-label="Reenviar cobrança"
@@ -664,7 +708,7 @@ export function InvoiceTable({
         <button
           type="button"
           onClick={runSelectedInvoices}
-          disabled={selectedIds.length === 0 || isRunningSelected}
+          disabled={!canIssue || selectedIds.length === 0 || isRunningSelected}
           className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isRunningSelected ? (

@@ -46,7 +46,11 @@ describe("LoginPage", () => {
     ).toHaveAttribute("href", "/esqueci-senha");
   });
 
-  it("redirects a temporary-password login to first access", async () => {
+  it.each([
+    {mustChangePassword:true, query:"", destination:"/primeiro-acesso"},
+    {mustChangePassword:false, query:"passwordChanged=1", destination:"/onboarding/efi"},
+  ])("redirects login to $destination", async ({mustChangePassword, query, destination}) => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams(query) as ReturnType<typeof useSearchParams>);
     const user = userEvent.setup();
     mockSignIn.mockResolvedValue({
       error: undefined,
@@ -63,7 +67,7 @@ describe("LoginPage", () => {
         email: "admin@cliente.com",
         companyId: "company-1",
         role: "COMPANY_ADMIN",
-        mustChangePassword: true,
+        mustChangePassword,
         tokenVersion: 0,
         authInvalidated: false,
       },
@@ -75,7 +79,7 @@ describe("LoginPage", () => {
     await user.click(screen.getByRole("button", { name: /^entrar$/i }));
 
     await waitFor(() =>
-      expect(mockPush).toHaveBeenCalledWith("/primeiro-acesso"),
+      expect(mockPush).toHaveBeenCalledWith(destination),
     );
     expect(mockPush).not.toHaveBeenCalledWith("/cobrancas");
   });

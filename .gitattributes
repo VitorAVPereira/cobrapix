@@ -1,0 +1,4 @@
+infra/efi/*.sh text eol=lf
+infra/efi/*.service text eol=lf
+infra/efi/*.timer text eol=lf
+api-cobranca/Dockerfile text eol=lf

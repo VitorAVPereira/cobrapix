@@ -24,6 +24,7 @@ import {
   InvoiceTable,
   type InvoiceRowAction,
 } from "@/components/features/InvoiceTable";
+import { PaymentFeeConfirmation } from "@/components/features/PaymentFeeConfirmation";
 import { UploadCSV } from "@/components/features/UploadCSV";
 import type {
   ParsedDebtor,
@@ -31,6 +32,7 @@ import type {
 } from "@/components/features/UploadCSV";
 import type {
   BillingSettings,
+  PaymentFeeQuote,
   CollectionChannel,
   CreatePaymentResponse,
   InvoicePaymentStatusResponse,
@@ -39,6 +41,7 @@ import type {
 import { formatBillingMethodRateLabel } from "@/lib/billing-fees";
 import { normalizeRequiredDebtorDocument } from "@/lib/debtor-document";
 import { useApiClient } from "@/lib/use-api-client";
+import { useFinancialActivation } from "@/components/features/financial-activation-context";
 import { normalizeWhatsAppNumber } from "@/lib/whatsapp-number";
 
 interface ApiErrorData {
@@ -91,7 +94,7 @@ const initialManualChargeForm: ManualChargeForm = {
   whatsappOptIn: false,
   amount: "",
   dueDate: "",
-  billingType: "PIX",
+  billingType: "BOLIX",
   recurring: false,
   dueDay: "10",
   studentName: "",
@@ -245,6 +248,7 @@ function buildPaymentStatusMessage(
 }
 
 function CobrancasContent() {
+  const { canIssue } = useFinancialActivation();
   const apiClient = useApiClient();
   const searchParams = useSearchParams();
   const debtorIdFilter = searchParams.get("debtorId") ?? undefined;
@@ -269,6 +273,11 @@ function CobrancasContent() {
   const [isRunningSelected, setIsRunningSelected] = useState(false);
   const [runningInvoiceAction, setRunningInvoiceAction] =
     useState<RunningInvoiceAction | null>(null);
+  const [feePreview, setFeePreview] = useState<{
+    invoice: ParsedDebtor;
+    quote: PaymentFeeQuote;
+    replacing: boolean;
+  } | null>(null);
   const [sendBillingModal, setSendBillingModal] =
     useState<SendBillingModalState | null>(null);
   const [sendBillingForm, setSendBillingForm] = useState<SendBillingForm>(
@@ -326,9 +335,9 @@ function CobrancasContent() {
         const settings = await apiClient.getBillingSettings();
         setBillingSettings(settings);
         setManualForm((current) => {
-          const enabled = settings.enabledBillingMethods;
+          const enabled: PaymentMethod[] = settings.enabledBillingMethods.filter((method) => method !== "BOLETO");
           if (enabled.includes(current.billingType)) return current;
-          return { ...current, billingType: enabled[0] ?? "PIX" };
+          return { ...current, billingType: enabled.includes(settings.preferredBillingMethod) ? settings.preferredBillingMethod : enabled[0] ?? "BOLIX" };
         });
       } catch {
         setBillingSettings(null);
@@ -417,7 +426,7 @@ function CobrancasContent() {
   ): Promise<void> {
     event.preventDefault();
 
-    if (!sendBillingModal) {
+    if (!canIssue || !sendBillingModal) {
       return;
     }
 
@@ -516,6 +525,10 @@ function CobrancasContent() {
   }
 
   async function handleGeneratePayment(invoice: ParsedDebtor): Promise<void> {
+    if (!canIssue) {
+      setErrorMsg("Conclua a ativação financeira antes de emitir cobranças.");
+      return;
+    }
     const invoiceId = getInvoiceId(invoice);
 
     if (!invoiceId) {
@@ -531,15 +544,48 @@ function CobrancasContent() {
     setRunningInvoiceAction({ invoiceId, action: "generate" });
 
     try {
-      const response = await apiClient.createPayment({
-        invoiceId,
+      const amount = Number(invoice.original_amount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        throw new Error("O valor da cobrança é inválido para emissão.");
+      }
+      const quote = await apiClient.getPaymentFeeQuote(
         billingType,
-      });
+        Math.round(amount * 100),
+      );
+      const expiresAt = invoice.payment?.expiresAt;
+      const replacing = Boolean(
+        invoice.payment?.generated &&
+        expiresAt &&
+        new Date(expiresAt).getTime() < Date.now(),
+      );
+      setFeePreview({ invoice, quote, replacing });
+    } catch (error: unknown) {
+      setErrorMsg(getErrorMessage(error, "Nao foi possivel gerar a cobranca."));
+    } finally {
+      setRunningInvoiceAction(null);
+    }
+  }
 
+  async function confirmPayment(newDueDate?: string): Promise<void> {
+    if (!feePreview || !canIssue) return;
+    const invoice = feePreview.invoice;
+    const invoiceId = getInvoiceId(invoice);
+    if (!invoiceId) return;
+    setRunningInvoiceAction({ invoiceId, action: "generate" });
+    setFeePreview(null);
+    try {
+      const response = newDueDate
+        ? await apiClient.replaceExpiredPayment(invoiceId, newDueDate)
+        : await apiClient.createPayment({
+            invoiceId,
+            billingType: feePreview.quote.billingMethod,
+          });
       await fetchInvoices();
       setSuccessMsg(buildPaymentCreatedMessage(invoice, response));
     } catch (error: unknown) {
-      setErrorMsg(getErrorMessage(error, "Nao foi possivel gerar a cobranca."));
+      setErrorMsg(
+        getErrorMessage(error, "Não foi possível emitir a cobrança."),
+      );
     } finally {
       setRunningInvoiceAction(null);
     }
@@ -644,11 +690,11 @@ function CobrancasContent() {
     }
 
     setInvoiceTargetDebtor(debtor);
-    const enabledMethods = billingSettings?.enabledBillingMethods ?? ["PIX"];
-    const currentBillingType = debtor.billing_type ?? "PIX";
+    const enabledMethods: PaymentMethod[] = billingSettings?.enabledBillingMethods.filter((method) => method !== "BOLETO") ?? ["BOLIX"];
+    const currentBillingType = debtor.billing_type === "BOLETO" ? "BOLIX" : debtor.billing_type ?? "BOLIX";
     const billingType = enabledMethods.includes(currentBillingType)
       ? currentBillingType
-      : (enabledMethods[0] ?? "PIX");
+      : (enabledMethods[0] ?? "BOLIX");
     setManualForm({
       ...initialManualChargeForm,
       billingType,
@@ -733,10 +779,10 @@ function CobrancasContent() {
     }
   }
 
-  const paymentMethods: PaymentMethod[] =
-    billingSettings?.enabledBillingMethods.length
-      ? billingSettings.enabledBillingMethods
-      : ["PIX"];
+  const paymentMethods: PaymentMethod[] = billingSettings?.enabledBillingMethods
+    .length
+    ? billingSettings.enabledBillingMethods.filter((method) => method !== "BOLETO")
+    : ["BOLIX"];
   const modalTitle = invoiceTargetDebtor
     ? `Nova fatura para ${invoiceTargetDebtor.name}`
     : "Adicionar cobrança manual";
@@ -880,6 +926,7 @@ function CobrancasContent() {
             ) : debtors.length > 0 ? (
               <>
                 <InvoiceTable
+                  canIssue={canIssue}
                   data={filteredDebtors}
                   pageCount={Math.ceil(total / pagination.pageSize)}
                   total={total}
@@ -1201,6 +1248,15 @@ function CobrancasContent() {
         </div>
       )}
 
+      {feePreview && (
+        <PaymentFeeConfirmation
+          quote={feePreview.quote}
+          replacing={feePreview.replacing}
+          busy={Boolean(runningInvoiceAction)}
+          onCancel={() => setFeePreview(null)}
+          onConfirm={confirmPayment}
+        />
+      )}
       {sendBillingModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 transition-all duration-200">
           <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-md bg-white shadow-xl transition-all duration-200">
@@ -1356,7 +1412,7 @@ function CobrancasContent() {
                 <button
                   type="button"
                   onClick={closeSendBillingModal}
-                  disabled={isSendingBilling}
+                  disabled={!canIssue || isSendingBilling}
                   className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-all duration-200 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Cancelar

@@ -1,0 +1,16 @@
+[Unit]
+Description=CifraMais encrypted PostgreSQL backup and retention
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/opt/ciframais/secrets/backup.env
+ExecStart=/bin/bash /opt/ciframais/current/infra/efi/backup.sh
+UMask=0077
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+TimeoutStartSec=45min

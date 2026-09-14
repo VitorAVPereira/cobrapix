@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common';
+import { ConsoleLogger, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
@@ -8,6 +8,7 @@ import helmet from 'helmet';
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     rawBody: true,
+    logger: new ConsoleLogger({ json: true }),
   });
   const config = app.get(ConfigService);
   const trustedProxyHops = config.get<number>('TRUST_PROXY_HOPS', 0);

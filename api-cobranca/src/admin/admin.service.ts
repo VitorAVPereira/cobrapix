@@ -1,3 +1,4 @@
+import { assertNewBillingMethod } from '../payment/billing-method-policy';
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import {
   BillingMethod,
@@ -12,6 +13,7 @@ import { createHash, randomBytes } from 'crypto';
 import { EfiService } from '../payment/efi.service';
 import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { PaymentFeeService } from '../payment-fees/payment-fee.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import {
   AdminEfiUpdateDto,
@@ -150,6 +152,7 @@ export class AdminService {
     private readonly whatsappService: WhatsappService,
     private readonly efiService: EfiService,
     private readonly crypto: PaymentCryptoService,
+    private readonly fees?: PaymentFeeService,
   ) {}
 
   async listClients(): Promise<AdminClientResponse[]> {
@@ -169,6 +172,8 @@ export class AdminService {
   async createClient(
     dto: CreateAdminClientDto,
   ): Promise<CreateAdminClientResponse> {
+    this.rejectLegacyIntegrations(dto);
+    await this.validateEnabledMethods('', dto.billing.enabledBillingMethods);
     const normalizedUserEmail = dto.firstUser.email.trim().toLowerCase();
     const existingUser = await this.prisma.user.findFirst({
       where: {
@@ -253,6 +258,9 @@ export class AdminService {
     id: string,
     dto: UpdateAdminClientDto,
   ): Promise<AdminClientResponse> {
+    this.rejectLegacyIntegrations(dto);
+    if (dto.billing?.enabledBillingMethods)
+      await this.validateEnabledMethods(id, dto.billing.enabledBillingMethods);
     const company = await this.findClientOrThrow(id);
     const companyData = this.buildCompanyUpdateData(dto);
 
@@ -583,6 +591,53 @@ export class AdminService {
     }
 
     return data;
+  }
+
+  private rejectLegacyIntegrations(
+    dto: CreateAdminClientDto | UpdateAdminClientDto,
+  ): void {
+    const update = dto as UpdateAdminClientDto;
+    if (
+      dto.meta ||
+      dto.efi ||
+      update.whatsapp ||
+      update.company?.gatewayStatus !== undefined ||
+      dto.integrations?.resendApiKey !== undefined ||
+      dto.integrations?.resendWebhookSecret !== undefined ||
+      dto.integrations?.resendFromEmail !== undefined
+    ) {
+      throw new HttpException(
+        'Canais são centrais. Utilize a ativação financeira validada para a conta Efí.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (
+      dto.billing?.onTimeSplitPercentageBps !== undefined ||
+      dto.billing?.overdueSplitPercentageBps !== undefined
+    ) {
+      throw new HttpException(
+        'Utilize versões de tarifas por meio de pagamento.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+  }
+
+  private async validateEnabledMethods(
+    companyId: string,
+    methods: BillingMethod[],
+  ): Promise<void> {
+    methods.forEach(assertNewBillingMethod);
+    if (!methods.length) return;
+    if (!this.fees)
+      throw new HttpException(
+        {
+          code: 'FEE_CONFIGURATION_MISSING',
+          message: 'Tarifas indisponíveis.',
+        },
+        409,
+      );
+    for (const method of methods)
+      await this.fees.resolveActiveVersion(companyId, method);
   }
 
   private buildIntegrationUpdateData(

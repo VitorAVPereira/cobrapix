@@ -51,8 +51,8 @@ const mainItems = [
     icon: CalendarClock,
   },
   {
-    href: "/inbox",
-    label: "Inbox WhatsApp",
+    href: "/communications",
+    label: "Inbox WhatsApp e envios",
     icon: MessageSquare,
   },
 ];
@@ -75,13 +75,17 @@ const settingsItems = [
     icon: MessageSquareText,
   },
   {
-    href: "/configuracoes/conecte-seu-banco",
-    label: "Pagamento",
+    href: "/onboarding/efi",
+    label: "Ativação financeira",
     icon: Database,
   },
 ];
 
 const adminItems = [
+  {href:'/admin/efi-onboarding',label:'Ativações e saúde',icon:Database},
+  {href:'/admin/payment-fees',label:'Tarifas',icon:HandCoins},
+  {href:'/admin/communications',label:'Atendimento central',icon:MessageSquare},
+  {href:'/admin/templates',label:'Catálogo de templates',icon:MessageSquareText},
   {
     href: "/admin/visao-geral",
     label: "Visao geral",

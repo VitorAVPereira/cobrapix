@@ -4,6 +4,10 @@ import { NextResponse } from "next/server";
 const PLATFORM_ADMIN_ALLOWED_PATHS = [
   "/admin/clientes",
   "/admin/visao-geral",
+  "/admin/efi-onboarding",
+  "/admin/payment-fees",
+  "/admin/communications",
+  "/admin/templates",
 ] as const;
 
 function isAllowedPlatformAdminPath(pathname: string): boolean {
@@ -19,10 +23,7 @@ export default auth((req) => {
 
   if (!req.auth) {
     if (isApiRoute) {
-      return NextResponse.json(
-        { error: "Nao autorizado." },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Nao autorizado." }, { status: 401 });
     }
     return NextResponse.redirect(new URL("/login", req.url));
   }
@@ -47,23 +48,24 @@ export default auth((req) => {
   if (
     !isApiRoute &&
     isPlatformAdmin &&
+    !isFirstAccessPath &&
     !isAllowedPlatformAdminPath(pathname)
   ) {
     return NextResponse.redirect(new URL("/admin/clientes", req.url));
   }
 
-  if (
-    pathname.startsWith("/admin") &&
-    !isPlatformAdmin
-  ) {
+  if (pathname.startsWith("/admin") && !isPlatformAdmin) {
     return NextResponse.redirect(new URL("/", req.url));
   }
 
   if (
     !isPlatformAdmin &&
-    (pathname.startsWith("/configuracoes/whatsapp") ||
-      pathname.startsWith("/configuracoes/conecte-seu-banco"))
+    pathname.startsWith("/configuracoes/conecte-seu-banco")
   ) {
+    return NextResponse.redirect(new URL("/onboarding/efi", req.url));
+  }
+
+  if (!isPlatformAdmin && pathname.startsWith("/configuracoes/whatsapp")) {
     return NextResponse.redirect(new URL("/configuracoes/cobranca", req.url));
   }
 

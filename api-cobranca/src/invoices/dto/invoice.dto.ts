@@ -55,7 +55,7 @@ export class CreateInvoiceDto {
   @IsString()
   due_date?: string;
 
-  @IsIn(['PIX', 'BOLETO', 'BOLIX'])
+  @IsIn(['PIX', 'BOLIX'])
   billing_type!: BillingType;
 
   @IsOptional()
@@ -94,7 +94,7 @@ export class CreateDebtorInvoiceDto {
   @IsString()
   due_date?: string;
 
-  @IsIn(['PIX', 'BOLETO', 'BOLIX'])
+  @IsIn(['PIX', 'BOLIX'])
   billing_type!: BillingType;
 
   @IsOptional()
@@ -180,7 +180,7 @@ export class UpdateRecurringInvoiceDto {
   @Max(999999.99)
   amount!: number;
 
-  @IsIn(['PIX', 'BOLETO', 'BOLIX'])
+  @IsIn(['PIX', 'BOLIX'])
   billingType!: BillingType;
 
   @IsInt()
@@ -203,7 +203,7 @@ export class UpdateDebtorSettingsDto {
   whatsappOptIn?: boolean;
 
   @IsOptional()
-  @IsIn(['PIX', 'BOLETO', 'BOLIX'])
+  @IsIn(['PIX', 'BOLIX'])
   preferredBillingMethod?: BillingType;
 
   @IsOptional()

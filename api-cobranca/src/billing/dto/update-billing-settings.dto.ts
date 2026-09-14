@@ -15,7 +15,7 @@ import {
 } from 'class-validator';
 
 export class UpdateBillingSettingsDto {
-  @IsIn(['PIX', 'BOLETO', 'BOLIX'])
+  @IsIn(['PIX', 'BOLIX'])
   preferredBillingMethod!: 'PIX' | 'BOLETO' | 'BOLIX';
 
   @IsArray()

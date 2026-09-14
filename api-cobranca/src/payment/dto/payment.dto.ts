@@ -6,6 +6,11 @@ import {
   IsUUID,
 } from 'class-validator';
 
+export class ReplacePaymentChargeDto {
+  @IsDateString()
+  dueDate!: string;
+}
+
 export class CreatePaymentDto {
   @IsUUID()
   invoiceId!: string;

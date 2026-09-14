@@ -5,6 +5,7 @@ import { getSession, signIn } from "next-auth/react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2, Zap, Shield, BarChart3 } from "lucide-react";
+import { companyLoginDestination } from "@/lib/efi-onboarding";
 
 function LoginPageContent() {
   const router = useRouter();
@@ -36,8 +37,11 @@ function LoginPageContent() {
       router.push("/primeiro-acesso");
       return;
     }
-    const nextPath =
-      session?.user.role === "PLATFORM_ADMIN" ? "/admin/clientes" : "/cobrancas";
+    const nextPath = companyLoginDestination(
+      false,
+      session?.user.role ?? "COMPANY_ADMIN",
+      searchParams.has("passwordChanged"),
+    );
 
     router.push(nextPath);
   }

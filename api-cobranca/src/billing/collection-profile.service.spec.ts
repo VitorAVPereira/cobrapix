@@ -37,19 +37,21 @@ function createService() {
   const prisma = {
     collectionProfile: {
       findMany: jest.fn().mockResolvedValueOnce([]).mockResolvedValue([]),
-      create: jest.fn(async (args: CreatedProfileArgs) => ({
-        id: `${args.data.profileType.toLowerCase()}-profile`,
-        companyId: args.data.companyId,
-        name: args.data.name,
-        profileType: args.data.profileType,
-        isDefault: args.data.isDefault,
-        isActive: args.data.isActive,
-        daysOverdueMin: args.data.daysOverdueMin,
-        daysOverdueMax: args.data.daysOverdueMax,
-        steps: [],
-        createdAt: new Date('2026-05-01T00:00:00.000Z'),
-        updatedAt: new Date('2026-05-01T00:00:00.000Z'),
-      })),
+      create: jest.fn((args: CreatedProfileArgs) =>
+        Promise.resolve({
+          id: `${args.data.profileType.toLowerCase()}-profile`,
+          companyId: args.data.companyId,
+          name: args.data.name,
+          profileType: args.data.profileType,
+          isDefault: args.data.isDefault,
+          isActive: args.data.isActive,
+          daysOverdueMin: args.data.daysOverdueMin,
+          daysOverdueMax: args.data.daysOverdueMax,
+          steps: [],
+          createdAt: new Date('2026-05-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-05-01T00:00:00.000Z'),
+        }),
+      ),
     },
   } as unknown as PrismaService;
   const templatesService = {
@@ -90,9 +92,11 @@ describe('CollectionProfileService defaults', () => {
       'company-1',
     );
 
-    const firstCreate = prisma.collectionProfile.create.mock.calls[0]?.[0] as
-      | CreatedProfileArgs
-      | undefined;
+    const create = prisma.collectionProfile.create as jest.Mock<
+      Promise<unknown>,
+      [CreatedProfileArgs]
+    >;
+    const firstCreate = create.mock.calls[0]?.[0];
 
     expect(firstCreate).toBeDefined();
     const steps = firstCreate?.data.steps.create ?? [];

@@ -55,8 +55,6 @@ function createAdminClientFixture(): AdminClient {
     status: "ACTIVE",
     enabledBillingMethods: ["PIX"],
     preferredBillingMethod: "PIX",
-    onTimeSplitPercentageBps: 350,
-    overdueSplitPercentageBps: 1200,
     gatewayStatus: "ACTIVE",
     whatsappStatus: "PENDING",
     firstUser: {
@@ -84,15 +82,6 @@ async function fillRequiredClientFields(): Promise<void> {
   await user.type(screen.getByLabelText("Telefone"), "11999999999");
   await user.type(screen.getByLabelText("Nome admin"), "Admin Empresa");
   await user.type(screen.getByLabelText("E-mail admin"), "admin@empresa.com");
-  await user.type(screen.getByLabelText("Efí client ID"), "client-id");
-  await user.type(screen.getByLabelText("Efí client secret"), "client-secret");
-  await user.type(screen.getByLabelText("Efí payee code"), "payee-code");
-  await user.type(screen.getByLabelText("Senha do certificado"), "senha-certificado");
-
-  const certificate = new File(["certificado"], "efi-homologacao.p12", {
-    type: "application/x-pkcs12",
-  });
-  await user.upload(screen.getByLabelText("Certificado Efí"), certificate);
 }
 
 describe("AdminClientsPage", () => {
@@ -117,7 +106,7 @@ describe("AdminClientsPage", () => {
     });
   });
 
-  it("uploads the Efi certificate and sends it when creating an admin client", async () => {
+  it("creates an admin client without tenant integration credentials", async () => {
     const user = userEvent.setup();
     mockGetAdminClients
       .mockResolvedValueOnce([])
@@ -135,9 +124,8 @@ describe("AdminClientsPage", () => {
     await waitFor(() => expect(mockGetAdminClients).toHaveBeenCalled());
     await fillRequiredClientFields();
 
-    expect(
-      await screen.findByText("Novo certificado selecionado: efi-homologacao.p12"),
-    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Efí client ID")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Meta token")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /cadastrar cliente/i }));
 
@@ -151,11 +139,8 @@ describe("AdminClientsPage", () => {
     ).toBeInTheDocument();
 
     const payload = mockCreateAdminClient.mock.calls[0]?.[0];
-    expect(payload?.efi?.efiCertificateBase64).toBe(
-      Buffer.from("certificado").toString("base64"),
-    );
-    expect(payload?.efi?.efiCertificatePassword).toBe("senha-certificado");
-    expect(payload?.efi?.efiCertificatePath).toBe("");
+    expect(payload?.efi).toBeUndefined();
+    expect(payload?.meta).toBeUndefined();
   });
 
   it("shows changed fields in a confirmation modal before updating a client", async () => {
@@ -171,19 +156,12 @@ describe("AdminClientsPage", () => {
     );
     await user.clear(screen.getByLabelText("Razao social"));
     await user.type(screen.getByLabelText("Razao social"), "Empresa Editada");
-    await user.type(
-      screen.getByLabelText("Meta token"),
-      "novo-token-meta-com-mais-de-quarenta-caracteres",
-    );
     await user.click(screen.getByRole("button", { name: /salvar alteracoes/i }));
 
     expect(await screen.findByText("Confirmar alteracoes")).toBeInTheDocument();
     expect(screen.getAllByText("Razao social").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Empresa Certificada").length).toBeGreaterThan(0);
     expect(screen.getByText("Empresa Editada")).toBeInTheDocument();
-    expect(
-      screen.getByText("novo-token-meta-com-mais-de-quarenta-caracteres"),
-    ).toBeInTheDocument();
     expect(mockUpdateAdminClient).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: /^confirmar$/i }));
@@ -194,9 +172,6 @@ describe("AdminClientsPage", () => {
       expect.objectContaining({
         company: expect.objectContaining({
           corporateName: "Empresa Editada",
-        }) as unknown,
-        whatsapp: expect.objectContaining({
-          metaAccessToken: "novo-token-meta-com-mais-de-quarenta-caracteres",
         }) as unknown,
       }) as unknown,
     );

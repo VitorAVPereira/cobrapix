@@ -13,19 +13,17 @@ export function formatPercentageBps(value: number): string {
   }).format(value / 100)}%`;
 }
 
-export function formatPlatformRateSummary(
-  settings: Pick<
-    BillingSettings,
-    "onTimeSplitPercentageBps" | "overdueSplitPercentageBps"
-  >,
-): string {
-  return `No prazo: ${formatPercentageBps(settings.onTimeSplitPercentageBps)} | Recuperada: ${formatPercentageBps(settings.overdueSplitPercentageBps)}`;
+export function formatPlatformRateSummary(settings: BillingSettings): string {
+  return (
+    settings.tariffs?.[settings.preferredBillingMethod]?.combinedLabel ??
+    "Tarifa não configurada"
+  );
 }
-
 export function formatBillingMethodRateLabel(
   method: BillingMethod,
   settings: BillingSettings | null,
 ): string {
   const label = getBillingMethodLabel(method);
-  return settings ? `${label} - ${formatPlatformRateSummary(settings)}` : label;
+  const fee = settings?.tariffs?.[method]?.combinedLabel;
+  return fee ? `${label} · Taxa ${fee}` : label;
 }

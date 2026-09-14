@@ -1,5 +1,5 @@
 import { PaymentNotificationsService } from './payment-notifications.service';
-import { PaymentCryptoService } from './payment-crypto.service';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { ResendMailerService } from '../common/resend-mailer.service';
 
@@ -44,15 +44,17 @@ describe('PaymentNotificationsService', () => {
     service: PaymentNotificationsService;
     resendMailer: { sendEmail: jest.Mock };
   } {
-    const crypto = {
-      decrypt: jest.fn().mockReturnValue('resend-key'),
-    } as unknown as PaymentCryptoService;
+    const config = new ConfigService({
+      RESEND_API_KEY: 'central-key',
+      RESEND_FROM_EMAIL: 'avisos@ciframais.com.br',
+      RESEND_REPLY_TO: 'atendimento@ciframais.com.br',
+    });
     const resendMailer = {
       sendEmail: jest.fn().mockResolvedValue({ id: 'email-123' }),
     } as unknown as ResendMailerService;
 
     return {
-      service: new PaymentNotificationsService(prisma, crypto, resendMailer),
+      service: new PaymentNotificationsService(prisma, config, resendMailer),
       resendMailer: resendMailer as unknown as { sendEmail: jest.Mock },
     };
   }
@@ -120,7 +122,10 @@ describe('PaymentNotificationsService', () => {
       },
     } as unknown as PrismaService;
 
-    const { service } = buildService(prisma);
+    const { service, resendMailer } = buildService(prisma);
+    resendMailer.sendEmail.mockRejectedValueOnce(
+      new Error('Provider unavailable'),
+    );
     await service.notifyPaidInvoice('company-1', 'invoice-1');
 
     expect(updateMany).toHaveBeenCalledWith(
@@ -133,7 +138,7 @@ describe('PaymentNotificationsService', () => {
     );
   });
 
-  it('envia alerta de pagamento pela conta Resend e remetente da empresa', async () => {
+  it('envia alerta de pagamento somente pela conta Resend e remetente central', async () => {
     const updateMany = jest.fn().mockResolvedValue({ count: 1 });
     const prisma = {
       paymentNotification: {
@@ -156,8 +161,8 @@ describe('PaymentNotificationsService', () => {
 
     expect(resendMailer.sendEmail).toHaveBeenCalledWith(
       expect.objectContaining({
-        apiKey: 'resend-key',
-        from: 'Escola Teste <financeiro@escolateste.com.br>',
+        apiKey: 'central-key',
+        from: 'CifraMais <avisos@ciframais.com.br>',
         to: ['tesouraria@escola.com'],
         subject: '[CobraPix] Pagamento confirmado - Joao Silva',
         html: expect.stringContaining('Responsavel Silva') as string,

@@ -1,3 +1,7 @@
+import { assertNewBillingMethod } from '../payment/billing-method-policy';
+import type { PaymentCharge } from '@prisma/client';
+import { Optional } from '@nestjs/common';
+import { PaymentFeeService } from '../payment-fees/payment-fee.service';
 import {
   BadRequestException,
   ConflictException,
@@ -25,7 +29,6 @@ import { InitialChargeJob, MessageQueueService } from '../queue/message.queue';
 import { PaymentService } from '../payment/payment.service';
 import { BillingType } from './dto/invoice.dto';
 
-const PLATFORM_FIXED_FEE = 0.5;
 const RECURRING_GENERATION_LOOKAHEAD_DAYS = 30;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const PAYMENT_HISTORY_TIME_ZONE = 'America/Sao_Paulo';
@@ -39,15 +42,7 @@ interface BillingSettingsSnapshot {
   autoDiscountPercentage: number | null;
   tariffs: Record<
     BillingMethod,
-    {
-      method: BillingMethod;
-      efiLabel: string;
-      platformLabel: string;
-      combinedLabel: string;
-      efiKind: 'percentage' | 'fixed';
-      efiValue: number;
-      platformFixedFee: number;
-    }
+    { method: BillingMethod; combinedLabel: string; configured: boolean }
   >;
 }
 
@@ -99,7 +94,25 @@ interface InvoiceListItem {
   } | null;
 }
 
+interface ChargeFinancialSummary {
+  grossAmountCents: number;
+  totalFeeCents: number;
+  netAmountCents: number;
+  estimated: boolean;
+  status: string;
+}
+const financialChargeSelect = {
+  grossAmountCents: true,
+  estimatedEfiFeeCents: true,
+  estimatedPlatformFeeCents: true,
+  effectiveEfiFeeCents: true,
+  effectivePlatformFeeCents: true,
+  status: true,
+} satisfies Prisma.PaymentChargeSelect;
+type FinancialCharge = Pick<PaymentCharge, keyof typeof financialChargeSelect>;
+
 interface InvoicePaymentSummary {
+  financialSummary?: ChargeFinancialSummary | null;
   generated: boolean;
   method: BillingMethod;
   pixCopyPaste: string | null;
@@ -215,6 +228,7 @@ interface DebtorIdentity {
 }
 
 interface InvoiceWithRelations {
+  paymentCharges?: FinancialCharge[];
   id: string;
   debtor: {
     id: string;
@@ -431,6 +445,7 @@ export class InvoicesService {
     private readonly prisma: PrismaService,
     private readonly messageQueue: MessageQueueService,
     private readonly paymentService: PaymentService,
+    @Optional() private readonly fees?: PaymentFeeService,
   ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
@@ -447,6 +462,11 @@ export class InvoicesService {
       include: {
         debtor: { include: { collectionProfile: true } },
         recurringInvoice: true,
+        paymentCharges: {
+          select: financialChargeSelect,
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -497,6 +517,11 @@ export class InvoicesService {
         include: {
           debtor: { include: { collectionProfile: true } },
           recurringInvoice: true,
+          paymentCharges: {
+            select: financialChargeSelect,
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
         },
         orderBy: { createdAt: 'desc' },
         skip: (params.page - 1) * params.pageSize,
@@ -815,6 +840,11 @@ export class InvoicesService {
         include: {
           debtor: { include: { collectionProfile: true } },
           recurringInvoice: true,
+          paymentCharges: {
+            select: financialChargeSelect,
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
         },
         orderBy: { createdAt: 'desc' },
       });
@@ -894,6 +924,11 @@ export class InvoicesService {
         include: {
           debtor: { include: { collectionProfile: true } },
           recurringInvoice: true,
+          paymentCharges: {
+            select: financialChargeSelect,
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
         },
       });
     });
@@ -920,6 +955,11 @@ export class InvoicesService {
       include: {
         debtor: { include: { collectionProfile: true } },
         recurringInvoice: true,
+        paymentCharges: {
+          select: financialChargeSelect,
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+        },
       },
     });
 
@@ -940,7 +980,7 @@ export class InvoicesService {
       efiChargeId: invoice.efiChargeId,
     });
 
-    const updatedInvoice = await this.prisma.$transaction(async (tx) => {
+    await this.prisma.$transaction(async (tx) => {
       const updateResult = await tx.invoice.updateMany({
         where: { id: invoice.id, companyId, status: 'PENDING' },
         data: {
@@ -955,6 +995,40 @@ export class InvoicesService {
         );
       }
 
+      if (invoice.efiTxid || invoice.efiChargeId) {
+        // The invoice UPDATE above holds its row lock before touching the charge.
+        const charge = await tx.paymentCharge.findFirst({
+          where: {
+            companyId,
+            invoiceId,
+            ...(invoice.efiTxid
+              ? { efiTxid: invoice.efiTxid }
+              : { efiChargeId: invoice.efiChargeId }),
+          },
+        });
+        if (
+          charge &&
+          ['PENDING', 'ACTIVE', 'EXPIRED'].includes(charge.status)
+        ) {
+          await tx.paymentCharge.updateMany({
+            where: { id: charge.id, companyId, status: charge.status },
+            data: {
+              status: 'CANCELED',
+              canceledAt: new Date(),
+              gatewayStatusRaw: cancellation.gatewayStatusRaw,
+            },
+          });
+          await tx.paymentChargeStatusHistory.create({
+            data: {
+              paymentChargeId: charge.id,
+              previousStatus: charge.status,
+              status: 'CANCELED',
+              providerStatus: cancellation.gatewayStatusRaw,
+            },
+          });
+        }
+      }
+
       await tx.collectionLog.create({
         data: {
           companyId,
@@ -964,21 +1038,24 @@ export class InvoicesService {
           status: 'CANCELED',
         },
       });
-
-      const reloadedInvoice = await tx.invoice.findFirst({
-        where: { id: invoice.id, companyId },
-        include: {
-          debtor: { include: { collectionProfile: true } },
-          recurringInvoice: true,
-        },
-      });
-
-      if (!reloadedInvoice) {
-        throw new NotFoundException('Fatura nao encontrada.');
-      }
-
-      return reloadedInvoice;
     });
+
+    const updatedInvoice = await this.prisma.invoice.findFirst({
+      where: { id: invoice.id, companyId },
+      include: {
+        debtor: { include: { collectionProfile: true } },
+        recurringInvoice: true,
+        paymentCharges: {
+          select: financialChargeSelect,
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+        },
+      },
+    });
+
+    if (!updatedInvoice) {
+      throw new NotFoundException('Fatura nao encontrada.');
+    }
 
     return this.mapInvoiceListItem(updatedInvoice);
   }
@@ -1098,18 +1175,24 @@ export class InvoicesService {
       return null;
     }
 
-    const globalSettings = this.buildGlobalSettingsSnapshot(debtor.company);
+    const globalSettings = this.buildGlobalSettingsSnapshot(
+      debtor.company,
+      await this.buildTariffs(companyId),
+    );
     const effectiveSettings = debtor.useGlobalBillingSettings
       ? globalSettings
-      : this.buildEffectiveCustomSettings({
-          preferredBillingMethod: debtor.preferredBillingMethod,
-          collectionReminderDays: debtor.collectionReminderDays,
-          autoGenerateFirstCharge: debtor.autoGenerateFirstCharge ?? true,
-          autoDiscountEnabled: debtor.autoDiscountEnabled,
-          autoDiscountDaysAfterDue: debtor.autoDiscountDaysAfterDue,
-          autoDiscountPercentage:
-            debtor.autoDiscountPercentage?.toNumber() ?? null,
-        });
+      : this.buildEffectiveCustomSettings(
+          {
+            preferredBillingMethod: debtor.preferredBillingMethod,
+            collectionReminderDays: debtor.collectionReminderDays,
+            autoGenerateFirstCharge: debtor.autoGenerateFirstCharge ?? true,
+            autoDiscountEnabled: debtor.autoDiscountEnabled,
+            autoDiscountDaysAfterDue: debtor.autoDiscountDaysAfterDue,
+            autoDiscountPercentage:
+              debtor.autoDiscountPercentage?.toNumber() ?? null,
+          },
+          globalSettings.tariffs,
+        );
 
     return {
       debtorId: debtor.id,
@@ -1230,14 +1313,17 @@ export class InvoicesService {
             autoDiscountDaysAfterDue: null,
             autoDiscountPercentage: null,
           }
-        : this.buildEffectiveCustomSettings({
-            preferredBillingMethod: input.preferredBillingMethod ?? 'PIX',
-            collectionReminderDays: input.collectionReminderDays ?? [],
-            autoGenerateFirstCharge: input.autoGenerateFirstCharge ?? true,
-            autoDiscountEnabled: input.autoDiscountEnabled ?? false,
-            autoDiscountDaysAfterDue: input.autoDiscountDaysAfterDue ?? null,
-            autoDiscountPercentage: input.autoDiscountPercentage ?? null,
-          });
+        : this.buildEffectiveCustomSettings(
+            {
+              preferredBillingMethod: input.preferredBillingMethod ?? 'PIX',
+              collectionReminderDays: input.collectionReminderDays ?? [],
+              autoGenerateFirstCharge: input.autoGenerateFirstCharge ?? true,
+              autoDiscountEnabled: input.autoDiscountEnabled ?? false,
+              autoDiscountDaysAfterDue: input.autoDiscountDaysAfterDue ?? null,
+              autoDiscountPercentage: input.autoDiscountPercentage ?? null,
+            },
+            await this.buildTariffs(companyId),
+          );
 
       updateData.useGlobalBillingSettings = useGlobalBillingSettings;
       updateData.preferredBillingMethod = useGlobalBillingSettings
@@ -1466,6 +1552,12 @@ export class InvoicesService {
     if (uniqueInvoiceIds.length === 0) {
       return 0;
     }
+
+    const onboarding = await this.prisma.efiOnboarding.findUnique({
+      where: { companyId },
+      select: { status: true },
+    });
+    if (onboarding?.status !== 'ACTIVE') return 0;
 
     await this.messageQueue.addInitialChargeJobs(
       uniqueInvoiceIds.map((invoiceId) => ({
@@ -1798,7 +1890,23 @@ export class InvoicesService {
       boletoUrl,
     });
 
+    const charge = invoice.paymentCharges?.[0];
+    const totalFeeCents = charge
+      ? (charge.effectiveEfiFeeCents ?? charge.estimatedEfiFeeCents) +
+        (charge.effectivePlatformFeeCents ?? charge.estimatedPlatformFeeCents)
+      : 0;
     return {
+      financialSummary: charge
+        ? {
+            grossAmountCents: charge.grossAmountCents,
+            totalFeeCents,
+            netAmountCents: charge.grossAmountCents - totalFeeCents,
+            estimated:
+              charge.effectiveEfiFeeCents === null ||
+              charge.effectivePlatformFeeCents === null,
+            status: charge.status,
+          }
+        : null,
       generated,
       method,
       pixCopyPaste,
@@ -2219,14 +2327,17 @@ export class InvoicesService {
     return Number(value.toFixed(2));
   }
 
-  private buildGlobalSettingsSnapshot(company: {
-    preferredBillingMethod: BillingMethod;
-    collectionReminderDays: number[];
-    autoGenerateFirstCharge: boolean;
-    autoDiscountEnabled: boolean;
-    autoDiscountDaysAfterDue: number | null;
-    autoDiscountPercentage: { toNumber(): number } | null;
-  }): BillingSettingsSnapshot {
+  private buildGlobalSettingsSnapshot(
+    company: {
+      preferredBillingMethod: BillingMethod;
+      collectionReminderDays: number[];
+      autoGenerateFirstCharge: boolean;
+      autoDiscountEnabled: boolean;
+      autoDiscountDaysAfterDue: number | null;
+      autoDiscountPercentage: { toNumber(): number } | null;
+    },
+    tariffs: BillingSettingsSnapshot['tariffs'],
+  ): BillingSettingsSnapshot {
     return {
       preferredBillingMethod: this.normalizeBillingMethod(
         company.preferredBillingMethod,
@@ -2244,7 +2355,7 @@ export class InvoicesService {
             company.autoDiscountPercentage?.toNumber(),
           )
         : null,
-      tariffs: this.buildTariffs(),
+      tariffs,
     };
   }
 
@@ -2252,6 +2363,7 @@ export class InvoicesService {
     companyId: string,
     billingType: BillingType,
   ): Promise<void> {
+    assertNewBillingMethod(billingType);
     const company = await this.prisma.company.findUnique({
       where: { id: companyId },
       select: { enabledBillingMethods: true },
@@ -2266,14 +2378,17 @@ export class InvoicesService {
     }
   }
 
-  private buildEffectiveCustomSettings(input: {
-    preferredBillingMethod: BillingMethod | null;
-    collectionReminderDays: number[];
-    autoGenerateFirstCharge: boolean | null;
-    autoDiscountEnabled: boolean | null;
-    autoDiscountDaysAfterDue: number | null;
-    autoDiscountPercentage: number | null;
-  }): BillingSettingsSnapshot {
+  private buildEffectiveCustomSettings(
+    input: {
+      preferredBillingMethod: BillingMethod | null;
+      collectionReminderDays: number[];
+      autoGenerateFirstCharge: boolean | null;
+      autoDiscountEnabled: boolean | null;
+      autoDiscountDaysAfterDue: number | null;
+      autoDiscountPercentage: number | null;
+    },
+    tariffs: BillingSettingsSnapshot['tariffs'],
+  ): BillingSettingsSnapshot {
     const autoDiscountEnabled = input.autoDiscountEnabled ?? false;
 
     return {
@@ -2291,39 +2406,37 @@ export class InvoicesService {
       autoDiscountPercentage: autoDiscountEnabled
         ? this.normalizeDiscountPercentage(input.autoDiscountPercentage)
         : null,
-      tariffs: this.buildTariffs(),
+      tariffs,
     };
   }
 
-  private buildTariffs(): BillingSettingsSnapshot['tariffs'] {
-    return {
-      PIX: {
-        method: 'PIX',
-        efiLabel: '1,19%',
-        platformLabel: 'R$ 0,50',
-        combinedLabel: '1,19% + R$ 0,50',
-        efiKind: 'percentage',
-        efiValue: 1.19,
-        platformFixedFee: PLATFORM_FIXED_FEE,
-      },
-      BOLETO: {
-        method: 'BOLETO',
-        efiLabel: 'R$ 3,45',
-        platformLabel: 'R$ 0,50',
-        combinedLabel: 'R$ 3,95',
-        efiKind: 'fixed',
-        efiValue: 3.45,
-        platformFixedFee: PLATFORM_FIXED_FEE,
-      },
-      BOLIX: {
-        method: 'BOLIX',
-        efiLabel: 'R$ 3,45',
-        platformLabel: 'R$ 0,50',
-        combinedLabel: 'R$ 3,95',
-        efiKind: 'fixed',
-        efiValue: 3.45,
-        platformFixedFee: PLATFORM_FIXED_FEE,
-      },
-    };
+  private async buildTariffs(
+    companyId: string,
+  ): Promise<BillingSettingsSnapshot['tariffs']> {
+    const entries = await Promise.all(
+      (['PIX', 'BOLETO', 'BOLIX'] as const).map(async (method) => {
+        try {
+          if (!this.fees) throw new Error('FEE_CONFIGURATION_MISSING');
+          const version = await this.fees.resolveActiveVersion(
+            companyId,
+            method,
+          );
+          return [
+            method,
+            {
+              method,
+              combinedLabel: this.fees.formatCombinedLabel(version),
+              configured: true,
+            },
+          ] as const;
+        } catch {
+          return [
+            method,
+            { method, combinedLabel: 'Não configurada', configured: false },
+          ] as const;
+        }
+      }),
+    );
+    return Object.fromEntries(entries) as BillingSettingsSnapshot['tariffs'];
   }
 }

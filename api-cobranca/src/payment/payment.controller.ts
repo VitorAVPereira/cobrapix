@@ -18,19 +18,16 @@ import {
   CreateGatewayAccountDto,
   GatewayAccountStatusResponse,
 } from './dto/gateway-account.dto';
-import { EfiService } from './efi.service';
+import { EfiPaymentResult, EfiService } from './efi.service';
 import { PaymentService } from './payment.service';
 import { PaymentNotificationsService } from './payment-notifications.service';
+import { ReplacePaymentChargeDto } from './dto/payment.dto';
 
 interface AuthenticatedUser {
   userId: string;
   email: string;
   name?: string;
   companyId: string;
-}
-
-function onlyDigits(value: string): string {
-  return value.replace(/\D/g, '');
 }
 
 class CreatePaymentDto {
@@ -140,70 +137,16 @@ export class PaymentController {
     @GetUser() user: AuthenticatedUser,
     @Body() dto: CreateGatewayAccountDto,
   ): Promise<GatewayAccountStatusResponse> {
-    this.ensureConfigured();
-
-    const company = await this.prisma.company.findUnique({
-      where: { id: user.companyId },
-    });
-
-    if (!company) {
-      throw new HttpException('Empresa nao encontrada', HttpStatus.NOT_FOUND);
-    }
-
-    await this.prisma.company.update({
-      where: { id: user.companyId },
-      data: {
-        corporateName: dto.corporateName,
-        document: onlyDigits(dto.cnpj),
-        email: dto.email,
-        phoneNumber: onlyDigits(dto.phoneNumber),
-        gatewayProvider: 'EFI',
-        gatewayAccountId: dto.efiPayeeCode,
-        gatewayApiKey: null,
-        gatewayStatus: dto.gatewayStatus ?? 'ACTIVE',
-        legalRepresentative: dto.legalRepresentative,
-        legalRepresentativeCpf: onlyDigits(dto.legalRepresentativeCpf),
-        legalRepresentativeBirthDate: new Date(
-          dto.legalRepresentativeBirthDate,
-        ),
-        addressPostalCode: onlyDigits(dto.postalCode),
-        addressStreet: dto.street,
-        addressNumber: dto.number,
-        addressDistrict: dto.district,
-        addressCity: dto.city,
-        addressState: dto.state.toUpperCase(),
-        bankName: dto.bankName,
-        bankAgency: dto.bankAgency,
-        bankAccount: dto.bankAccount,
+    void user;
+    void dto;
+    await Promise.resolve();
+    throw new HttpException(
+      {
+        code: 'EFI_ONBOARDING_REQUIRED',
+        message: 'Utilize o assistente de ativação financeira.',
       },
-    });
-
-    await this.prisma.originalBankAccount.upsert({
-      where: { companyId: user.companyId },
-      create: {
-        companyId: user.companyId,
-        holderName: dto.legalRepresentative,
-        holderDocument: onlyDigits(dto.legalRepresentativeCpf),
-        bankName: dto.bankName,
-        agency: dto.bankAgency,
-        account: dto.bankAccount,
-        accountDigit: dto.bankAccountDigit,
-        accountType: dto.bankAccountType ?? 'CHECKING',
-      },
-      update: {
-        holderName: dto.legalRepresentative,
-        holderDocument: onlyDigits(dto.legalRepresentativeCpf),
-        bankName: dto.bankName,
-        agency: dto.bankAgency,
-        account: dto.bankAccount,
-        accountDigit: dto.bankAccountDigit,
-        accountType: dto.bankAccountType ?? 'CHECKING',
-      },
-    });
-
-    await this.efiService.upsertManualGatewayAccount(user.companyId, dto);
-
-    return this.getGatewayAccount(user);
+      403,
+    );
   }
 
   @Post('create')
@@ -214,7 +157,7 @@ export class PaymentController {
     this.ensureConfigured();
 
     try {
-      const billingType = dto.billingType || 'PIX';
+      const billingType = dto.billingType || 'BOLIX';
       const result = await this.paymentService.createPayment(
         dto.invoiceId,
         user.companyId,
@@ -245,7 +188,7 @@ export class PaymentController {
     this.ensureConfigured();
 
     try {
-      const billingType = dto.billingType || 'PIX';
+      const billingType = dto.billingType || 'BOLIX';
       const result = await this.paymentService.createPaymentBatch(
         dto.invoiceIds,
         user.companyId,
@@ -379,50 +322,32 @@ export class PaymentController {
     @GetUser() user: AuthenticatedUser,
     @Param('id') invoiceId: string,
     @Body() dto: InvoiceStatusDto,
-  ) {
-    const invoice = await this.prisma.invoice.findFirst({
-      where: {
-        id: invoiceId,
-        companyId: user.companyId,
+  ): Promise<never> {
+    void user;
+    void invoiceId;
+    void dto;
+    await Promise.resolve();
+    throw new HttpException(
+      {
+        code: 'PROVIDER_STATUS_REQUIRED',
+        message:
+          'A situação financeira é atualizada exclusivamente pela confirmação da Efí.',
       },
-    });
+      HttpStatus.FORBIDDEN,
+    );
+  }
 
-    if (!invoice) {
-      throw new HttpException('Fatura nao encontrada', HttpStatus.NOT_FOUND);
-    }
-
-    await this.prisma.invoice.updateMany({
-      where: { id: invoiceId, companyId: user.companyId },
-      data: {
-        status: dto.status,
-        ...(dto.status === 'PAID'
-          ? { paidAt: invoice.paidAt ?? new Date() }
-          : {}),
-      },
-    });
-
-    await this.prisma.collectionLog.create({
-      data: {
-        companyId: user.companyId,
-        invoiceId: invoice.id,
-        actionType: 'STATUS_CHANGED',
-        description: `Status alterado para ${dto.status}`,
-        status: dto.status,
-      },
-    });
-
-    if (dto.status === 'PAID') {
-      await this.paymentNotifications.notifyPaidInvoice(
-        user.companyId,
-        invoice.id,
-      );
-    }
-
-    return {
-      success: true,
-      invoiceId: invoice.id,
-      status: dto.status,
-    };
+  @Post('invoice/:id/replace')
+  async replaceExpiredCharge(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id') invoiceId: string,
+    @Body() dto: ReplacePaymentChargeDto,
+  ): Promise<EfiPaymentResult> {
+    return this.paymentService.replaceExpiredCharge(
+      invoiceId,
+      user.companyId,
+      new Date(dto.dueDate),
+    );
   }
 
   @Get('status')

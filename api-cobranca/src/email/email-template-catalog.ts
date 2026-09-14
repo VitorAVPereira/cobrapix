@@ -15,17 +15,17 @@ export interface EmailTemplateDefinition {
 
 const defaultBodyBySlug: Record<string, string> = {
   'cobranca-emissao':
-    'Ola, {{nome_devedor}}.\n\nSua cobranca de {{valor}} da {{nome_empresa}} foi emitida com vencimento em {{data_vencimento}}.\n\nAcesse a pagina segura para pagar por {{metodo_pagamento}}: {{payment_link}}',
+    '{{saudacao}}, {{nome_devedor}}.\n\nSua cobrança de {{nome_empresa}} via CifraMais, no valor de {{valor}}, foi emitida com vencimento em {{data_vencimento}}.\n\n{{instrucoes}}\n\n{{assinatura}}',
   'pre-vencimento':
-    'Ola, {{nome_devedor}}.\n\nEstamos passando para lembrar que a cobranca de {{valor}} da {{nome_empresa}} vence em {{data_vencimento}}.\n\nPara pagar com seguranca, acesse: {{payment_link}}',
+    '{{saudacao}}, {{nome_devedor}}.\n\nLembramos que sua cobrança de {{nome_empresa}} via CifraMais, no valor de {{valor}}, vence em {{data_vencimento}}.\n\n{{instrucoes}}\n\n{{assinatura}}',
   'vencimento-hoje':
-    'Ola, {{nome_devedor}}.\n\nSua cobranca de {{valor}} da {{nome_empresa}} vence hoje, {{data_vencimento}}.\n\nPara evitar atraso, acesse a pagina segura de pagamento: {{payment_link}}',
+    '{{saudacao}}, {{nome_devedor}}.\n\nSua cobrança de {{nome_empresa}} via CifraMais, no valor de {{valor}}, vence hoje, {{data_vencimento}}.\n\n{{instrucoes}}\n\n{{assinatura}}',
   'atraso-primeiro-aviso':
-    'Ola, {{nome_devedor}}.\n\nIdentificamos uma cobranca em aberto de {{valor}} da {{nome_empresa}}, vencida em {{data_vencimento}}.\n\nRegularize com seguranca por aqui: {{payment_link}}',
+    '{{saudacao}}, {{nome_devedor}}.\n\nIdentificamos uma cobrança de {{nome_empresa}} via CifraMais, no valor de {{valor}}, vencida em {{data_vencimento}}.\n\n{{instrucoes}}\n\n{{assinatura}}',
   'atraso-recorrente':
-    'Ola, {{nome_devedor}}.\n\nAinda consta uma cobranca pendente de {{valor}} da {{nome_empresa}}, com vencimento em {{data_vencimento}}.\n\nAcesse a pagina de pagamento: {{payment_link}}',
+    '{{saudacao}}, {{nome_devedor}}.\n\nAinda consta uma cobrança de {{nome_empresa}} via CifraMais, no valor de {{valor}}, com vencimento em {{data_vencimento}}.\n\n{{instrucoes}}\n\n{{assinatura}}',
   'atraso-critico':
-    'Ola, {{nome_devedor}}.\n\nSua cobranca de {{valor}} da {{nome_empresa}} segue pendente desde {{data_vencimento}}.\n\nAcesse a pagina segura para regularizar: {{payment_link}}',
+    '{{saudacao}}, {{nome_devedor}}.\n\nSua cobrança de {{nome_empresa}} via CifraMais, no valor de {{valor}}, segue pendente desde {{data_vencimento}}.\n\n{{instrucoes}}\n\n{{assinatura}}',
 };
 
 const subjectBySlug: Record<string, string> = {
@@ -44,7 +44,7 @@ export const EMAIL_TEMPLATE_DEFINITIONS: readonly EmailTemplateDefinition[] =
     subject: subjectBySlug[definition.slug] ?? '{{nome_empresa}}: cobranca',
     content:
       defaultBodyBySlug[definition.slug] ??
-      'Ola, {{nome_devedor}}.\n\nVoce tem uma cobranca de {{valor}} da {{nome_empresa}} com vencimento em {{data_vencimento}}.\n\nAcesse: {{payment_link}}',
+      '{{saudacao}}, {{nome_devedor}}.\n\nVocê tem uma cobrança de {{nome_empresa}} via CifraMais, no valor de {{valor}}, com vencimento em {{data_vencimento}}.\n\n{{instrucoes}}\n\n{{assinatura}}',
   }));
 
 export const DEFAULT_EMAIL_TEMPLATE_DEFINITION: EmailTemplateDefinition =
@@ -53,7 +53,7 @@ export const DEFAULT_EMAIL_TEMPLATE_DEFINITION: EmailTemplateDefinition =
     name: 'Cobranca na emissao',
     subject: '{{nome_empresa}}: cobranca emitida',
     content:
-      'Ola, {{nome_devedor}}.\n\nVoce tem uma cobranca de {{valor}} da {{nome_empresa}} com vencimento em {{data_vencimento}}.\n\nAcesse: {{payment_link}}',
+      '{{saudacao}}, {{nome_devedor}}.\n\nVocê tem uma cobrança de {{nome_empresa}} via CifraMais, no valor de {{valor}}, com vencimento em {{data_vencimento}}.\n\n{{instrucoes}}\n\n{{assinatura}}',
   };
 
 export function getEmailTemplateDefinition(

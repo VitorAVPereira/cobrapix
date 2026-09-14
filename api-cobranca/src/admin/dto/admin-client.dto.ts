@@ -22,7 +22,7 @@ import { CreateGatewayAccountDto } from '../../payment/dto/gateway-account.dto';
 import { ConfigureMetaWhatsappDto } from '../../whatsapp/dto/configure-meta-whatsapp.dto';
 
 const COMPANY_STATUSES = ['ACTIVE', 'INACTIVE', 'SUSPENDED'] as const;
-const BILLING_METHODS = ['PIX', 'BOLETO', 'BOLIX'] as const;
+const BILLING_METHODS = ['PIX', 'BOLIX'] as const;
 const BUSINESS_SEGMENTS = ['GENERAL', 'EDUCATION'] as const;
 const WHATSAPP_PROVIDERS = ['META_CLOUD'] as const;
 const WHATSAPP_STATUSES = ['CONNECTED', 'DISCONNECTED', 'PENDING'] as const;
@@ -80,12 +80,14 @@ export class AdminBillingDto {
   @IsInt()
   @Min(0)
   @Max(9999)
-  onTimeSplitPercentageBps!: number;
+  @IsOptional()
+  onTimeSplitPercentageBps?: number;
 
   @IsInt()
   @Min(0)
   @Max(9999)
-  overdueSplitPercentageBps!: number;
+  @IsOptional()
+  overdueSplitPercentageBps?: number;
 }
 
 export class AdminCompanyUpdateDto {

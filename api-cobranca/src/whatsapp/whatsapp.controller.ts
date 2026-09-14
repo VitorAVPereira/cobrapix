@@ -14,6 +14,7 @@ import { GetUser } from '../auth/decorators/get-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { MessagingLimitService } from '../queue/services/messaging-limit.service';
+import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
 import { WhatsAppConversationService } from './conversation.service';
 import { ConfigureMetaWhatsappDto } from './dto/configure-meta-whatsapp.dto';
 import { WhatsappService } from './whatsapp.service';
@@ -33,12 +34,14 @@ export class WhatsappController {
   ) {}
 
   @Get('unread-count')
+  @UseGuards(PlatformAdminGuard)
   async getUnreadCount(@GetUser() user: AuthenticatedUser) {
     const count = await this.conversationService.getUnreadCount(user.companyId);
     return { count };
   }
 
   @Get('conversations')
+  @UseGuards(PlatformAdminGuard)
   async listConversations(
     @GetUser() user: AuthenticatedUser,
     @Query('status') status?: string,
@@ -60,6 +63,7 @@ export class WhatsappController {
   }
 
   @Get('conversations/:id')
+  @UseGuards(PlatformAdminGuard)
   async getConversation(
     @GetUser() user: AuthenticatedUser,
     @Param('id') id: string,
@@ -75,6 +79,7 @@ export class WhatsappController {
   }
 
   @Get('conversations/:id/messages')
+  @UseGuards(PlatformAdminGuard)
   async getMessages(
     @GetUser() user: AuthenticatedUser,
     @Param('id') id: string,
@@ -83,6 +88,7 @@ export class WhatsappController {
   }
 
   @Post('conversations/:id/reply')
+  @UseGuards(PlatformAdminGuard)
   async reply(
     @GetUser() user: AuthenticatedUser,
     @Param('id') id: string,
@@ -109,6 +115,7 @@ export class WhatsappController {
   }
 
   @Put('conversations/:id/status')
+  @UseGuards(PlatformAdminGuard)
   async updateStatus(
     @GetUser() user: AuthenticatedUser,
     @Param('id') id: string,
@@ -128,6 +135,7 @@ export class WhatsappController {
   }
 
   @Put('conversations/:id/assignee')
+  @UseGuards(PlatformAdminGuard)
   async updateAssignee(
     @GetUser() user: AuthenticatedUser,
     @Param('id') id: string,
