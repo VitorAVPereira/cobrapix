@@ -213,7 +213,7 @@ describe("ClientesPage", () => {
       expect(createDebtorInvoice).toHaveBeenCalledWith("debtor-1", {
         original_amount: 120,
         due_date: "2026-07-10",
-        billing_type: "PIX",
+        billing_type: "BOLIX",
       });
     });
   });

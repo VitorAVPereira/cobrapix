@@ -1,0 +1,62 @@
+name: ciframais
+services:
+  api:
+    build: ../../api-cobranca
+    image: ciframais-api:${RELEASE_TAG:-local}
+    restart: unless-stopped
+    init: true
+    env_file: /opt/ciframais/secrets/api.env
+    environment:
+      PORT: '3001'
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      EFI_MTLS_PROXY_IP: 172.29.42.10
+      TRUST_PROXY_HOPS: '1'
+    volumes:
+      - /opt/ciframais/secrets/efi:/run/efi:ro
+    read_only: true
+    tmpfs: [/tmp]
+    mem_limit: 1280m
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [backend]
+    logging:
+      driver: local
+      options: {max-size: 10m, max-file: '3'}
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: [redis-server, --appendonly, 'yes', --maxmemory, 128mb, --maxmemory-policy, noeviction]
+    volumes: [redis:/data]
+    mem_limit: 256m
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks: [backend]
+    logging:
+      driver: local
+      options: {max-size: 5m, max-file: '2'}
+  nginx:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    ports: ['80:80', '443:443']
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - /opt/ciframais/secrets/tls:/etc/nginx/tls:ro
+    mem_limit: 96m
+    depends_on: [api]
+    networks:
+      backend:
+        ipv4_address: 172.29.42.10
+    logging:
+      driver: local
+      options: {max-size: 10m, max-file: '3'}
+networks:
+  backend:
+    ipam:
+      config: [{subnet: 172.29.42.0/24}]
+volumes:
+  redis:

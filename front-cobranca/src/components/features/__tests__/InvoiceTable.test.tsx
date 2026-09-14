@@ -24,12 +24,14 @@ function buildInvoice(status: string): ParsedDebtor {
 function renderTable(options?: {
   data?: ParsedDebtor[];
   onCancelInvoice?: jest.Mock;
+  canIssue?: boolean;
 }): void {
   const data = options?.data ?? [buildInvoice("PENDING")];
   const pagination: PaginationState = { pageIndex: 0, pageSize: 20 };
 
   render(
     <InvoiceTable
+      canIssue={options?.canIssue}
       data={data}
       pageCount={1}
       total={data.length}
@@ -53,7 +55,9 @@ function getEnabledCancelButton(): HTMLButtonElement {
   const buttons = screen.getAllByRole("button", {
     name: /cancelar cobrança/i,
   });
-  const enabledButton = buttons.find((button) => !button.hasAttribute("disabled"));
+  const enabledButton = buttons.find(
+    (button) => !button.hasAttribute("disabled"),
+  );
 
   if (!(enabledButton instanceof HTMLButtonElement)) {
     throw new Error("Expected an enabled cancel button.");
@@ -63,6 +67,32 @@ function getEnabledCancelButton(): HTMLButtonElement {
 }
 
 describe("InvoiceTable cancel action", () => {
+  it("allows manual replacement when Efí expired the current charge", () => {
+    const invoice = buildInvoice("CANCELED");
+    invoice.payment = {
+      generated: true,
+      method: "PIX",
+      pixCopyPaste: "pix",
+      boletoLine: null,
+      boletoUrl: null,
+      boletoPdf: null,
+      paymentLink: null,
+      expiresAt: "2020-01-01T00:00:00.000Z",
+      financialSummary: {
+        grossAmountCents: 15000,
+        totalFeeCents: 250,
+        netAmountCents: 14750,
+        estimated: true,
+        status: "EXPIRED",
+      },
+    };
+    renderTable({ data: [invoice], canIssue: true });
+    const buttons = screen.getAllByRole("button", {
+      name: "Substituir cobrança vencida",
+    });
+    buttons.forEach((button) => expect(button).toBeEnabled());
+    expect(screen.getAllByText(/Taxa:/)).toHaveLength(2);
+  });
   it("calls cancel handler for a pending invoice", async () => {
     const user = userEvent.setup();
     const onCancelInvoice = jest.fn();

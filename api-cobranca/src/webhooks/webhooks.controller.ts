@@ -16,6 +16,7 @@ import {
 import type { Request } from 'express';
 import { EmailService } from '../email/email.service';
 import { EfiWebhookGuard } from './efi-webhook.guard';
+import { EfiMtlsGuard } from '../efi-onboarding/efi-mtls.guard';
 import { WebhooksService } from './webhooks.service';
 
 type RawBodyRequest = Request & { rawBody?: Buffer };
@@ -171,7 +172,7 @@ export class WebhooksController {
   }
 
   @Post('efi/pix')
-  @UseGuards(EfiWebhookGuard)
+  @UseGuards(EfiMtlsGuard)
   async handleEfiPixWebhook(@Body() payload: unknown) {
     try {
       return await this.webhooksService.handleEfiPixWebhook(payload);
@@ -189,9 +190,15 @@ export class WebhooksController {
 
   @Post('efi/cobrancas')
   @UseGuards(EfiWebhookGuard)
-  async handleEfiChargesWebhook(@Body() payload: unknown) {
+  async handleEfiChargesWebhook(
+    @Body() payload: unknown,
+    @Query('companyId') companyId?: string,
+  ) {
     try {
-      return await this.webhooksService.handleEfiChargesWebhook(payload);
+      return await this.webhooksService.handleEfiChargesWebhook(
+        payload,
+        companyId,
+      );
     } catch (error) {
       this.logger.error(
         'Erro ao processar webhook Efi Cobrancas:',

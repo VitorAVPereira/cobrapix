@@ -74,6 +74,7 @@ declare module 'sdk-node-apis-efi' {
         tipo: string;
         valor: string;
         favorecido: {
+          cnpj?: string;
           conta: string;
         };
       }>;
@@ -96,6 +97,7 @@ declare module 'sdk-node-apis-efi' {
       value: number;
       amount: number;
       marketplace?: {
+        mode?: 1;
         repasses: Array<{
           payee_code: string;
           percentage?: number;
@@ -188,6 +190,25 @@ declare module 'sdk-node-apis-efi' {
 
   export default class EfiPay {
     constructor(options: EfiPayOptions);
+    pixListEvp(): Promise<{ chaves: string[] }>;
+    pixCreateEvp(): Promise<{ chave: string }>;
+    pixConfigWebhook(
+      params: { chave: string },
+      body: { webhookUrl: string },
+    ): Promise<unknown>;
+    pixDetailWebhook(params: {
+      chave: string;
+    }): Promise<{ webhookUrl: string }>;
+    pixDeleteWebhook(params: { chave: string }): Promise<unknown>;
+    pixListDueCharges(params: {
+      inicio: string;
+      fim: string;
+    }): Promise<unknown>;
+    listPlans(params: { limit: number }): Promise<unknown>;
+    pixSplitConfigId(
+      params: { id: string },
+      body: PixSplitConfigBody,
+    ): Promise<PixSplitConfigResponse>;
 
     pixCreateDueCharge(
       params: { txid: string },
@@ -218,7 +239,9 @@ declare module 'sdk-node-apis-efi' {
       body: CreateOneStepChargeBody,
     ): Promise<CreateOneStepChargeResponse>;
 
-    cancelCharge(params: { id: string | number }): Promise<CancelChargeResponse>;
+    cancelCharge(params: {
+      id: string | number;
+    }): Promise<CancelChargeResponse>;
 
     getNotification(params: { token: string }): Promise<NotificationResponse>;
   }

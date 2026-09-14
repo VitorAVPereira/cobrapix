@@ -10,6 +10,7 @@ import { Prisma } from '@prisma/client';
 import type { Request, Response } from 'express';
 
 interface ErrorResponse {
+  code?: string;
   statusCode: number;
   message: string;
   path: string;
@@ -26,20 +27,34 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const request = ctx.getRequest<Request>();
 
     const { statusCode, message } = this.resolveError(exception);
-
+    const code = this.extractErrorCode(exception);
+    const route: unknown = request.route;
+    const path =
+      this.isRecord(route) && typeof route.path === 'string' ? route.path : '/';
+    // Provider errors and request URLs may contain credentials or personal data.
     this.logger.error(
-      `${request.method} ${request.url} → ${statusCode}: ${message}`,
-      exception instanceof Error ? exception.stack : undefined,
+      `${request.method} ${path} → ${statusCode}${code ? ` ${code}` : ''}`,
     );
 
     const body: ErrorResponse = {
       statusCode,
       message,
-      path: request.url,
+      ...(code ? { code } : {}),
+      path,
       timestamp: new Date().toISOString(),
     };
 
     response.status(statusCode).json(body);
+  }
+
+  private extractErrorCode(exception: unknown): string | undefined {
+    if (!(exception instanceof HttpException)) return undefined;
+    const response = exception.getResponse();
+    if (!this.isRecord(response) || typeof response.code !== 'string')
+      return undefined;
+    return /^[A-Z][A-Z0-9_]{2,63}$/.test(response.code)
+      ? response.code
+      : undefined;
   }
 
   private resolveError(exception: unknown): {

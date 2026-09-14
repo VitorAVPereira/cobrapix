@@ -64,8 +64,11 @@ interface FindFirstDebtorOptInArgs {
 }
 
 interface PrismaMock {
-  messageTemplate: {
+  globalMessageTemplate: {
     findMany: jest.Mock<Promise<TemplateRecord[]>, [FindManyTemplatesArgs]>;
+  };
+  companyTemplatePreference: {
+    findMany: jest.Mock<Promise<never[]>, [unknown]>;
   };
   invoice: {
     findFirst: jest.Mock<
@@ -88,6 +91,7 @@ interface TemplateSelector {
   findMessageTemplate(invoice: {
     companyId: string;
     dueDate: Date;
+    company: { corporateName: string; tradeName: string | null };
   }): Promise<TemplateRecord | null>;
 }
 
@@ -97,28 +101,35 @@ interface SendMessageJobProcessor {
 
 function createPrismaMock(templates: TemplateRecord[]): PrismaMock {
   return {
-    messageTemplate: {
-      findMany: jest.fn(async (args: FindManyTemplatesArgs) =>
-        templates.filter(
-          (template) =>
-            args.where.slug.in.includes(template.slug) &&
-            template.metaStatus === args.where.metaStatus,
+    globalMessageTemplate: {
+      findMany: jest.fn((args: FindManyTemplatesArgs) =>
+        Promise.resolve(
+          templates.filter(
+            (template) =>
+              args.where.slug.in.includes(template.slug) &&
+              template.metaStatus === args.where.metaStatus,
+          ),
         ),
       ),
     },
+    companyTemplatePreference: {
+      findMany: jest.fn(() => Promise.resolve([])),
+    },
     invoice: {
-      findFirst: jest.fn(async () => ({ status: 'PENDING' })),
+      findFirst: jest.fn(() => Promise.resolve({ status: 'PENDING' })),
     },
     collectionLog: {
-      create: jest.fn(async () => ({})),
+      create: jest.fn(() => Promise.resolve({})),
     },
     debtor: {
-      findFirst: jest.fn(async () => ({ whatsappOptIn: true })),
+      findFirst: jest.fn(() => Promise.resolve({ whatsappOptIn: true })),
     },
   };
 }
 
-function createWorker(prisma: PrismaMock): TemplateSelector & SendMessageJobProcessor {
+function createWorker(
+  prisma: PrismaMock,
+): TemplateSelector & SendMessageJobProcessor {
   const service = new MessageWorkerService(
     {} as ConfigService,
     prisma as unknown as PrismaService,
@@ -172,43 +183,50 @@ describe('MessageWorkerService template selection', () => {
     const template = await worker.findMessageTemplate({
       companyId: 'company-1',
       dueDate: new Date('2026-05-25T12:00:00.000Z'),
+      company: { corporateName: 'Empresa Teste', tradeName: 'Loja Teste' },
     });
 
     expect(template?.slug).toBe('cobranca-emissao');
-    expect(prisma.messageTemplate.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          slug: { in: ['vencimento-hoje', 'cobranca-emissao'] },
-          metaStatus: 'APPROVED',
-        }),
-      }),
-    );
+    expect(
+      prisma.globalMessageTemplate.findMany.mock.calls[0]?.[0],
+    ).toMatchObject({
+      where: {
+        slug: { in: ['vencimento-hoje', 'cobranca-emissao'] },
+        metaStatus: 'APPROVED',
+      },
+    });
   });
 
   it('ignora envio WhatsApp quando a fatura nao esta mais pendente', async () => {
     const prisma = createPrismaMock([]);
     prisma.invoice.findFirst.mockResolvedValueOnce({ status: 'CANCELED' });
     const whatsappService = {
-      sendTemplateMessage: jest.fn(async () => ({
-        messageId: 'meta-message-1',
-        status: 'sent',
-      })),
+      sendTemplateMessage: jest.fn(() =>
+        Promise.resolve({
+          messageId: 'meta-message-1',
+          status: 'sent',
+        }),
+      ),
     };
     const messagingLimitService = {
-      canSend: jest.fn(async () => ({
-        allowed: true,
-        usage: 0,
-        limit: 100,
-        resetAt: Date.now() + 60_000,
-      })),
-      trackSend: jest.fn(async () => undefined),
-      recordInteraction: jest.fn(async () => undefined),
+      canSend: jest.fn(() =>
+        Promise.resolve({
+          allowed: true,
+          usage: 0,
+          limit: 100,
+          resetAt: Date.now() + 60_000,
+        }),
+      ),
+      trackSend: jest.fn(() => Promise.resolve(undefined)),
+      recordInteraction: jest.fn(() => Promise.resolve(undefined)),
     };
     const rateLimitService = {
-      checkRateLimit: jest.fn(async () => ({
-        allowed: true,
-        resetAt: Date.now() + 60_000,
-      })),
+      checkRateLimit: jest.fn(() =>
+        Promise.resolve({
+          allowed: true,
+          resetAt: Date.now() + 60_000,
+        }),
+      ),
     };
     const service = new MessageWorkerService(
       {} as ConfigService,
@@ -240,19 +258,17 @@ describe('MessageWorkerService template selection', () => {
     await service.processSendMessageJob(job);
 
     expect(whatsappService.sendTemplateMessage).not.toHaveBeenCalled();
-    expect(prisma.collectionLog.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
+    expect(prisma.collectionLog.create.mock.calls[0]?.[0]).toMatchObject({
+      data: {
         companyId: 'company-1',
         invoiceId: 'invoice-1',
         actionType: 'MESSAGE_SKIPPED_INVOICE_NOT_PENDING',
         status: 'SKIPPED',
-      }),
+      },
     });
-    expect(prisma.collectionLog.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        description: expect.stringContaining('WHATSAPP'),
-      }),
-    });
+    expect(
+      prisma.collectionLog.create.mock.calls[0]?.[0].data.description,
+    ).toContain('WHATSAPP');
   });
 
   it('nao falha o job quando o log de skip da fatura cancelada falha', async () => {

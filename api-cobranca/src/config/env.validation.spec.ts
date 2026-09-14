@@ -14,21 +14,78 @@ function buildValidConfig(
       EFI_WEBHOOK_SECRET: 'efi_webhook_secret_with_32_characters',
       AUTH_RESEND_API_KEY: 're_test_platform_key',
       AUTH_EMAIL_FROM: 'CobraPix <acesso@cobrapix.test>',
+      META_ACCESS_TOKEN: 'meta-test-token',
+      META_PHONE_NUMBER_ID: '123456789',
+      META_BUSINESS_ACCOUNT_ID: '123456780',
+      META_APP_SECRET: 'meta-app-secret',
+      META_WEBHOOK_VERIFY_TOKEN: 'verify-token',
+      META_WEBHOOK_BASE_URL: 'https://api.example.test',
+      RESEND_API_KEY: 're_test',
+      RESEND_FROM_EMAIL: 'CifraMais <cobranca@example.test>',
+      RESEND_REPLY_TO: 'suporte@example.test',
+      RESEND_WEBHOOK_SECRET: 'whsec_test',
+      EFI_OPENING_CLIENT_ID: 'opening-client',
+      EFI_OPENING_CLIENT_SECRET: 'opening-secret',
+      EFI_OPENING_CERT_PATH: '/run/secrets/efi-integrator.p12',
+      EFI_PLATFORM_CLIENT_ID: 'platform-client',
+      EFI_PLATFORM_CLIENT_SECRET: 'platform-secret',
+      EFI_PLATFORM_CERT_PATH: '/run/secrets/efi-platform.p12',
+      EFI_PLATFORM_PAYEE_CODE: 'payee-code',
+      EFI_PLATFORM_ACCOUNT_NUMBER: '12345',
+      EFI_PLATFORM_CNPJ: '12345678000190',
+      EFI_WEBHOOK_BASE_URL: 'https://efi.example.test',
+      EFI_CHARGES_WEBHOOK_BASE_URL: 'https://api.example.test',
+      PAYMENT_ENCRYPTION_KEYS: JSON.stringify({ v1: '11'.repeat(32) }),
+      PAYMENT_ACTIVE_KEY_VERSION: 'v1',
     },
     overrides,
   );
 }
 
 describe('validateEnv', () => {
-  it('permite producao sem RESEND_WEBHOOK_SECRET global quando webhooks usam secret por cliente', () => {
-    const env = validateEnv(
-      buildValidConfig({
-        NODE_ENV: 'production',
-        RESEND_WEBHOOK_SECRET: undefined,
-      }),
-    );
+  it('exige assinatura Resend central em produção', () => {
+    expect(() =>
+      validateEnv(
+        buildValidConfig({
+          NODE_ENV: 'production',
+          RESEND_WEBHOOK_SECRET: undefined,
+        }),
+      ),
+    ).toThrow('RESEND_WEBHOOK_SECRET');
+  });
 
-    expect(env.RESEND_WEBHOOK_SECRET).toBeUndefined();
+  it.each([
+    'META_ACCESS_TOKEN',
+    'EFI_OPENING_CLIENT_SECRET',
+    'EFI_OPENING_CERT_PATH',
+    'EFI_PLATFORM_CNPJ',
+    'PAYMENT_ENCRYPTION_KEYS',
+    'RESEND_REPLY_TO',
+  ])('exige %s em produção', (field: string) => {
+    expect(() =>
+      validateEnv(
+        buildValidConfig({ NODE_ENV: 'production', [field]: undefined }),
+      ),
+    ).toThrow(field);
+  });
+
+  it('rejeita mapa criptográfico inválido sem revelar a chave', () => {
+    expect(() =>
+      validateEnv(
+        buildValidConfig({ PAYMENT_ENCRYPTION_KEYS: '{"v1":"short-secret"}' }),
+      ),
+    ).toThrow('PAYMENT_ENCRYPTION_KEYS');
+  });
+
+  it('exige HTTPS no hostname dedicado Efí em produção', () => {
+    expect(() =>
+      validateEnv(
+        buildValidConfig({
+          NODE_ENV: 'production',
+          EFI_WEBHOOK_BASE_URL: 'http://efi.example.test',
+        }),
+      ),
+    ).toThrow('EFI_WEBHOOK_BASE_URL');
   });
 
   it('aceita RESEND_WEBHOOK_SECRET com prefixo whsec', () => {

@@ -8,6 +8,7 @@ import { CollectionRuleEngine } from './collection-rule-engine';
 import { EmailQueueService } from '../email/email.queue';
 import { EmailService } from '../email/email.service';
 import { EmailTemplatesService } from '../email/email-templates.service';
+import { TemplatesService } from '../templates/templates.service';
 
 function decimal(value: number): { toNumber(): number; valueOf(): number } {
   return { toNumber: () => value, valueOf: () => value };
@@ -104,6 +105,9 @@ function createService(input: {
   const createPayment = input.createPayment ?? jest.fn().mockResolvedValue({});
 
   const prisma = {
+    efiOnboarding: {
+      findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
+    },
     company: {
       findUnique: jest.fn().mockResolvedValue(company),
     },
@@ -201,8 +205,38 @@ function createService(input: {
       content:
         'Ola {{nome_devedor}}, acesse {{payment_link}} ate {{data_vencimento}}.',
       isActive: true,
+      greeting: 'Olá',
+      instructions: 'Acesse o pagamento seguro.',
+      signature: 'Equipe Empresa Teste',
     }),
   } as unknown as EmailTemplatesService;
+  const approvedTemplate = {
+    id: 'global-template-1',
+    slug: 'vencimento-hoje',
+    content:
+      input.templateContent ??
+      [
+        'Ola {{nome_devedor}}, sua cobranca de {{valor}} vence em {{data_vencimento}}.',
+        '',
+        'Forma de pagamento: {{metodo_pagamento}}',
+        'Acesse/pague por aqui: {{payment_link}}',
+        'Pix copia e cola: {{pix_copia_e_cola}}',
+        'Linha digitavel: {{boleto_linha_digitavel}}',
+        'Boleto: {{boleto_link}}',
+        'PDF do boleto: {{boleto_pdf}}',
+      ].join('\n'),
+    isActive: true,
+    metaTemplateName: null,
+    metaLanguage: 'pt_BR',
+    paymentButtonEnabled: true,
+    greeting: 'Olá',
+    instructions: 'Acesse o pagamento seguro.',
+    signature: 'Equipe Empresa Teste',
+  };
+  const templatesService = {
+    resolveApproved: jest.fn().mockResolvedValue(approvedTemplate),
+    findAll: jest.fn().mockResolvedValue([approvedTemplate]),
+  } as unknown as TemplatesService;
 
   return {
     service: new BillingService(
@@ -214,6 +248,7 @@ function createService(input: {
       emailQueue,
       emailService,
       emailTemplatesService,
+      templatesService,
     ),
     prisma: prisma as unknown as {
       collectionLog: { create: jest.Mock };

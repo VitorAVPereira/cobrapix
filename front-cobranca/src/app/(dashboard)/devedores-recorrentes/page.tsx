@@ -79,7 +79,7 @@ export default function DevedoresRecorrentesPage() {
     useState<RecurringInvoice | null>(null);
   const [editForm, setEditForm] = useState<EditForm>({
     amount: "",
-    billingType: "PIX",
+    billingType: "BOLIX",
     dueDay: "10",
   });
   const [searchQuery, setSearchQuery] = useState("");
@@ -108,8 +108,8 @@ export default function DevedoresRecorrentesPage() {
   }, [apiClient]);
 
   const enabledBillingMethods: BillingMethod[] = settings?.enabledBillingMethods.length
-    ? settings.enabledBillingMethods
-    : ["PIX"];
+    ? settings.enabledBillingMethods.filter((method) => method !== "BOLETO")
+    : ["BOLIX"];
 
   useEffect(() => {
     void fetchData();
@@ -141,7 +141,7 @@ export default function DevedoresRecorrentesPage() {
   function openEditModal(recurrence: RecurringInvoice): void {
     const billingType = enabledBillingMethods.includes(recurrence.billingType)
       ? recurrence.billingType
-      : (enabledBillingMethods[0] ?? "PIX");
+      : (enabledBillingMethods[0] ?? "BOLIX");
 
     setSelectedRecurrence(recurrence);
     setEditForm({

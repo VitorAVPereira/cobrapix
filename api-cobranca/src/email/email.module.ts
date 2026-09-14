@@ -9,6 +9,7 @@ import { EmailQueueService } from './email.queue';
 import { EmailController } from './email.controller';
 import { EmailTemplatesController } from './email-templates.controller';
 import { EmailTemplatesService } from './email-templates.service';
+import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { EmailTemplatesService } from './email-templates.service';
     EmailProcessor,
     EmailQueueService,
     ResendMailerService,
+    PlatformAdminGuard,
   ],
   exports: [EmailService, EmailTemplatesService, EmailQueueService],
 })

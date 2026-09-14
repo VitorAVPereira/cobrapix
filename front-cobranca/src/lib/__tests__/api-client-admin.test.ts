@@ -19,8 +19,6 @@ function createAdminClientFixture(): AdminClient {
     status: "ACTIVE",
     enabledBillingMethods: ["PIX"],
     preferredBillingMethod: "PIX",
-    onTimeSplitPercentageBps: 350,
-    overdueSplitPercentageBps: 1200,
     gatewayStatus: "ACTIVE",
     whatsappStatus: "PENDING",
     firstUser: {
@@ -55,8 +53,6 @@ function createAdminClientInput(): CreateAdminClientInput {
     billing: {
       enabledBillingMethods: ["PIX"],
       preferredBillingMethod: "PIX",
-      onTimeSplitPercentageBps: 350,
-      overdueSplitPercentageBps: 1200,
     },
     efi: {
       corporateName: "Empresa Certificada",

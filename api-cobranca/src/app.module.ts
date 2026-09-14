@@ -16,6 +16,8 @@ import { TemplatesModule } from './templates/templates.module';
 import { EmailModule } from './email/email.module';
 import { AdminModule } from './admin/admin.module';
 import { BullInfrastructureModule } from './queue/bull-infrastructure.module';
+import { EfiOnboardingModule } from './efi-onboarding/efi-onboarding.module';
+import { CommunicationsModule } from './communications/communications.module';
 
 @Module({
   imports: [
@@ -37,6 +39,8 @@ import { BullInfrastructureModule } from './queue/bull-infrastructure.module';
     TemplatesModule,
     EmailModule,
     AdminModule,
+    EfiOnboardingModule,
+    CommunicationsModule,
   ],
   providers: [
     {

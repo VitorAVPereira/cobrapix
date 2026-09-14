@@ -1,18 +1,9 @@
+import { PaymentChargeService } from './payment-charge.service';
 import { ConfigService } from '@nestjs/config';
 import { EfiService } from './efi.service';
 import { PaymentCryptoService } from './payment-crypto.service';
 import { PaymentNotificationsService } from './payment-notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
-
-interface SplitResolver {
-  resolveSplitSettings(input: {
-    dueDate: Date;
-    company: {
-      onTimeSplitPercentageBps: number;
-      overdueSplitPercentageBps: number;
-    };
-  }): { percentageBps: number; category: 'ON_TIME' | 'OVERDUE' };
-}
 
 interface EfiPayloadBuilder {
   buildPixDebtorPayload(invoice: {
@@ -46,53 +37,6 @@ interface EfiPayloadBuilder {
   formatEfiError(error: unknown): string;
 }
 
-describe('EfiService split settings', () => {
-  beforeEach(() => {
-    jest.useFakeTimers().setSystemTime(new Date('2026-05-12T12:00:00.000Z'));
-  });
-
-  afterEach(() => {
-    jest.useRealTimers();
-  });
-
-  function createService(): SplitResolver {
-    return new EfiService(
-      {} as ConfigService,
-      {} as PrismaService,
-      {} as PaymentCryptoService,
-      {} as PaymentNotificationsService,
-    ) as unknown as SplitResolver;
-  }
-
-  it('usa taxa no prazo quando a cobranca e emitida no vencimento', () => {
-    const service = createService();
-
-    expect(
-      service.resolveSplitSettings({
-        dueDate: new Date('2026-05-12T00:00:00.000Z'),
-        company: {
-          onTimeSplitPercentageBps: 350,
-          overdueSplitPercentageBps: 1200,
-        },
-      }),
-    ).toEqual({ percentageBps: 350, category: 'ON_TIME' });
-  });
-
-  it('usa taxa recuperada quando a cobranca e emitida depois do vencimento', () => {
-    const service = createService();
-
-    expect(
-      service.resolveSplitSettings({
-        dueDate: new Date('2026-05-11T23:59:59.000Z'),
-        company: {
-          onTimeSplitPercentageBps: 350,
-          overdueSplitPercentageBps: 1200,
-        },
-      }),
-    ).toEqual({ percentageBps: 1200, category: 'OVERDUE' });
-  });
-});
-
 describe('EfiService Pix CobV debtor payload', () => {
   function createService(): EfiPayloadBuilder {
     return new EfiService(
@@ -100,6 +44,8 @@ describe('EfiService Pix CobV debtor payload', () => {
       {} as PrismaService,
       {} as PaymentCryptoService,
       {} as PaymentNotificationsService,
+      null,
+      {} as PaymentChargeService,
     ) as unknown as EfiPayloadBuilder;
   }
 
@@ -209,5 +155,135 @@ describe('EfiService Pix CobV debtor payload', () => {
         ],
       }),
     ).toContain('cobv.devedor: O objeto cobv.devedor');
+  });
+});
+
+describe('Efí notification ordering', () => {
+  function fixture(providerStatus: string, previousStatus = 'ACTIVE') {
+    const invoice = {
+      id: 'invoice-1',
+      companyId: 'company-1',
+      status: 'PENDING',
+      paidAt: null,
+    };
+    const prisma = {
+      gatewayAccount: {
+        findFirst: jest.fn().mockResolvedValue({ companyId: 'company-1' }),
+      },
+      paymentCharge: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'charge-1',
+          companyId: 'company-1',
+          invoiceId: 'invoice-1',
+          status: previousStatus,
+          estimatedEfiFeeCents: 100,
+        }),
+      },
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue(invoice),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      collectionLog: { create: jest.fn() },
+    };
+    const charges = {
+      recordSettlement: jest.fn(),
+      transition: jest.fn(),
+      recordPixRefunds: jest.fn().mockResolvedValue('REFUNDED'),
+    };
+    const service = new EfiService(
+      {} as ConfigService,
+      prisma as unknown as PrismaService,
+      {} as PaymentCryptoService,
+      {
+        notifyPaidInvoice: jest.fn(),
+      } as unknown as PaymentNotificationsService,
+      null,
+      charges as unknown as PaymentChargeService,
+    );
+    const sdk = {
+      getNotification: jest.fn().mockResolvedValue({
+        data: [{ custom_id: 'charge-1', status: { current: providerStatus } }],
+      }),
+    };
+    jest
+      .spyOn(
+        service as unknown as { createSdkClient(): typeof sdk },
+        'createSdkClient',
+      )
+      .mockReturnValue(sdk);
+    return { service, charges, prisma };
+  }
+  it('does not treat canceled boleto as paid', async () => {
+    const { service, charges } = fixture('canceled');
+    await service.handleChargesWebhook({ notification: 'token' }, 'company-1');
+    expect(charges.recordSettlement).not.toHaveBeenCalled();
+    expect(charges.transition).toHaveBeenCalledWith(
+      'charge-1',
+      'company-1',
+      'CANCELED',
+      expect.anything(),
+      'canceled',
+    );
+  });
+  it('does not independently settle the invoice after an old charge payment', async () => {
+    const { service, charges, prisma } = fixture('paid', 'REPLACED');
+    charges.recordSettlement.mockResolvedValue(false);
+    await service.handleChargesWebhook({ notification: 'token' }, 'company-1');
+    expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+  });
+  it('does not independently cancel the invoice after a charge refund', async () => {
+    const { service, prisma } = fixture('refunded', 'PAID');
+    await service.handleChargesWebhook({ notification: 'token' }, 'company-1');
+    expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+  });
+  it('does not replace refunded invoice metadata with a delayed waiting event', async () => {
+    const { service, prisma } = fixture('waiting', 'REFUNDED');
+    await service.handleChargesWebhook({ notification: 'token' }, 'company-1');
+    expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+  });
+  it('does not independently settle the invoice after an old Pix payment', async () => {
+    const { service, charges, prisma } = fixture('paid', 'REPLACED');
+    charges.recordSettlement.mockResolvedValue(false);
+    await service.handlePixWebhook({ pix: [{ txid: 'txid' }] });
+    expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+  });
+  it('processes confirmed Pix refunds instead of treating them as a new payment', async () => {
+    const { service, charges } = fixture('paid', 'PAID');
+    await service.handlePixWebhook({
+      pix: [
+        {
+          txid: 'txid',
+          endToEndId: 'e2e',
+          devolucoes: [{ id: 'refund', valor: '100.00', status: 'DEVOLVIDO' }],
+        },
+      ],
+    });
+    expect(charges.recordPixRefunds).toHaveBeenCalledWith(expect.anything(), [
+      { providerRefundId: 'e2e:refund', amountCents: 10000 },
+    ]);
+    expect(charges.recordSettlement).not.toHaveBeenCalled();
+  });
+  it('ignores a late payment callback after a Pix refund', async () => {
+    const { service, charges, prisma } = fixture('paid', 'REFUNDED');
+    await service.handlePixWebhook({ pix: [{ txid: 'txid' }] });
+    expect(charges.recordSettlement).not.toHaveBeenCalled();
+    expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+  });
+  it('does not cancel the replacement invoice on a late original cancellation', async () => {
+    const { service, prisma } = fixture('canceled', 'REPLACED');
+    await service.handleChargesWebhook({ notification: 'token' }, 'company-1');
+    expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+  });
+  it('reflects provider refunds without exposing a refund operation', async () => {
+    const { service, charges } = fixture('refunded', 'PAID');
+    await service.handleChargesWebhook({ notification: 'token' }, 'company-1');
+    expect(charges.transition).toHaveBeenCalledWith(
+      'charge-1',
+      'company-1',
+      'REFUNDED',
+      expect.anything(),
+      'refunded',
+    );
+    expect(charges.recordSettlement).not.toHaveBeenCalled();
   });
 });

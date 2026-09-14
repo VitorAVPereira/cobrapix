@@ -201,7 +201,7 @@ export class PublicPaymentLinkService {
       'toNumber' in value &&
       typeof value.toNumber === 'function'
     ) {
-      return Number(value.toNumber());
+      return Number((value as { toNumber: () => number }).toNumber());
     }
 
     return Number(value);

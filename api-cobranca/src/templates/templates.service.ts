@@ -1,5 +1,5 @@
-import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
-import type { MessageTemplate, Prisma } from '@prisma/client';
+import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import type { GlobalMessageTemplate, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { OfficialTemplateStatus } from '../whatsapp/whatsapp.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
@@ -7,347 +7,280 @@ import { CreateTemplateDto, UpdateTemplateDto } from './dto';
 import {
   getTemplateDefinition,
   TEMPLATE_DEFINITIONS,
-  TEMPLATE_VARIABLE_TAGS,
 } from './template-catalog';
+
+export type MessageTemplateView = GlobalMessageTemplate & {
+  greeting: string;
+  instructions: string;
+  signature: string;
+};
+
+const DEFAULT_GREETING = 'Olá';
+const DEFAULT_INSTRUCTIONS =
+  'Use o botão abaixo para acessar o pagamento seguro.';
+const DEFAULT_SIGNATURE = 'Equipe de cobrança';
 
 @Injectable()
 export class TemplatesService {
-  private readonly logger = new Logger(TemplatesService.name);
-  private readonly supportedVariableTags = new Set<string>(
-    TEMPLATE_VARIABLE_TAGS,
-  );
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly whatsappService: WhatsappService,
   ) {}
 
   async create(
-    companyId: string,
+    _companyId: string,
     dto: CreateTemplateDto,
-  ): Promise<MessageTemplate> {
-    this.validateTemplateContent(dto.content);
-    if (dto.footerText !== undefined) {
-      this.validateTemplateContent(dto.footerText);
-    }
-    const definition = getTemplateDefinition(dto.slug);
-    const existing = await this.prisma.messageTemplate.findFirst({
-      where: { companyId, slug: dto.slug },
+  ): Promise<GlobalMessageTemplate> {
+    const existing = await this.prisma.globalMessageTemplate.findUnique({
+      where: { slug: dto.slug },
     });
-
-    if (existing) {
+    if (existing)
       throw new HttpException(
         `Template com slug "${dto.slug}" ja existe.`,
         HttpStatus.CONFLICT,
       );
-    }
-
-    return this.prisma.messageTemplate.create({
-      data: {
-        name: definition?.name ?? dto.name,
-        slug: dto.slug,
-        content: dto.content,
-        footerText: dto.footerText ?? definition?.footerText ?? null,
-        paymentButtonEnabled:
-          dto.paymentButtonEnabled ?? definition?.paymentButtonEnabled ?? true,
-        paymentButtonLabel:
-          dto.paymentButtonLabel ??
-          definition?.paymentButtonLabel ??
-          'Abrir pagamento',
-        copyCodeButtonEnabled:
-          dto.copyCodeButtonEnabled ??
-          definition?.copyCodeButtonEnabled ??
-          false,
-        copyCodeSource:
-          dto.copyCodeSource ?? definition?.copyCodeSource ?? 'AUTO',
-        isActive: dto.isActive ?? true,
-        metaTemplateName:
-          dto.metaTemplateName ??
-          this.whatsappService.buildMetaTemplateName(dto.slug),
-        metaLanguage: dto.metaLanguage ?? 'pt_BR',
-        category: dto.category ?? 'UTILITY',
-        companyId,
-      },
+    return this.prisma.globalMessageTemplate.create({
+      data: this.fromDto(dto),
     });
   }
 
-  async findAll(companyId: string): Promise<MessageTemplate[]> {
-    await this.ensureDefaultTemplates(companyId);
-
-    return this.prisma.messageTemplate.findMany({
-      where: { companyId },
-      orderBy: { createdAt: 'asc' },
-    });
-  }
-
-  async ensureDefaultTemplates(companyId: string): Promise<MessageTemplate[]> {
-    const slugs = TEMPLATE_DEFINITIONS.map((definition) => definition.slug);
-    const existingTemplates = await this.prisma.messageTemplate.findMany({
-      where: {
-        companyId,
-        slug: { in: slugs },
-      },
-      select: { slug: true },
-    });
-    const existingSlugs = new Set(
-      existingTemplates.map((template) => template.slug),
+  async findAll(companyId: string): Promise<MessageTemplateView[]> {
+    await this.ensureGlobalCatalog();
+    const [templates, preferences] = await Promise.all([
+      this.prisma.globalMessageTemplate.findMany({
+        where: { isActive: true },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.companyTemplatePreference.findMany({
+        where: { companyId, channel: 'WHATSAPP' },
+      }),
+    ]);
+    const bySlug = new Map(
+      preferences.map((preference) => [preference.slug, preference]),
     );
-    const missingTemplates = TEMPLATE_DEFINITIONS.filter(
-      (definition) => !existingSlugs.has(definition.slug),
+    return templates.map((template) =>
+      this.toView(template, bySlug.get(template.slug)),
     );
-
-    if (missingTemplates.length > 0) {
-      await this.prisma.messageTemplate.createMany({
-        data: missingTemplates.map((definition) =>
-          this.buildDefaultTemplateCreateInput(companyId, definition),
-        ),
-        skipDuplicates: true,
-      });
-    }
-
-    return this.prisma.messageTemplate.findMany({
-      where: {
-        companyId,
-        slug: { in: slugs },
-      },
-      orderBy: { createdAt: 'asc' },
-    });
   }
 
-  async findOne(companyId: string, id: string): Promise<MessageTemplate> {
-    const template = await this.prisma.messageTemplate.findFirst({
-      where: { id, companyId },
-    });
+  async ensureDefaultTemplates(
+    companyId: string,
+  ): Promise<MessageTemplateView[]> {
+    return this.findAll(companyId);
+  }
 
-    if (!template) {
+  async findOne(companyId: string, id: string): Promise<MessageTemplateView> {
+    const template = await this.prisma.globalMessageTemplate.findUnique({
+      where: { id },
+    });
+    if (!template || !template.isActive)
       throw new HttpException('Template nao encontrado.', HttpStatus.NOT_FOUND);
-    }
-
-    return template;
+    const preference = await this.prisma.companyTemplatePreference.findUnique({
+      where: {
+        companyId_channel_slug: {
+          companyId,
+          channel: 'WHATSAPP',
+          slug: template.slug,
+        },
+      },
+    });
+    return this.toView(template, preference);
   }
 
   async update(
     companyId: string,
     id: string,
     dto: UpdateTemplateDto,
-  ): Promise<MessageTemplate> {
-    const template = await this.prisma.messageTemplate.findFirst({
-      where: { id, companyId },
-    });
-
-    if (!template) {
-      throw new HttpException('Template nao encontrado.', HttpStatus.NOT_FOUND);
-    }
-
-    if (dto.content !== undefined) {
-      this.validateTemplateContent(dto.content);
-    }
-
-    if (dto.footerText !== undefined) {
-      this.validateTemplateContent(dto.footerText);
-    }
-
-    if (dto.slug && dto.slug !== template.slug) {
-      const existing = await this.prisma.messageTemplate.findFirst({
-        where: { companyId, slug: dto.slug },
-      });
-
-      if (existing) {
-        throw new HttpException(
-          `Template com slug "${dto.slug}" ja existe.`,
-          HttpStatus.CONFLICT,
-        );
-      }
-    }
-
-    const nextSlug = dto.slug ?? template.slug;
-    const definition = getTemplateDefinition(nextSlug);
-    const componentChanged =
-      dto.content !== undefined ||
-      dto.footerText !== undefined ||
-      dto.paymentButtonEnabled !== undefined ||
-      dto.paymentButtonLabel !== undefined ||
-      dto.copyCodeButtonEnabled !== undefined ||
-      dto.copyCodeSource !== undefined;
-
-    return this.prisma.messageTemplate.update({
+  ): Promise<MessageTemplateView> {
+    const template = await this.prisma.globalMessageTemplate.findUnique({
       where: { id },
-      data: {
-        name: definition?.name ?? dto.name ?? template.name,
-        ...(dto.slug !== undefined && { slug: dto.slug }),
-        ...(dto.content !== undefined && { content: dto.content }),
-        ...(dto.footerText !== undefined && {
-          footerText: dto.footerText.trim() || null,
-        }),
-        ...(dto.paymentButtonEnabled !== undefined && {
-          paymentButtonEnabled: dto.paymentButtonEnabled,
-        }),
-        ...(dto.paymentButtonLabel !== undefined && {
-          paymentButtonLabel:
-            dto.paymentButtonLabel.trim() || 'Abrir pagamento',
-        }),
-        ...(dto.copyCodeButtonEnabled !== undefined && {
-          copyCodeButtonEnabled: dto.copyCodeButtonEnabled,
-        }),
-        ...(dto.copyCodeSource !== undefined && {
-          copyCodeSource: dto.copyCodeSource,
-        }),
+    });
+    if (!template)
+      throw new HttpException('Template nao encontrado.', HttpStatus.NOT_FOUND);
+    this.assertSafePersonalization(dto);
+    await this.prisma.companyTemplatePreference.upsert({
+      where: {
+        companyId_channel_slug: {
+          companyId,
+          channel: 'WHATSAPP',
+          slug: template.slug,
+        },
+      },
+      create: {
+        companyId,
+        channel: 'WHATSAPP',
+        slug: template.slug,
+        globalMessageTemplateId: template.id,
+        isActive: dto.isActive ?? true,
+        greeting: this.clean(dto.greeting),
+        instructions: this.clean(dto.instructions),
+        signature: this.clean(dto.signature),
+      },
+      update: {
         ...(dto.isActive !== undefined && { isActive: dto.isActive }),
-        ...(dto.metaTemplateName !== undefined && {
-          metaTemplateName: dto.metaTemplateName,
+        ...(dto.greeting !== undefined && {
+          greeting: this.clean(dto.greeting),
         }),
-        ...(dto.metaLanguage !== undefined && {
-          metaLanguage: dto.metaLanguage,
+        ...(dto.instructions !== undefined && {
+          instructions: this.clean(dto.instructions),
         }),
-        ...(dto.category !== undefined && { category: dto.category }),
-        ...(componentChanged && {
-          metaStatus: 'LOCAL',
-          metaRejectedReason: null,
+        ...(dto.signature !== undefined && {
+          signature: this.clean(dto.signature),
         }),
       },
     });
+    return this.findOne(companyId, id);
   }
 
   async submitToMeta(
     companyId: string,
     id: string,
-  ): Promise<{ template: MessageTemplate; meta: unknown }> {
-    const template = await this.findOne(companyId, id);
+  ): Promise<{ template: GlobalMessageTemplate; meta: unknown }> {
+    const template = await this.findGlobalOrThrow(id);
     const meta = await this.whatsappService.createOfficialTemplate({
       companyId,
       template,
     });
-    const updated = await this.findOne(companyId, id);
-
-    return { template: updated, meta };
+    return { template: await this.findGlobalOrThrow(id), meta };
   }
 
-  async syncMetaStatuses(companyId: string): Promise<MessageTemplate[]> {
-    const templates = await this.prisma.messageTemplate.findMany({
-      where: {
-        companyId,
-        metaTemplateName: { not: null },
-      },
-      orderBy: { createdAt: 'asc' },
+  async syncMetaStatuses(companyId: string): Promise<GlobalMessageTemplate[]> {
+    const templates = await this.prisma.globalMessageTemplate.findMany({
+      where: { metaTemplateName: { not: null } },
     });
-
-    if (templates.length === 0) {
-      return this.findCompanyTemplates(companyId);
-    }
-
-    const officialTemplates =
+    const official =
       await this.whatsappService.listOfficialTemplateStatuses(companyId);
-    const officialTemplateByKey = new Map(
-      officialTemplates.map((template) => [
-        this.buildOfficialTemplateKey(template.name, template.language),
-        template,
+    const byKey = new Map(
+      official.map((item) => [
+        this.providerKey(item.name, item.language),
+        item,
       ]),
     );
     const syncedAt = new Date();
-
     await Promise.all(
-      templates.map((template) =>
-        this.syncTemplateStatus(template, officialTemplateByKey, syncedAt),
-      ),
+      templates.map((template) => this.syncStatus(template, byKey, syncedAt)),
     );
-
-    return this.findCompanyTemplates(companyId);
-  }
-
-  private validateTemplateContent(content: string): void {
-    const variables = Array.from(
-      content.matchAll(/\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g),
-    )
-      .map((match) => match[1])
-      .filter((variable): variable is string => typeof variable === 'string');
-    const invalidVariables = Array.from(
-      new Set(
-        variables.filter(
-          (variable) => !this.supportedVariableTags.has(variable),
-        ),
-      ),
-    );
-
-    if (invalidVariables.length === 0) {
-      return;
-    }
-
-    this.logger.warn(
-      `Template rejeitado com variaveis nao suportadas: ${invalidVariables.join(', ')}`,
-    );
-
-    throw new HttpException(
-      `Variaveis nao suportadas: ${invalidVariables
-        .map((variable) => `{{${variable}}}`)
-        .join(', ')}.`,
-      HttpStatus.BAD_REQUEST,
-    );
-  }
-
-  private async syncTemplateStatus(
-    template: MessageTemplate,
-    officialTemplateByKey: Map<string, OfficialTemplateStatus>,
-    syncedAt: Date,
-  ): Promise<void> {
-    if (!template.metaTemplateName) {
-      return;
-    }
-
-    const officialTemplate = officialTemplateByKey.get(
-      this.buildOfficialTemplateKey(
-        template.metaTemplateName,
-        template.metaLanguage,
-      ),
-    );
-
-    if (!officialTemplate) {
-      return;
-    }
-
-    await this.prisma.messageTemplate.updateMany({
-      where: { id: template.id, companyId: template.companyId },
-      data: {
-        metaStatus: officialTemplate.status,
-        metaRejectedReason: officialTemplate.rejectedReason,
-        lastMetaSyncAt: syncedAt,
-      },
-    });
-  }
-
-  private buildOfficialTemplateKey(name: string, language: string): string {
-    return `${name.trim().toLowerCase()}::${language.trim().toLowerCase()}`;
-  }
-
-  private async findCompanyTemplates(
-    companyId: string,
-  ): Promise<MessageTemplate[]> {
-    return this.prisma.messageTemplate.findMany({
-      where: { companyId },
+    return this.prisma.globalMessageTemplate.findMany({
       orderBy: { createdAt: 'asc' },
     });
   }
 
-  private buildDefaultTemplateCreateInput(
+  async resolveApproved(
     companyId: string,
-    definition: (typeof TEMPLATE_DEFINITIONS)[number],
-  ): Prisma.MessageTemplateCreateManyInput {
-    return {
-      name: definition.name,
-      slug: definition.slug,
-      content: definition.defaultContent,
-      footerText: definition.footerText,
-      paymentButtonEnabled: definition.paymentButtonEnabled,
-      paymentButtonLabel: definition.paymentButtonLabel,
-      copyCodeButtonEnabled: definition.copyCodeButtonEnabled,
-      copyCodeSource: definition.copyCodeSource,
-      isActive: true,
-      metaTemplateName: this.whatsappService.buildMetaTemplateName(
-        definition.slug,
+    slug: string,
+  ): Promise<MessageTemplateView | null> {
+    await this.ensureGlobalCatalog();
+    const template = await this.prisma.globalMessageTemplate.findFirst({
+      where: { slug, isActive: true, metaStatus: 'APPROVED' },
+    });
+    return template ? this.findOne(companyId, template.id) : null;
+  }
+
+  private async ensureGlobalCatalog(): Promise<void> {
+    await Promise.all(
+      TEMPLATE_DEFINITIONS.map((definition) =>
+        this.prisma.globalMessageTemplate.upsert({
+          where: { slug: definition.slug },
+          create: {
+            name: definition.name,
+            slug: definition.slug,
+            content: definition.defaultContent,
+            footerText: definition.footerText,
+            paymentButtonEnabled: definition.paymentButtonEnabled,
+            paymentButtonLabel: definition.paymentButtonLabel,
+            copyCodeButtonEnabled: definition.copyCodeButtonEnabled,
+            copyCodeSource: definition.copyCodeSource,
+            metaTemplateName: this.whatsappService.buildMetaTemplateName(
+              definition.slug,
+            ),
+            metaLanguage: 'pt_BR',
+            category: 'UTILITY',
+            metaStatus: 'LOCAL',
+          },
+          update: {},
+        }),
       ),
-      metaLanguage: 'pt_BR',
-      category: 'UTILITY',
+    );
+  }
+
+  private fromDto(
+    dto: CreateTemplateDto,
+  ): Prisma.GlobalMessageTemplateCreateInput {
+    const definition = getTemplateDefinition(dto.slug);
+    return {
+      name: definition?.name ?? dto.name.trim(),
+      slug: dto.slug,
+      content: dto.content,
+      footerText: dto.footerText?.trim() || null,
+      paymentButtonEnabled: dto.paymentButtonEnabled ?? true,
+      paymentButtonLabel: dto.paymentButtonLabel?.trim() || 'Abrir pagamento',
+      copyCodeButtonEnabled: dto.copyCodeButtonEnabled ?? false,
+      copyCodeSource: dto.copyCodeSource ?? 'AUTO',
+      isActive: dto.isActive ?? true,
+      metaTemplateName:
+        dto.metaTemplateName ??
+        this.whatsappService.buildMetaTemplateName(dto.slug),
+      metaLanguage: dto.metaLanguage ?? 'pt_BR',
+      category: dto.category ?? 'UTILITY',
       metaStatus: 'LOCAL',
-      companyId,
     };
+  }
+
+  private assertSafePersonalization(dto: UpdateTemplateDto): void {
+    for (const value of [dto.greeting, dto.instructions, dto.signature]) {
+      if (value && /\{\{|\}\}|https?:\/\/|\r|\n/i.test(value))
+        throw new HttpException(
+          'Personalizacao deve ser texto simples, sem links, quebras de linha ou variaveis.',
+          HttpStatus.BAD_REQUEST,
+        );
+    }
+  }
+
+  private toView(
+    template: GlobalMessageTemplate,
+    preference?: {
+      isActive: boolean;
+      greeting: string | null;
+      instructions: string | null;
+      signature: string | null;
+    } | null,
+  ): MessageTemplateView {
+    return {
+      ...template,
+      isActive: preference?.isActive ?? template.isActive,
+      greeting: preference?.greeting ?? DEFAULT_GREETING,
+      instructions: preference?.instructions ?? DEFAULT_INSTRUCTIONS,
+      signature: preference?.signature ?? DEFAULT_SIGNATURE,
+    };
+  }
+  private clean(value: string | undefined): string | null {
+    return value?.trim() || null;
+  }
+  private findGlobalOrThrow(id: string): Promise<GlobalMessageTemplate> {
+    return this.prisma.globalMessageTemplate.findUniqueOrThrow({
+      where: { id },
+    });
+  }
+  private providerKey(name: string, language: string): string {
+    return `${name.trim().toLowerCase()}::${language.trim().toLowerCase()}`;
+  }
+  private async syncStatus(
+    template: GlobalMessageTemplate,
+    statuses: Map<string, OfficialTemplateStatus>,
+    syncedAt: Date,
+  ): Promise<void> {
+    if (!template.metaTemplateName) return;
+    const status = statuses.get(
+      this.providerKey(template.metaTemplateName, template.metaLanguage),
+    );
+    if (!status) return;
+    await this.prisma.globalMessageTemplate.update({
+      where: { id: template.id },
+      data: {
+        metaStatus: status.status,
+        metaRejectedReason: status.rejectedReason,
+        lastMetaSyncAt: syncedAt,
+      },
+    });
   }
 }
