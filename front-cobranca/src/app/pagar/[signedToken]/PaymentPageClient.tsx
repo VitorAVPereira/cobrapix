@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { CheckCircle2, Copy, ExternalLink, FileText } from "lucide-react";
 import type { BillingMethod } from "@/lib/api-client";
+import { BrandLogo } from "@/components/ui/BrandLogo";
 
 export interface PublicPaymentData {
   invoiceId: string;
@@ -61,7 +62,8 @@ export default function PaymentPageClient({
   if (error || !data) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
-        <section className="w-full max-w-lg rounded-md border border-red-200 bg-white p-6 shadow-sm">
+        <section className="w-full max-w-lg rounded-2xl border border-red-200 bg-white p-6 shadow-sm">
+          <BrandLogo width={116} height={38} className="mb-6" priority />
           <h1 className="text-xl font-bold text-slate-950">
             Link indisponivel
           </h1>
@@ -76,8 +78,9 @@ export default function PaymentPageClient({
   return (
     <main className="min-h-screen bg-slate-50">
       <div className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center p-4 sm:p-6">
-        <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-100 px-5 py-5 sm:px-6">
+            <BrandLogo width={116} height={38} className="mb-5" priority />
             <p className="text-sm font-semibold text-emerald-700">
               {data.companyName}
             </p>

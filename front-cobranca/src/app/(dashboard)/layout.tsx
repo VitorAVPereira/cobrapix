@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Sidebar } from "@/components/ui/Sidebar";
 import { Menu } from "lucide-react";
 import { FinancialActivationProvider } from "@/components/features/FinancialActivation";
+import { BrandLogo } from "@/components/ui/BrandLogo";
 
 export default function DashboardLayout({
   children,
@@ -25,9 +26,7 @@ export default function DashboardLayout({
           >
             <Menu size={22} />
           </button>
-          <span className="text-lg font-bold text-slate-900 tracking-wider">
-            COBRA<span className="text-emerald-500">PIX</span>
-          </span>
+          <BrandLogo width={104} height={34} priority />
         </header>
 
         <main className="flex-1 overflow-y-auto">

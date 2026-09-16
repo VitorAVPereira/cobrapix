@@ -55,10 +55,17 @@ jest.mock("@/lib/auth", () => ({
       handler(request),
 }));
 
-import middleware from "../middleware";
+import middleware, { config } from "../middleware";
 import { NextResponse } from "next/server";
 
 const mockedNextResponse = NextResponse as unknown as MockNextResponse;
+
+it("serves brand assets without redirecting unauthenticated visitors", () => {
+  const matcher = new RegExp(`^${config.matcher[0]}$`);
+
+  expect(matcher.test("/brand/cifra-plus-primary.svg")).toBe(false);
+  expect(matcher.test("/cobrancas")).toBe(true);
+});
 
 function createRequest(
   pathname: string,

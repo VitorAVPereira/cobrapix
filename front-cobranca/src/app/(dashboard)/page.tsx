@@ -145,7 +145,7 @@ export default function DashboardPage() {
     {
       label: "Total Recuperado",
       value: formatBRL(metrics.recoveredAmount),
-      helper: "Receita recuperada pelo CobraPix",
+      helper: "Receita recuperada pela Cifra+",
       icon: ArrowUpRight,
       emphasis: "emerald",
     },
