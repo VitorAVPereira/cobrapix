@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
+import { BrandLogo } from "@/components/ui/BrandLogo";
 import {
   BellRing,
   Building2,
@@ -137,12 +138,10 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         `}
       >
         <div className="h-16 flex items-center justify-between px-6 border-b border-slate-800 shrink-0">
-          <span className="text-xl font-bold text-white tracking-wider">
-            COBRA<span className="text-emerald-400">PIX</span>
-          </span>
+          <BrandLogo variant="reverse" width={130} height={42} priority />
           <button
             onClick={onClose}
-            className="lg:hidden p-1 text-slate-400 hover:text-white transition-colors"
+            className="lg:hidden p-1 text-slate-300 hover:text-white transition-colors"
             aria-label="Fechar menu"
           >
             <X size={20} />
@@ -152,7 +151,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         <nav className="flex-1 px-3 py-6 overflow-y-auto">
           {isPlatformAdmin ? (
             <div>
-              <p className="px-3 pb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+              <p className="px-3 pb-2 text-xs font-semibold uppercase tracking-wider text-slate-300/80">
                 Admin
               </p>
               <div className="space-y-1">
@@ -221,7 +220,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                   type="button"
                   onClick={() => setSettingsOpen((current) => !current)}
                   aria-expanded={settingsOpen}
-                  className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500 transition-colors hover:bg-slate-800 hover:text-slate-300"
+                  className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-semibold uppercase tracking-wider text-slate-300/80 transition-colors hover:bg-slate-800 hover:text-white"
                 >
                   <span className="flex items-center gap-2">
                     <Settings size={15} />
@@ -267,7 +266,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         <div className="p-4 border-t border-slate-800 space-y-3 shrink-0">
           {session?.user && (
             <div className="px-3 py-2">
-              <p className="text-xs text-slate-500 uppercase tracking-wider font-medium">
+              <p className="text-xs text-slate-300/80 uppercase tracking-wider font-medium">
                 Empresa
               </p>
               <p className="text-sm text-slate-300 font-medium truncate mt-0.5">

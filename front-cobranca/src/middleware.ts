@@ -74,6 +74,6 @@ export default auth((req) => {
 
 export const config = {
   matcher: [
-    "/((?!login|esqueci-senha|redefinir-senha|api/auth|api/webhooks|_next/static|_next/image|favicon.ico).*)",
+    "/((?!login|esqueci-senha|redefinir-senha|api/auth|api/webhooks|_next/static|_next/image|brand/|favicon.ico).*)",
   ],
 };

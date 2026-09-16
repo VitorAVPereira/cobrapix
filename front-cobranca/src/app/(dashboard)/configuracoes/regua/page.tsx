@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { ReactElement } from "react";
 import {
   ArrowDown,
   ArrowUp,
   CalendarClock,
-  CheckCircle2,
   Clock3,
   Frown,
   Loader2,
@@ -19,7 +19,6 @@ import {
   Trash2,
   UserPlus,
   Users,
-  X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type {
@@ -36,7 +35,6 @@ function getErrorMessage(error: unknown): string {
 
 interface ProfileViewMeta {
   label: string;
-  title: string;
   description: string;
   icon: LucideIcon;
 }
@@ -44,30 +42,26 @@ interface ProfileViewMeta {
 const PROFILE_VIEW_META: Record<CollectionProfileType, ProfileViewMeta> = {
   NEW: {
     label: "Novo Cliente",
-    title: "Regua de Cobranca para Novos Clientes",
     description:
-      "Desenvolva um relacionamento positivo desde o inicio com estrategias suaves que incentivam o pagamento sem pressionar.",
+      "Uma sequência de boas-vindas e lembretes leves para quem está começando a pagar com você.",
     icon: UserPlus,
   },
   GOOD: {
     label: "Bom Pagador",
-    title: "Regua de Cobranca para Bons Pagadores",
     description:
-      "Mantenha a confianca e a lealdade com uma cadencia amigavel que respeita o historico de pontualidade.",
+      "Lembretes pontuais que respeitam o histórico de quem costuma pagar em dia.",
     icon: Smile,
   },
   DOUBTFUL: {
     label: "Pagador Duvidoso",
-    title: "Regua de Cobranca para Pagador Duvidoso",
     description:
-      "Use abordagens mais frequentes para reduzir riscos de inadimplencia sem perder clareza no contato.",
+      "Mais pontos de contato para acompanhar pagamentos que precisam de atenção.",
     icon: Meh,
   },
   BAD: {
     label: "Mau Pagador",
-    title: "Regua de Cobranca para Mau Pagador",
     description:
-      "Aplique uma cobranca mais estruturada para recuperar debitos com comunicacao direta e rastreavel.",
+      "Uma sequência de cobrança mais frequente e direta para pagamentos em atraso.",
     icon: Frown,
   },
 };
@@ -103,7 +97,6 @@ interface TimelinePoint {
   day: number;
   steps: TimelineStep[];
   tone: TimelineTone;
-  caption: string;
 }
 
 type TimelineTone = "emission" | "before" | "due" | "after" | "critical";
@@ -143,34 +136,21 @@ const EMPTY_STEP: StepForm = {
   sendTimeEnd: "",
 };
 
-const TONE_CLASSES: Record<
-  TimelineTone,
-  { node: string; icon: string; label: string }
-> = {
+const TONE_CLASSES: Record<TimelineTone, { node: string }> = {
   emission: {
     node: "bg-slate-500 text-white",
-    icon: "text-slate-500",
-    label: "text-slate-700",
   },
   before: {
     node: "bg-slate-700 text-white",
-    icon: "text-slate-600",
-    label: "text-slate-700",
   },
   due: {
     node: "bg-emerald-600 text-white",
-    icon: "text-emerald-700",
-    label: "text-emerald-950",
   },
   after: {
     node: "bg-amber-500 text-white",
-    icon: "text-amber-600",
-    label: "text-amber-700",
   },
   critical: {
     node: "bg-red-700 text-white",
-    icon: "text-red-700",
-    label: "text-red-950",
   },
 };
 
@@ -219,7 +199,6 @@ function buildTimelinePoints(
       day: cumulativeDay,
       steps: [{ index, channel: step.channel }],
       tone: getTimelineTone(cumulativeDay, profileType),
-      caption: getTimelineCaption(cumulativeDay, profileType),
     });
   });
 
@@ -237,21 +216,8 @@ function getTimelineTone(
   return "after";
 }
 
-function getTimelineCaption(
-  day: number,
-  profileType: CollectionProfileType,
-): string {
-  if (day <= EMISSION_DAY) return "Ao cadastrar";
-  if (day < 0) return "Antes do vencimento";
-  if (day === 0) return "No dia do vencimento";
-  if (profileType === "BAD" && day === 30) return "Negativacao";
-  if (profileType === "BAD" && day >= 40) return "Protesto";
-  if ([2, 15, 30].includes(day)) return "Depois do vencimento";
-  return "";
-}
-
 function formatDayBadge(day: number): string {
-  if (day <= EMISSION_DAY) return "Emissão";
+  if (day <= EMISSION_DAY) return "Inicial";
   return day.toString();
 }
 
@@ -348,11 +314,6 @@ function clampDay(day: number, min: number, max: number): number {
   return Math.min(Math.max(day, min), max);
 }
 
-function parseIntegerInput(value: string): number {
-  const parsed = Number.parseInt(value, 10);
-  return Number.isNaN(parsed) ? 0 : parsed;
-}
-
 function formatScheduleDay(day: number): string {
   const absoluteDay = Math.abs(day);
   const dayLabel = absoluteDay === 1 ? "dia" : "dias";
@@ -365,7 +326,68 @@ function formatScheduleDay(day: number): string {
     return "No dia do vencimento";
   }
 
-  return `${day} ${dayLabel} apos o vencimento`;
+  return `${day} ${dayLabel} após o vencimento`;
+}
+
+interface StepDayInputProps {
+  value: number;
+  min: number;
+  max: number;
+  label: string;
+  onCommit: (day: number) => void;
+}
+
+function StepDayInput({
+  value,
+  min,
+  max,
+  label,
+  onCommit,
+}: StepDayInputProps): ReactElement {
+  const [draft, setDraft] = useState(String(value));
+  const [inputError, setInputError] = useState<string | null>(null);
+
+  function commit(): void {
+    const parsed = Number(draft);
+    if (!/^-?\d+$/.test(draft.trim()) || !Number.isSafeInteger(parsed)) {
+      setDraft(String(value));
+      setInputError("Digite um número inteiro de dias.");
+      return;
+    }
+
+    const nextDay = clampDay(parsed, min, max);
+    setDraft(String(nextDay));
+    setInputError(null);
+    if (nextDay !== value) onCommit(nextDay);
+  }
+
+  return (
+    <>
+      <input
+        type="number"
+        value={draft}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          setInputError(null);
+        }}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+        }}
+        min={min}
+        max={max}
+        step={1}
+        aria-label={label}
+        aria-invalid={Boolean(inputError)}
+        className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900"
+      />
+      {inputError && (
+        <span role="alert" className="text-xs font-medium text-red-600">
+          {inputError}
+        </span>
+      )}
+    </>
+  );
 }
 
 export default function ReguaPage() {
@@ -420,7 +442,72 @@ export default function ReguaPage() {
     [stepForms],
   );
   const emissionEnabled = emissionChannels.EMAIL || emissionChannels.WHATSAPP;
-  const timelineMinWidth = Math.max(820, timelinePoints.length * 86);
+
+  function markStepsChanged(): void {
+    setError(null);
+    setSuccess(null);
+    setHasStepChanges(true);
+  }
+
+  useEffect(() => {
+    if (!hasStepChanges) return;
+
+    function warnBeforeUnload(event: BeforeUnloadEvent): void {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+
+    function guardLinkNavigation(event: MouseEvent): void {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      )
+        return;
+      if (!(event.target instanceof Element)) return;
+      const link = event.target.closest("a[href]");
+      if (
+        !(link instanceof HTMLAnchorElement) ||
+        link.target === "_blank" ||
+        link.getAttribute("href")?.startsWith("#")
+      )
+        return;
+      if (
+        window.confirm(
+          "Você tem alterações não salvas. Descartá-las e sair desta página?",
+        )
+      )
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    document.addEventListener("click", guardLinkNavigation, true);
+    return () => {
+      window.removeEventListener("beforeunload", warnBeforeUnload);
+      document.removeEventListener("click", guardLinkNavigation, true);
+    };
+  }, [hasStepChanges]);
+
+  function selectProfile(profileId: string): void {
+    if (profileId === selectedId) return;
+    if (
+      hasStepChanges &&
+      !window.confirm(
+        "Você tem alterações não salvas. Descartar e trocar de perfil?",
+      )
+    ) {
+      return;
+    }
+
+    setSelectedId(profileId);
+    setError(null);
+    setSuccess(null);
+  }
 
   useEffect(() => {
     let active = true;
@@ -479,6 +566,15 @@ export default function ReguaPage() {
   }, [selected]);
 
   async function createProfile(): Promise<void> {
+    if (
+      hasStepChanges &&
+      !window.confirm(
+        "Você tem alterações não salvas. Descartá-las e criar outro perfil?",
+      )
+    ) {
+      return;
+    }
+
     setSaving(true);
     setError(null);
 
@@ -519,6 +615,22 @@ export default function ReguaPage() {
 
   async function saveSteps(): Promise<void> {
     if (!selectedId) return;
+
+    for (const [position, entry] of editableStepEntries.entries()) {
+      const { sendTimeStart, sendTimeEnd } = entry.step;
+      if (Boolean(sendTimeStart) !== Boolean(sendTimeEnd)) {
+        setError(
+          `Preencha os dois horários do contato ${position + 1} ou deixe ambos vazios.`,
+        );
+        return;
+      }
+      if (sendTimeStart && sendTimeEnd && sendTimeStart > sendTimeEnd) {
+        setError(
+          `O horário inicial do contato ${position + 1} deve ser anterior ao horário final.`,
+        );
+        return;
+      }
+    }
 
     setSaving(true);
     setError(null);
@@ -563,7 +675,7 @@ export default function ReguaPage() {
         stepIndex === index ? { ...step, [field]: value } : step,
       ),
     );
-    setHasStepChanges(true);
+    markStepsChanged();
   }
 
   function updateStepTemplate(index: number, templateId: string): void {
@@ -574,7 +686,7 @@ export default function ReguaPage() {
           : step,
       ),
     );
-    setHasStepChanges(true);
+    markStepsChanged();
   }
 
   function updateStepScheduleDay(index: number, value: number): void {
@@ -614,7 +726,7 @@ export default function ReguaPage() {
 
       return next;
     });
-    setHasStepChanges(true);
+    markStepsChanged();
   }
 
   function updateEmissionEnabled(enabled: boolean): void {
@@ -643,7 +755,7 @@ export default function ReguaPage() {
         ...otherSteps,
       ]);
     });
-    setHasStepChanges(true);
+    markStepsChanged();
   }
 
   function updateEmissionChannel(channel: StepChannel, enabled: boolean): void {
@@ -683,7 +795,7 @@ export default function ReguaPage() {
         ...otherSteps,
       ]);
     });
-    setHasStepChanges(true);
+    markStepsChanged();
   }
 
   function updateEmissionTemplate(
@@ -699,7 +811,7 @@ export default function ReguaPage() {
         ),
       ),
     );
-    setHasStepChanges(true);
+    markStepsChanged();
   }
 
   function getEmissionTemplateId(channel: StepChannel): string {
@@ -712,6 +824,7 @@ export default function ReguaPage() {
 
   function addStep(): void {
     setStepForms((prev) => {
+      if (prev.length >= 20) return prev;
       const scheduledSteps = getScheduledStepForms(prev);
       const lastScheduleDay = scheduledSteps.reduce(
         (maxDay, step) => Math.max(maxDay, step.scheduleDay),
@@ -721,7 +834,7 @@ export default function ReguaPage() {
         lastScheduleDay === Number.NEGATIVE_INFINITY ||
         lastScheduleDay <= EMISSION_DAY
           ? 0
-          : lastScheduleDay + 3;
+          : Math.min(lastScheduleDay + 3, 365);
 
       return buildStepFormsFromScheduledSteps([
         ...scheduledSteps,
@@ -733,7 +846,7 @@ export default function ReguaPage() {
         },
       ]);
     });
-    setHasStepChanges(true);
+    markStepsChanged();
   }
 
   function removeStep(index: number): void {
@@ -744,7 +857,7 @@ export default function ReguaPage() {
         ),
       ),
     );
-    setHasStepChanges(true);
+    markStepsChanged();
   }
 
   function moveStep(index: number, direction: "up" | "down"): void {
@@ -779,7 +892,7 @@ export default function ReguaPage() {
 
       return buildStepFormsFromScheduledSteps(next);
     });
-    setHasStepChanges(true);
+    markStepsChanged();
   }
 
   if (loading) {
@@ -792,14 +905,18 @@ export default function ReguaPage() {
 
   return (
     <div className="min-h-full bg-slate-50">
-      <div className="mx-auto max-w-7xl p-4 sm:p-6 lg:p-8">
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+      <div className="mx-auto max-w-7xl space-y-6 p-4 pb-12 sm:p-6 lg:p-8">
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-slate-950">
-              Regua de Cobranca
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-emerald-700">
+              Configurações de cobrança
+            </p>
+            <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">
+              Régua de cobrança
             </h1>
-            <p className="mt-1 text-sm text-slate-500">
-              Configure perfis e etapas de cobranca multicanal.
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+              Escolha um perfil e organize os contatos que serão enviados ao
+              longo do vencimento.
             </p>
           </div>
 
@@ -808,7 +925,7 @@ export default function ReguaPage() {
               type="button"
               onClick={() => void handleClassify()}
               disabled={saving}
-              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:opacity-60"
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 disabled:opacity-60"
             >
               <SlidersHorizontal size={16} />
               Classificar devedores
@@ -816,7 +933,7 @@ export default function ReguaPage() {
             <button
               type="button"
               onClick={() => setShowNewProfile(true)}
-              className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
             >
               <Plus size={16} />
               Novo perfil
@@ -824,9 +941,46 @@ export default function ReguaPage() {
           </div>
         </div>
 
+        <div className="grid gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-950 sm:grid-cols-3 sm:gap-5 sm:p-5">
+          <div className="flex items-start gap-3">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white font-bold text-emerald-700">
+              1
+            </span>
+            <span>
+              <strong className="block">Escolha o perfil</strong>
+              <span className="text-emerald-800">
+                Cada grupo pode receber uma sequência diferente.
+              </span>
+            </span>
+          </div>
+          <div className="flex items-start gap-3">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white font-bold text-emerald-700">
+              2
+            </span>
+            <span>
+              <strong className="block">Defina os contatos</strong>
+              <span className="text-emerald-800">
+                Escolha o dia, o canal e a mensagem.
+              </span>
+            </span>
+          </div>
+          <div className="flex items-start gap-3">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white font-bold text-emerald-700">
+              3
+            </span>
+            <span>
+              <strong className="block">Salve a régua</strong>
+              <span className="text-emerald-800">
+                Confira a prévia antes de aplicar as alterações.
+              </span>
+            </span>
+          </div>
+        </div>
+
         {(error || success) && (
           <div
-            className={`mb-4 rounded-md border px-4 py-3 text-sm font-medium ${
+            role="status"
+            className={`rounded-xl border px-4 py-3 text-sm font-medium ${
               error
                 ? "border-red-200 bg-red-50 text-red-800"
                 : "border-emerald-200 bg-emerald-50 text-emerald-800"
@@ -837,77 +991,98 @@ export default function ReguaPage() {
         )}
 
         {showNewProfile && (
-          <section className="mb-6 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-3 text-sm font-semibold text-slate-950">
-              Novo perfil
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+            <h2 className="text-base font-bold text-slate-950">
+              Criar perfil de cobrança
             </h2>
-            <div className="grid gap-3 lg:grid-cols-[minmax(180px,1fr)_220px_auto_auto]">
-              <input
-                type="text"
-                value={newProfile.name}
-                onChange={(event) =>
-                  setNewProfile((profile) => ({
-                    ...profile,
-                    name: event.target.value,
-                  }))
-                }
-                placeholder="Nome do perfil"
-                className="h-10 rounded-md border border-slate-300 px-3 text-sm"
-              />
-              <select
-                value={newProfile.profileType}
-                onChange={(event) =>
-                  setNewProfile((profile) => ({
-                    ...profile,
-                    profileType: event.target.value as CollectionProfileType,
-                  }))
-                }
-                className="h-10 rounded-md border border-slate-300 px-3 text-sm"
-              >
-                {Object.entries(PROFILE_VIEW_META).map(([type, meta]) => (
-                  <option key={type} value={type}>
-                    {meta.label}
-                  </option>
-                ))}
-              </select>
-              <label className="flex h-10 items-center gap-2 text-sm text-slate-600">
+            <p className="mt-1 text-sm text-slate-500">
+              Perfis permitem criar sequências diferentes para cada grupo de
+              clientes.
+            </p>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <label className="grid gap-1.5 text-xs font-bold text-slate-700">
+                Nome do perfil
                 <input
-                  type="checkbox"
-                  checked={newProfile.isDefault}
+                  type="text"
+                  value={newProfile.name}
                   onChange={(event) =>
                     setNewProfile((profile) => ({
                       ...profile,
-                      isDefault: event.target.checked,
+                      name: event.target.value,
                     }))
                   }
-                  className="h-4 w-4 rounded border-slate-300"
+                  placeholder="Ex.: Clientes novos"
+                  className="h-11 rounded-lg border border-slate-200 px-3 text-sm font-normal text-slate-900"
                 />
-                Padrao
               </label>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => void createProfile()}
-                  disabled={saving || !newProfile.name.trim()}
-                  className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+              <label className="grid gap-1.5 text-xs font-bold text-slate-700">
+                Tipo de cliente
+                <select
+                  value={newProfile.profileType}
+                  onChange={(event) =>
+                    setNewProfile((profile) => ({
+                      ...profile,
+                      profileType: event.target.value as CollectionProfileType,
+                    }))
+                  }
+                  className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm font-normal text-slate-900"
                 >
-                  Criar
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowNewProfile(false)}
-                  className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
-                >
-                  Cancelar
-                </button>
-              </div>
+                  {Object.entries(PROFILE_VIEW_META).map(([type, meta]) => (
+                    <option key={type} value={type}>
+                      {meta.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <label className="mt-4 flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={newProfile.isDefault}
+                onChange={(event) =>
+                  setNewProfile((profile) => ({
+                    ...profile,
+                    isDefault: event.target.checked,
+                  }))
+                }
+                className="h-4 w-4 rounded border-slate-300"
+              />
+              Usar como perfil padrão
+            </label>
+            <p className="mt-1 text-xs text-slate-500">
+              Define este como o perfil principal da empresa.
+            </p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void createProfile()}
+                disabled={saving || !newProfile.name.trim()}
+                className="min-h-10 rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+              >
+                Criar perfil
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowNewProfile(false)}
+                className="min-h-10 rounded-xl border border-slate-200 px-4 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
             </div>
           </section>
         )}
 
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[290px_minmax(0,1fr)]">
-          <aside className="overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-slate-200">
-            <div className="divide-y divide-slate-100">
+        <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
+          <aside className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm xl:sticky xl:top-6">
+            <div className="px-2 pb-3 pt-2">
+              <h2 className="text-sm font-bold text-slate-950">
+                Perfis de cobrança
+              </h2>
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                Selecione quem receberá esta sequência.
+              </p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
               {sortedProfiles.map((profile) => {
                 const isSelected = selectedId === profile.id;
                 const meta = PROFILE_VIEW_META[profile.profileType];
@@ -917,17 +1092,18 @@ export default function ReguaPage() {
                   <button
                     key={profile.id}
                     type="button"
-                    onClick={() => setSelectedId(profile.id)}
-                    className={`flex w-full items-center gap-4 px-5 py-4 text-left transition ${
+                    onClick={() => selectProfile(profile.id)}
+                    aria-current={isSelected ? "true" : undefined}
+                    className={`flex w-full items-center gap-3 rounded-xl border px-3 py-3 text-left transition ${
                       isSelected
-                        ? "bg-emerald-600 text-white"
-                        : "bg-white text-slate-900 hover:bg-slate-50"
+                        ? "border-emerald-300 bg-emerald-50 text-emerald-950 ring-1 ring-emerald-200"
+                        : "border-transparent bg-white text-slate-900 hover:border-slate-200 hover:bg-slate-50"
                     }`}
                   >
                     <span
-                      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
+                      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
                         isSelected
-                          ? "bg-white/20 text-white"
+                          ? "bg-emerald-600 text-white"
                           : "bg-emerald-50 text-emerald-700"
                       }`}
                     >
@@ -937,123 +1113,165 @@ export default function ReguaPage() {
                       <span className="block truncate text-sm font-bold">
                         {getProfileLabel(profile)}
                       </span>
-                      <span
-                        className={`mt-1 flex items-center gap-2 text-xs ${
-                          isSelected ? "text-emerald-50" : "text-slate-400"
-                        }`}
-                      >
-                        {profile.steps.length} etapa
+                      <span className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+                        {profile.steps.length} contato
                         {profile.steps.length !== 1 ? "s" : ""}
                         {profile._count && (
                           <>
+                            <span aria-hidden="true">·</span>
                             <Users size={12} />
-                            {profile._count.debtors}
+                            {profile._count.debtors} cliente
+                            {profile._count.debtors !== 1 ? "s" : ""}
                           </>
                         )}
                       </span>
                     </span>
                     {profile.isDefault && (
-                      <CheckCircle2
-                        size={16}
-                        className={
-                          isSelected ? "text-white" : "text-emerald-500"
-                        }
-                      />
+                      <span className="rounded-full bg-white px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700">
+                        Padrão
+                      </span>
                     )}
                   </button>
                 );
               })}
 
               {sortedProfiles.length === 0 && (
-                <p className="px-5 py-8 text-center text-sm text-slate-400">
-                  Nenhum perfil cadastrado.
+                <p className="px-3 py-8 text-center text-sm text-slate-500">
+                  Nenhum perfil cadastrado. Crie um perfil para começar.
                 </p>
               )}
             </div>
           </aside>
 
           <main className="min-w-0 space-y-6">
-            <section className="rounded-lg bg-white px-4 py-6 shadow-sm ring-1 ring-slate-200 sm:px-6">
+            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
               {selected ? (
                 <>
-                  <div className="mx-auto max-w-3xl text-center">
-                    <h2 className="text-xl font-bold text-slate-950 sm:text-2xl">
-                      {selectedMeta.title}
-                    </h2>
-                    <p className="mt-3 text-sm leading-6 text-slate-500">
-                      {selectedMeta.description}
-                    </p>
+                  <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 p-5 sm:p-6">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-emerald-700">
+                        Perfil selecionado
+                      </p>
+                      <h2 className="mt-1 text-xl font-bold text-slate-950 sm:text-2xl">
+                        {getProfileLabel(selected)}
+                      </h2>
+                      <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                        {selectedMeta.description}
+                      </p>
+                    </div>
+                    {selected.isDefault && (
+                      <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
+                        Perfil padrão
+                      </span>
+                    )}
                   </div>
 
-                  <div className="mt-8 overflow-x-auto pb-2">
+                  <div className="p-5 sm:p-6">
+                    <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+                      <div>
+                        <h3 className="text-base font-bold text-slate-950">
+                          Prévia da sequência
+                        </h3>
+                        <p className="mt-1 text-sm text-slate-500">
+                          Veja quando os contatos deste perfil estão
+                          programados.
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                        {stepForms.length} contato
+                        {stepForms.length !== 1 ? "s" : ""}
+                      </span>
+                    </div>
                     {timelinePoints.length > 0 ? (
-                      <div
-                        className="relative flex items-start justify-between px-8 pt-2"
-                        style={{ minWidth: `${timelineMinWidth}px` }}
-                      >
-                        <div className="absolute left-10 right-10 top-4.5 h-1 rounded-full bg-linear-to-r from-slate-400 via-emerald-500 to-amber-400" />
-                        {timelinePoints.map((point) => (
-                          <div
+                      <ol className="space-y-0">
+                        {timelinePoints.map((point, pointIndex) => (
+                          <li
                             key={`${point.day}-${point.steps
                               .map((step) => step.index)
                               .join("-")}`}
-                            className="relative z-10 flex w-18.5 flex-col items-center text-center"
+                            className="relative flex gap-4 pb-5 last:pb-0"
                           >
+                            {pointIndex < timelinePoints.length - 1 && (
+                              <span
+                                className="absolute bottom-0 left-4 top-8 w-px bg-slate-200"
+                                aria-hidden="true"
+                              />
+                            )}
                             <span
-                              className={`flex h-8 min-w-8 items-center justify-center rounded-full px-2 text-xs font-bold shadow-sm ${TONE_CLASSES[point.tone].node}`}
+                              className={`relative z-10 flex h-8 min-w-8 shrink-0 items-center justify-center rounded-full px-2 text-xs font-bold ${TONE_CLASSES[point.tone].node}`}
                             >
                               {formatDayBadge(point.day)}
                             </span>
-                            <span
-                              className={`mt-2 min-h-8 text-[11px] font-semibold leading-3 ${TONE_CLASSES[point.tone].label}`}
-                            >
-                              {point.caption}
-                            </span>
-                            <span className="mt-1 flex h-4 items-center justify-center gap-1">
-                              {point.steps.map((step) =>
-                                step.channel === "EMAIL" ? (
-                                  <Mail
-                                    key={step.index}
-                                    size={13}
-                                    className={TONE_CLASSES[point.tone].icon}
-                                    aria-label="E-mail"
-                                  />
-                                ) : (
-                                  <MessageCircle
-                                    key={step.index}
-                                    size={13}
-                                    className={TONE_CLASSES[point.tone].icon}
-                                    aria-label="WhatsApp"
-                                  />
-                                ),
-                              )}
-                            </span>
-                          </div>
+                            <div className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                              <p className="text-sm font-bold text-slate-900">
+                                {point.day === EMISSION_DAY
+                                  ? "A partir de 30 dias antes do vencimento"
+                                  : formatScheduleDay(point.day)}
+                              </p>
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {point.steps.map((timelineStep) => {
+                                  const templateId =
+                                    stepForms[timelineStep.index]?.templateId;
+                                  const templateName =
+                                    templates.find(
+                                      (template) => template.id === templateId,
+                                    )?.name ?? "Sem mensagem selecionada";
+                                  return (
+                                    <span
+                                      key={timelineStep.index}
+                                      className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700"
+                                    >
+                                      {timelineStep.channel === "EMAIL" ? (
+                                        <Mail size={13} className="shrink-0" />
+                                      ) : (
+                                        <MessageCircle
+                                          size={13}
+                                          className="shrink-0"
+                                        />
+                                      )}
+                                      {timelineStep.channel === "EMAIL"
+                                        ? "E-mail"
+                                        : "WhatsApp"}
+                                      <span
+                                        className="text-slate-400"
+                                        aria-hidden="true"
+                                      >
+                                        ·
+                                      </span>
+                                      <span className="truncate">
+                                        {templateName}
+                                      </span>
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </li>
                         ))}
-                      </div>
+                      </ol>
                     ) : (
-                      <p className="py-12 text-center text-sm text-slate-400">
+                      <p className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-5 py-8 text-center text-sm text-slate-500">
                         Nenhuma etapa configurada.
                       </p>
                     )}
                   </div>
                 </>
               ) : (
-                <p className="py-16 text-center text-sm text-slate-400">
-                  Selecione um perfil para editar suas etapas.
+                <p className="px-5 py-16 text-center text-sm text-slate-500">
+                  Selecione ou crie um perfil para configurar os contatos.
                 </p>
               )}
             </section>
 
             {selected && (
-              <section className="rounded-lg bg-white shadow-sm ring-1 ring-slate-200">
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+              <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-5 sm:px-6">
                   <div>
-                    <h2 className="text-sm font-bold text-slate-950">
-                      Etapas - {getProfileLabel(selected)}
+                    <h2 className="text-lg font-bold text-slate-950">
+                      Configurar contatos
                     </h2>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Ajuste canais, dias da regua e horarios de envio.
+                    <p className="mt-1 text-sm text-slate-500">
+                      Ajuste os envios do perfil {getProfileLabel(selected)}.
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -1061,41 +1279,35 @@ export default function ReguaPage() {
                       <button
                         type="button"
                         onClick={() => void deleteProfile(selected.id)}
-                        className="rounded-md border border-red-200 p-2 text-red-500 hover:bg-red-50"
-                        title="Remover perfil"
+                        className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-red-200 px-3 text-xs font-semibold text-red-600 hover:bg-red-50"
+                        aria-label="Remover perfil"
                       >
                         <Trash2 size={15} />
+                        <span className="hidden sm:inline">Remover perfil</span>
                       </button>
                     )}
-                    <button
-                      type="button"
-                      onClick={addStep}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-                    >
-                      <Plus size={13} />
-                      Etapa
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void saveSteps()}
-                      disabled={saving || !hasStepChanges}
-                      className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
-                    >
-                      <Save size={13} />
-                      Salvar
-                    </button>
                   </div>
                 </div>
 
-                <div className="border-b border-slate-100 bg-slate-50/60 px-5 py-4">
+                <div className="border-b border-slate-100 bg-emerald-50/60 px-5 py-4 sm:px-6">
+                  <p className="text-sm font-bold text-emerald-950">
+                    Como contar os dias
+                  </p>
+                  <p className="mt-1 text-sm leading-6 text-emerald-900">
+                    Dia 0 é o vencimento. Use números negativos para enviar
+                    antes e positivos para enviar depois.
+                  </p>
+                </div>
+
+                <div className="border-b border-slate-100 px-5 py-5 sm:px-6">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <h3 className="text-sm font-bold text-slate-900">
-                        Cobranca na emissao
+                      <h3 className="text-base font-bold text-slate-900">
+                        Contato inicial
                       </h3>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Envie a primeira cobranca assim que a fatura for
-                        cadastrada neste perfil.
+                      <p className="mt-1 text-sm text-slate-500">
+                        Envie uma mensagem a partir de 30 dias antes do
+                        vencimento, quando a fatura já estiver cadastrada.
                       </p>
                     </div>
                     <button
@@ -1103,7 +1315,8 @@ export default function ReguaPage() {
                       role="switch"
                       aria-checked={emissionEnabled}
                       onClick={() => updateEmissionEnabled(!emissionEnabled)}
-                      className={`inline-flex items-center gap-2 rounded-md border px-3 py-2 text-xs font-semibold transition ${
+                      aria-label="Contato inicial"
+                      className={`inline-flex min-h-10 items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
                         emissionEnabled
                           ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                           : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
@@ -1124,14 +1337,17 @@ export default function ReguaPage() {
                     </button>
                   </div>
 
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <span className="mr-1 text-xs font-semibold text-slate-600">
+                      Enviar por
+                    </span>
                     <button
                       type="button"
                       aria-pressed={emissionChannels.EMAIL}
                       onClick={() =>
                         updateEmissionChannel("EMAIL", !emissionChannels.EMAIL)
                       }
-                      className={`inline-flex items-center gap-2 rounded-md border px-3 py-2 text-xs font-semibold transition ${
+                      className={`inline-flex min-h-10 items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
                         emissionChannels.EMAIL
                           ? "border-emerald-200 bg-white text-emerald-700 shadow-sm"
                           : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
@@ -1149,7 +1365,7 @@ export default function ReguaPage() {
                           !emissionChannels.WHATSAPP,
                         )
                       }
-                      className={`inline-flex items-center gap-2 rounded-md border px-3 py-2 text-xs font-semibold transition ${
+                      className={`inline-flex min-h-10 items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
                         emissionChannels.WHATSAPP
                           ? "border-emerald-200 bg-white text-emerald-700 shadow-sm"
                           : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
@@ -1167,14 +1383,14 @@ export default function ReguaPage() {
                         .map((channel) => (
                           <label
                             key={channel}
-                            className="grid gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-2"
+                            className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3"
                           >
                             <span className="text-xs font-semibold text-slate-600">
-                              Template da emissao por{" "}
+                              Mensagem do contato inicial por{" "}
                               {channel === "EMAIL" ? "E-mail" : "WhatsApp"}
                             </span>
                             <select
-                              aria-label={`Template da emissao por ${
+                              aria-label={`Template do contato inicial por ${
                                 channel === "EMAIL" ? "E-mail" : "WhatsApp"
                               }`}
                               value={getEmissionTemplateId(channel)}
@@ -1184,200 +1400,251 @@ export default function ReguaPage() {
                                   event.target.value,
                                 )
                               }
-                              className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700"
+                              className="h-10 min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700"
                             >
-                              <option value="">Sem template</option>
+                              <option value="">Sem seleção</option>
                               {activeTemplates.map((template) => (
                                 <option key={template.id} value={template.id}>
                                   {template.name}
                                 </option>
                               ))}
                             </select>
+                            <span className="text-xs leading-5 text-slate-500">
+                              {channel === "WHATSAPP"
+                                ? 'Sem seleção usa "Vencimento hoje" se aprovado na Meta. Outra mensagem escolhida também precisa de aprovação.'
+                                : 'Sem seleção prioriza "Vencimento hoje" ou outro modelo ativo.'}
+                            </span>
                           </label>
                         ))}
                     </div>
                   )}
                 </div>
 
-                <div className="divide-y divide-slate-100">
+                <div className="px-5 py-5 sm:px-6">
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">
+                        Contatos programados
+                      </h3>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Adicione lembretes antes, no dia ou depois do
+                        vencimento.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={addStep}
+                      disabled={stepForms.length >= 20}
+                      className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-sm font-semibold text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Plus size={16} /> Adicionar contato
+                    </button>
+                  </div>
+
                   {editableStepEntries.length === 0 && (
-                    <p className="px-5 py-12 text-center text-sm text-slate-400">
-                      Clique em Etapa para adicionar o primeiro contato.
+                    <p className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-5 py-10 text-center text-sm text-slate-500">
+                      Ainda não há lembretes programados. Adicione um contato
+                      para começar.
                     </p>
                   )}
 
-                  {editableStepEntries.map(
-                    ({ index, scheduleDay, step }, entryPosition) => {
-                      const limits = getStepDayLimits(scheduleDays, index);
-                      const min = Math.max(limits.min, EMISSION_DAY + 1);
-                      const { max } = limits;
+                  <div className="space-y-4">
+                    {editableStepEntries.map(
+                      ({ index, scheduleDay, step }, entryPosition) => {
+                        const limits = getStepDayLimits(scheduleDays, index);
+                        const min = Math.max(limits.min, EMISSION_DAY + 1);
+                        const { max } = limits;
 
-                      return (
-                        <div
-                          key={index}
-                          className="grid gap-3 px-5 py-4 lg:grid-cols-[56px_120px_minmax(190px,0.9fr)_minmax(210px,1fr)_minmax(230px,1fr)_36px]"
-                        >
-                          <div className="flex items-center gap-1 lg:flex-col">
-                            <button
-                              type="button"
-                              onClick={() => moveStep(index, "up")}
-                              disabled={entryPosition === 0}
-                              className="rounded p-1 text-slate-400 hover:text-slate-600 disabled:opacity-30"
-                              title="Mover para cima"
-                            >
-                              <ArrowUp size={13} />
-                            </button>
-                            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-600">
-                              {index + 1}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => moveStep(index, "down")}
-                              disabled={
-                                entryPosition === editableStepEntries.length - 1
-                              }
-                              className="rounded p-1 text-slate-400 hover:text-slate-600 disabled:opacity-30"
-                              title="Mover para baixo"
-                            >
-                              <ArrowDown size={13} />
-                            </button>
-                          </div>
-
-                          <div className="flex items-center">
-                            <div className="inline-flex rounded-md border border-slate-200 bg-slate-50 p-1">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  updateStep(index, "channel", "EMAIL")
-                                }
-                                className={`rounded px-3 py-1.5 text-xs font-semibold ${
-                                  step.channel === "EMAIL"
-                                    ? "bg-white text-emerald-700 shadow-sm"
-                                    : "text-slate-500 hover:text-slate-700"
-                                }`}
-                                title="E-mail"
-                              >
-                                <Mail size={14} />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  updateStep(index, "channel", "WHATSAPP")
-                                }
-                                className={`rounded px-3 py-1.5 text-xs font-semibold ${
-                                  step.channel === "WHATSAPP"
-                                    ? "bg-white text-emerald-700 shadow-sm"
-                                    : "text-slate-500 hover:text-slate-700"
-                                }`}
-                                title="WhatsApp"
-                              >
-                                <MessageCircle size={14} />
-                              </button>
-                            </div>
-                          </div>
-
-                          <label className="grid gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                            <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-                              <CalendarClock size={13} />
-                              Dia da regua
-                            </span>
-                            <span className="flex items-center gap-2">
-                              <input
-                                type="number"
-                                value={scheduleDay}
-                                onChange={(event) =>
-                                  updateStepScheduleDay(
-                                    index,
-                                    parseIntegerInput(event.target.value),
-                                  )
-                                }
-                                className="h-8 w-20 rounded-md border border-slate-200 bg-white px-2 text-sm font-bold text-slate-900 outline-none"
-                                min={min}
-                                max={max}
-                              />
-                              <span className="text-xs text-slate-400">
-                                dias
-                              </span>
-                            </span>
-                            <span className="text-[11px] font-medium text-slate-500">
-                              {formatScheduleDay(scheduleDay)}
-                            </span>
-                          </label>
-
-                          <label className="grid gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-2">
-                            <span className="text-xs font-semibold text-slate-600">
-                              Template
-                            </span>
-                            <select
-                              aria-label={`Template da etapa ${index + 1}`}
-                              value={step.templateId ?? ""}
-                              onChange={(event) =>
-                                updateStepTemplate(index, event.target.value)
-                              }
-                              className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700"
-                            >
-                              <option value="">Sem template</option>
-                              {activeTemplates.map((template) => (
-                                <option key={template.id} value={template.id}>
-                                  {template.name}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-
-                          <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
-                            <div className="mb-2 flex items-center justify-between gap-2">
-                              <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-                                <Clock3 size={13} />
-                                Horario
-                              </span>
-                              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-slate-500">
-                                Opcional
-                              </span>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                              <input
-                                type="time"
-                                value={step.sendTimeStart}
-                                onChange={(event) =>
-                                  updateStep(
-                                    index,
-                                    "sendTimeStart",
-                                    event.target.value,
-                                  )
-                                }
-                                className="h-9 w-28 rounded-md border border-slate-200 px-2 text-xs text-slate-700"
-                                aria-label="Horario inicial"
-                              />
-                              <span>ate</span>
-                              <input
-                                type="time"
-                                value={step.sendTimeEnd}
-                                onChange={(event) =>
-                                  updateStep(
-                                    index,
-                                    "sendTimeEnd",
-                                    event.target.value,
-                                  )
-                                }
-                                className="h-9 w-28 rounded-md border border-slate-200 px-2 text-xs text-slate-700"
-                                aria-label="Horario final"
-                              />
-                            </div>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => removeStep(index)}
-                            className="flex h-9 w-9 items-center justify-center rounded-md text-slate-300 hover:bg-red-50 hover:text-red-500"
-                            title="Remover etapa"
+                        return (
+                          <article
+                            key={index}
+                            className="rounded-2xl border border-slate-200 bg-white shadow-sm"
                           >
-                            <X size={15} />
-                          </button>
-                        </div>
-                      );
-                    },
-                  )}
+                            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-slate-50/70 px-4 py-3 sm:px-5">
+                              <div className="flex min-w-0 items-center gap-3">
+                                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-xs font-bold text-white">
+                                  {entryPosition + 1}
+                                </span>
+                                <div className="min-w-0">
+                                  <h4 className="text-sm font-bold text-slate-900">
+                                    Contato {entryPosition + 1}
+                                  </h4>
+                                  <p className="truncate text-xs text-slate-500">
+                                    {formatScheduleDay(scheduleDay)}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => moveStep(index, "up")}
+                                  disabled={entryPosition === 0}
+                                  className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-30"
+                                  aria-label={`Mover contato ${entryPosition + 1} para cima`}
+                                >
+                                  <ArrowUp size={16} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => moveStep(index, "down")}
+                                  disabled={
+                                    entryPosition ===
+                                    editableStepEntries.length - 1
+                                  }
+                                  className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-30"
+                                  aria-label={`Mover contato ${entryPosition + 1} para baixo`}
+                                >
+                                  <ArrowDown size={16} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => removeStep(index)}
+                                  className="flex h-9 w-9 items-center justify-center rounded-lg text-red-600 hover:bg-red-50"
+                                  aria-label={`Remover contato ${entryPosition + 1}`}
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </div>
+                            <div className="grid gap-4 p-4 sm:p-5 md:grid-cols-2">
+                              <label className="grid gap-1.5">
+                                <span className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+                                  <CalendarClock size={14} /> Dia em relação ao
+                                  vencimento
+                                </span>
+                              <StepDayInput
+                                key={`${selected.id}-${index}-${scheduleDay}`}
+                                value={scheduleDay}
+                                  onCommit={(day) =>
+                                    updateStepScheduleDay(index, day)
+                                  }
+                                  min={min}
+                                  max={max}
+                                  label={`Dia do contato ${entryPosition + 1}`}
+                                />
+                                <span className="text-xs text-slate-500">
+                                  {formatScheduleDay(scheduleDay)}
+                                </span>
+                              </label>
+                              <div className="grid content-start gap-1.5">
+                                <span className="text-xs font-bold text-slate-700">
+                                  Canal de envio
+                                </span>
+                                <div className="flex gap-2">
+                                  <button
+                                    type="button"
+                                    aria-pressed={step.channel === "EMAIL"}
+                                    onClick={() =>
+                                      updateStep(index, "channel", "EMAIL")
+                                    }
+                                    className={`inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border px-3 text-sm font-semibold ${step.channel === "EMAIL" ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-slate-200 text-slate-600 hover:bg-slate-50"}`}
+                                  >
+                                    <Mail size={16} /> E-mail
+                                  </button>
+                                  <button
+                                    type="button"
+                                    aria-pressed={step.channel === "WHATSAPP"}
+                                    onClick={() =>
+                                      updateStep(index, "channel", "WHATSAPP")
+                                    }
+                                    className={`inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border px-3 text-sm font-semibold ${step.channel === "WHATSAPP" ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-slate-200 text-slate-600 hover:bg-slate-50"}`}
+                                  >
+                                    <MessageCircle size={16} /> WhatsApp
+                                  </button>
+                                </div>
+                              </div>
+                              <label className="grid gap-1.5 md:col-span-2">
+                                <span className="text-xs font-bold text-slate-700">
+                                  Mensagem que será enviada
+                                </span>
+                                <select
+                                  aria-label={`Template da etapa ${index + 1}`}
+                                  value={step.templateId ?? ""}
+                                  onChange={(event) =>
+                                    updateStepTemplate(
+                                      index,
+                                      event.target.value,
+                                    )
+                                  }
+                                  className="h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700"
+                                >
+                                  <option value="">Sem seleção</option>
+                                  {activeTemplates.map((template) => (
+                                    <option
+                                      key={template.id}
+                                      value={template.id}
+                                    >
+                                      {template.name}
+                                    </option>
+                                  ))}
+                                </select>
+                                <span className="text-xs text-slate-500">
+                                  {step.channel === "WHATSAPP"
+                                    ? 'Sem seleção usa "Vencimento hoje" se aprovado na Meta. Outra mensagem escolhida também precisa de aprovação.'
+                                    : 'Sem seleção prioriza "Vencimento hoje" ou outro modelo ativo.'}
+                                </span>
+                              </label>
+                              <div className="md:col-span-2">
+                                <span className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+                                  <Clock3 size={14} /> Horário de envio{" "}
+                                  <span className="font-normal text-slate-500">
+                                    (opcional)
+                                  </span>
+                                </span>
+                                <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-500">
+                                  <input
+                                    type="time"
+                                    value={step.sendTimeStart}
+                                    onChange={(event) =>
+                                      updateStep(
+                                        index,
+                                        "sendTimeStart",
+                                        event.target.value,
+                                      )
+                                    }
+                                    className="h-11 min-w-32 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 sm:flex-none"
+                                    aria-label={`Horário inicial do contato ${entryPosition + 1}`}
+                                  />
+                                  <span>até</span>
+                                  <input
+                                    type="time"
+                                    value={step.sendTimeEnd}
+                                    onChange={(event) =>
+                                      updateStep(
+                                        index,
+                                        "sendTimeEnd",
+                                        event.target.value,
+                                      )
+                                    }
+                                    className="h-11 min-w-32 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 sm:flex-none"
+                                    aria-label={`Horário final do contato ${entryPosition + 1}`}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          </article>
+                        );
+                      },
+                    )}
+                  </div>
+                </div>
+
+                <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-white/95 px-5 py-4 backdrop-blur sm:px-6">
+                  <p
+                    aria-live="polite"
+                    className={`text-sm font-semibold ${hasStepChanges ? "text-amber-700" : "text-slate-500"}`}
+                  >
+                    {hasStepChanges ? "Alterações não salvas" : "Tudo salvo"}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void saveSteps()}
+                    disabled={saving || !hasStepChanges}
+                    className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 text-sm font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Save size={16} />{" "}
+                    {saving ? "Salvando..." : "Salvar alterações"}
+                  </button>
                 </div>
               </section>
             )}

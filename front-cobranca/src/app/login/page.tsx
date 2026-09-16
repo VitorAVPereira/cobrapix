@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2, Zap, Shield, BarChart3 } from "lucide-react";
 import { companyLoginDestination } from "@/lib/efi-onboarding";
+import { BrandLogo } from "@/components/ui/BrandLogo";
 
 function LoginPageContent() {
   const router = useRouter();
@@ -59,14 +60,12 @@ function LoginPageContent() {
       {/* Left panel — Brand */}
       <div className="hidden lg:flex lg:w-[480px] xl:w-[560px] bg-slate-900 flex-col justify-between p-12 relative overflow-hidden">
         {/* Decorative gradient */}
-        <div className="absolute -top-24 -right-24 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl" />
-        <div className="absolute -bottom-32 -left-32 w-80 h-80 bg-emerald-500/5 rounded-full blur-3xl" />
+        <div className="absolute -top-24 -right-24 w-96 h-96 bg-emerald-400/10 rounded-full blur-3xl" />
+        <div className="absolute -bottom-32 -left-32 w-80 h-80 bg-emerald-400/5 rounded-full blur-3xl" />
 
         <div className="relative z-10">
-          <h1 className="text-3xl font-bold text-white tracking-wider mb-2">
-            COBRA<span className="text-emerald-400">PIX</span>
-          </h1>
-          <p className="text-slate-400 text-sm">
+          <BrandLogo variant="reverse" width={186} height={60} priority />
+          <p className="text-slate-300 text-sm">
             Plataforma de cobranca automatizada
           </p>
         </div>
@@ -74,41 +73,41 @@ function LoginPageContent() {
         <div className="relative z-10 space-y-8">
           <h2 className="text-2xl font-semibold text-white leading-snug">
             Gerencie cobranças com<br />
-            <span className="text-emerald-400">WhatsApp + Pix</span>
+            <span className="text-emerald-400">WhatsApp + Boletos e/ou Pix</span>
           </h2>
 
           <div className="space-y-5">
             <div className="flex items-start gap-4">
-              <div className="p-2.5 bg-emerald-500/10 rounded-lg shrink-0">
+              <div className="p-2.5 bg-emerald-400/10 rounded-lg shrink-0">
                 <Zap size={20} className="text-emerald-400" />
               </div>
               <div>
                 <p className="text-white font-medium text-sm">Disparo automatico</p>
-                <p className="text-slate-400 text-sm">
+                <p className="text-slate-300 text-sm">
                   Mensagens de cobranca enviadas via WhatsApp para devedores.
                 </p>
               </div>
             </div>
 
             <div className="flex items-start gap-4">
-              <div className="p-2.5 bg-emerald-500/10 rounded-lg shrink-0">
+              <div className="p-2.5 bg-emerald-400/10 rounded-lg shrink-0">
                 <Shield size={20} className="text-emerald-400" />
               </div>
               <div>
                 <p className="text-white font-medium text-sm">Seguro e auditavel</p>
-                <p className="text-slate-400 text-sm">
+                <p className="text-slate-300 text-sm">
                   Cada acao registrada no log de cobranca com rastreabilidade completa.
                 </p>
               </div>
             </div>
 
             <div className="flex items-start gap-4">
-              <div className="p-2.5 bg-emerald-500/10 rounded-lg shrink-0">
+              <div className="p-2.5 bg-emerald-400/10 rounded-lg shrink-0">
                 <BarChart3 size={20} className="text-emerald-400" />
               </div>
               <div>
                 <p className="text-white font-medium text-sm">Painel em tempo real</p>
-                <p className="text-slate-400 text-sm">
+                <p className="text-slate-300 text-sm">
                   Acompanhe faturas, vencimentos e status de conexao do WhatsApp.
                 </p>
               </div>
@@ -116,19 +115,17 @@ function LoginPageContent() {
           </div>
         </div>
 
-        <p className="relative z-10 text-slate-600 text-xs">
-          CobraPix &copy; {new Date().getFullYear()}
+        <p className="relative z-10 text-slate-300/80 text-xs">
+          Cifra+ &copy; {new Date().getFullYear()}
         </p>
       </div>
 
       {/* Right panel — Form */}
       <div className="flex-1 flex items-center justify-center p-6 sm:p-12 bg-slate-50">
-        <div className="w-full max-w-md">
+        <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-10">
           {/* Mobile brand (hidden on lg+) */}
           <div className="lg:hidden text-center mb-10">
-            <h1 className="text-3xl font-bold text-slate-900 tracking-wider">
-              COBRA<span className="text-emerald-500">PIX</span>
-            </h1>
+            <BrandLogo width={168} height={54} className="mx-auto" priority />
             <p className="text-slate-500 mt-1 text-sm">
               Plataforma de cobranca automatizada
             </p>

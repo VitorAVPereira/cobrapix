@@ -1,5 +1,11 @@
 import "@testing-library/jest-dom";
-import { render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {
   CollectionRuleProfile,
@@ -140,10 +146,12 @@ describe("ReguaPage", () => {
 
     render(<ReguaPage />);
 
-    expect(await screen.findByText("Novo Cliente")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: /Novo Cliente/i }),
+    ).toBeInTheDocument();
     expect(mockGetTemplates).toHaveBeenCalledTimes(1);
     expect(
-      await screen.findByLabelText("Template da emissao por WhatsApp"),
+      await screen.findByLabelText("Template do contato inicial por WhatsApp"),
     ).toHaveValue("template-emissao");
 
     await user.selectOptions(
@@ -161,6 +169,148 @@ describe("ReguaPage", () => {
           templateId: "template-atraso",
         }),
       ]),
+    );
+  });
+
+  it("explica a referência dos dias e mostra uma prévia da sequência", async () => {
+    render(<ReguaPage />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Prévia da sequência" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/dia 0 é o vencimento/i)).toBeInTheDocument();
+    expect(
+      (await screen.findAllByText("No dia do vencimento")).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getByText("A partir de 30 dias antes do vencimento"),
+    ).toBeInTheDocument();
+  });
+
+  it("avisa antes de descartar alterações ao trocar de perfil", async () => {
+    const user = userEvent.setup();
+    const secondProfile: CollectionRuleProfile = {
+      ...createProfileFixture(),
+      id: "profile-2",
+      name: "Bom Pagador",
+      profileType: "GOOD",
+      isDefault: false,
+      steps: [],
+    };
+    mockGetRules.mockResolvedValue([createProfileFixture(), secondProfile]);
+    const confirmSpy = jest.spyOn(window, "confirm").mockReturnValue(false);
+
+    try {
+      render(<ReguaPage />);
+      const emissionTemplate = await screen.findByLabelText(
+        "Template do contato inicial por WhatsApp",
+      );
+      await user.selectOptions(emissionTemplate, "template-atraso");
+      await user.click(screen.getByRole("button", { name: /Bom Pagador/i }));
+
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      expect(emissionTemplate).toHaveValue("template-atraso");
+
+      confirmSpy.mockReturnValue(true);
+      await user.click(screen.getByRole("button", { name: /Bom Pagador/i }));
+      expect(
+        await screen.findByText("Nenhuma etapa configurada."),
+      ).toBeInTheDocument();
+    } finally {
+      confirmSpy.mockRestore();
+    }
+  });
+
+  it("permite digitar um dia negativo e atualiza a prévia antes de salvar", async () => {
+    const user = userEvent.setup();
+    render(<ReguaPage />);
+
+    const dayInput = await screen.findByRole("spinbutton", {
+      name: "Dia do contato 1",
+    });
+    await user.clear(dayInput);
+    await user.type(dayInput, "-3");
+    await user.tab();
+
+    expect(dayInput).toHaveValue(-3);
+    const preview = screen
+      .getByRole("heading", { name: "Prévia da sequência" })
+      .closest("section");
+    if (!preview) throw new Error("Prévia da sequência ausente");
+    expect(
+      within(preview).getByText("3 dias antes do vencimento"),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: /salvar alterações/i }),
+    );
+    await waitFor(() => expect(mockSetRuleSteps).toHaveBeenCalledTimes(1));
+    expect(mockSetRuleSteps).toHaveBeenCalledWith(
+      "profile-1",
+      expect.arrayContaining([
+        expect.objectContaining({ stepOrder: 1, delayDays: 27 }),
+      ]),
+    );
+  });
+
+  it("explica janelas de horário incompletas antes de salvar", async () => {
+    const user = userEvent.setup();
+    render(<ReguaPage />);
+
+    const startTime = await screen.findByLabelText(
+      "Horário inicial do contato 1",
+    );
+    fireEvent.change(startTime, { target: { value: "09:00" } });
+    await user.click(
+      screen.getByRole("button", { name: /salvar alterações/i }),
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Preencha os dois horários do contato 1 ou deixe ambos vazios.",
+    );
+    expect(mockSetRuleSteps).not.toHaveBeenCalled();
+  });
+
+  it("protege alterações ao sair por um link ou atualizar a página", async () => {
+    const user = userEvent.setup();
+    const confirmSpy = jest.spyOn(window, "confirm").mockReturnValue(false);
+
+    try {
+      render(
+        <>
+          <a href="/clientes">Ir para clientes</a>
+          <ReguaPage />
+        </>,
+      );
+      const template = await screen.findByLabelText(
+        "Template do contato inicial por WhatsApp",
+      );
+      await user.selectOptions(template, "template-atraso");
+
+      expect(
+        fireEvent.click(screen.getByRole("link", { name: "Ir para clientes" })),
+      ).toBe(false);
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+
+      const beforeUnload = new Event("beforeunload", { cancelable: true });
+      fireEvent(window, beforeUnload);
+      expect(beforeUnload.defaultPrevented).toBe(true);
+    } finally {
+      confirmSpy.mockRestore();
+    }
+  });
+
+  it("rejeita um dia fracionário em vez de convertê-lo silenciosamente", async () => {
+    render(<ReguaPage />);
+    const dayInput = await screen.findByRole("spinbutton", {
+      name: "Dia do contato 1",
+    });
+
+    fireEvent.change(dayInput, { target: { value: "2.5" } });
+    fireEvent.blur(dayInput);
+
+    expect(dayInput).toHaveValue(0);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Digite um número inteiro de dias.",
     );
   });
 });

@@ -14,8 +14,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "CobraPix - Gestão de Cobranças",
+  title: "Cifra+ | Gestão de Cobranças",
   description: "Plataforma de cobrança automatizada via WhatsApp e Pix para empresas brasileiras.",
+  icons: {
+    icon: "/brand/cifra-app-icon.svg",
+  },
 };
 
 export default function RootLayout({
