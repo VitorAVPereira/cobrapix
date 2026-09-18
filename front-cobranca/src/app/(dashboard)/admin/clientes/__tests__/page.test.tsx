@@ -126,6 +126,8 @@ describe("AdminClientsPage", () => {
 
     expect(screen.queryByLabelText("Efí client ID")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Meta token")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("ERP API key")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("ERP webhook URL")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /cadastrar cliente/i }));
 
@@ -141,6 +143,48 @@ describe("AdminClientsPage", () => {
     const payload = mockCreateAdminClient.mock.calls[0]?.[0];
     expect(payload?.efi).toBeUndefined();
     expect(payload?.meta).toBeUndefined();
+  });
+
+  it("guides account opening through the portal and uses the administrator WhatsApp channel", async () => {
+    const user = userEvent.setup();
+    render(<AdminClientsPage />);
+
+    expect(screen.getByText(/abertura automatizada da conta Efí pelo portal/i)).toBeInTheDocument();
+    expect(screen.getByText(/mesmo número de WhatsApp do administrador da plataforma/i)).toBeInTheDocument();
+    for (const label of ["Status WhatsApp", "Limite Meta", "Descontos por devedor", "Emails notificacao pagamento", "Responsavel legal", "Banco", "Digito conta"]) {
+      expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
+    }
+
+    await fillRequiredClientFields();
+    await user.selectOptions(screen.getByLabelText("Metodo preferido"), "PIX");
+    await user.click(screen.getByRole("button", { name: /cadastrar cliente/i }));
+
+    await waitFor(() => expect(mockCreateAdminClient).toHaveBeenCalledTimes(1));
+    expect(mockCreateAdminClient.mock.calls[0]?.[0]).toEqual({
+      company: {
+        corporateName: "Empresa Certificada", document: "12345678000190",
+        email: "financeiro@empresa.com", phoneNumber: "11999999999", status: "ACTIVE",
+      },
+      firstUser: { name: "Admin Empresa", email: "admin@empresa.com" },
+      billing: { enabledBillingMethods: ["PIX", "BOLIX"], preferredBillingMethod: "PIX" },
+    });
+  });
+
+  it("keeps persisted billing settings in editing without tenant WhatsApp controls", async () => {
+    const user = userEvent.setup();
+    mockGetAdminClients.mockResolvedValue([createAdminClientFixture()]);
+    render(<AdminClientsPage />);
+
+    await user.click(await screen.findByRole("button", { name: /editar empresa certificada/i }));
+    expect(screen.getByLabelText("Dias da regua")).toBeInTheDocument();
+    expect(screen.getByLabelText("Emails notificacao pagamento")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Status WhatsApp")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Limite Meta")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Digito conta")).not.toBeInTheDocument();
+    expect(screen.queryByText(/WhatsApp PENDING/)).not.toBeInTheDocument();
+    for (const label of ["Descontos por devedor", "Dia gatilho desconto", "Desconto automatico", "Dias desconto automatico", "Percentual desconto automatico", "ERP API key", "ERP webhook URL", "Eventos ERP"]) {
+      expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
+    }
   });
 
   it("shows changed fields in a confirmation modal before updating a client", async () => {
@@ -175,6 +219,14 @@ describe("AdminClientsPage", () => {
         }) as unknown,
       }) as unknown,
     );
+    const payload = mockUpdateAdminClient.mock.calls[0]?.[1];
+    expect(payload?.integrations).toBeUndefined();
+    expect(payload?.billing).not.toHaveProperty("autoDiscountEnabled");
+    expect(payload?.billing).not.toHaveProperty("autoDiscountDaysAfterDue");
+    expect(payload?.billing).not.toHaveProperty("autoDiscountPercentage");
+    expect(payload?.notifications).toEqual({
+      businessSegment: "GENERAL", paymentNotificationEnabled: true, paymentNotificationEmails: [],
+    });
   });
 
   it("does not update a client when the confirmation modal is cancelled", async () => {
