@@ -628,8 +628,8 @@ export default function BillingSettingsPage() {
                 Desconto automatico
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Defina um desconto global para pagamentos feitos apos o
-                vencimento.
+                Desativado por padrão. Ative para configurar um desconto global
+                para pagamentos feitos apos o vencimento.
               </p>
             </div>
           </div>
@@ -639,6 +639,7 @@ export default function BillingSettingsPage() {
               <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-4">
                 <input
                   type="checkbox"
+                  disabled={loading || saving}
                   checked={autoDiscountEnabled}
                   onChange={(event) => {
                     setAutoDiscountEnabled(event.target.checked);
@@ -657,52 +658,57 @@ export default function BillingSettingsPage() {
                 </div>
               </label>
 
-              <div className="grid gap-4 sm:grid-cols-2">
-                <label className="flex flex-col gap-1.5">
-                  <span className="text-xs font-semibold uppercase text-slate-500">
-                    Dias apos o vencimento
-                  </span>
-                  <input
-                    type="number"
-                    min={0}
-                    max={365}
-                    step={1}
-                    value={autoDiscountDaysAfterDue}
-                    disabled={!autoDiscountEnabled}
-                    onChange={(event) => {
-                      setAutoDiscountDaysAfterDue(event.target.value);
-                      setSuccess(null);
-                    }}
-                    className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-                    placeholder="Ex: 3"
-                  />
-                </label>
+              <p className="text-sm font-semibold text-slate-700">
+                {autoDiscountEnabled ? "Ativado" : "Desativado"}
+              </p>
 
-                <label className="flex flex-col gap-1.5">
-                  <span className="text-xs font-semibold uppercase text-slate-500">
-                    Percentual de desconto
-                  </span>
-                  <div className="relative">
+              {autoDiscountEnabled && (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="flex flex-col gap-1.5">
+                    <span className="text-xs font-semibold uppercase text-slate-500">
+                      Dias apos o vencimento
+                    </span>
                     <input
                       type="number"
-                      min={0.01}
-                      max={100}
-                      step={0.01}
-                      value={autoDiscountPercentage}
-                      disabled={!autoDiscountEnabled}
+                      min={0}
+                      max={365}
+                      step={1}
+                      value={autoDiscountDaysAfterDue}
                       onChange={(event) => {
-                        setAutoDiscountPercentage(event.target.value);
+                        setAutoDiscountDaysAfterDue(event.target.value);
                         setSuccess(null);
                       }}
-                      className="h-11 w-full rounded-md border border-slate-300 px-3 pr-9 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-                      placeholder="Ex: 10"
+                      className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                      placeholder="Ex: 3"
                     />
-                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">
-                      %
+                  </label>
+
+                  <label className="flex flex-col gap-1.5">
+                    <span id="auto-discount-percentage-label" className="text-xs font-semibold uppercase text-slate-500">
+                      Percentual de desconto
                     </span>
-                  </div>
-                </label>
-              </div>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        aria-labelledby="auto-discount-percentage-label"
+                        min={0.01}
+                        max={100}
+                        step={0.01}
+                        value={autoDiscountPercentage}
+                        onChange={(event) => {
+                          setAutoDiscountPercentage(event.target.value);
+                          setSuccess(null);
+                        }}
+                        className="h-11 w-full rounded-md border border-slate-300 px-3 pr-9 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                        placeholder="Ex: 10"
+                      />
+                      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">
+                        %
+                      </span>
+                    </div>
+                  </label>
+                </div>
+              )}
             </div>
 
             <aside className="rounded-md border border-slate-200 bg-slate-50 p-4">

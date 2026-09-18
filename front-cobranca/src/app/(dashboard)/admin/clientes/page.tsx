@@ -21,29 +21,13 @@ import {
   BusinessSegment,
   CompanyStatus,
   CreateAdminClientInput,
-  MessagingLimitTier,
   UpdateAdminClientInput,
-  WhatsappStatus,
 } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 
 const billingMethods: BillingMethod[] = ["PIX", "BOLIX"];
 const statusOptions: CompanyStatus[] = ["ACTIVE", "INACTIVE", "SUSPENDED"];
 const businessSegmentOptions: BusinessSegment[] = ["GENERAL", "EDUCATION"];
-const whatsappStatusOptions: WhatsappStatus[] = [
-  "CONNECTED",
-  "DISCONNECTED",
-  "PENDING",
-];
-const messagingLimitTierOptions: MessagingLimitTier[] = [
-  "TIER_50",
-  "TIER_250",
-  "TIER_1K",
-  "TIER_10K",
-  "TIER_100K",
-  "TIER_UNLIMITED",
-];
-
 interface ClientFormState {
   corporateName: string;
   document: string;
@@ -51,44 +35,15 @@ interface ClientFormState {
   phoneNumber: string;
   status: CompanyStatus;
   gatewayProvider: string;
-  gatewayStatus: string;
   userName: string;
   userEmail: string;
   enabledBillingMethods: BillingMethod[];
   preferredBillingMethod: BillingMethod;
-  maxDiscountsPerDebtor: string;
-  discountTriggerDay: string;
   collectionReminderDays: string;
   autoGenerateFirstCharge: boolean;
-  autoDiscountEnabled: boolean;
-  autoDiscountDaysAfterDue: string;
-  autoDiscountPercentage: string;
   businessSegment: BusinessSegment;
   paymentNotificationEnabled: boolean;
   paymentNotificationEmails: string;
-  whatsappStatus: WhatsappStatus;
-  metaPhoneNumberId: string;
-  metaBusinessAccountId: string;
-  metaAccessToken: string;
-  metaBusinessPhoneNumber: string;
-  metaDefaultLanguage: string;
-  messagingLimitTier: MessagingLimitTier | "";
-  resendApiKey: string;
-  resendWebhookSecret: string;
-  resendFromEmail: string;
-  erpApiKey: string;
-  erpWebhookUrl: string;
-  erpEnabledEvents: string;
-  efiEnvironment: "homologation" | "production";
-  efiGatewayStatus: "PENDING" | "ACTIVE" | "REJECTED" | "DISABLED";
-  efiClientId: string;
-  efiClientSecret: string;
-  efiPayeeCode: string;
-  efiAccountNumber: string;
-  efiAccountDigit: string;
-  efiPixKey: string;
-  efiCertificatePassword: string;
-  efiCertificateBase64: string;
   legalRepresentative: string;
   legalRepresentativeCpf: string;
   legalRepresentativeBirthDate: string;
@@ -101,7 +56,6 @@ interface ClientFormState {
   bankName: string;
   bankAgency: string;
   bankAccount: string;
-  bankAccountDigit: string;
 }
 
 const initialForm: ClientFormState = {
@@ -111,44 +65,15 @@ const initialForm: ClientFormState = {
   phoneNumber: "",
   status: "ACTIVE",
   gatewayProvider: "EFI",
-  gatewayStatus: "PENDING",
   userName: "",
   userEmail: "",
   enabledBillingMethods: ["PIX", "BOLIX"],
   preferredBillingMethod: "BOLIX",
-  maxDiscountsPerDebtor: "1",
-  discountTriggerDay: "15",
   collectionReminderDays: "0",
   autoGenerateFirstCharge: true,
-  autoDiscountEnabled: false,
-  autoDiscountDaysAfterDue: "",
-  autoDiscountPercentage: "",
   businessSegment: "GENERAL",
   paymentNotificationEnabled: true,
   paymentNotificationEmails: "",
-  whatsappStatus: "PENDING",
-  metaPhoneNumberId: "",
-  metaBusinessAccountId: "",
-  metaAccessToken: "",
-  metaBusinessPhoneNumber: "",
-  metaDefaultLanguage: "pt_BR",
-  messagingLimitTier: "",
-  resendApiKey: "",
-  resendWebhookSecret: "",
-  resendFromEmail: "",
-  erpApiKey: "",
-  erpWebhookUrl: "",
-  erpEnabledEvents: "",
-  efiEnvironment: "homologation",
-  efiGatewayStatus: "ACTIVE",
-  efiClientId: "",
-  efiClientSecret: "",
-  efiPayeeCode: "",
-  efiAccountNumber: "",
-  efiAccountDigit: "",
-  efiPixKey: "",
-  efiCertificatePassword: "",
-  efiCertificateBase64: "",
   legalRepresentative: "",
   legalRepresentativeCpf: "",
   legalRepresentativeBirthDate: "",
@@ -161,15 +86,11 @@ const initialForm: ClientFormState = {
   bankName: "",
   bankAgency: "",
   bankAccount: "",
-  bankAccountDigit: "",
 };
 
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
-
-
-
 
 function methodLabel(method: BillingMethod): string {
   if (method === "BOLETO") return "Boleto";
@@ -193,18 +114,6 @@ function parseEmailList(value: string): string[] {
     .split(/[\n,;]/)
     .map((item) => item.trim())
     .filter(Boolean);
-}
-
-function parseOptionalNumber(value: string): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const parsed = Number(trimmed.replace(",", "."));
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function parseIntInput(value: string, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) ? parsed : fallback;
 }
 
 function normalizeDateInput(value: string | null | undefined): string {
@@ -305,50 +214,13 @@ export default function AdminClientsPage() {
       phoneNumber: client.phoneNumber,
       status: client.status,
       gatewayProvider: client.gatewayProvider ?? "EFI",
-      gatewayStatus: client.gatewayStatus,
       enabledBillingMethods: client.enabledBillingMethods,
       preferredBillingMethod: client.preferredBillingMethod,
-      maxDiscountsPerDebtor: String(client.maxDiscountsPerDebtor ?? 1),
-      discountTriggerDay: String(client.discountTriggerDay ?? 15),
       collectionReminderDays: joinNumberList(client.collectionReminderDays ?? [0]),
       autoGenerateFirstCharge: client.autoGenerateFirstCharge ?? true,
-      autoDiscountEnabled: client.autoDiscountEnabled ?? false,
-      autoDiscountDaysAfterDue:
-        client.autoDiscountDaysAfterDue === null ||
-        client.autoDiscountDaysAfterDue === undefined
-          ? ""
-          : String(client.autoDiscountDaysAfterDue),
-      autoDiscountPercentage:
-        client.autoDiscountPercentage === null ||
-        client.autoDiscountPercentage === undefined
-          ? ""
-          : String(client.autoDiscountPercentage),
       businessSegment: client.businessSegment ?? "GENERAL",
       paymentNotificationEnabled: client.paymentNotificationEnabled ?? true,
       paymentNotificationEmails: client.paymentNotificationEmails?.join("\n") ?? "",
-      whatsappStatus: (client.whatsappStatus as WhatsappStatus) ?? "PENDING",
-      metaPhoneNumberId: client.metaPhoneNumberId ?? "",
-      metaBusinessAccountId: client.metaBusinessAccountId ?? "",
-      metaBusinessPhoneNumber: client.metaBusinessPhoneNumber ?? "",
-      metaDefaultLanguage: client.metaDefaultLanguage ?? "pt_BR",
-      messagingLimitTier: client.messagingLimitTier ?? "",
-      resendWebhookSecret: "",
-      resendFromEmail: client.resendFromEmail ?? "",
-      erpWebhookUrl: client.erpWebhookUrl ?? "",
-      erpEnabledEvents: client.erpEnabledEvents?.join("\n") ?? "",
-      efiEnvironment:
-        client.efi.environment === "production" ? "production" : "homologation",
-      efiGatewayStatus:
-        client.efi.status === "PENDING" ||
-        client.efi.status === "ACTIVE" ||
-        client.efi.status === "REJECTED" ||
-        client.efi.status === "DISABLED"
-          ? client.efi.status
-          : "PENDING",
-      efiPayeeCode: client.efi.payeeCode ?? "",
-      efiAccountNumber: client.efi.accountNumber ?? "",
-      efiAccountDigit: client.efi.accountDigit ?? "",
-      efiPixKey: client.efi.pixKey ?? "",
       legalRepresentative: client.legalRepresentative ?? "",
       legalRepresentativeCpf: client.legalRepresentativeCpf ?? "",
       legalRepresentativeBirthDate: normalizeDateInput(
@@ -409,33 +281,16 @@ export default function AdminClientsPage() {
       billing: {
         enabledBillingMethods: form.enabledBillingMethods,
         preferredBillingMethod: form.preferredBillingMethod,
-        maxDiscountsPerDebtor: parseIntInput(form.maxDiscountsPerDebtor, 1),
-        discountTriggerDay: parseIntInput(form.discountTriggerDay, 15),
         collectionReminderDays: parseNumberList(form.collectionReminderDays),
         autoGenerateFirstCharge: form.autoGenerateFirstCharge,
-        autoDiscountEnabled: form.autoDiscountEnabled,
-        autoDiscountDaysAfterDue: parseOptionalNumber(
-          form.autoDiscountDaysAfterDue,
-        ),
-        autoDiscountPercentage: parseOptionalNumber(form.autoDiscountPercentage),
       },
       notifications: {
         businessSegment: form.businessSegment,
         paymentNotificationEnabled: form.paymentNotificationEnabled,
         paymentNotificationEmails: parseEmailList(form.paymentNotificationEmails),
       },
-      integrations: {
-        erpWebhookUrl: form.erpWebhookUrl || null,
-        erpEnabledEvents: parseEmailList(form.erpEnabledEvents),
-      },
     };
 
-    if (form.erpApiKey.trim()) {
-      payload.integrations = {
-        ...payload.integrations,
-        erpApiKey: form.erpApiKey,
-      };
-    }
     return payload;
   }
 
@@ -453,20 +308,6 @@ export default function AdminClientsPage() {
         changes.push({ label, current: currentText, next: nextText, sensitive });
       }
     };
-    const addSecretChange = (
-      label: string,
-      hasCurrent: boolean | undefined,
-      next: string,
-    ): void => {
-      if (!next.trim()) return;
-      changes.push({
-        label,
-        current: hasCurrent ? "Protegido" : "Vazio",
-        next,
-        sensitive: true,
-      });
-    };
-
     addChange("Razao social", client.corporateName, form.corporateName);
     addChange("CNPJ", client.document, form.document);
     addChange("E-mail empresa", client.email, form.email);
@@ -487,7 +328,6 @@ export default function AdminClientsPage() {
       client.paymentNotificationEmails?.join(", ") ?? "",
       parseEmailList(form.paymentNotificationEmails).join(", "),
     );
-    addChange("Status WhatsApp", client.whatsappStatus, form.whatsappStatus);
     addChange("Responsavel legal", client.legalRepresentative, form.legalRepresentative);
     addChange("CPF responsavel", client.legalRepresentativeCpf, form.legalRepresentativeCpf);
     addChange("CEP", client.addressPostalCode, form.postalCode);
@@ -499,7 +339,6 @@ export default function AdminClientsPage() {
     addChange("Banco", client.bankName, form.bankName);
     addChange("Agencia", client.bankAgency, form.bankAgency);
     addChange("Conta bancaria", client.bankAccount, form.bankAccount);
-    addSecretChange("ERP API key", client.hasErpApiKey, form.erpApiKey);
 
     return changes;
   }
@@ -569,21 +408,6 @@ export default function AdminClientsPage() {
       },
     };
 
-    if (
-      form.erpApiKey.trim() ||
-      form.erpWebhookUrl.trim() ||
-      form.erpEnabledEvents.trim()
-    ) {
-      payload.integrations = {
-        erpWebhookUrl: form.erpWebhookUrl || null,
-        erpEnabledEvents: parseEmailList(form.erpEnabledEvents),
-      };
-
-      if (form.erpApiKey.trim()) {
-        payload.integrations.erpApiKey = form.erpApiKey;
-      }
-    }
-
     try {
       const result = await apiClient.createAdminClient(payload);
       setForm(initialForm);
@@ -635,7 +459,7 @@ export default function AdminClientsPage() {
               Clientes Cifra+
             </h1>
             <p className="mt-1 text-sm text-slate-500">
-              Onboarding interno de empresas, acessos, taxas e integrações.
+              Cadastro de empresas e acesso ao portal para ativação financeira.
             </p>
           </div>
           <button
@@ -740,8 +564,7 @@ export default function AdminClientsPage() {
                         <td className="px-4 py-3 text-slate-700">
                           <p>{client.status}</p>
                           <p className="text-xs text-slate-500">
-                            Efí {client.efi.status ?? "PENDING"} · WhatsApp{" "}
-                            {client.whatsappStatus}
+                            Efí {client.efi.status ?? "PENDING"} · WhatsApp central
                           </p>
                         </td>
                         <td className="px-4 py-3">
@@ -799,6 +622,19 @@ export default function AdminClientsPage() {
             </div>
 
             <div className="grid gap-4 p-5">
+              <div className="rounded-md border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-950">
+                <p>
+                  Após o cadastro e a troca da senha temporária, o cliente conclui
+                  a abertura automatizada da conta Efí pelo portal do usuário,
+                  informando seus dados e autorizando a abertura. A emissão de
+                  cobranças fica disponível após a ativação financeira.
+                </p>
+                <p className="mt-2">
+                  Todos os disparos via API usam o mesmo número de WhatsApp do
+                  administrador da plataforma. O telefone da empresa é apenas
+                  um dado de contato.
+                </p>
+              </div>
               <div className="grid gap-3 md:grid-cols-2">
                 <Input label="Razao social" value={form.corporateName} onChange={(value) => updateField("corporateName", value)} required />
                 <Input label="CNPJ" value={form.document} onChange={(value) => updateField("document", value)} required />
@@ -837,74 +673,65 @@ export default function AdminClientsPage() {
                 </label>
               </div>
 
-              <div className="grid gap-3 md:grid-cols-3">
-                <Input label="Descontos por devedor" value={form.maxDiscountsPerDebtor} onChange={(value) => updateField("maxDiscountsPerDebtor", value)} />
-                <Input label="Dia gatilho desconto" value={form.discountTriggerDay} onChange={(value) => updateField("discountTriggerDay", value)} />
-                <Input label="Dias da regua" value={form.collectionReminderDays} onChange={(value) => updateField("collectionReminderDays", value)} />
-                <Input label="Dias desconto automatico" value={form.autoDiscountDaysAfterDue} onChange={(value) => updateField("autoDiscountDaysAfterDue", value)} />
-                <Input label="Percentual desconto automatico" value={form.autoDiscountPercentage} onChange={(value) => updateField("autoDiscountPercentage", value)} />
-              </div>
+              {isEditing && (
+                <>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <Input label="Dias da regua" value={form.collectionReminderDays} onChange={(value) => updateField("collectionReminderDays", value)} />
+                  </div>
 
-              <div className="grid gap-3 md:grid-cols-3">
-                <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={form.autoGenerateFirstCharge}
-                    onChange={(event) =>
-                      updateField("autoGenerateFirstCharge", event.target.checked)
-                    }
-                    className="h-4 w-4 accent-emerald-600"
-                  />
-                  Gerar primeira cobrança
-                </label>
-                <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={form.autoDiscountEnabled}
-                    onChange={(event) =>
-                      updateField("autoDiscountEnabled", event.target.checked)
-                    }
-                    className="h-4 w-4 accent-emerald-600"
-                  />
-                  Desconto automatico
-                </label>
-                <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={form.paymentNotificationEnabled}
-                    onChange={(event) =>
-                      updateField("paymentNotificationEnabled", event.target.checked)
-                    }
-                    className="h-4 w-4 accent-emerald-600"
-                  />
-                  Notificacao de pagamento
-                </label>
-              </div>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={form.autoGenerateFirstCharge}
+                        onChange={(event) =>
+                          updateField("autoGenerateFirstCharge", event.target.checked)
+                        }
+                        className="h-4 w-4 accent-emerald-600"
+                      />
+                      Gerar primeira cobrança
+                    </label>
 
-              <div className="grid gap-3 md:grid-cols-2">
-                <label className="flex flex-col gap-1.5">
-                  <span className="text-xs font-semibold uppercase text-slate-500">
-                    Segmento
-                  </span>
-                  <select
-                    value={form.businessSegment}
-                    onChange={(event) =>
-                      updateField(
-                        "businessSegment",
-                        event.target.value as BusinessSegment,
-                      )
-                    }
-                    className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                  >
-                    {businessSegmentOptions.map((segment) => (
-                      <option key={segment} value={segment}>
-                        {segment}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <Input label="Emails notificacao pagamento" value={form.paymentNotificationEmails} onChange={(value) => updateField("paymentNotificationEmails", value)} />
-              </div>
+                    <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={form.paymentNotificationEnabled}
+                        onChange={(event) =>
+                          updateField("paymentNotificationEnabled", event.target.checked)
+                        }
+                        className="h-4 w-4 accent-emerald-600"
+                      />
+                      Notificacao de pagamento
+                    </label>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="flex flex-col gap-1.5">
+                      <span className="text-xs font-semibold uppercase text-slate-500">
+                        Segmento
+                      </span>
+                      <select
+                        value={form.businessSegment}
+                        onChange={(event) =>
+                          updateField(
+                            "businessSegment",
+                            event.target.value as BusinessSegment,
+                          )
+                        }
+                        className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                      >
+                        {businessSegmentOptions.map((segment) => (
+                          <option key={segment} value={segment}>
+                            {segment}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <Input label="Emails notificacao pagamento" value={form.paymentNotificationEmails} onChange={(value) => updateField("paymentNotificationEmails", value)} />
+                  </div>
+
+                </>
+              )}
 
               <div className="grid gap-2">
                 <span className="text-xs font-semibold uppercase text-slate-500">
@@ -929,72 +756,40 @@ export default function AdminClientsPage() {
               </div>
 
               <div className="grid gap-3 md:grid-cols-2">
-                <label className="flex flex-col gap-1.5">
+                <label className="flex flex-col gap-1.5 md:col-span-2">
                   <span className="text-xs font-semibold uppercase text-slate-500">
-                    Status WhatsApp
+                    Metodo preferido
                   </span>
                   <select
-                    value={form.whatsappStatus}
-                    onChange={(event) =>
-                      updateField(
-                        "whatsappStatus",
-                        event.target.value as WhatsappStatus,
-                      )
-                    }
+                    value={form.preferredBillingMethod}
+                    onChange={(event) => updateField("preferredBillingMethod", event.target.value as BillingMethod)}
                     className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                   >
-                    {whatsappStatusOptions.map((status) => (
-                      <option key={status} value={status}>
-                        {status}
-                      </option>
+                    {form.enabledBillingMethods.map((method) => (
+                      <option key={method} value={method}>{methodLabel(method)}</option>
                     ))}
                   </select>
                 </label>
-                <label className="flex flex-col gap-1.5">
-                  <span className="text-xs font-semibold uppercase text-slate-500">
-                    Limite Meta
-                  </span>
-                  <select
-                    value={form.messagingLimitTier}
-                    onChange={(event) =>
-                      updateField(
-                        "messagingLimitTier",
-                        event.target.value as MessagingLimitTier | "",
-                      )
-                    }
-                    className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                  >
-                    <option value="">Sem tier</option>
-                    {messagingLimitTierOptions.map((tier) => (
-                      <option key={tier} value={tier}>
-                        {tier}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+
               </div>
 
-              <div className="grid gap-3 md:grid-cols-2">
-                <Input label="ERP API key" type="password" value={form.erpApiKey} onChange={(value) => updateField("erpApiKey", value)} placeholder={isEditing ? "Mantem chave atual se vazio" : undefined} />
-                <Input label="ERP webhook URL" value={form.erpWebhookUrl} onChange={(value) => updateField("erpWebhookUrl", value)} />
-                <Input label="Eventos ERP" value={form.erpEnabledEvents} onChange={(value) => updateField("erpEnabledEvents", value)} />
-              </div>
+              {isEditing && (
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Input label="Responsavel legal" value={form.legalRepresentative} onChange={(value) => updateField("legalRepresentative", value)} />
+                  <Input label="CPF responsavel" value={form.legalRepresentativeCpf} onChange={(value) => updateField("legalRepresentativeCpf", value)} />
+                  <Input label="Nascimento" type="date" value={form.legalRepresentativeBirthDate} onChange={(value) => updateField("legalRepresentativeBirthDate", value)} />
+                  <Input label="CEP" value={form.postalCode} onChange={(value) => updateField("postalCode", value)} />
+                  <Input label="Rua" value={form.street} onChange={(value) => updateField("street", value)} />
+                  <Input label="Numero" value={form.number} onChange={(value) => updateField("number", value)} />
+                  <Input label="Bairro" value={form.district} onChange={(value) => updateField("district", value)} />
+                  <Input label="Cidade" value={form.city} onChange={(value) => updateField("city", value)} />
+                  <Input label="UF" value={form.state} onChange={(value) => updateField("state", value)} />
+                  <Input label="Banco" value={form.bankName} onChange={(value) => updateField("bankName", value)} />
+                  <Input label="Agencia" value={form.bankAgency} onChange={(value) => updateField("bankAgency", value)} />
+                  <Input label="Conta bancaria" value={form.bankAccount} onChange={(value) => updateField("bankAccount", value)} />
+                </div>
 
-              <div className="grid gap-3 md:grid-cols-2">
-                <Input label="Responsavel legal" value={form.legalRepresentative} onChange={(value) => updateField("legalRepresentative", value)} />
-                <Input label="CPF responsavel" value={form.legalRepresentativeCpf} onChange={(value) => updateField("legalRepresentativeCpf", value)} />
-                <Input label="Nascimento" type="date" value={form.legalRepresentativeBirthDate} onChange={(value) => updateField("legalRepresentativeBirthDate", value)} />
-                <Input label="CEP" value={form.postalCode} onChange={(value) => updateField("postalCode", value)} />
-                <Input label="Rua" value={form.street} onChange={(value) => updateField("street", value)} />
-                <Input label="Numero" value={form.number} onChange={(value) => updateField("number", value)} />
-                <Input label="Bairro" value={form.district} onChange={(value) => updateField("district", value)} />
-                <Input label="Cidade" value={form.city} onChange={(value) => updateField("city", value)} />
-                <Input label="UF" value={form.state} onChange={(value) => updateField("state", value)} />
-                <Input label="Banco" value={form.bankName} onChange={(value) => updateField("bankName", value)} />
-                <Input label="Agencia" value={form.bankAgency} onChange={(value) => updateField("bankAgency", value)} />
-                <Input label="Conta bancaria" value={form.bankAccount} onChange={(value) => updateField("bankAccount", value)} />
-                <Input label="Digito conta" value={form.bankAccountDigit} onChange={(value) => updateField("bankAccountDigit", value)} />
-              </div>
+              )}
 
               <button
                 type="submit"
