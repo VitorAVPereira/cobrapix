@@ -8,7 +8,7 @@ import { OnboardingJobs } from './onboarding-jobs';
 import { OnboardingDraftDto } from './onboarding.dto';
 import { assertFreshConsent, canEditOnboarding } from './onboarding-policy';
 import { validateDebtorDocument } from '../common/debtor-document';
-import { assertEfiOpeningEnabled } from './efi-opening-capability';
+import { assertEfiOpeningEnabled } from '../config/account-opening';
 
 const SENSITIVE_FIELDS = [
   'representativeNameEncrypted',

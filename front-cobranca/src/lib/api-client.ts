@@ -3,6 +3,14 @@
  * O frontend nao acessa banco diretamente; toda persistencia passa por aqui.
  */
 
+import type {
+  CompanyFinancialProfile,
+  FinancialEnvironment,
+  FinancialMethod,
+  FinancialOverview,
+  FinancialProfile,
+  ValidationAttempt,
+} from "./financial-activation";
 import type { EfiDraftInput, EfiOnboardingState } from "./efi-onboarding";
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
@@ -1066,6 +1074,89 @@ class ApiClient {
       method: "POST",
     });
   }
+  getFinancialProfile(): Promise<CompanyFinancialProfile> {
+    return this.fetch("/financial-profile");
+  }
+  getFinancialOverview(companyId: string): Promise<FinancialOverview> {
+    return this.fetch(
+      `/admin/companies/${encodeURIComponent(companyId)}/financial-profile`,
+    );
+  }
+  createFinancialActivation(
+    companyId: string,
+    input: {
+      idempotencyKey: string;
+      environment: FinancialEnvironment;
+      enabledMethods: FinancialMethod[];
+    },
+  ): Promise<FinancialProfile> {
+    return this.fetch(
+      `/admin/companies/${encodeURIComponent(companyId)}/financial-activations`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ...input,
+          accountMode: "CUSTOMER_ACCOUNT",
+          payoutMode: "DIRECT_TO_CUSTOMER",
+        }),
+      },
+    );
+  }
+  getFinancialActivation(id: string): Promise<FinancialProfile> {
+    return this.fetch(`/admin/financial-activations/${encodeURIComponent(id)}`);
+  }
+  updateFinancialConfiguration(
+    id: string,
+    input: Record<string, unknown>,
+  ): Promise<FinancialProfile> {
+    return this.fetch(
+      `/admin/financial-activations/${encodeURIComponent(id)}/configuration`,
+      { method: "PUT", body: JSON.stringify(input) },
+    );
+  }
+  /** Multipart upload; the browser sets the boundary. */
+  uploadFinancialCredentials(
+    id: string,
+    form: FormData,
+  ): Promise<FinancialProfile> {
+    return this.fetch(
+      `/admin/financial-activations/${encodeURIComponent(id)}/credentials`,
+      { method: "PUT", body: form },
+    );
+  }
+  requestFinancialValidation(
+    id: string,
+    input: { expectedRevision: number; idempotencyKey: string },
+  ): Promise<ValidationAttempt> {
+    return this.fetch(
+      `/admin/financial-activations/${encodeURIComponent(id)}/validate`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+  }
+  activateFinancialProfile(
+    id: string,
+    input: {
+      expectedRevision: number;
+      validationAttemptId: string;
+      idempotencyKey: string;
+      confirmEffects: true;
+      acknowledgeUnverifiedSteps: boolean;
+    },
+  ): Promise<FinancialProfile> {
+    return this.fetch(
+      `/admin/financial-activations/${encodeURIComponent(id)}/activate`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+  }
+  cancelFinancialActivation(
+    id: string,
+    input: { expectedRevision: number; reason: string },
+  ): Promise<FinancialProfile> {
+    return this.fetch(
+      `/admin/financial-activations/${encodeURIComponent(id)}/cancel`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+  }
   financialAdmin<T>(
     path: string,
     method: "GET" | "POST" | "PUT" | "PATCH" = "GET",
@@ -1150,7 +1241,10 @@ class ApiClient {
     }
 
     const headers: Record<string, string> = {
-      "Content-Type": "application/json",
+      // FormData needs the browser-generated multipart boundary.
+      ...(options.body instanceof FormData
+        ? {}
+        : { "Content-Type": "application/json" }),
       ...(options.headers as Record<string, string> | undefined),
     };
 

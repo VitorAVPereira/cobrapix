@@ -8,7 +8,7 @@ import { GatewayHealthService } from '../payment/gateway-health.service';
 import { EfiOpeningClient } from './efi-opening.client';
 import { OnboardingJobs } from './onboarding-jobs';
 import { readCheckpoint } from './onboarding-checkpoint';
-import { assertEfiOpeningEnabled } from './efi-opening-capability';
+import { assertEfiOpeningEnabled } from '../config/account-opening';
 
 const SAFE_ONBOARDING = {
   companyId: true,

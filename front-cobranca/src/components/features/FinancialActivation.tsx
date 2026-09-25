@@ -6,7 +6,11 @@ import Link from "next/link";
 import { useApiClient } from "@/lib/use-api-client";
 import { canIssueFinancially, EFI_STATUS_LABELS } from "@/lib/efi-onboarding";
 import type { EfiOnboardingState } from "@/lib/efi-onboarding";
-import { FinancialActivationContext } from "./financial-activation-context";
+import type { CompanyFinancialProfile } from "@/lib/financial-activation";
+import {
+  FinancialActivationContext,
+  useFinancialActivation,
+} from "./financial-activation-context";
 export function FinancialActivationProvider({
   children,
 }: {
@@ -15,6 +19,7 @@ export function FinancialActivationProvider({
   const api = useApiClient();
   const { data: session, status } = useSession();
   const [state, setState] = useState<EfiOnboardingState | null>(null);
+  const [profile, setProfile] = useState<CompanyFinancialProfile | null>(null);
   const [ownerCompanyId, setOwnerCompanyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -27,15 +32,21 @@ export function FinancialActivationProvider({
       session.user.mustChangePassword
     ) {
       setState(null);
+      setProfile(null);
       setError(null);
       setLoading(false);
       return;
     }
     setLoading(true);
     try {
-      const value = await api.getEfiOnboarding();
+      const nextProfile = await api.getFinancialProfile();
+      // The opening flow is only queried when the server offers it.
+      const nextState = nextProfile.openingEnabled
+        ? await api.getEfiOnboarding()
+        : null;
       if (currentRequestId !== requestId.current) return;
-      setState(value);
+      setProfile(nextProfile);
+      setState(nextState);
       setOwnerCompanyId(session.user.companyId);
       setError(null);
     } catch (caught: unknown) {
@@ -64,43 +75,64 @@ export function FinancialActivationProvider({
       activeRequest.current++;
     };
   }, [refresh]);
-  const visibleState =
+  const owned =
     ownerCompanyId === session?.user.companyId &&
-    session?.user.role === "COMPANY_ADMIN"
-      ? state
-      : null;
+    session?.user.role === "COMPANY_ADMIN";
+  const visibleState = owned ? state : null;
+  const visibleProfile = owned ? profile : null;
   return (
     <FinancialActivationContext.Provider
       value={{
         state: visibleState,
+        profile: visibleProfile,
+        openingEnabled: visibleProfile?.openingEnabled ?? false,
         loading,
         error,
-        canIssue: canIssueFinancially(visibleState) && !error,
+        // Manual activation publishes a profile; the opening flow still counts
+        // until it publishes one too.
+        canIssue:
+          (Boolean(visibleProfile?.canIssue) ||
+            canIssueFinancially(visibleState)) &&
+          !error,
         refresh,
       }}
     >
-      {session?.user.role === "COMPANY_ADMIN" &&
-        !session.user.mustChangePassword &&
-        (!canIssueFinancially(visibleState) || error) && (
-          <div
-            role="status"
-            className="border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-950 flex flex-wrap items-center justify-between gap-2"
-          >
-            <span>
-              {error ??
-                (loading
-                  ? "Verificando sua ativação financeira…"
-                  : `Ativação financeira: ${visibleState ? EFI_STATUS_LABELS[visibleState.status] : "pendente"}. Você pode preparar cadastros e rascunhos.`)}
-            </span>
-            <Link
-              className="font-semibold underline underline-offset-4"
-              href="/onboarding/efi"
-            >
-              Continuar ativação
-            </Link>
-          </div>
-        )}
       {children}
     </FinancialActivationContext.Provider>
+  );
+}
+
+export function FinancialActivationBanner(): ReactNode {
+  const { data: session } = useSession();
+  const { state, openingEnabled, loading, error, canIssue } =
+    useFinancialActivation();
+  if (
+    session?.user.role !== "COMPANY_ADMIN" ||
+    session.user.mustChangePassword ||
+    (canIssue && !error)
+  )
+    return null;
+  const message =
+    error ??
+    (loading
+      ? "Verificando sua ativação financeira…"
+      : openingEnabled
+        ? `Ativação financeira: ${state ? EFI_STATUS_LABELS[state.status] : "pendente"}. Você pode preparar cadastros e rascunhos.`
+        : "Ativação financeira pendente: a equipe CifraMais está configurando sua conta de recebimento. Você pode preparar cadastros e rascunhos.");
+  return (
+    <div
+      role="status"
+      className="border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-950 flex flex-wrap items-center justify-between gap-2"
+    >
+      <span>{message}</span>
+      {openingEnabled && (
+        <Link
+          className="font-semibold underline underline-offset-4"
+          href="/onboarding/efi"
+        >
+          Continuar ativação
+        </Link>
+      )}
+    </div>
   );
 }

@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { readFile } from 'fs/promises';
 import { request } from 'https';
 import { z } from 'zod';
-import { isEfiOpeningEnabled } from './efi-opening-capability';
+import { isEfiOpeningEnabled } from '../config/account-opening';
 
 export const EFI_REQUIRED_SCOPES: readonly string[] = [
   'cobv.write',

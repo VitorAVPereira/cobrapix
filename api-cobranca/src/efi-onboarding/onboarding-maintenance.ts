@@ -7,7 +7,7 @@ import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { OnboardingJobs } from './onboarding-jobs';
 import { OnboardingNotifications } from './onboarding-notifications';
 import { readCheckpoint } from './onboarding-checkpoint';
-import { isEfiOpeningEnabled } from './efi-opening-capability';
+import { isEfiOpeningEnabled } from '../config/account-opening';
 
 const PENDING = ['AWAITING_REPRESENTATIVE', 'EFI_PROCESSING'] as const;
 

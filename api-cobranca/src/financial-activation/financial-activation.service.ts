@@ -133,12 +133,19 @@ export class FinancialActivationService {
 
   async getOverview(companyId: string): Promise<{
     companyId: string;
+    company: { corporateName: string; document: string };
+    manualActivationReleased: boolean;
     active: FinancialProfileView | null;
     candidate: FinancialProfileView | null;
   }> {
     const company = await this.prisma.company.findUnique({
       where: { id: companyId },
-      select: { id: true, activeFinancialProfileId: true },
+      select: {
+        id: true,
+        corporateName: true,
+        document: true,
+        activeFinancialProfileId: true,
+      },
     });
     if (!company) this.fail(404, 'COMPANY_NOT_FOUND');
     const [active, candidate] = await Promise.all([
@@ -153,10 +160,25 @@ export class FinancialActivationService {
         ...profileView,
       }),
     ]);
+    const released = await this.prisma.platformIntegrationState.findUnique({
+      where: { integration: 'FINANCIAL_MANUAL_ACTIVATION' },
+      select: { enabled: true },
+    });
     return {
       companyId,
+      // The admin already sees the company document; it prefills the holder.
+      company: {
+        corporateName: company.corporateName,
+        document: company.document,
+      },
+      manualActivationReleased: released?.enabled ?? false,
       active: active ? this.toView(active) : null,
-      candidate: candidate ? this.toView(candidate) : null,
+      candidate: candidate
+        ? {
+            ...this.toView(candidate),
+            latestValidation: await this.validation.latestAttempt(candidate.id),
+          }
+        : null,
     };
   }
 

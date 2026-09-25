@@ -6,7 +6,7 @@ import { EfiGatewayClient } from '../payment/efi-gateway.client';
 import { GatewayHealthService } from '../payment/gateway-health.service';
 import { inspectEfiCertificate } from '../payment/efi-certificate';
 import { EfiOpeningClient } from './efi-opening.client';
-import { isEfiOpeningEnabled } from './efi-opening-capability';
+import { isEfiOpeningEnabled } from '../config/account-opening';
 import { ConfigService } from '@nestjs/config';
 import { OnboardingNotifications } from './onboarding-notifications';
 import { readCheckpoint } from './onboarding-checkpoint';

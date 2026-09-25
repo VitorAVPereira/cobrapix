@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { PrismaModule } from '../prisma/prisma.module';
 import { PaymentModule } from '../payment/payment.module';
+import { CompanyFinancialProfileController } from './company-financial-profile.controller';
+import { CompanyFinancialProfileService } from './company-financial-profile.service';
 import { EfiAccountRegistryService } from './efi-account-registry.service';
 import { FinancialActivationController } from './financial-activation.controller';
 import { FinancialActivationService } from './financial-activation.service';
@@ -19,7 +21,10 @@ import { FinancialValidationWorker } from './financial-validation.worker';
     PaymentModule,
     BullModule.registerQueue({ name: FINANCIAL_VALIDATION_QUEUE }),
   ],
-  controllers: [FinancialActivationController],
+  controllers: [
+    FinancialActivationController,
+    CompanyFinancialProfileController,
+  ],
   providers: [
     FinancialActivationService,
     EfiAccountRegistryService,
@@ -27,6 +32,7 @@ import { FinancialValidationWorker } from './financial-validation.worker';
     FinancialValidationJobs,
     FinancialValidationWorker,
     FinancialEligibilityService,
+    CompanyFinancialProfileService,
   ],
   exports: [
     FinancialActivationService,

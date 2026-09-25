@@ -16,7 +16,7 @@ import { EfiOnboardingService } from './efi-onboarding.service';
 import { OnboardingDraftDto } from './onboarding.dto';
 import { EfiMtlsGuard } from './efi-mtls.guard';
 import { OnboardingEvents } from './onboarding-events';
-import { assertEfiOpeningEnabled } from './efi-opening-capability';
+import { assertEfiOpeningEnabled } from '../config/account-opening';
 
 @Controller('onboarding/efi')
 @UseGuards(JwtAuthGuard)

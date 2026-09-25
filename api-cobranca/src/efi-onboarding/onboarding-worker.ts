@@ -7,7 +7,7 @@ import { OnboardingWorkflow } from './onboarding-workflow';
 import { OnboardingProvisioner } from './onboarding-provisioner';
 import { OnboardingEvents } from './onboarding-events';
 import { OnboardingMaintenance } from './onboarding-maintenance';
-import { isEfiOpeningEnabled } from './efi-opening-capability';
+import { isEfiOpeningEnabled } from '../config/account-opening';
 
 @Processor('efi-onboarding', {
   concurrency: 3,
