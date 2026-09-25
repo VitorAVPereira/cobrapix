@@ -43,5 +43,5 @@ A transação de ativação (etapa 4) segue o padrão testado: marcar a ACTIVE a
 
 ## Pendências
 
-- Padrão de “dias aceitando pagamento após o vencimento” para novas empresas (hoje 0, igual ao comportamento atual). Decidir antes da etapa de emissão.
+- Resolvido (responsável): padrão de 30 dias aceitando pagamento após o vencimento, aplicado pela migration `20260925180000_payment_days_after_due_default` (padrão das colunas de empresa, fatura e recorrência; empresas existentes atualizadas; faturas existentes mantidas).
 - Unidade de `interest` mensal no boleto e comportamento do Pix do BOLIX após vencimento: homologação.

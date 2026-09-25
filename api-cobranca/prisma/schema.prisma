@@ -342,7 +342,7 @@ model Company {
   enabledBillingMethods                 BillingMethod[]          @default([PIX, BOLIX])
   defaultLateFineBasisPoints            Int                      @default(0)
   defaultLateInterestMonthlyBasisPoints Int                      @default(0)
-  defaultPaymentDaysAfterDue            Int                      @default(0)
+  defaultPaymentDaysAfterDue            Int                      @default(30)
   activeFinancialProfileId              String?                  @unique
   activeFinancialProfile                FinancialProfileVersion? @relation("CompanyActiveFinancialProfile", fields: [activeFinancialProfileId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
@@ -508,7 +508,7 @@ model Invoice {
   paidAt                         DateTime?
   lateFineBasisPoints            Int                   @default(0)
   lateInterestMonthlyBasisPoints Int                   @default(0)
-  paymentDaysAfterDue            Int                   @default(0)
+  paymentDaysAfterDue            Int                   @default(30)
 
   collectionLogs        CollectionLog[]
   collectionAttempts    CollectionAttempt[]
@@ -1097,7 +1097,7 @@ model RecurringInvoice {
   nextDueDate                    DateTime?
   lateFineBasisPoints            Int                    @default(0)
   lateInterestMonthlyBasisPoints Int                    @default(0)
-  paymentDaysAfterDue            Int                    @default(0)
+  paymentDaysAfterDue            Int                    @default(30)
 
   invoices Invoice[]
 

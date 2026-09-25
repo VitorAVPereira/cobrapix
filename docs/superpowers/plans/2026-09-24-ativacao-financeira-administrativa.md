@@ -441,6 +441,7 @@ Complementam as seções anteriores e prevalecem sobre elas quando houver confli
 - Os valores ficam na `Invoice` e são fotografados na `PaymentCharge` na emissão. Alteração após emissão exige substituição da cobrança.
 - Mapeamento: Pix CobV `valor.multa`/`valor.juros` e `calendario.validadeAposVencimento`; boleto/BOLIX `configurations.fine`/`configurations.interest` com a mesma política. Hoje `efi.service.ts` envia `validadeAposVencimento: 0`, o que impede o pagamento do Pix após o vencimento. Os campos e limites devem ser conferidos na documentação Efí na Etapa 1, e o comportamento do Pix do BOLIX após o vencimento deve ser testado em homologação.
 - O painel alerta multa acima de 2% para devedor pessoa física (limite do CDC).
+- Multa somente percentual (boleto/BOLIX não aceita multa fixa). Padrão de dias aceitando pagamento após o vencimento: **30 dias** para empresas, faturas e recorrências novas (decisão de 25/09/2026).
 
 ### 8.5 Pagamento com valor diferente, duplicidade e devolução
 
