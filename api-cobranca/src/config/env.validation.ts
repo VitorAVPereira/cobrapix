@@ -148,9 +148,9 @@ export const envSchema = z
       'RESEND_REPLY_TO',
       'RESEND_WEBHOOK_SECRET',
       'EFI_CHARGES_WEBHOOK_BASE_URL',
-      'EFI_PLATFORM_CLIENT_ID',
-      'EFI_PLATFORM_CLIENT_SECRET',
-      'EFI_PLATFORM_CERT_PATH',
+      // CifraMais account that receives its fee through split. Its API
+      // credentials (EFI_PLATFORM_CLIENT_*) are only needed by the CifraMais
+      // account modes (Phase B) and are not required yet.
       'EFI_PLATFORM_PAYEE_CODE',
       'EFI_PLATFORM_ACCOUNT_NUMBER',
       'EFI_PLATFORM_CNPJ',
@@ -310,8 +310,26 @@ export const envSchema = z
 
 export type Env = z.infer<typeof envSchema>;
 
+// Optional settings left blank in api.env (the VPS template lists every key)
+// mean "not configured", not an invalid value.
+const BLANK_MEANS_ABSENT = [
+  'EFI_OPENING_CLIENT_ID',
+  'EFI_OPENING_CLIENT_SECRET',
+  'EFI_OPENING_CERT_PATH',
+  'EFI_OPENING_CERT_PASSWORD',
+  'EFI_PLATFORM_CLIENT_ID',
+  'EFI_PLATFORM_CLIENT_SECRET',
+  'EFI_PLATFORM_CERT_PATH',
+  'EFI_PLATFORM_CERT_PASSWORD',
+  'PLATFORM_ALERT_EMAIL',
+];
+
 export const validateEnv = (config: Record<string, unknown>): Env => {
-  const parsed = envSchema.safeParse(config);
+  const normalized = { ...config };
+  for (const key of BLANK_MEANS_ABSENT)
+    if (typeof normalized[key] === 'string' && !normalized[key].trim())
+      delete normalized[key];
+  const parsed = envSchema.safeParse(normalized);
   if (!parsed.success) {
     const formatted = parsed.error.issues
       .map((i) => `  ${i.path.join('.')}: ${i.message}`)

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { FinancialActivationAdmin } from "@/components/features/financial-activation/FinancialActivationAdmin";
 import { FinancialHistoryPanel } from "@/components/features/financial-activation/FinancialHistoryPanel";
+import { OperationsPanel } from "@/components/features/financial-activation/OperationsPanel";
 
 export default function AdminFinancialActivationPage(): ReactNode {
   const { companyId } = useParams<{ companyId: string }>();
@@ -17,6 +18,7 @@ export default function AdminFinancialActivationPage(): ReactNode {
         >
           Ver conciliação deste cliente
         </Link>
+        <OperationsPanel companyId={companyId} />
         <FinancialHistoryPanel companyId={companyId} />
       </div>
     </>

@@ -17,6 +17,7 @@ const { FinancialEligibilityService } = require('../src/financial-activation/fin
 const { EfiService } = require('../src/payment/efi.service.ts');
 const { PaymentService } = require('../src/payment/payment.service.ts');
 const { BillingService } = require('../src/billing/billing.service.ts');
+const { PaymentAdminController } = require('../src/payment/payment-admin.controller.ts');
 const name = `efi-payment-test-${randomBytes(6).toString('hex')}`;
 const password = randomBytes(24).toString('hex');
 function docker(args) {
@@ -205,10 +206,13 @@ let containerStarted = false;
       pixSplitConfigId: async () => ({ id: 'split-1' }),
       pixCreateDueCharge: async (params, body) => { sent.push({ kind: 'PIX', account: account.efiAccountNumber, body }); return {}; },
       pixDetailDueCharge: async () => ({ loc: { id: 7, location: 'https://pix.example.test/7' }, status: 'ATIVA' }),
-      pixSplitLinkDueCharge: async () => ({}),
+      pixSplitLinkDueCharge: async () => { if (failSplitLink) throw { nome: 'split_rejeitado' }; return {}; },
+      getNotification: async () => chargesNotification,
       pixGenerateQRCode: async () => ({ qrcode: '000201pix' }),
       createOneStepCharge: async (params, body) => { sent.push({ kind: 'BOLIX', account: account.efiAccountNumber, body }); return { data: { charge_id: 555, status: 'waiting', barcode: '0019', billet_link: 'https://boleto.example.test', pix: { qrcode: '000201bolix' } } }; },
     });
+    let failSplitLink = false;
+    let chargesNotification = null;
     const payments = new PaymentService(issuer, prisma, charges, eligibility);
     await prisma.debtor.update({ where: { id: debtor.id }, data: { document: '52998224725', email: 'fixture@example.test' } });
     await prisma.company.update({ where: { id: company.id }, data: { addressStreet: 'Rua A', addressNumber: '1', addressDistrict: 'Centro', addressPostalCode: '01001000', addressCity: 'São Paulo', addressState: 'SP' } });
@@ -256,6 +260,60 @@ let containerStarted = false;
     assert.ok(recurrence.invoices.length >= 1);
     for (const generated of recurrence.invoices) assert.deepEqual([generated.lateFineBasisPoints, generated.lateInterestMonthlyBasisPoints, generated.paymentDaysAfterDue], [200, 50, 15], 'the recurrence copies its terms to each invoice');
     console.log('PASS company defaults, per-invoice override (zero = none) and recurrence copying its late terms');
+
+    // Operation: stale or uncertain issuances are listed per company for reconciliation.
+    const stuckInvoice = await prisma.invoice.create({ data: { companyId: company.id, debtorId: debtor.id, originalAmount: 30, dueDate } });
+    const stuck = await charges.createDraft(company.id, stuckInvoice.id, 'PIX', 3000, await issuance());
+    await charges.transition(stuck.id, company.id, 'PENDING', { gatewayStatusRaw: 'SUBMITTING' });
+    const adminCharges = new PaymentAdminController(issuer, prisma);
+    assert.equal((await adminCharges.attention(company.id)).some((row) => row.id === stuck.id), false, 'a fresh submission is not flagged yet');
+    await pool.query(`UPDATE "PaymentCharge" SET "updatedAt" = now() - interval '1 hour' WHERE id = $1`, [stuck.id]);
+    const attention = await adminCharges.attention(company.id);
+    assert.ok(attention.some((row) => row.id === stuck.id && row.gatewayStatusRaw === 'SUBMITTING'));
+    assert.equal((await adminCharges.attention(other.id)).length, 0, 'other tenants see nothing');
+    console.log('PASS uncertain issuances listed per company for reconciliation');
+
+    // Acceptance matrix (Phase A) — remaining rows.
+    // Split link rejected: the QR/link is never published; the charge waits for reconciliation.
+    failSplitLink = true;
+    const splitFail = await prisma.invoice.create({ data: { companyId: company.id, debtorId: debtor.id, originalAmount: 40, dueDate } });
+    await assert.rejects(payments.createPayment(splitFail.id, company.id, 'PIX'));
+    failSplitLink = false;
+    const splitFailInvoice = await prisma.invoice.findUnique({ where: { id: splitFail.id } });
+    assert.equal(splitFailInvoice.efiPixCopiaECola, null, 'no Pix code exposed without the mandatory split');
+    assert.equal(splitFailInvoice.status, 'DRAFT');
+    const splitFailCharge = await prisma.paymentCharge.findFirst({ where: { invoiceId: splitFail.id } });
+    assert.equal(splitFailCharge.status, 'PENDING', 'kept for reconciliation, not failed');
+    await assert.rejects(payments.createPayment(splitFail.id, company.id, 'PIX'), (error) => error.response?.code === 'EFI_SUBMISSION_UNCERTAIN', 'never reissued automatically');
+    console.log('PASS mandatory split failure: no QR exposed, no duplicate issuance');
+
+    // Payments paused: nothing new is issued, but webhooks and reconciliation keep working.
+    const openCharge = await prisma.paymentCharge.findFirst({ where: { invoiceId: withTerms.id } });
+    await prisma.platformIntegrationState.update({ where: { integration: 'EFI_PAYMENTS' }, data: { enabled: false } });
+    const paused = await prisma.invoice.create({ data: { companyId: company.id, debtorId: debtor.id, originalAmount: 50, dueDate } });
+    await assert.rejects(payments.createPayment(paused.id, company.id, 'PIX'), (error) => error.response?.code === 'EFI_PAYMENTS_PAUSED');
+    await issuer.handlePixWebhook({ pix: [{ txid: openCharge.efiTxid, chave: 'chave-2002', valor: '102.00', endToEndId: 'E2E-PAUSED' }] });
+    assert.equal((await prisma.paymentCharge.findUnique({ where: { id: openCharge.id } })).status, 'PAID', 'webhook applied while paused');
+    assert.ok(await prisma.paymentSettlement.findUnique({ where: { paymentChargeId: openCharge.id } }));
+    await prisma.platformIntegrationState.update({ where: { integration: 'EFI_PAYMENTS' }, data: { enabled: true } });
+    console.log('PASS paused payments block issuance only; webhooks and settlement continue');
+
+    // Tampered companyId in the charges webhook URL cannot settle a charge issued with a profile.
+    const bolixCharge = await prisma.paymentCharge.findFirst({ where: { invoiceId: bolix.id } });
+    await prisma.gatewayAccount.create({ data: { companyId: company.id, status: 'ACTIVE', payeeCode: 'legacy', efiAccountNumber: '9001', pixKey: 'legacy', encryptedClientId: 'c', encryptedClientSecret: 's' } });
+    chargesNotification = { data: [{ custom_id: bolixCharge.id, status: { current: 'paid' }, value: 10000 }] };
+    await issuer.handleChargesWebhook({ notification: 'tampered' }, company.id);
+    assert.equal((await prisma.paymentCharge.findUnique({ where: { id: bolixCharge.id } })).status, 'ACTIVE', 'companyId in the URL does not reach profile charges');
+    await issuer.handleChargesWebhook({ notification: 'genuine' }, undefined, identityB.id);
+    assert.equal((await prisma.paymentCharge.findUnique({ where: { id: bolixCharge.id } })).status, 'PAID');
+    console.log('PASS tampered companyId ignored; only the issuing account settles the charge');
+
+    // No active credential for the issuing account: blocked, never the CifraMais credentials.
+    await prisma.efiCredentialVersion.updateMany({ where: { identityId: identityA.id, status: 'ACTIVE' }, data: { status: 'RETIRED', retiredAt: new Date() } });
+    const oldOnA = await prisma.paymentCharge.findFirst({ where: { issuerIdentityId: identityA.id, status: 'ACTIVE' } });
+    if (oldOnA) await assert.rejects(issuer.cancelPixDueCharge(company.id, oldOnA.efiTxid), (error) => error.response?.code === 'EFI_CREDENTIALS_UNAVAILABLE');
+    else await assert.rejects(issuer.accountForIdentity(identityA.id, company.id), (error) => error.response?.code === 'EFI_CREDENTIALS_UNAVAILABLE');
+    console.log('PASS missing credential blocks the operation without falling back to platform credentials');
     console.log(`PASS payment lifecycle on ${migrations.length} migrations in PostgreSQL 16`);
   } finally {
     if (prisma) await prisma.$disconnect();
