@@ -85,7 +85,21 @@ Composição da parte do cliente com tarifa Efí suportada pelo cliente, remuner
 
 - Conta/aplicação da CifraMais: split Pix e webhooks confirmados pelo responsável; validação real em homologação.
 - Clientes atuais: conta própria; credenciais e certificado entregues pelo cliente.
-- Pendentes de conferência documental: campos/limites de `valor.multa`, `valor.juros`, `validadeAposVencimento` e `configurations.fine`/`interest`; comportamento do Pix do BOLIX após vencimento; evidência de efetivação do split.
+- Pendentes: comportamento do Pix do BOLIX após o vencimento (qual webhook confirma, se aplica multa/juros), unidade de `interest` mensal e limites de juros no boleto; evidência de efetivação do split.
+
+## 8. Conferência de multa, juros e prazo (25/09)
+
+`dev.efipay.com.br` continuou bloqueado pelo proxy desta sessão mesmo após a liberação no ambiente. Fontes usadas: tipagens e exemplos oficiais do SDK `sdk-node-apis-efi` 1.2.28 (`dist/types/methods/pix.d.ts`, `cobrancas.d.ts`, `examples/pix/cobv/pixCreateDueCharge.js`) e trechos da documentação Efí retornados por busca.
+
+| Regra CifraMais | Pix CobV (`PUT /v2/cobv/:txid`) | Boleto/BOLIX (`POST /v1/charge/one-step`, em `payment.banking_billet.configurations`) |
+| --- | --- | --- |
+| Multa percentual | `valor.multa` modalidade 2, `valorPerc` `"2.00"` | `fine` inteiro em centésimos de ponto percentual (200 = 2%); faixa citada 0,01% a 10% |
+| Multa fixa | `valor.multa` modalidade 1 (valor) | **sem equivalente**: `fine` é somente percentual |
+| Juros % ao mês | `valor.juros` modalidade 3 (percentual ao mês, dias corridos); também 1–8 (valor/%, dia/mês/ano, corridos/úteis) | `interest: { value, type: 'monthly' }`; número simples é tratado como diário (33 = 0,033% ao dia) |
+| Dias aceitando pagamento após o vencimento | `calendario.validadeAposVencimento` (exemplo oficial: 30) | `days_to_write_off` |
+
+- Boleto registrado Efí pode ser pago após o vencimento em qualquer banco com multa/juros quando ativos; o Pix do BOLIX compensa na hora. Resta testar em homologação se o QR do BOLIX pago após o vencimento cobra multa/juros e por qual webhook chega.
+- Referência de CDC citada pela Efí: juros de até 0,033% ao dia ou 1% ao mês; multa de até 2% em relação de consumo.
 
 ## Entregas
 
