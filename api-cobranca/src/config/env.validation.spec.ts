@@ -182,6 +182,31 @@ describe('validateEnv', () => {
     ).toThrow(field);
   });
 
+  it('dispensa as credenciais de abertura quando EFI_OPENING_ENABLED=false', () => {
+    expect(() =>
+      validateEnv(
+        buildValidConfig({
+          NODE_ENV: 'production',
+          EFI_OPENING_ENABLED: 'false',
+          EFI_OPENING_CLIENT_ID: undefined,
+          EFI_OPENING_CLIENT_SECRET: undefined,
+          EFI_OPENING_CERT_PATH: undefined,
+        }),
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateEnv(
+        buildValidConfig({
+          NODE_ENV: 'production',
+          EFI_OPENING_CLIENT_ID: undefined,
+        }),
+      ),
+    ).toThrow('EFI_OPENING_CLIENT_ID');
+    expect(() =>
+      validateEnv(buildValidConfig({ EFI_OPENING_ENABLED: 'no' })),
+    ).toThrow('EFI_OPENING_ENABLED');
+  });
+
   it('rejeita mapa criptográfico inválido sem revelar a chave', () => {
     expect(() =>
       validateEnv(

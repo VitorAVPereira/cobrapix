@@ -1,4 +1,6 @@
 import {
+  Equals,
+  IsBoolean,
   ArrayMaxSize,
   ArrayMinSize,
   ArrayUnique,
@@ -13,7 +15,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ACCOUNT_MODES,
   FINANCIAL_ISSUANCE_METHODS,
@@ -83,4 +85,29 @@ export class UploadFinancialCredentialsDto {
 export class CancelFinancialActivationDto {
   @Type(() => Number) @IsInt() @Min(1) expectedRevision!: number;
   @IsString() @MinLength(3) @MaxLength(500) reason!: string;
+}
+
+// The global pipe converts strings implicitly, and Boolean('false') is true.
+// Confirmations must be the JSON literal, so read the raw value.
+const RawValue = (): PropertyDecorator =>
+  Transform(
+    ({ obj, key }: { obj: Record<string, unknown>; key: string }) => obj[key],
+  );
+
+export class RequestFinancialValidationDto {
+  @Type(() => Number) @IsInt() @Min(1) expectedRevision!: number;
+  @IsUUID('4') idempotencyKey!: string;
+}
+
+export class ActivateFinancialProfileDto {
+  @Type(() => Number) @IsInt() @Min(1) expectedRevision!: number;
+  @IsUUID('4') validationAttemptId!: string;
+  @IsUUID('4') idempotencyKey!: string;
+  // The screen shows the effects (webhook, split, régua) before confirming.
+  @RawValue() @Equals(true) confirmEffects!: true;
+  @RawValue() @IsOptional() @IsBoolean() acknowledgeUnverifiedSteps?: boolean;
+}
+
+export class ManualActivationSwitchDto {
+  @RawValue() @IsBoolean() enabled!: boolean;
 }

@@ -8,6 +8,7 @@ import { OnboardingJobs } from './onboarding-jobs';
 import { OnboardingDraftDto } from './onboarding.dto';
 import { assertFreshConsent, canEditOnboarding } from './onboarding-policy';
 import { validateDebtorDocument } from '../common/debtor-document';
+import { assertEfiOpeningEnabled } from './efi-opening-capability';
 
 const SENSITIVE_FIELDS = [
   'representativeNameEncrypted',
@@ -184,6 +185,7 @@ export class EfiOnboardingService {
 
   async submit(user: AuthenticatedUser): Promise<unknown> {
     this.requireCompanyAdmin(user);
+    assertEfiOpeningEnabled(this.config);
     const state = await this.prisma.platformIntegrationState.findUnique({
       where: { integration: 'EFI_ONBOARDING' },
     });

@@ -5,6 +5,29 @@ import { createHash } from 'crypto';
 import EfiPay from 'sdk-node-apis-efi';
 import { PaymentCryptoService } from './payment-crypto.service';
 
+// Decrypted material of one credential version. Lives only in memory for the
+// duration of a validation; never persisted, queued or logged.
+export interface EfiAccountMaterial {
+  environment: 'HOMOLOGATION' | 'PRODUCTION';
+  clientId: string;
+  clientSecret: string;
+  certificateBase64: string;
+}
+
+// Operations used to prepare an existing account, without the opening API.
+export interface EfiAccountOperations {
+  // Read: proves Pix OAuth and CobV read scope, not issuance.
+  listRecentDueCharges(): Promise<void>;
+  // Changes the Pix webhook of the key; fails when the key is not the account's.
+  configurePixWebhook(pixKey: string): Promise<void>;
+  // Read: URL currently registered for the key.
+  pixWebhookUrl(pixKey: string): Promise<string | undefined>;
+  // Changes a split configuration identified by a stable id; creates no charge.
+  upsertValidationSplit(id: string): Promise<void>;
+  // Read on the Cobranças API: proves its OAuth, not boleto/Bolix issuance.
+  listChargePlans(): Promise<void>;
+}
+
 @Injectable()
 export class EfiGatewayClient {
   constructor(
@@ -74,6 +97,67 @@ export class EfiGatewayClient {
         },
       },
     );
+  }
+  // Pix and Cobranças authenticate on different servers; one SDK instance per
+  // API keeps their tokens apart.
+  operations(material: EfiAccountMaterial): EfiAccountOperations {
+    const client = (): EfiPay =>
+      new EfiPay({
+        sandbox: material.environment !== 'PRODUCTION',
+        client_id: material.clientId,
+        client_secret: material.clientSecret,
+        certificate: material.certificateBase64,
+        cert_base64: true,
+        cache: false,
+      });
+    let pix: EfiPay | undefined;
+    let charges: EfiPay | undefined;
+    const pixClient = (): EfiPay => (pix ??= client());
+    const chargesClient = (): EfiPay => (charges ??= client());
+    return {
+      listRecentDueCharges: async (): Promise<void> => {
+        const fim = new Date().toISOString();
+        const inicio = new Date(Date.now() - 3600_000).toISOString();
+        await pixClient().pixListDueCharges({ inicio, fim });
+      },
+      configurePixWebhook: async (pixKey: string): Promise<void> => {
+        await pixClient().pixConfigWebhook(
+          { chave: pixKey },
+          { webhookUrl: this.pixWebhookTarget() },
+        );
+      },
+      pixWebhookUrl: async (pixKey: string): Promise<string | undefined> =>
+        (await pixClient().pixDetailWebhook({ chave: pixKey })).webhookUrl,
+      upsertValidationSplit: async (id: string): Promise<void> => {
+        const cnpj = this.config.get<string>('EFI_PLATFORM_CNPJ');
+        const conta = this.config.get<string>('EFI_PLATFORM_ACCOUNT_NUMBER');
+        if (!cnpj || !conta) throw new Error('EFI_PLATFORM_ACCOUNT_INVALID');
+        await pixClient().pixSplitConfigId(
+          { id },
+          {
+            descricao: 'Validação CifraMais',
+            lancamento: { imediato: true },
+            split: {
+              divisaoTarifa: 'assumir_total',
+              minhaParte: { tipo: 'porcentagem', valor: '99.00' },
+              repasses: [
+                {
+                  tipo: 'porcentagem',
+                  valor: '1.00',
+                  favorecido: { cnpj, conta },
+                },
+              ],
+            },
+          },
+        );
+      },
+      listChargePlans: async (): Promise<void> => {
+        await chargesClient().listPlans({ limit: 1 });
+      },
+    };
+  }
+  pixWebhookTarget(): string {
+    return `${this.webhookBase()}/webhooks/efi/pix?ignorar=`;
   }
   async removeWebhook(account: GatewayAccount): Promise<void> {
     await this.sdk(account).pixDeleteWebhook({ chave: account.pixKey });

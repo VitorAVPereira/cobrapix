@@ -114,6 +114,7 @@ enum PlatformIntegration {
   RESEND
   EFI_ONBOARDING
   EFI_PAYMENTS
+  FINANCIAL_MANUAL_ACTIVATION
 }
 
 enum CommunicationChannel {

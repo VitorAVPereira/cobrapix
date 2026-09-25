@@ -8,6 +8,7 @@ import { GatewayHealthService } from '../payment/gateway-health.service';
 import { EfiOpeningClient } from './efi-opening.client';
 import { OnboardingJobs } from './onboarding-jobs';
 import { readCheckpoint } from './onboarding-checkpoint';
+import { assertEfiOpeningEnabled } from './efi-opening-capability';
 
 const SAFE_ONBOARDING = {
   companyId: true,
@@ -90,6 +91,7 @@ export class OnboardingAdminService {
     return { onboarding, gateway, timeline };
   }
   async retry(companyId: string, userId: string): Promise<unknown> {
+    assertEfiOpeningEnabled(this.config);
     const row = await this.prisma.efiOnboarding.findUnique({
       where: { companyId },
     });
@@ -150,6 +152,7 @@ export class OnboardingAdminService {
       certificatePassword?: string;
     },
   ): Promise<unknown> {
+    assertEfiOpeningEnabled(this.config);
     const row = await this.prisma.efiOnboarding.findUnique({
       where: { companyId },
       include: { company: true },
@@ -257,6 +260,7 @@ export class OnboardingAdminService {
     enabled: boolean,
   ): Promise<unknown> {
     if (enabled && integration === 'EFI_ONBOARDING') {
+      assertEfiOpeningEnabled(this.config);
       // A production Node server can use Efi homologation. Only an explicit
       // homologation environment is exempt from the production approval gate.
       if (

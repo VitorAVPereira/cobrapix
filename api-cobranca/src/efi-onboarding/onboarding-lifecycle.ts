@@ -6,6 +6,8 @@ import { EfiGatewayClient } from '../payment/efi-gateway.client';
 import { GatewayHealthService } from '../payment/gateway-health.service';
 import { inspectEfiCertificate } from '../payment/efi-certificate';
 import { EfiOpeningClient } from './efi-opening.client';
+import { isEfiOpeningEnabled } from './efi-opening-capability';
+import { ConfigService } from '@nestjs/config';
 import { OnboardingNotifications } from './onboarding-notifications';
 import { readCheckpoint } from './onboarding-checkpoint';
 
@@ -19,9 +21,12 @@ export class OnboardingLifecycle {
     private readonly gateway: EfiGatewayClient,
     private readonly health: GatewayHealthService,
     private readonly notifications: OnboardingNotifications,
+    private readonly config?: ConfigService,
   ) {}
   @Cron('0 0 3 * * *')
   async certificates(): Promise<void> {
+    // Renewal here goes through the opening API; manual accounts renew by upload.
+    if (this.config && !isEfiOpeningEnabled(this.config)) return;
     let cursor: string | undefined;
     do {
       const accounts = await this.prisma.gatewayAccount.findMany({

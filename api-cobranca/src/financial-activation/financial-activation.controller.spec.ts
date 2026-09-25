@@ -9,6 +9,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GlobalExceptionFilter } from '../common/filters/http-exception.filter';
 import { FinancialActivationController } from './financial-activation.controller';
 import { FinancialActivationService } from './financial-activation.service';
+import { FinancialValidationService } from './financial-validation.service';
 
 describe('Ativação financeira HTTP', () => {
   let app: INestApplication<Server>;
@@ -19,7 +20,10 @@ describe('Ativação financeira HTTP', () => {
     updateConfiguration: jest.fn(),
     uploadCredentials: jest.fn(),
     cancel: jest.fn(),
+    activate: jest.fn(),
+    setManualActivationReleased: jest.fn(),
   };
+  const validation = { requestValidation: jest.fn() };
   const id = randomUUID();
   const companyId = randomUUID();
   const credentialFields = {
@@ -34,7 +38,10 @@ describe('Ativação financeira HTTP', () => {
   beforeAll(async () => {
     const module = await Test.createTestingModule({
       controllers: [FinancialActivationController],
-      providers: [{ provide: FinancialActivationService, useValue: service }],
+      providers: [
+        { provide: FinancialActivationService, useValue: service },
+        { provide: FinancialValidationService, useValue: validation },
+      ],
     })
       .overrideGuard(JwtAuthGuard)
       .useValue({
@@ -65,7 +72,8 @@ describe('Ativação financeira HTTP', () => {
   });
   beforeEach(() => {
     jest.clearAllMocks();
-    for (const fn of Object.values(service)) fn.mockResolvedValue({ id });
+    for (const fn of [...Object.values(service), ...Object.values(validation)])
+      fn.mockResolvedValue({ id });
   });
   afterAll(async () => {
     await app.close();
@@ -78,6 +86,9 @@ describe('Ativação financeira HTTP', () => {
     ['put', `/admin/financial-activations/${id}/configuration`],
     ['put', `/admin/financial-activations/${id}/credentials`],
     ['post', `/admin/financial-activations/${id}/cancel`],
+    ['post', `/admin/financial-activations/${id}/validate`],
+    ['post', `/admin/financial-activations/${id}/activate`],
+    ['put', '/admin/integrations/financial-manual-activation'],
   ];
 
   it.each(routes)(
@@ -90,7 +101,10 @@ describe('Ativação financeira HTTP', () => {
       )
         .set('x-test-role', 'COMPANY_ADMIN')
         .expect(403);
-      for (const fn of Object.values(service))
+      for (const fn of [
+        ...Object.values(service),
+        ...Object.values(validation),
+      ])
         expect(fn).not.toHaveBeenCalled();
     },
   );
@@ -182,5 +196,59 @@ describe('Ativação financeira HTTP', () => {
       void extra.field(key, value);
     await extra.expect(400);
     expect(service.uploadCredentials).not.toHaveBeenCalled();
+  });
+
+  it('validação é assíncrona (202) e exige chave de idempotência', async () => {
+    const post = (body: object) =>
+      request(app.getHttpServer())
+        .post(`/admin/financial-activations/${id}/validate`)
+        .set('x-test-role', 'PLATFORM_ADMIN')
+        .send(body);
+    await post({ expectedRevision: 3, idempotencyKey: randomUUID() }).expect(
+      202,
+    );
+    await post({ expectedRevision: 3 }).expect(400);
+    expect(validation.requestValidation).toHaveBeenCalledTimes(1);
+  });
+
+  it('ativação exige confirmação explícita dos efeitos', async () => {
+    const body = {
+      expectedRevision: 4,
+      validationAttemptId: randomUUID(),
+      idempotencyKey: randomUUID(),
+      confirmEffects: true,
+      acknowledgeUnverifiedSteps: true,
+    };
+    const post = (payload: object) =>
+      request(app.getHttpServer())
+        .post(`/admin/financial-activations/${id}/activate`)
+        .set('x-test-role', 'PLATFORM_ADMIN')
+        .send(payload);
+    await post({ ...body, confirmEffects: false }).expect(400);
+    await post({ ...body, confirmEffects: 'true' }).expect(400);
+    await post({ ...body, confirmEffects: 'false' }).expect(400);
+    await post({ ...body, acknowledgeUnverifiedSteps: 'false' }).expect(400);
+    const { confirmEffects: _omitted, ...withoutConfirmation } = body;
+    void _omitted;
+    await post(withoutConfirmation).expect(400);
+    expect(service.activate).not.toHaveBeenCalled();
+    await post(body).expect(200);
+    expect(service.activate).toHaveBeenCalledWith(
+      id,
+      'admin-test',
+      expect.objectContaining({ confirmEffects: true }),
+    );
+  });
+
+  it('a liberação manual só aceita booleano literal', async () => {
+    const put = (body: object) =>
+      request(app.getHttpServer())
+        .put('/admin/integrations/financial-manual-activation')
+        .set('x-test-role', 'PLATFORM_ADMIN')
+        .send(body);
+    await put({ enabled: 'false' }).expect(400);
+    await put({ enabled: 1 }).expect(400);
+    await put({ enabled: false }).expect(200);
+    expect(service.setManualActivationReleased).toHaveBeenCalledWith(false);
   });
 });

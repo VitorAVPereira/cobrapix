@@ -10,12 +10,28 @@ import { inspectEfiCertificate } from '../payment/efi-certificate';
 import type { EfiCertificate } from '../payment/efi-certificate';
 import { EfiAccountRegistryService } from './efi-account-registry.service';
 import {
+  ActivateFinancialProfileDto,
   CancelFinancialActivationDto,
   CreateFinancialActivationDto,
   UpdateFinancialConfigurationDto,
   UploadFinancialCredentialsDto,
 } from './financial-activation.dto';
 import { validateFinancialModeSelection } from './financial-activation.types';
+import {
+  FinancialValidationService,
+  ValidationAttemptView,
+} from './financial-validation.service';
+import type { ValidationStep } from './financial-validation.types';
+
+// A company whose account-opening request is in flight must be reconciled
+// before a manual activation replaces it.
+const OPENING_IN_FLIGHT = [
+  'NOTICE_PENDING',
+  'AWAITING_REPRESENTATIVE',
+  'EFI_PROCESSING',
+  'SUBMISSION_UNCERTAIN',
+  'PROVISIONING',
+] as const;
 
 export const OPEN_CANDIDATE_STATUSES: FinancialProfileStatus[] = [
   'DRAFT',
@@ -102,6 +118,7 @@ export interface FinancialProfileView {
   cancelReason: string | null;
   createdAt: Date;
   updatedAt: Date;
+  latestValidation?: ValidationAttemptView | null;
 }
 
 @Injectable()
@@ -111,6 +128,7 @@ export class FinancialActivationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly registry: EfiAccountRegistryService,
+    private readonly validation: FinancialValidationService,
   ) {}
 
   async getOverview(companyId: string): Promise<{
@@ -148,7 +166,202 @@ export class FinancialActivationService {
       ...profileView,
     });
     if (!profile) this.fail(404, 'FINANCIAL_ACTIVATION_NOT_FOUND');
-    return this.toView(profile);
+    return {
+      ...this.toView(profile),
+      latestValidation: await this.validation.latestAttempt(id),
+    };
+  }
+
+  // Publishes a validated candidate: supersedes the previous version, activates
+  // the credential, moves the company pointer, updates the compatibility
+  // gateway account and audits — all in one transaction. No provider call.
+  async activate(
+    id: string,
+    userId: string,
+    dto: ActivateFinancialProfileDto,
+  ): Promise<FinancialProfileView> {
+    await this.prisma.$transaction(async (tx) => {
+      await this.validation.assertManualActivationReleased(tx);
+      const [row] = await tx.$queryRaw<{ companyId: string }[]>(
+        Prisma.sql`SELECT "companyId" FROM "FinancialProfileVersion" WHERE id=${id}`,
+      );
+      if (!row) this.fail(404, 'FINANCIAL_ACTIVATION_NOT_FOUND');
+      // Lock order: company, then profile (same as candidate creation).
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM "Company" WHERE id=${row.companyId} FOR UPDATE`,
+      );
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM "FinancialProfileVersion" WHERE id=${id} FOR UPDATE`,
+      );
+      const profile = await tx.financialProfileVersion.findUniqueOrThrow({
+        where: { id },
+        include: { issuerIdentity: true, issuerCredentialVersion: true },
+      });
+      if (
+        profile.status === 'ACTIVE' &&
+        profile.activationIdempotencyKey === dto.idempotencyKey
+      )
+        return; // Replay of the same confirmation.
+      const keyOwner = await tx.financialProfileVersion.findUnique({
+        where: { activationIdempotencyKey: dto.idempotencyKey },
+        select: { id: true },
+      });
+      if (keyOwner) this.fail(409, 'IDEMPOTENCY_KEY_REUSED');
+      if (profile.status !== 'READY')
+        this.fail(409, 'FINANCIAL_PROFILE_NOT_READY');
+      if (profile.revision !== dto.expectedRevision)
+        this.fail(409, 'REVISION_CONFLICT');
+
+      const attempt = await tx.financialValidationAttempt.findFirst({
+        where: {
+          id: dto.validationAttemptId,
+          profileId: id,
+          companyId: profile.companyId,
+        },
+      });
+      const now = new Date();
+      if (
+        !attempt ||
+        attempt.status !== 'SUCCEEDED' ||
+        attempt.profileRevision !== profile.revision ||
+        !attempt.validUntil ||
+        attempt.validUntil <= now ||
+        !profile.validationHash ||
+        attempt.validationHash !== profile.validationHash ||
+        (await this.validation.computeValidationHash(tx, id)) !==
+          profile.validationHash
+      )
+        this.fail(409, 'VALIDATION_STALE');
+      const unverified = (
+        Array.isArray(attempt.steps)
+          ? (attempt.steps as unknown as ValidationStep[])
+          : []
+      ).filter((step) => step.status === 'NOT_VERIFIABLE');
+      if (unverified.length > 0 && dto.acknowledgeUnverifiedSteps !== true)
+        this.fail(422, 'UNVERIFIED_STEPS_NOT_ACKNOWLEDGED');
+      if (
+        profile.authorizationValidUntil &&
+        profile.authorizationValidUntil <= now
+      )
+        this.fail(422, 'AUTHORIZATION_EXPIRED');
+      const opening = await tx.efiOnboarding.findUnique({
+        where: { companyId: profile.companyId },
+        select: { status: true },
+      });
+      if (
+        opening &&
+        (OPENING_IN_FLIGHT as readonly string[]).includes(opening.status)
+      )
+        this.fail(409, 'OPENING_RECONCILIATION_REQUIRED');
+      const identity = profile.issuerIdentity;
+      const credential = profile.issuerCredentialVersion;
+      if (!identity || !credential)
+        this.fail(409, 'FINANCIAL_PROFILE_NOT_READY');
+
+      const company = await tx.company.findUniqueOrThrow({
+        where: { id: profile.companyId },
+        select: { activeFinancialProfileId: true },
+      });
+      if (company.activeFinancialProfileId)
+        await tx.financialProfileVersion.updateMany({
+          where: { id: company.activeFinancialProfileId, status: 'ACTIVE' },
+          data: { status: 'SUPERSEDED', supersededAt: now },
+        });
+      await tx.efiCredentialVersion.updateMany({
+        where: {
+          identityId: identity.id,
+          status: 'ACTIVE',
+          id: { not: credential.id },
+        },
+        data: { status: 'RETIRED', retiredAt: now },
+      });
+      if (credential.status !== 'ACTIVE')
+        await tx.efiCredentialVersion.update({
+          where: { id: credential.id },
+          data: { status: 'ACTIVE', activatedAt: now },
+        });
+      const published = await tx.financialProfileVersion.updateMany({
+        where: { id, status: 'READY', revision: profile.revision },
+        data: {
+          status: 'ACTIVE',
+          activatedAt: now,
+          activatedByUserId: userId,
+          activationIdempotencyKey: dto.idempotencyKey,
+        },
+      });
+      if (published.count !== 1) this.fail(409, 'REVISION_CONFLICT');
+      await tx.company.update({
+        where: { id: profile.companyId },
+        data: { activeFinancialProfileId: id },
+      });
+      // Temporary bridge: the current issuance path reads GatewayAccount.
+      // Ciphertexts are copied as-is; the identity stays the source of truth.
+      const gateway = {
+        provider: 'EFI',
+        environment:
+          profile.environment === 'PRODUCTION' ? 'production' : 'homologation',
+        status: 'ACTIVE',
+        payeeCode: identity.payeeCode ?? '',
+        efiAccountNumber: identity.efiAccountNumber,
+        efiAccountDigit: identity.efiAccountDigit,
+        pixKey: identity.pixKey ?? '',
+        encryptedClientId: credential.encryptedClientId,
+        encryptedClientSecret: credential.encryptedClientSecret,
+        encryptedCertificate: credential.encryptedCertificate,
+        certificatePath: null,
+        encryptedCertificatePassword: null,
+        credentialKeyVersion: credential.credentialKeyVersion,
+        certificateExpiresAt: credential.certificateExpiresAt,
+        certificateFingerprint: credential.certificateFingerprint,
+        healthStatus: 'HEALTHY' as const,
+        lastValidatedAt: profile.validatedAt,
+        consecutiveFailures: 0,
+        lastError: null,
+        efiAccountIdentityId: identity.id,
+      };
+      try {
+        await tx.gatewayAccount.upsert({
+          where: { companyId: profile.companyId },
+          create: { companyId: profile.companyId, ...gateway },
+          update: gateway,
+        });
+      } catch (error: unknown) {
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === 'P2002'
+        )
+          this.fail(409, 'PIX_KEY_IN_USE');
+        throw error;
+      }
+      await this.audit(tx, profile, userId, 'FINANCIAL_ACTIVATION_ACTIVATED', {
+        version: profile.version,
+        validationAttemptId: attempt.id,
+        supersededProfileId: company.activeFinancialProfileId,
+        credentialVersion: credential.version,
+        unverifiedStepsAcknowledged: unverified.map((step) => step.code),
+      });
+    });
+    return this.getActivation(id);
+  }
+
+  async setManualActivationReleased(enabled: boolean): Promise<{
+    integration: string;
+    enabled: boolean;
+  }> {
+    const state = await this.prisma.platformIntegrationState.upsert({
+      where: { integration: 'FINANCIAL_MANUAL_ACTIVATION' },
+      create: {
+        integration: 'FINANCIAL_MANUAL_ACTIVATION',
+        enabled,
+        pausedAt: enabled ? null : new Date(),
+      },
+      update: {
+        enabled,
+        pausedAt: enabled ? null : new Date(),
+        pauseReason: enabled ? null : 'ADMIN_PAUSED',
+      },
+    });
+    return { integration: state.integration, enabled: state.enabled };
   }
 
   async createCandidate(
@@ -583,6 +796,17 @@ export function mask(value: string): string {
 }
 
 const MESSAGES: Record<string, string> = {
+  FINANCIAL_PROFILE_NOT_READY:
+    'A ativação precisa estar validada (pronta) antes de ser confirmada.',
+  VALIDATION_STALE:
+    'A validação expirou ou os dados mudaram desde então. Valide novamente.',
+  UNVERIFIED_STEPS_NOT_ACKNOWLEDGED:
+    'Confirme ciência das verificações que a Efí não permite comprovar sem emitir cobrança.',
+  OPENING_RECONCILIATION_REQUIRED:
+    'Há um pedido de abertura de conta em andamento. Concilie-o antes da ativação manual.',
+  PIX_KEY_IN_USE: 'Esta chave Pix já está vinculada a outra empresa.',
+  MANUAL_ACTIVATION_PAUSED:
+    'Novas ativações financeiras manuais estão pausadas.',
   COMPANY_NOT_FOUND: 'Empresa não encontrada.',
   FINANCIAL_ACTIVATION_NOT_FOUND: 'Ativação financeira não encontrada.',
   FINANCIAL_MODE_INVALID: 'Combinação de conta e repasse inválida.',

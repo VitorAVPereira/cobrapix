@@ -170,14 +170,15 @@ export default function AdminEfiOnboardingPage(): ReactNode {
               {{
                 META: "WhatsApp central",
                 RESEND: "E-mail central",
-                EFI_ONBOARDING: "Novas ativações",
+                EFI_ONBOARDING: "Abertura de contas Efí",
                 EFI_PAYMENTS: "Novas emissões",
+                FINANCIAL_MANUAL_ACTIVATION: "Ativação financeira manual",
               }[item.integration] ?? item.integration}
             </h2>
             <p className="mt-2 text-sm text-slate-600">
               {item.enabled ? "Liberado" : "Pausado"} · {item.healthStatus}
             </p>
-            {["EFI_ONBOARDING", "EFI_PAYMENTS", "META", "RESEND"].includes(
+            {["EFI_ONBOARDING", "EFI_PAYMENTS", "FINANCIAL_MANUAL_ACTIVATION", "META", "RESEND"].includes(
               item.integration,
             ) && (
               <button
@@ -185,7 +186,7 @@ export default function AdminEfiOnboardingPage(): ReactNode {
                 className="mt-3 rounded-lg border px-3 py-2 text-sm disabled:opacity-50"
                 onClick={() =>
                   void action(
-                    `/admin/integrations/${{ EFI_ONBOARDING: "efi-onboarding", EFI_PAYMENTS: "efi-payments", META: "meta", RESEND: "resend" }[item.integration]}`,
+                    `/admin/integrations/${{ EFI_ONBOARDING: "efi-onboarding", EFI_PAYMENTS: "efi-payments", FINANCIAL_MANUAL_ACTIVATION: "financial-manual-activation", META: "meta", RESEND: "resend" }[item.integration]}`,
                     "PUT",
                     { enabled: !item.enabled },
                   )

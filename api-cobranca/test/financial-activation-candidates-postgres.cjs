@@ -62,7 +62,8 @@ let containerStarted = false;
     prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
     const crypto = new PaymentCryptoService(new ConfigService({ PAYMENT_SECRET_KEY: randomBytes(32).toString('hex') }));
     const registry = new EfiAccountRegistryService(crypto);
-    const service = new FinancialActivationService(prisma, registry);
+    // Validation is covered by financial-activation-validation-postgres.cjs.
+    const service = new FinancialActivationService(prisma, registry, { latestAttempt: async () => null });
 
     const companyA = await prisma.company.create({ data: { corporateName: 'A fixture', email: 'a@example.test', phoneNumber: '5511999999999', document: '12345678000195' } });
     const companyB = await prisma.company.create({ data: { corporateName: 'B fixture', email: 'b@example.test', phoneNumber: '5511888888888', document: '98765432000100' } });
