@@ -1,4 +1,5 @@
 import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
+import { ToBoolean } from '../../common/to-boolean';
 
 export class UpdateEmailTemplateDto {
   @IsString()
@@ -16,6 +17,7 @@ export class UpdateEmailTemplateDto {
   @MaxLength(120)
   signature?: string;
 
+  @ToBoolean()
   @IsBoolean()
   @IsOptional()
   isActive?: boolean;

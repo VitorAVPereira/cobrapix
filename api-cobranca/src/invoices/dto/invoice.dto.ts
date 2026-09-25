@@ -17,6 +17,7 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
+import { ToBoolean } from '../../common/to-boolean';
 
 export type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
 
@@ -43,6 +44,7 @@ export class CreateInvoiceDto {
   email?: string;
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   whatsappOptIn?: boolean;
 
@@ -59,6 +61,7 @@ export class CreateInvoiceDto {
   billing_type!: BillingType;
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   recurring?: boolean;
 
@@ -98,6 +101,7 @@ export class CreateDebtorInvoiceDto {
   billing_type!: BillingType;
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   recurring?: boolean;
 
@@ -139,6 +143,7 @@ export class CreateDebtorDto {
   email?: string;
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   whatsappOptIn?: boolean;
 
@@ -166,6 +171,7 @@ export class UpdateDebtorDto {
   email?: string;
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   whatsappOptIn?: boolean;
 
@@ -195,10 +201,12 @@ export class UpdateDebtorSettingsDto {
   document?: string;
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   useGlobalBillingSettings?: boolean;
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   whatsappOptIn?: boolean;
 
@@ -217,10 +225,12 @@ export class UpdateDebtorSettingsDto {
   collectionReminderDays?: number[];
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   autoGenerateFirstCharge?: boolean;
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   autoDiscountEnabled?: boolean;
 

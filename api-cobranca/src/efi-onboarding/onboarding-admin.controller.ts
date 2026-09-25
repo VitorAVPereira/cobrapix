@@ -24,13 +24,14 @@ import { GetUser } from '../auth/decorators/get-user.decorator';
 import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
 import { OnboardingAdminService } from './onboarding-admin.service';
 import { OnboardingLifecycle } from './onboarding-lifecycle';
+import { ToBoolean } from '../common/to-boolean';
 
-class EnabledDto {
-  @IsBoolean() enabled!: boolean;
+export class EnabledDto {
+  @ToBoolean() @IsBoolean() enabled!: boolean;
 }
 class ManualRecoveryDto {
   @IsString() @MinLength(1) @MaxLength(128) requestId!: string;
-  @IsOptional() @IsBoolean() ownershipVerified?: boolean;
+  @IsOptional() @ToBoolean() @IsBoolean() ownershipVerified?: boolean;
   @IsOptional() @Matches(/^\d{14}$/) verifiedCompanyDocument?: string;
   @IsOptional() @IsString() @MaxLength(2_000_000) certificateBase64?: string;
   @IsOptional() @IsString() @MaxLength(256) certificatePassword?: string;

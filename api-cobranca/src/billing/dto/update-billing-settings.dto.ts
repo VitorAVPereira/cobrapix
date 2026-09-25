@@ -13,6 +13,7 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
+import { ToBoolean } from '../../common/to-boolean';
 
 export class UpdateBillingSettingsDto {
   @IsIn(['PIX', 'BOLIX'])
@@ -27,9 +28,11 @@ export class UpdateBillingSettingsDto {
   @Max(365, { each: true })
   collectionReminderDays!: number[];
 
+  @ToBoolean()
   @IsBoolean()
   autoGenerateFirstCharge!: boolean;
 
+  @ToBoolean()
   @IsBoolean()
   autoDiscountEnabled!: boolean;
 
@@ -50,6 +53,7 @@ export class UpdateBillingSettingsDto {
   businessSegment?: 'GENERAL' | 'EDUCATION';
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   paymentNotificationEnabled?: boolean;
 

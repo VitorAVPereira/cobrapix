@@ -19,6 +19,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { CreateGatewayAccountDto } from '../../payment/dto/gateway-account.dto';
+import { ToBoolean } from '../../common/to-boolean';
 
 const COMPANY_STATUSES = ['ACTIVE', 'INACTIVE', 'SUSPENDED'] as const;
 const BILLING_METHODS = ['PIX', 'BOLIX'] as const;
@@ -203,10 +204,12 @@ export class AdminBillingUpdateDto {
   collectionReminderDays?: number[];
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   autoGenerateFirstCharge?: boolean;
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   autoDiscountEnabled?: boolean;
 
@@ -229,6 +232,7 @@ export class AdminNotificationsDto {
   businessSegment?: (typeof BUSINESS_SEGMENTS)[number];
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   paymentNotificationEnabled?: boolean;
 

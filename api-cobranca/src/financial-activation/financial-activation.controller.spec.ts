@@ -225,9 +225,9 @@ describe('Ativação financeira HTTP', () => {
         .set('x-test-role', 'PLATFORM_ADMIN')
         .send(payload);
     await post({ ...body, confirmEffects: false }).expect(400);
-    await post({ ...body, confirmEffects: 'true' }).expect(400);
+    await post({ ...body, confirmEffects: 'yes' }).expect(400);
     await post({ ...body, confirmEffects: 'false' }).expect(400);
-    await post({ ...body, acknowledgeUnverifiedSteps: 'false' }).expect(400);
+    await post({ ...body, acknowledgeUnverifiedSteps: 'yes' }).expect(400);
     const { confirmEffects: _omitted, ...withoutConfirmation } = body;
     void _omitted;
     await post(withoutConfirmation).expect(400);
@@ -240,15 +240,17 @@ describe('Ativação financeira HTTP', () => {
     );
   });
 
-  it('a liberação manual só aceita booleano literal', async () => {
+  it('a liberação manual não trata texto como verdadeiro', async () => {
     const put = (body: object) =>
       request(app.getHttpServer())
         .put('/admin/integrations/financial-manual-activation')
         .set('x-test-role', 'PLATFORM_ADMIN')
         .send(body);
-    await put({ enabled: 'false' }).expect(400);
+    await put({ enabled: 'no' }).expect(400);
     await put({ enabled: 1 }).expect(400);
-    await put({ enabled: false }).expect(200);
+    await put({ enabled: 'false' }).expect(200);
     expect(service.setManualActivationReleased).toHaveBeenCalledWith(false);
+    await put({ enabled: false }).expect(200);
+    expect(service.setManualActivationReleased).toHaveBeenCalledTimes(2);
   });
 });
