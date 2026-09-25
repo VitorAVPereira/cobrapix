@@ -8,6 +8,10 @@ import { EfiWebhookGuard } from './efi-webhook.guard';
 import { EfiMtlsGuard } from '../efi-onboarding/efi-mtls.guard';
 import { WebhooksController } from './webhooks.controller';
 import { WebhooksService } from './webhooks.service';
+import { DatafyWebhookController } from './datafy-webhook.controller';
+import { DatafyWebhookService } from './datafy-webhook.service';
+import { DatafyWebhookWorker } from '../queue/workers/datafy-webhook.worker';
+import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
 
 @Module({
   imports: [
@@ -17,7 +21,14 @@ import { WebhooksService } from './webhooks.service';
     WhatsappModule,
     EmailModule,
   ],
-  controllers: [WebhooksController],
-  providers: [WebhooksService, EfiWebhookGuard, EfiMtlsGuard],
+  controllers: [WebhooksController, DatafyWebhookController],
+  providers: [
+    WebhooksService,
+    EfiWebhookGuard,
+    EfiMtlsGuard,
+    DatafyWebhookService,
+    DatafyWebhookWorker,
+    PlatformAdminGuard,
+  ],
 })
 export class WebhooksModule {}

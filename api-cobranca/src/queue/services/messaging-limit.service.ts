@@ -1,9 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { MessagingLimitTier } from '@prisma/client';
-import Redis from 'ioredis';
+import { Prisma } from '@prisma/client';
+import { WhatsappTransportError } from '../../whatsapp/transport/whatsapp-transport.error';
+import type Redis from 'ioredis';
+import { acquireRedis, releaseRedis } from '../../common/shared-redis';
 import { PrismaService } from '../../prisma/prisma.service';
-import { PaymentCryptoService } from '../../payment/payment-crypto.service';
+import { redisReady } from '../../common/redis-ready';
+import { WHATSAPP_TRANSPORT } from '../../whatsapp/transport/whatsapp-transport';
+import type { WhatsappTransport } from '../../whatsapp/transport/whatsapp-transport';
 
 const TIER_LIMITS: Record<MessagingLimitTier, number> = {
   TIER_50: 50,
@@ -23,37 +28,17 @@ interface DailyLimitStatus {
   resetAt: number;
 }
 
-interface CompanyMetaConfig {
-  metaPhoneNumberId: string | null;
-  metaAccessTokenEncrypted: string | null;
-  messagingLimitTier: MessagingLimitTier | null;
-}
-
 @Injectable()
 export class MessagingLimitService {
   private readonly logger = new Logger(MessagingLimitService.name);
-  private redis: Redis;
+  private readonly redis: Redis;
 
   constructor(
-    private configService: ConfigService,
+    configService: ConfigService,
     private prisma: PrismaService,
-    private crypto: PaymentCryptoService,
+    @Inject(WHATSAPP_TRANSPORT) private readonly transport: WhatsappTransport,
   ) {
-    const redisHost =
-      this.configService.get<string>('REDIS_HOST') || 'localhost';
-    const redisPort = this.configService.get<number>('REDIS_PORT') || 6379;
-    const redisPassword = this.configService.get<string>('REDIS_PASSWORD');
-
-    this.redis = new Redis({
-      host: redisHost,
-      port: redisPort,
-      password: redisPassword,
-      lazyConnect: true,
-    });
-
-    this.redis.on('error', (err) => {
-      this.logger.error('Redis (messaging-limit) connection error:', err);
-    });
+    this.redis = acquireRedis(configService);
   }
 
   getDailyLimit(tier: MessagingLimitTier | null): number {
@@ -109,6 +94,103 @@ export class MessagingLimitService {
     };
   }
 
+  /** `commercial: false` (platform replies) consumes the shared number, never the company quota. */
+  async reserveDispatchQuota(
+    intentId: string,
+    channelId: string,
+    options: { commercial: boolean } = { commercial: true },
+  ): Promise<void> {
+    let channelLimit = TIER_LIMITS.TIER_50;
+    try {
+      await redisReady(this.redis);
+      const cached = await this.redis.get(
+        `ciframais:channel-tier:${channelId}`,
+      );
+      if (cached && this.normalizeTier(cached))
+        channelLimit = this.getDailyLimit(this.normalizeTier(cached));
+    } catch {
+      throw new WhatsappTransportError(
+        'Controle do canal indisponivel.',
+        'TEMPORARY',
+        'NOT_SENT',
+        undefined,
+        undefined,
+        5,
+      );
+    }
+    await this.prisma
+      .$transaction(async (tx) => {
+        // One shared-number lock coordinates reservations across companies and API processes.
+        await tx.$executeRaw(
+          Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`dispatch-quota:${channelId}`}))`,
+        );
+        const intent = await tx.communicationOutboundIntent.findUniqueOrThrow({
+          where: { id: intentId },
+        });
+        const since = new Date(Date.now() - 86_400_000);
+        if (intent.quotaReservedAt && intent.quotaReservedAt > since) return;
+        const scopes: Array<{ companyId: string | null; limit: number }> = [
+          { companyId: null, limit: channelLimit },
+        ];
+        if (intent.companyId && options.commercial) {
+          const company = await tx.company.findUniqueOrThrow({
+            where: { id: intent.companyId },
+            select: { messagingLimitTier: true },
+          });
+          scopes.push({
+            companyId: intent.companyId,
+            limit: this.getDailyLimit(company.messagingLimitTier),
+          });
+        }
+        for (const scope of scopes) {
+          const rows = await tx.$queryRaw<
+            Array<{ count: bigint; known: boolean }>
+          >(Prisma.sql`
+          SELECT count(*) AS count, coalesce(bool_or(recipient = ${intent.recipientHash}), false) AS known FROM (
+            SELECT DISTINCT "recipientHash" AS recipient FROM "CommunicationOutboundIntent"
+            WHERE "transportChannelId" = ${channelId} AND "quotaReservedAt" > ${since}
+              AND (${scope.companyId}::text IS NULL OR "companyId" = ${scope.companyId})
+            UNION
+            SELECT encode(sha256(convert_to("phoneNumber", 'UTF8')), 'hex') AS recipient FROM "MessagingUsage"
+            WHERE "sentAt" > ${since} AND (${scope.companyId}::text IS NULL OR "companyId" = ${scope.companyId})
+          ) AS recent`);
+          const row = rows[0];
+          if (!row || (!row.known && Number(row.count) >= scope.limit))
+            throw new WhatsappTransportError(
+              'Limite diario do canal ou empresa atingido.',
+              'RATE_LIMIT',
+              'NOT_SENT',
+              undefined,
+              undefined,
+              3600,
+            );
+        }
+        await tx.communicationOutboundIntent.update({
+          where: { id: intentId },
+          data: { quotaReservedAt: new Date() },
+        });
+      })
+      .catch((error: unknown) => {
+        if (error instanceof WhatsappTransportError) throw error;
+        // A missing intent/company or an invalid query never heals: reject instead of looping.
+        if (
+          (error instanceof Prisma.PrismaClientKnownRequestError &&
+            error.code === 'P2025') ||
+          error instanceof Prisma.PrismaClientValidationError
+        )
+          throw new Error('DISPATCH_CONTEXT_NOT_FOUND');
+        // Nothing was transmitted: a database timeout or conflict keeps the intent pending.
+        throw new WhatsappTransportError(
+          'Controle do canal indisponivel.',
+          'TEMPORARY',
+          'NOT_SENT',
+          undefined,
+          undefined,
+          5,
+        );
+      });
+  }
+
   async trackSend(companyId: string, phoneNumber: string): Promise<void> {
     try {
       await this.prisma.messagingUsage.upsert({
@@ -131,80 +213,42 @@ export class MessagingLimitService {
     }
   }
 
+  /** The central channel tier is informational, not a company's commercial quota. */
   async syncTierFromMeta(
     companyId: string,
   ): Promise<MessagingLimitTier | null> {
-    const company = await this.getCompanyMetaConfig(companyId);
-    if (!company?.metaPhoneNumberId || !company.metaAccessTokenEncrypted) {
-      return null;
-    }
-
+    void companyId;
     try {
-      const token = this.crypto.decrypt(company.metaAccessTokenEncrypted);
-      const version =
-        this.configService.get<string>('META_GRAPH_API_VERSION') || 'v23.0';
-      const url = `https://graph.facebook.com/${version}/${company.metaPhoneNumberId}?fields=messaging_limit_tier`;
-
-      const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(15_000),
+      const channel = await this.transport.getChannelInfo({
+        includeMessagingLimit: true,
       });
-
-      if (!response.ok) {
-        this.logger.warn(
-          `Meta API retornou ${response.status} ao consultar tier de ${companyId}`,
-        );
-        return null;
+      const tier = channel.messagingLimitTier
+        ? this.normalizeTier(channel.messagingLimitTier)
+        : null;
+      if (tier) {
+        try {
+          await this.redis.setex(
+            `ciframais:channel-tier:${channel.phoneNumberId}`,
+            86_400,
+            tier,
+          );
+        } catch {
+          /* Conservative TIER_50 is used until a verified tier can be cached. */
+        }
       }
-
-      const data = (await response.json()) as {
-        messaging_limit_tier?: string;
-      };
-
-      if (!data.messaging_limit_tier) return null;
-
-      const tier = this.normalizeTier(data.messaging_limit_tier);
-      if (!tier) return null;
-
-      await this.prisma.company.update({
-        where: { id: companyId },
-        data: {
-          messagingLimitTier: tier,
-          messagingLimitUpdatedAt: new Date(),
-        },
-      });
-
-      this.logger.log(
-        `Tier da empresa ${companyId} sincronizado da Meta: ${tier}`,
-      );
-
       return tier;
-    } catch (error) {
-      this.logger.error(
-        `Falha ao sincronizar tier da Meta para company ${companyId}:`,
-        error,
+    } catch {
+      this.logger.warn(
+        'Nao foi possivel consultar o tier do canal WhatsApp central.',
       );
       return null;
     }
   }
 
-  async updateTierFromWebhook(
-    companyId: string,
-    tier: MessagingLimitTier,
-  ): Promise<void> {
-    await this.prisma.company.update({
-      where: { id: companyId },
-      data: {
-        messagingLimitTier: tier,
-        messagingLimitUpdatedAt: new Date(),
-      },
-    });
-
-    this.logger.log(
-      `Tier da empresa ${companyId} atualizado via webhook: ${tier}`,
-    );
-  }
-
+  /**
+   * Last 24 h of the company's WhatsApp messages, from the Datafy conversation
+   * history (provider status of each outbound message, attributed inbound).
+   */
   async getInteractionStats(companyId: string): Promise<{
     outbound: number;
     delivered: number;
@@ -212,64 +256,32 @@ export class MessagingLimitService {
     inbound: number;
     failed: number;
   }> {
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-
-    const [outbound, delivered, read, inbound, failed] = await Promise.all([
-      this.prisma.whatsAppInteraction.count({
-        where: { companyId, direction: 'OUTBOUND', receivedAt: { gte: since } },
+    const where = {
+      companyId,
+      createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      conversation: { channel: 'WHATSAPP' as const },
+    };
+    const [outbound, inbound] = await Promise.all([
+      this.prisma.communicationMessage.groupBy({
+        by: ['status'],
+        where: { ...where, direction: 'OUTBOUND' },
+        _count: { _all: true },
       }),
-      this.prisma.whatsAppInteraction.count({
-        where: {
-          companyId,
-          direction: 'OUTBOUND',
-          status: 'delivered',
-          receivedAt: { gte: since },
-        },
-      }),
-      this.prisma.whatsAppInteraction.count({
-        where: {
-          companyId,
-          direction: 'OUTBOUND',
-          status: 'read',
-          receivedAt: { gte: since },
-        },
-      }),
-      this.prisma.whatsAppInteraction.count({
-        where: { companyId, direction: 'INBOUND', receivedAt: { gte: since } },
-      }),
-      this.prisma.whatsAppInteraction.count({
-        where: {
-          companyId,
-          direction: 'OUTBOUND',
-          status: 'failed',
-          receivedAt: { gte: since },
-        },
+      this.prisma.communicationMessage.count({
+        where: { ...where, direction: 'INBOUND' },
       }),
     ]);
-
-    return { outbound, delivered, read, inbound, failed };
-  }
-
-  async recordInteraction(params: {
-    companyId: string;
-    phoneNumber: string;
-    direction: 'INBOUND' | 'OUTBOUND';
-    status?: string;
-    messageId?: string;
-    rawPayload?: unknown;
-  }): Promise<void> {
-    await this.prisma.whatsAppInteraction.create({
-      data: {
-        companyId: params.companyId,
-        phoneNumber: params.phoneNumber,
-        direction: params.direction,
-        status: params.status,
-        messageId: params.messageId,
-        rawPayload: params.rawPayload
-          ? (params.rawPayload as object)
-          : undefined,
-      },
-    });
+    const count = (...statuses: string[]): number =>
+      outbound
+        .filter((row) => row.status !== null && statuses.includes(row.status))
+        .reduce((total, row) => total + row._count._all, 0);
+    return {
+      outbound: count('sent', 'delivered', 'read'),
+      delivered: count('delivered', 'read'),
+      read: count('read'),
+      inbound,
+      failed: count('failed'),
+    };
   }
 
   normalizeTier(rawTier: string): MessagingLimitTier | null {
@@ -293,19 +305,6 @@ export class MessagingLimitService {
     return null;
   }
 
-  private async getCompanyMetaConfig(
-    companyId: string,
-  ): Promise<CompanyMetaConfig | null> {
-    return this.prisma.company.findUnique({
-      where: { id: companyId },
-      select: {
-        metaPhoneNumberId: true,
-        metaAccessTokenEncrypted: true,
-        messagingLimitTier: true,
-      },
-    });
-  }
-
   private usageCacheKey(companyId: string): string {
     const today = new Date().toISOString().slice(0, 10);
     return `messaging:daily:${companyId}:${today}`;
@@ -326,7 +325,7 @@ export class MessagingLimitService {
     return Math.max(ttl, 60);
   }
 
-  async onModuleDestroy() {
-    await this.redis.quit();
+  async onModuleDestroy(): Promise<void> {
+    await releaseRedis(this.redis);
   }
 }

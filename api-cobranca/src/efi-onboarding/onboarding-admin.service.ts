@@ -257,11 +257,16 @@ export class OnboardingAdminService {
     enabled: boolean,
   ): Promise<unknown> {
     if (enabled && integration === 'EFI_ONBOARDING') {
+      // A production Node server can use Efi homologation. Only an explicit
+      // homologation environment is exempt from the production approval gate.
       if (
-        this.config.get<string>('NODE_ENV') === 'production' &&
+        this.config.get<string>('EFI_ENV') !== 'homologation' &&
         this.config.get<string>('EFI_LEGAL_APPROVED') !== 'true'
       )
-        this.fail('EFI_LEGAL_APPROVAL_REQUIRED');
+        this.fail(
+          'EFI_LEGAL_APPROVAL_REQUIRED',
+          'Novas ativações em produção exigem aprovação dos textos de autorização, termos de uso e política de privacidade.',
+        );
       const url = new URL(
         this.config.get<string>('EFI_WEBHOOK_BASE_URL') ?? '',
       );
@@ -299,11 +304,14 @@ export class OnboardingAdminService {
     await this.health.validate(companyId);
     return this.detail(companyId);
   }
-  private fail(code: string): never {
+  private fail(
+    code: string,
+    message: string = 'A operação exige revisão dos dados no painel administrativo.',
+  ): never {
     throw new HttpException(
       {
         code,
-        message: 'A operação exige revisão dos dados no painel administrativo.',
+        message,
       },
       409,
     );

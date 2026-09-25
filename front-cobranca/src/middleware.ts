@@ -65,7 +65,8 @@ export default auth((req) => {
     return NextResponse.redirect(new URL("/onboarding/efi", req.url));
   }
 
-  if (!isPlatformAdmin && pathname.startsWith("/configuracoes/whatsapp")) {
+  // WhatsApp is the central Datafy channel; the old per-company settings page is gone.
+  if (pathname.startsWith("/configuracoes/whatsapp")) {
     return NextResponse.redirect(new URL("/configuracoes/cobranca", req.url));
   }
 

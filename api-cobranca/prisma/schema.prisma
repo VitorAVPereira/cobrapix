@@ -63,6 +63,57 @@ enum CommunicationChannel {
   EMAIL
 }
 
+enum CommunicationTransport {
+  META_DIRECT
+  DATAFY
+}
+
+enum CommunicationRecipientType {
+  PHONE
+  BSUID
+}
+
+enum CommunicationMessageSource {
+  LEGACY
+  LIVE
+  IMPORTED
+}
+
+enum CommunicationAttributionMethod {
+  UNASSIGNED
+  OUTBOUND_CONTEXT
+  REPLY_CONTEXT
+  INTERACTIVE_CONTEXT
+  MANUAL
+}
+
+enum CommunicationDeliveryState {
+  PENDING
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
+enum CommunicationIntentState {
+  PENDING
+  SENDING
+  ACCEPTED
+  FAILED
+  UNCERTAIN
+}
+
+enum CommunicationActorType {
+  SYSTEM
+  PLATFORM_ADMIN
+}
+
+enum CommunicationAttachmentState {
+  PENDING
+  READY
+  UNAVAILABLE
+  EXPIRED
+}
+
 enum BusinessSegment {
   GENERAL
   EDUCATION
@@ -257,6 +308,7 @@ model Company {
   paymentFeeVersions    PaymentFeeVersion[]
   paymentCharges        PaymentCharge[]
   communicationMessages CommunicationMessage[]
+  communicationIntents  CommunicationOutboundIntent[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -340,6 +392,7 @@ model Debtor {
   recurringInvoices     RecurringInvoice[]
   conversations         WhatsAppConversation[]
   communicationMessages CommunicationMessage[]
+  communicationIntents  CommunicationOutboundIntent[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -393,6 +446,7 @@ model Invoice {
   paymentNotifications  PaymentNotification[]
   paymentCharges        PaymentCharge[]
   communicationMessages CommunicationMessage[]
+  communicationIntents  CommunicationOutboundIntent[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -557,20 +611,21 @@ model PlatformIntegrationState {
 }
 
 model CommunicationConversation {
-  id                     String                 @id @default(uuid())
+  id                     String                      @id @default(uuid())
   channel                CommunicationChannel
   recipientHash          String
-  recipientEncrypted     String?                @db.Text
-  status                 ConversationStatus     @default(NEW)
+  recipientEncrypted     String?                     @db.Text
+  recipientType          CommunicationRecipientType?
+  status                 ConversationStatus          @default(NEW)
   lastInboundAt          DateTime?
   serviceWindowExpiresAt DateTime?
   lastMessagePreview     String?
-  unreadCount            Int                    @default(0)
+  unreadCount            Int                         @default(0)
   retentionExpiresAt     DateTime
   recipientAnonymizedAt  DateTime?
   messages               CommunicationMessage[]
-  createdAt              DateTime               @default(now())
-  updatedAt              DateTime               @updatedAt
+  createdAt              DateTime                    @default(now())
+  updatedAt              DateTime                    @updatedAt
 
   @@unique([channel, recipientHash])
   @@index([status, updatedAt])
@@ -596,9 +651,190 @@ model CommunicationMessage {
   anonymizedAt       DateTime?
   createdAt          DateTime                  @default(now())
 
+  transportChannelId       String?
+  recipientType            CommunicationRecipientType?
+  replyToExternalMessageId String?
+  messageType              String?
+  providerTimestamp        DateTime?
+  source                   CommunicationMessageSource      @default(LEGACY)
+  attributionMethod        CommunicationAttributionMethod?
+  attributionRevision      Int                             @default(0)
+  statusOccurredAt         DateTime?
+  outboundIntent           CommunicationOutboundIntent?
+  attributionAudits        CommunicationAttributionAudit[]
+  attachments              CommunicationAttachment[]
+  interactiveReferences    CommunicationInteractiveReference[]
+
   @@index([conversationId, createdAt])
   @@index([companyId, direction, createdAt])
   @@index([invoiceId])
+  @@index([retentionExpiresAt])
+  @@index([companyId, conversationId, createdAt, id], map: "CommunicationMessage_tenant_conversation_cursor_idx")
+  @@index([companyId, createdAt, id], map: "CommunicationMessage_tenant_cursor_idx")
+  @@index([transportChannelId, replyToExternalMessageId], map: "CommunicationMessage_reply_context_idx")
+  @@index([conversationId, attributionMethod, direction], map: "CommunicationMessage_classification_idx")
+}
+
+/// Server-issued opaque button reference. Only the SHA-256 of the token is stored.
+model CommunicationInteractiveReference {
+  id          String               @id @default(uuid())
+  tokenHash   String               @unique @db.VarChar(64)
+  messageId   String
+  message     CommunicationMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  buttonIndex Int
+  createdAt   DateTime             @default(now())
+
+  @@unique([messageId, buttonIndex])
+}
+
+model CommunicationWebhookDelivery {
+  id                 String                            @id @default(uuid())
+  channel            CommunicationChannel              @default(WHATSAPP)
+  transport          CommunicationTransport
+  transportChannelId String
+  deliveryId         String
+  bodyHash           String                            @db.VarChar(64)
+  payloadEncrypted   String?                           @db.Text
+  state              CommunicationDeliveryState        @default(PENDING)
+  attempts           Int                               @default(0)
+  lastErrorCode      String?                           @db.VarChar(64)
+  nextAttemptAt      DateTime                          @default(now())
+  leaseExpiresAt     DateTime?
+  processedAt        DateTime?
+  retentionExpiresAt DateTime
+  payloadPurgedAt    DateTime?
+  wabaId             String?
+  leaseToken         String?
+  eventKinds         String[]                          @default([])
+  reviewRequired     Boolean                           @default(false)
+  replayCount        Int                               @default(0)
+  lastReplayedAt     DateTime?
+  lastReplayActorId  String?
+  statusEvents       CommunicationMessageStatusEvent[]
+  createdAt          DateTime                          @default(now())
+  updatedAt          DateTime                          @updatedAt
+
+  @@unique([transport, transportChannelId, deliveryId], map: "CommunicationWebhookDelivery_transport_channel_delivery_key")
+  @@index([state, nextAttemptAt])
+  @@index([state, leaseExpiresAt])
+  @@index([retentionExpiresAt])
+  @@index([reviewRequired, createdAt])
+}
+
+// Durable status reconciliation also covers webhooks that precede the send response.
+model CommunicationRecipientSuppression {
+  id            String                     @id @default(uuid())
+  channel       CommunicationChannel       @default(WHATSAPP)
+  recipientType CommunicationRecipientType
+  recipientHash String                     @db.VarChar(64)
+  reasonCode    String                     @db.VarChar(64)
+  blockedAt     DateTime                   @default(now())
+
+  @@unique([channel, recipientHash])
+}
+
+model CommunicationMessageStatusEvent {
+  id                 String                       @id @default(uuid())
+  eventKey           String                       @unique @db.VarChar(64)
+  deliveryId         String
+  delivery           CommunicationWebhookDelivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  externalMessageId  String
+  transportChannelId String
+  recipientType      CommunicationRecipientType
+  recipientHash      String                       @db.VarChar(64)
+  status             String                       @db.VarChar(16)
+  occurredAt         DateTime
+  errorCodes         String[]                     @default([])
+  appliedAt          DateTime?
+  resolutionCode     String?                      @db.VarChar(64)
+  nextAttemptAt      DateTime                     @default(now())
+  retentionExpiresAt DateTime
+  createdAt          DateTime                     @default(now())
+
+  @@index([appliedAt, nextAttemptAt])
+  @@index([externalMessageId, transportChannelId])
+  @@index([deliveryId])
+  @@index([retentionExpiresAt])
+}
+
+model CommunicationOutboundIntent {
+  id                 String                     @id @default(uuid())
+  idempotencyKey     String                     @unique @db.VarChar(200)
+  messageId          String                     @unique
+  message            CommunicationMessage       @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  companyId          String?
+  company            Company?                   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  invoiceId          String?
+  invoice            Invoice?                   @relation(fields: [invoiceId, companyId], references: [id, companyId], onDelete: Restrict)
+  debtorId           String?
+  debtor             Debtor?                    @relation(fields: [debtorId, companyId], references: [id, companyId], onDelete: Restrict)
+  transport          CommunicationTransport
+  transportChannelId String
+  recipientType      CommunicationRecipientType
+  recipientHash      String                     @db.VarChar(64)
+  recipientEncrypted String                     @db.Text
+  requestHash        String                     @db.VarChar(64)
+  payloadEncrypted   String?                    @db.Text
+  state              CommunicationIntentState   @default(PENDING)
+  externalMessageId  String?                    @unique
+  attempts           Int                        @default(0)
+  nextAttemptAt      DateTime                   @default(now())
+  leaseToken         String?
+  leaseExpiresAt     DateTime?
+  quotaReservedAt    DateTime?
+  lastErrorCode      String?                    @db.VarChar(64)
+  retentionExpiresAt DateTime
+  createdAt          DateTime                   @default(now())
+  updatedAt          DateTime                   @updatedAt
+
+  @@index([companyId, createdAt, id])
+  @@index([state, createdAt])
+  @@index([state, nextAttemptAt])
+  @@index([retentionExpiresAt])
+}
+
+model CommunicationAttributionAudit {
+  id          String                         @id @default(uuid())
+  messageId   String
+  message     CommunicationMessage           @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  actorType   CommunicationActorType
+  actorUserId String?
+  actorUser   User?                          @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  method      CommunicationAttributionMethod
+  oldContext  Json
+  newContext  Json
+  reason      String                         @db.VarChar(500)
+  revision    Int
+  createdAt   DateTime                       @default(now())
+
+  @@unique([messageId, revision])
+  @@index([actorUserId, createdAt])
+}
+
+model CommunicationAttachment {
+  id                 String                       @id @default(uuid())
+  messageId          String
+  message            CommunicationMessage         @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  externalMediaId    String?
+  contentType        String?                      @db.VarChar(255)
+  sizeBytes          Int?
+  storageKey         String?
+  state              CommunicationAttachmentState @default(PENDING)
+  retentionExpiresAt DateTime
+  createdAt          DateTime                     @default(now())
+  updatedAt          DateTime                     @updatedAt
+  /// Download queue: lease, attempts and a stable local reason when unavailable.
+  attempts           Int                          @default(0)
+  nextAttemptAt      DateTime                     @default(now())
+  leaseToken         String?
+  leaseExpiresAt     DateTime?
+  errorCode          String?                      @db.VarChar(64)
+  sha256             String?                      @db.VarChar(64)
+  storedAt           DateTime?
+
+  @@unique([messageId, externalMediaId])
+  @@index([state, createdAt])
+  @@index([state, nextAttemptAt])
   @@index([retentionExpiresAt])
 }
 
@@ -664,20 +900,21 @@ model CollectionLog {
 }
 
 model User {
-  id                    String                 @id @default(uuid())
-  email                 String                 @unique
-  password              String
-  name                  String?
-  companyId             String
-  company               Company                @relation(fields: [companyId], references: [id])
-  role                  UserRole               @default(COMPANY_ADMIN)
-  mustChangePassword    Boolean                @default(false)
-  tokenVersion          Int                    @default(0)
-  assignedConversations WhatsAppConversation[]
-  auditLogs             AuditLog[]
-  passwordResetTokens   PasswordResetToken[]
-  efiOnboardingConsents EfiOnboarding[]        @relation("EfiOnboardingConsentUser")
-  createdPaymentFees    PaymentFeeVersion[]    @relation("PaymentFeeCreatedBy")
+  id                             String                          @id @default(uuid())
+  email                          String                          @unique
+  password                       String
+  name                           String?
+  companyId                      String
+  company                        Company                         @relation(fields: [companyId], references: [id])
+  role                           UserRole                        @default(COMPANY_ADMIN)
+  mustChangePassword             Boolean                         @default(false)
+  tokenVersion                   Int                             @default(0)
+  assignedConversations          WhatsAppConversation[]
+  auditLogs                      AuditLog[]
+  passwordResetTokens            PasswordResetToken[]
+  efiOnboardingConsents          EfiOnboarding[]                 @relation("EfiOnboardingConsentUser")
+  createdPaymentFees             PaymentFeeVersion[]             @relation("PaymentFeeCreatedBy")
+  communicationAttributionAudits CommunicationAttributionAudit[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -789,6 +1026,15 @@ model GlobalMessageTemplate {
   metaStatus            String                        @default("LOCAL")
   metaRejectedReason    String?                       @db.Text
   lastMetaSyncAt        DateTime?
+  metaTemplateId        String?
+  metaQuality           String?
+  metaProviderCategory  String?
+  metaComponents        Json?
+  metaReviewRequired    Boolean                       @default(false)
+  metaStatusAt          DateTime?
+  metaQualityAt         DateTime?
+  metaCategoryAt        DateTime?
+  metaComponentsAt      DateTime?
   preferences           CompanyTemplatePreference[]
   createdAt             DateTime                      @default(now())
   updatedAt             DateTime                      @updatedAt

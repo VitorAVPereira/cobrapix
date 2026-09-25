@@ -15,7 +15,6 @@ import {
   HandCoins,
   LayoutDashboard,
   LogOut,
-  MessageCircle,
   MessageSquareText,
   MessageSquare,
   Settings,
@@ -64,7 +63,6 @@ const settingsItems = [
     label: "Cobranca",
     icon: CalendarClock,
   },
-  { href: "/configuracoes/whatsapp", label: "WhatsApp", icon: MessageCircle },
   {
     href: "/configuracoes/regua",
     label: "Regua de Cobranca",
@@ -116,7 +114,6 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const isPlatformAdmin = session?.user.role === "PLATFORM_ADMIN";
   const visibleSettingsItems = settingsItems.filter(
     (item) =>
-      item.href !== "/configuracoes/whatsapp" &&
       item.href !== "/configuracoes/conecte-seu-banco",
   );
 

@@ -263,7 +263,7 @@ export function DebtorSettingsModal({
                       Opt-in WhatsApp oficial
                     </p>
                     <p className="mt-1 text-sm text-slate-500">
-                      Autoriza templates de cobranca pela Meta Cloud API.
+                      Autoriza templates de cobranca pelo WhatsApp oficial.
                     </p>
                   </div>
                 </label>

@@ -2,7 +2,6 @@ import type { EfiService } from '../payment/efi.service';
 import type { PaymentCryptoService } from '../payment/payment-crypto.service';
 import type { PaymentFeeService } from '../payment-fees/payment-fee.service';
 import type { PrismaService } from '../prisma/prisma.service';
-import type { WhatsappService } from '../whatsapp/whatsapp.service';
 import { AdminService } from './admin.service';
 
 describe('AdminService payment method policy', () => {
@@ -16,7 +15,6 @@ describe('AdminService payment method policy', () => {
     return {
       service: new AdminService(
         { company: { update: companyUpdate } } as unknown as PrismaService,
-        {} as WhatsappService,
         {} as EfiService,
         {} as PaymentCryptoService,
         { resolveActiveVersion } as unknown as PaymentFeeService,

@@ -19,7 +19,6 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { CreateGatewayAccountDto } from '../../payment/dto/gateway-account.dto';
-import { ConfigureMetaWhatsappDto } from '../../whatsapp/dto/configure-meta-whatsapp.dto';
 
 const COMPANY_STATUSES = ['ACTIVE', 'INACTIVE', 'SUSPENDED'] as const;
 const BILLING_METHODS = ['PIX', 'BOLIX'] as const;
@@ -301,11 +300,6 @@ export class AdminWhatsappUpdateDto {
   @IsOptional()
   @IsIn(MESSAGING_LIMIT_TIERS)
   messagingLimitTier?: (typeof MESSAGING_LIMIT_TIERS)[number] | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(4096)
-  metaAccessToken?: string;
 }
 
 export class AdminIntegrationsDto {
@@ -405,11 +399,6 @@ export class CreateAdminClientDto {
 
   @IsOptional()
   @ValidateNested()
-  @Type(() => ConfigureMetaWhatsappDto)
-  meta?: ConfigureMetaWhatsappDto;
-
-  @IsOptional()
-  @ValidateNested()
   @Type(() => CreateGatewayAccountDto)
   efi?: CreateGatewayAccountDto;
 
@@ -444,11 +433,6 @@ export class UpdateAdminClientDto {
   @ValidateNested()
   @Type(() => AdminIntegrationsDto)
   integrations?: AdminIntegrationsDto;
-
-  @IsOptional()
-  @ValidateNested()
-  @Type(() => ConfigureMetaWhatsappDto)
-  meta?: ConfigureMetaWhatsappDto;
 
   @IsOptional()
   @ValidateNested()

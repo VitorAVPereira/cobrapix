@@ -4,6 +4,32 @@ import type { ReactNode } from "react";
 import { useSession } from "next-auth/react";
 import { useApiClient } from "@/lib/use-api-client";
 import type { EmailTemplate, MessageTemplate } from "@/lib/api-client";
+const STATUS_LABELS: Record<string, string> = {
+  LOCAL: "Não enviado",
+  SUBMITTING: "Enviando",
+  SUBMISSION_UNCERTAIN: "Envio incerto: sincronize antes de reenviar",
+  PENDING: "Em análise",
+  IN_APPEAL: "Em recurso",
+  APPROVED: "Aprovado",
+  REJECTED: "Rejeitado",
+  PAUSED: "Pausado",
+  DISABLED: "Desativado",
+  PENDING_DELETION: "Exclusão pendente",
+  DELETED: "Excluído",
+};
+const STATUS_TONES: Record<string, string> = {
+  APPROVED: "text-emerald-700",
+  REJECTED: "text-red-700",
+  PAUSED: "text-amber-700",
+  DISABLED: "text-red-700",
+};
+const QUALITY_LABELS: Record<string, string> = {
+  GREEN: "alta",
+  YELLOW: "média",
+  RED: "baixa",
+  UNKNOWN: "desconhecida",
+};
+
 export default function AdminTemplatesPage(): ReactNode {
   const api = useApiClient();
   const { data: session } = useSession();
@@ -103,10 +129,41 @@ export default function AdminTemplatesPage(): ReactNode {
           >
             <h3 className="font-semibold">{item.name}</h3>
             <p className="text-sm text-slate-600">
-              Situação na Meta: {item.metaStatus}
+              Situação no provedor:{" "}
+              <span className={STATUS_TONES[item.metaStatus] ?? ""}>
+                {STATUS_LABELS[item.metaStatus] ?? item.metaStatus}
+              </span>
+              {item.metaQuality && ` · Qualidade ${QUALITY_LABELS[item.metaQuality] ?? item.metaQuality}`}
             </p>
             {item.metaRejectedReason && (
               <p className="text-sm text-red-700">{item.metaRejectedReason}</p>
+            )}
+            {item.metaReviewRequired && (
+              <div
+                role="note"
+                className="space-y-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900"
+              >
+                <p>
+                  O provedor alterou o conteúdo ou a categoria deste template
+                  {item.metaProviderCategory &&
+                  item.metaProviderCategory !== item.category
+                    ? ` (categoria atual: ${item.metaProviderCategory})`
+                    : ""}
+                  . Ele não será enviado até a revisão ser concluída.
+                </p>
+                <button
+                  disabled={busy}
+                  className="rounded-lg border border-amber-700 px-3 py-2 disabled:opacity-50"
+                  onClick={() =>
+                    void run(
+                      () => api.confirmTemplateReview(item.id),
+                      "Revisão concluída: o template voltou a ser enviado.",
+                    )
+                  }
+                >
+                  Concluir revisão de {item.name}
+                </button>
+              </div>
             )}
             <p className="whitespace-pre-wrap text-sm">{item.content}</p>
             <button

@@ -115,7 +115,7 @@ describe("AdminClientsPage", () => {
       client: createAdminClientFixture(),
       temporaryPassword: "TempSenha1",
       integrationWarnings: [
-        "Cliente criado, mas a integração com a Meta não pôde ser configurada.",
+        "Cliente criado, mas a integração com a Efí não pôde ser configurada.",
       ],
     });
 
@@ -137,12 +137,12 @@ describe("AdminClientsPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Falha ao recarregar clientes")).toBeInTheDocument();
     expect(
-      screen.getByText(/integração com a Meta não pôde ser configurada/i),
+      screen.getByText(/integração com a Efí não pôde ser configurada/i),
     ).toBeInTheDocument();
 
     const payload = mockCreateAdminClient.mock.calls[0]?.[0];
     expect(payload?.efi).toBeUndefined();
-    expect(payload?.meta).toBeUndefined();
+    expect(payload).not.toHaveProperty("meta");
   });
 
   it("guides account opening through the portal and uses the administrator WhatsApp channel", async () => {

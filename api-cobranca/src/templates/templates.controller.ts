@@ -61,6 +61,15 @@ export class TemplatesController {
     return this.templatesService.submitToMeta(user.companyId, id);
   }
 
+  @Post(':id/review')
+  @UseGuards(PlatformAdminGuard)
+  async confirmReview(
+    @GetUser() user: { companyId: string },
+    @Param('id') id: string,
+  ) {
+    return this.templatesService.confirmReview(user.companyId, id);
+  }
+
   @Post('sync-meta')
   @UseGuards(PlatformAdminGuard)
   async syncMetaStatuses(@GetUser() user: { companyId: string }) {
