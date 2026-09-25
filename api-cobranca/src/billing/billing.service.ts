@@ -555,11 +555,8 @@ export class BillingService {
     companyId: string,
   ): Promise<BillingExecutionResult> {
     try {
-      const onboarding = await this.prisma.efiOnboarding.findUnique({
-        where: { companyId },
-        select: { status: true },
-      });
-      if (onboarding?.status !== 'ACTIVE') return { queued: 0, skipped: 0 };
+      if (!(await this.paymentService.hasActiveFinancialProfile(companyId)))
+        return { queued: 0, skipped: 0 };
       const company = await this.prisma.company.findUnique({
         where: { id: companyId },
       });
@@ -1402,14 +1399,10 @@ export class BillingService {
   }
 
   private async assertFinancialActive(companyId: string): Promise<void> {
-    const onboarding = await this.prisma.efiOnboarding.findUnique({
-      where: { companyId },
-      select: { status: true },
-    });
-    if (onboarding?.status !== 'ACTIVE')
+    if (!(await this.paymentService.hasActiveFinancialProfile(companyId)))
       throw new HttpException(
         {
-          code: 'EFI_ONBOARDING_REQUIRED',
+          code: 'FINANCIAL_PROFILE_NOT_READY',
           message: 'Conclua a ativação financeira antes de disparar cobranças.',
         },
         409,

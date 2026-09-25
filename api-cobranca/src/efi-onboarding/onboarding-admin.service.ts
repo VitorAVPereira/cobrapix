@@ -9,6 +9,7 @@ import { EfiOpeningClient } from './efi-opening.client';
 import { OnboardingJobs } from './onboarding-jobs';
 import { readCheckpoint } from './onboarding-checkpoint';
 import { assertEfiOpeningEnabled } from '../config/account-opening';
+import { OPENING_IN_FLIGHT } from '../financial-activation/opening-profile';
 
 const SAFE_ONBOARDING = {
   companyId: true,
@@ -89,6 +90,64 @@ export class OnboardingAdminService {
       }),
     ]);
     return { onboarding, gateway, timeline };
+  }
+  // Closes an in-flight opening so a manual activation may proceed. The admin
+  // records what the Efí panel shows; nothing is sent to Efí and no bank
+  // outcome is assumed. Works with the opening API disabled.
+  async closeForManual(
+    companyId: string,
+    userId: string,
+    input: {
+      outcome: 'NO_ACCOUNT_OPENED' | 'ACCOUNT_OPENED_NOT_USED';
+      evidenceReference: string;
+    },
+  ): Promise<unknown> {
+    await this.prisma.$transaction(
+      async (tx: Prisma.TransactionClient): Promise<void> => {
+        const row = await tx.efiOnboarding.findUnique({
+          where: { companyId },
+        });
+        if (!row || !OPENING_IN_FLIGHT.includes(row.status))
+          this.fail('EFI_OPENING_NOT_IN_FLIGHT');
+        const closed = await tx.efiOnboarding.updateMany({
+          where: { companyId, status: row.status, updatedAt: row.updatedAt },
+          data: {
+            status: 'DISCONNECTED',
+            disconnectedAt: new Date(),
+            sanitizedErrorCode: 'CLOSED_FOR_MANUAL_ACTIVATION',
+            sanitizedErrorMessage:
+              'Abertura encerrada pela CifraMais para ativação manual.',
+            representativeNameEncrypted: null,
+            representativeCpfEncrypted: null,
+            representativeBirthDateEncrypted: null,
+            representativeMotherNameEncrypted: null,
+            representativeEmailEncrypted: null,
+            representativePhoneEncrypted: null,
+            sensitiveDataDeletedAt: new Date(),
+            sensitiveDataKeyVersion: null,
+          },
+        });
+        if (closed.count !== 1) this.fail('ONBOARDING_LOCKED');
+        await tx.auditLog.create({
+          data: {
+            companyId,
+            userId,
+            entityType: 'EfiOnboarding',
+            entityId: row.id,
+            action: 'EFI_OPENING_CLOSED_FOR_MANUAL',
+            changes: {
+              previousStatus: row.status,
+              requestId: row.simplifiedAccountRequestId,
+              outcome: input.outcome,
+              evidenceReference: input.evidenceReference.trim(),
+              verification: 'ADMIN_EFI_PORTAL_ATTESTATION',
+            },
+            retentionExpiresAt: new Date(Date.now() + 5 * 365.25 * 86400_000),
+          },
+        });
+      },
+    );
+    return this.detail(companyId);
   }
   async retry(companyId: string, userId: string): Promise<unknown> {
     assertEfiOpeningEnabled(this.config);

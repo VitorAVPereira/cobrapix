@@ -4,10 +4,11 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { PaymentModule } from '../payment/payment.module';
 import { CompanyFinancialProfileController } from './company-financial-profile.controller';
 import { CompanyFinancialProfileService } from './company-financial-profile.service';
+import { ResendMailerService } from '../common/resend-mailer.service';
 import { EfiAccountRegistryService } from './efi-account-registry.service';
+import { FinancialCertificateMonitor } from './financial-certificate-monitor';
 import { FinancialActivationController } from './financial-activation.controller';
 import { FinancialActivationService } from './financial-activation.service';
-import { FinancialEligibilityService } from './financial-eligibility.service';
 import {
   FINANCIAL_VALIDATION_QUEUE,
   FinancialValidationJobs,
@@ -31,13 +32,10 @@ import { FinancialValidationWorker } from './financial-validation.worker';
     FinancialValidationService,
     FinancialValidationJobs,
     FinancialValidationWorker,
-    FinancialEligibilityService,
     CompanyFinancialProfileService,
+    FinancialCertificateMonitor,
+    ResendMailerService,
   ],
-  exports: [
-    FinancialActivationService,
-    EfiAccountRegistryService,
-    FinancialEligibilityService,
-  ],
+  exports: [FinancialActivationService, EfiAccountRegistryService],
 })
 export class FinancialActivationModule {}

@@ -208,7 +208,7 @@ export class EfiService {
       403,
     );
   }
-  async assertIssuable(companyId: string): Promise<void> {
+  async assertIssuable(companyId: string, method?: BillingType): Promise<void> {
     if (!this.gatewayHealth)
       throw new HttpException(
         {
@@ -217,7 +217,7 @@ export class EfiService {
         },
         409,
       );
-    await this.gatewayHealth.assertIssuable(companyId);
+    await this.gatewayHealth.assertIssuable(companyId, method);
   }
 
   async createPayment(
@@ -244,7 +244,7 @@ export class EfiService {
         },
         409,
       );
-    await this.gatewayHealth.assertIssuable(companyId);
+    await this.gatewayHealth.assertIssuable(companyId, billingType);
     const gatewayAccount = await this.getActiveGatewayAccount(companyId);
 
     if (billingType === 'BOLETO' || billingType === 'BOLIX') {

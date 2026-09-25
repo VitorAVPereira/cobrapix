@@ -1553,11 +1553,8 @@ export class InvoicesService {
       return 0;
     }
 
-    const onboarding = await this.prisma.efiOnboarding.findUnique({
-      where: { companyId },
-      select: { status: true },
-    });
-    if (onboarding?.status !== 'ACTIVE') return 0;
+    if (!(await this.paymentService.hasActiveFinancialProfile(companyId)))
+      return 0;
 
     await this.messageQueue.addInitialChargeJobs(
       uniqueInvoiceIds.map((invoiceId) => ({

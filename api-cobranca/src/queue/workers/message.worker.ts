@@ -545,11 +545,19 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async processInitialChargeJob(data: InitialChargeJob): Promise<void> {
-    const onboarding = await this.prisma.efiOnboarding.findUnique({
-      where: { companyId: data.companyId },
-      select: { status: true },
-    });
-    if (onboarding?.status !== 'ACTIVE') return;
+    if (
+      !(await this.paymentService.hasActiveFinancialProfile(data.companyId))
+    ) {
+      // Record the skip instead of dropping the job silently.
+      await this.createCollectionLog(
+        data.companyId,
+        data.invoiceId,
+        'INITIAL_CHARGE_SKIPPED',
+        'Primeira cobranca nao gerada: ativacao financeira pendente.',
+        'SKIPPED',
+      );
+      return;
+    }
     const invoice = await this.loadInitialChargeInvoice(data);
 
     if (!invoice) {

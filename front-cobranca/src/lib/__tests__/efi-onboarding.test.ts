@@ -1,11 +1,5 @@
-import {certificateExpirationNotice,canIssueFinancially,companyLoginDestination} from '../efi-onboarding';
+import {certificateExpirationNotice,companyLoginDestination} from '../efi-onboarding';
 describe('financial activation UX',()=>{
-  it('blocks incomplete or unknown accounts and releases only active accounts',()=>{
-    expect(canIssueFinancially(null)).toBe(false);
-    expect(canIssueFinancially({status:'PROVISIONING'})).toBe(false);
-    expect(canIssueFinancially({status:'SUBMISSION_UNCERTAIN'})).toBe(false);
-    expect(canIssueFinancially({status:'ACTIVE'})).toBe(true);
-  });
   it('routes the new login after temporary password change into onboarding',()=>{
     expect(companyLoginDestination(true,'COMPANY_ADMIN',false)).toBe('/primeiro-acesso');
     expect(companyLoginDestination(false,'COMPANY_ADMIN',true)).toBe('/onboarding/efi');

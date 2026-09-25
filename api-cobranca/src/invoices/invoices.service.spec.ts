@@ -72,6 +72,7 @@ describe('InvoicesService', () => {
 
   function buildPaymentService(): PaymentService {
     return {
+      hasActiveFinancialProfile: jest.fn().mockResolvedValue(true),
       cancelPaymentForInvoice: jest.fn().mockResolvedValue({
         providerAction: 'LOCAL_ONLY',
         gatewayStatusRaw: 'CANCELED_BY_USER',
@@ -106,9 +107,6 @@ describe('InvoicesService', () => {
         }),
     );
     const prisma = {
-      efiOnboarding: {
-        findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-      },
       company: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'company-1',
@@ -146,9 +144,6 @@ describe('InvoicesService', () => {
       profileType: 'NEW',
     });
     const prisma = {
-      efiOnboarding: {
-        findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-      },
       company: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'company-1',
@@ -212,9 +207,6 @@ describe('InvoicesService', () => {
   it('bloqueia fatura manual para novo devedor sem CPF ou CNPJ', async () => {
     const transaction = jest.fn();
     const prisma = {
-      efiOnboarding: {
-        findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-      },
       company: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'company-1',
@@ -264,9 +256,6 @@ describe('InvoicesService', () => {
         }),
     );
     const prisma = {
-      efiOnboarding: {
-        findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-      },
       company: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'company-1',
@@ -295,9 +284,6 @@ describe('InvoicesService', () => {
   it('bloqueia criacao de fatura com metodo nao habilitado para a empresa', async () => {
     const transaction = jest.fn();
     const prisma = {
-      efiOnboarding: {
-        findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-      },
       company: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'company-1',
@@ -332,9 +318,6 @@ describe('InvoicesService', () => {
     const invoiceFindMany = jest.fn().mockResolvedValue([invoice]);
     const invoiceCount = jest.fn().mockResolvedValue(1);
     const prisma = {
-      efiOnboarding: {
-        findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-      },
       invoice: {
         findMany: invoiceFindMany,
         count: invoiceCount,
@@ -385,9 +368,6 @@ describe('InvoicesService', () => {
       addInitialChargeJobs: jest.fn().mockResolvedValue(undefined),
     } as unknown as MessageQueueService;
     const prisma = {
-      efiOnboarding: {
-        findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-      },
       collectionProfile: { findFirst: profileFindFirst },
       $transaction: jest.fn(
         async (
@@ -481,9 +461,6 @@ describe('InvoicesService', () => {
         }),
     );
     const prisma = {
-      efiOnboarding: {
-        findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-      },
       invoice: {
         findFirst: invoiceFindFirst,
       },
@@ -533,9 +510,6 @@ describe('InvoicesService', () => {
     });
     const transaction = jest.fn();
     const prisma = {
-      efiOnboarding: {
-        findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-      },
       invoice: {
         findFirst: jest.fn().mockResolvedValue(invoice),
       },
@@ -564,9 +538,6 @@ describe('InvoicesService', () => {
   it('rejeita cancelamento de fatura paga sem chamar PaymentService', async () => {
     const invoice = buildInvoice({ id: 'invoice-1', status: 'PAID' });
     const prisma = {
-      efiOnboarding: {
-        findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-      },
       invoice: {
         findFirst: jest.fn().mockResolvedValue(invoice),
       },
@@ -591,9 +562,6 @@ describe('InvoicesService', () => {
 
   it('retorna erro quando fatura para cancelamento nao existe', async () => {
     const prisma = {
-      efiOnboarding: {
-        findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-      },
       invoice: {
         findFirst: jest.fn().mockResolvedValue(null),
       },
@@ -646,9 +614,6 @@ describe('InvoicesService', () => {
       invoices: [paidOverdue, paidOnDueDate, paidEarly],
     });
     const prisma = {
-      efiOnboarding: {
-        findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-      },
       debtor: {
         findFirst: debtorFindFirst,
       },
@@ -731,9 +696,6 @@ describe('InvoicesService', () => {
     });
     const invoiceUpsert = jest.fn().mockResolvedValue(invoice);
     const prisma = {
-      efiOnboarding: {
-        findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-      },
       company: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'company-1',
@@ -874,9 +836,6 @@ describe('InvoicesService', () => {
       const debtorCreate = jest.fn().mockResolvedValue(buildDebtor());
       const profileFindFirst = jest.fn().mockResolvedValue(defaultProfile);
       const prisma = {
-        efiOnboarding: {
-          findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-        },
         collectionProfile: { findFirst: profileFindFirst },
         debtor: {
           findMany: jest.fn().mockResolvedValue([]),
@@ -923,9 +882,6 @@ describe('InvoicesService', () => {
 
     it('rejeita cliente novo com WhatsApp duplicado na empresa', async () => {
       const prisma = {
-        efiOnboarding: {
-          findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-        },
         collectionProfile: {
           findFirst: jest.fn().mockResolvedValue(defaultProfile),
         },
@@ -975,9 +931,6 @@ describe('InvoicesService', () => {
       const debtorFindMany = jest.fn().mockResolvedValue([debtorWithInvoices]);
       const debtorUpdateMany = jest.fn().mockResolvedValue({ count: 2 });
       const prisma = {
-        efiOnboarding: {
-          findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-        },
         collectionProfile: {
           findFirst: jest.fn().mockResolvedValue(defaultProfile),
         },
@@ -1070,9 +1023,6 @@ describe('InvoicesService', () => {
         .mockResolvedValueOnce([pageDebtor])
         .mockResolvedValueOnce([pageDebtor, summaryDebtor]);
       const prisma = {
-        efiOnboarding: {
-          findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-        },
         collectionProfile: {
           findFirst: jest.fn().mockResolvedValue(defaultProfile),
         },
@@ -1130,9 +1080,6 @@ describe('InvoicesService', () => {
         );
       const debtorUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
       const prisma = {
-        efiOnboarding: {
-          findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-        },
         collectionProfile: {
           findFirst: jest.fn().mockResolvedValue(defaultProfile),
         },
@@ -1182,9 +1129,6 @@ describe('InvoicesService', () => {
         .mockResolvedValueOnce({ id: 'debtor-1' })
         .mockResolvedValueOnce(buildSettingsDebtor());
       const prisma = {
-        efiOnboarding: {
-          findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-        },
         debtor: {
           findFirst: debtorFindFirst,
           update: debtorUpdate,
@@ -1212,9 +1156,6 @@ describe('InvoicesService', () => {
         .mockResolvedValueOnce({ id: 'debtor-1' })
         .mockResolvedValueOnce(buildSettingsDebtor());
       const prisma = {
-        efiOnboarding: {
-          findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-        },
         collectionProfile: {
           findFirst: jest.fn().mockResolvedValue({ id: 'profile-new' }),
         },

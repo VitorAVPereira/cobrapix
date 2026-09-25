@@ -62,6 +62,7 @@ describe('transactional payment secret rotation', () => {
       company: {
         findMany: companyReads,
       },
+      efiCredentialVersion: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(
         (callback: (client: typeof tx) => Promise<unknown>): Promise<unknown> =>
           callback(tx),
@@ -114,6 +115,7 @@ describe('transactional payment secret rotation', () => {
           .mockResolvedValueOnce([{ id: 'tenant-1' }])
           .mockResolvedValue([]),
       },
+      efiCredentialVersion: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(
         (callback: (client: typeof tx) => Promise<unknown>): Promise<unknown> =>
           callback(tx),
@@ -252,5 +254,54 @@ describe('transactional payment secret rotation', () => {
     await expect(
       rotatePaymentSecrets(prisma, crypto, { apply: true }),
     ).rejects.toThrow('Registro alterado durante rotação');
+  });
+
+  it('rotates credential versions and leaves wiped ones untouched', async () => {
+    const at = new Date('2026-09-25T12:00:00.000Z');
+    const rows = [
+      {
+        id: 'credential-1',
+        updatedAt: at,
+        encryptedClientId: previous.encrypt('client'),
+        encryptedClientSecret: previous.encrypt('secret'),
+        encryptedCertificate: previous.encrypt('p12'),
+        encryptedCertificatePassword: null,
+      },
+      {
+        id: 'credential-2',
+        updatedAt: at,
+        encryptedClientId: '',
+        encryptedClientSecret: '',
+        encryptedCertificate: '',
+        encryptedCertificatePassword: null,
+      },
+    ];
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const tx = { efiCredentialVersion: { updateMany } };
+    const prisma = {
+      company: { findMany: jest.fn().mockResolvedValue([]) },
+      efiCredentialVersion: {
+        findMany: jest.fn().mockResolvedValueOnce(rows).mockResolvedValue([]),
+      },
+      $transaction: jest.fn(
+        (callback: (client: typeof tx) => Promise<unknown>): Promise<unknown> =>
+          callback(tx),
+      ),
+    } as unknown as PrismaService;
+
+    await expect(
+      rotatePaymentSecrets(prisma, crypto, { apply: true }),
+    ).resolves.toEqual({ apply: true, inspected: 2, changed: 1 });
+    expect(updateMany).toHaveBeenCalledTimes(1);
+    const [{ where, data }] = updateMany.mock.calls[0] as [
+      { where: object; data: Record<string, string | null> },
+    ];
+    expect(where).toEqual({ id: 'credential-1', updatedAt: at });
+    expect(data.credentialKeyVersion).toBe('v2');
+    expect(crypto.getEnvelopeKeyVersion(data.encryptedClientSecret ?? '')).toBe(
+      'v2',
+    );
+    expect(crypto.decrypt(data.encryptedCertificate ?? '')).toBe('p12');
+    expect(data.encryptedCertificatePassword).toBeNull();
   });
 });

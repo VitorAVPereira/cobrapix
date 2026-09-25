@@ -9,6 +9,11 @@ import { EfiOpeningClient, EFI_REQUIRED_SCOPES } from './efi-opening.client';
 import { OnboardingJobs } from './onboarding-jobs';
 import { OnboardingNotifications } from './onboarding-notifications';
 import { readCheckpoint } from './onboarding-checkpoint';
+import {
+  hasActiveManualProfile,
+  OpeningProfileConflict,
+  publishOpeningProfile,
+} from '../financial-activation/opening-profile';
 
 const DELAYS = [60_000, 5 * 60_000, 15 * 60_000, 30 * 60_000, 60 * 60_000];
 interface ProvisionLease {
@@ -56,6 +61,25 @@ export class OnboardingProvisioner {
       Date.parse(checkpoint.provisionRetryAt) > Date.now()
     )
       return;
+    // A manual activation took over: never touch its gateway account.
+    if (await hasActiveManualProfile(this.prisma, companyId)) {
+      const stopped = await this.prisma.efiOnboarding.updateMany({
+        where: {
+          companyId,
+          status: 'PROVISIONING',
+          draftRevision: row.draftRevision,
+        },
+        data: {
+          status: 'CONFIGURATION_ERROR',
+          sanitizedErrorCode: 'FINANCIAL_MANUAL_ACTIVE',
+          sanitizedErrorMessage:
+            'A empresa já tem ativação financeira manual; a abertura não foi aplicada.',
+        },
+      });
+      if (stopped.count === 1)
+        await this.notifications.alert(companyId, 'FINANCIAL_MANUAL_ACTIVE');
+      return;
+    }
     const lease = new Date(Date.now() + 15 * 60_000).toISOString();
     const claimed = await this.prisma.efiOnboarding.updateMany({
       where: {
@@ -175,7 +199,7 @@ export class OnboardingProvisioner {
           });
           if (transitioned.count !== 1)
             throw new ProvisioningError('EFI_PROVISIONING_STALE', true);
-          await tx.gatewayAccount.update({
+          const activeAccount = await tx.gatewayAccount.update({
             where: { companyId },
             data: {
               status: 'ACTIVE',
@@ -185,6 +209,20 @@ export class OnboardingProvisioner {
               lastError: null,
             },
           });
+          // Same transaction: opening and its financial profile commit together.
+          try {
+            await publishOpeningProfile(tx, {
+              companyId,
+              onboardingId: row.id,
+              draftRevision: row.draftRevision,
+              requestId: row.simplifiedAccountRequestId ?? '',
+              account: activeAccount,
+            });
+          } catch (error: unknown) {
+            if (error instanceof OpeningProfileConflict)
+              throw new ProvisioningError(error.code, true);
+            throw error;
+          }
           await tx.auditLog.create({
             data: {
               companyId,

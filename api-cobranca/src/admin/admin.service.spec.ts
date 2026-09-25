@@ -97,6 +97,7 @@ describe('AdminService financial onboarding', () => {
           .mockResolvedValue(existingUser ? { id: 'user-1' } : null),
       },
       gatewayAccount: { update: jest.fn() },
+      efiAccountIdentity: { count: jest.fn().mockResolvedValue(0) },
     };
     const fees = {
       resolveActiveVersion: jest.fn().mockResolvedValue({ id: 'fee-1' }),
@@ -189,6 +190,31 @@ describe('AdminService financial onboarding', () => {
     expect(prisma.gatewayAccount.update).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).not.toContain('encrypted-client-secret');
   });
+  it.each([
+    [
+      'an active financial profile',
+      { activeFinancialProfileId: 'profile-1' },
+      0,
+    ],
+    ['registered Efí credentials', { activeFinancialProfileId: null }, 1],
+  ])(
+    'locks the company document with %s',
+    async (_label, company, identities) => {
+      const { service, prisma } = fixture();
+      prisma.company.findUnique
+        .mockResolvedValueOnce(baseCompanyRecord)
+        .mockResolvedValueOnce(company);
+      prisma.efiAccountIdentity.count.mockResolvedValue(identities);
+      await expect(
+        service.updateClient('company-1', {
+          company: { document: '98.765.432/0001-00' },
+        }),
+      ).rejects.toMatchObject({
+        response: { code: 'COMPANY_DOCUMENT_LOCKED' },
+      });
+      expect(prisma.company.update).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('Admin password reset', () => {

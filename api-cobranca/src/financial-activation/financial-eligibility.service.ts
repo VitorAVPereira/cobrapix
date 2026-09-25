@@ -23,9 +23,21 @@ export interface IssuanceContext {
 export class FinancialEligibilityService {
   constructor(private readonly prisma: PrismaService) {}
 
+  // A published profile alone: gates flows that do not issue by themselves
+  // (collection rule, first-charge scheduling). Pause and health are checked
+  // when a charge is actually issued.
+  async hasActiveProfile(companyId: string): Promise<boolean> {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { activeFinancialProfile: { select: { status: true } } },
+    });
+    return company?.activeFinancialProfile?.status === 'ACTIVE';
+  }
+
+  // Without a method, answers whether the company may issue at all.
   async resolveIssuance(
     companyId: string,
-    method: BillingMethod,
+    method?: BillingMethod,
     now = new Date(),
   ): Promise<IssuanceContext> {
     const company = await this.prisma.company.findUnique({
@@ -47,7 +59,7 @@ export class FinancialEligibilityService {
       !profile.issuerIdentity
     )
       this.fail(409, 'FINANCIAL_PROFILE_NOT_READY');
-    if (!profile.enabledMethods.includes(method))
+    if (method && !profile.enabledMethods.includes(method))
       this.fail(409, 'PAYMENT_METHOD_NOT_ENABLED');
 
     const payments = await this.prisma.platformIntegrationState.findUnique({

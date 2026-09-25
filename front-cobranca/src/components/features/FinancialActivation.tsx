@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { useApiClient } from "@/lib/use-api-client";
-import { canIssueFinancially, EFI_STATUS_LABELS } from "@/lib/efi-onboarding";
+import { EFI_STATUS_LABELS } from "@/lib/efi-onboarding";
 import type { EfiOnboardingState } from "@/lib/efi-onboarding";
 import type { CompanyFinancialProfile } from "@/lib/financial-activation";
 import {
@@ -88,12 +88,9 @@ export function FinancialActivationProvider({
         openingEnabled: visibleProfile?.openingEnabled ?? false,
         loading,
         error,
-        // Manual activation publishes a profile; the opening flow still counts
-        // until it publishes one too.
-        canIssue:
-          (Boolean(visibleProfile?.canIssue) ||
-            canIssueFinancially(visibleState)) &&
-          !error,
+        // Same rule as the API: a published financial profile, whether it came
+        // from a manual activation or from a completed opening.
+        canIssue: Boolean(visibleProfile?.canIssue) && !error,
         refresh,
       }}
     >

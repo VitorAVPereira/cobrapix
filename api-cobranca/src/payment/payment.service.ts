@@ -5,6 +5,7 @@ import {
   Inject,
   Injectable,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { PaymentCharge } from '@prisma/client';
 import {
@@ -14,6 +15,7 @@ import {
 } from './efi.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentChargeService } from './payment-charge.service';
+import { FinancialEligibilityService } from '../financial-activation/financial-eligibility.service';
 
 type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
 
@@ -38,7 +40,17 @@ export class PaymentService {
     private readonly prisma: PrismaService,
     @Inject(PaymentChargeService)
     private readonly charges: PaymentChargeService | null,
+    @Optional()
+    private readonly eligibility?: FinancialEligibilityService,
   ) {}
+
+  // Collection rule and first-charge scheduling run only for companies with a
+  // published financial profile (manual activation or completed opening).
+  async hasActiveFinancialProfile(companyId: string): Promise<boolean> {
+    return this.eligibility
+      ? this.eligibility.hasActiveProfile(companyId)
+      : false;
+  }
 
   async createPayment(
     invoiceId: string,
@@ -92,7 +104,7 @@ export class PaymentService {
     }
 
     // Reject paused or unhealthy integrations before creating an issuance reservation.
-    await this.efiService.assertIssuable(companyId);
+    await this.efiService.assertIssuable(companyId, billingType);
 
     const invoice = await this.prisma.invoice.findFirst({
       where: { id: invoiceId, companyId },
@@ -176,7 +188,7 @@ export class PaymentService {
       paymentLink: string;
     }>;
   }> {
-    await this.efiService.assertIssuable(companyId);
+    await this.efiService.assertIssuable(companyId, billingType);
     await this.ensureBillingMethodEnabled(companyId, billingType);
     const results: Array<{
       invoiceId: string;

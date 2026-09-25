@@ -79,11 +79,6 @@ export const EFI_STATUS_LABELS: Record<EfiOnboardingStatus, string> = {
   CONFIGURATION_ERROR: "Configuração em revisão",
   DISCONNECTED: "Integração desligada",
 };
-export function canIssueFinancially(
-  state: Pick<EfiOnboardingState, "status"> | null,
-): boolean {
-  return state?.status === "ACTIVE";
-}
 export function companyLoginDestination(
   mustChangePassword: boolean,
   role: string,

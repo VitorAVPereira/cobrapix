@@ -9,6 +9,7 @@ import { OnboardingDraftDto } from './onboarding.dto';
 import { assertFreshConsent, canEditOnboarding } from './onboarding-policy';
 import { validateDebtorDocument } from '../common/debtor-document';
 import { assertEfiOpeningEnabled } from '../config/account-opening';
+import { hasActiveManualProfile } from '../financial-activation/opening-profile';
 
 const SENSITIVE_FIELDS = [
   'representativeNameEncrypted',
@@ -193,6 +194,11 @@ export class EfiOnboardingService {
       this.error(
         'ONBOARDING_PAUSED',
         'Novas ativações estão temporariamente pausadas. Seu rascunho está salvo.',
+      );
+    if (await hasActiveManualProfile(this.prisma, user.companyId))
+      this.error(
+        'FINANCIAL_ALREADY_ACTIVE',
+        'Sua ativação financeira já foi concluída pela CifraMais.',
       );
     const row = await this.prisma.efiOnboarding.findUnique({
       where: { companyId: user.companyId },

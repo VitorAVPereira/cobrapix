@@ -7,7 +7,7 @@ describe('fronteira da ativação financeira', () => {
     const offenders = readdirSync(dir)
       .filter((file) => file.endsWith('.ts') && !file.endsWith('.spec.ts'))
       .filter((file) =>
-        /from '\.\.\/efi-onboarding\/|efi-opening|gn\.registration/.test(
+        /from '[^']*(efi-onboarding|efi-opening)[^']*'|gn\.registration/.test(
           readFileSync(join(dir, file), 'utf8'),
         ),
       );

@@ -22,16 +22,7 @@ import {
   ValidationAttemptView,
 } from './financial-validation.service';
 import type { ValidationStep } from './financial-validation.types';
-
-// A company whose account-opening request is in flight must be reconciled
-// before a manual activation replaces it.
-const OPENING_IN_FLIGHT = [
-  'NOTICE_PENDING',
-  'AWAITING_REPRESENTATIVE',
-  'EFI_PROCESSING',
-  'SUBMISSION_UNCERTAIN',
-  'PROVISIONING',
-] as const;
+import { OPENING_IN_FLIGHT } from './opening-profile';
 
 export const OPEN_CANDIDATE_STATUSES: FinancialProfileStatus[] = [
   'DRAFT',
@@ -270,10 +261,7 @@ export class FinancialActivationService {
         where: { companyId: profile.companyId },
         select: { status: true },
       });
-      if (
-        opening &&
-        (OPENING_IN_FLIGHT as readonly string[]).includes(opening.status)
-      )
+      if (opening && OPENING_IN_FLIGHT.includes(opening.status))
         this.fail(409, 'OPENING_RECONCILIATION_REQUIRED');
       const identity = profile.issuerIdentity;
       const credential = profile.issuerCredentialVersion;

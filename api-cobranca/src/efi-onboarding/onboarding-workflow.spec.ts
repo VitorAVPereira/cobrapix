@@ -5,6 +5,14 @@ import { EfiOpeningClient, EfiOpeningError } from './efi-opening.client';
 import { OnboardingWorkflow } from './onboarding-workflow';
 import { OnboardingNotifications } from './onboarding-notifications';
 import { OnboardingJobs } from './onboarding-jobs';
+import * as openingProfile from '../financial-activation/opening-profile';
+
+jest.mock('../financial-activation/opening-profile', (): object => ({
+  ...jest.requireActual('../financial-activation/opening-profile'),
+  hasActiveManualProfile: jest.fn().mockResolvedValue(false),
+  publishOpeningProfile: jest.fn().mockResolvedValue('profile-1'),
+  syncOpeningCredential: jest.fn().mockResolvedValue(undefined),
+}));
 
 describe('onboarding submission workflow', () => {
   afterEach((): void => {
@@ -106,6 +114,16 @@ describe('onboarding submission workflow', () => {
     expect(submit).toHaveBeenCalledTimes(1);
   });
 
+  it('drops a queued submission after a manual activation', async () => {
+    const { workflow, row, notice, submit } = fixture();
+    jest
+      .mocked(openingProfile.hasActiveManualProfile)
+      .mockResolvedValueOnce(true);
+    await workflow.submit('tenant');
+    expect(notice).not.toHaveBeenCalled();
+    expect(submit).not.toHaveBeenCalled();
+    expect(row.status).toBe('NOTICE_PENDING');
+  });
   it('never calls Efí while WhatsApp fails and exhausts the three delayed retries', async () => {
     jest.useFakeTimers({ now: new Date('2026-09-09T12:00:00Z') });
     const { workflow, row, notice, submit, scheduled } = fixture();

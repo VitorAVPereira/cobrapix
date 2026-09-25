@@ -105,9 +105,6 @@ function createService(input: {
   const createPayment = input.createPayment ?? jest.fn().mockResolvedValue({});
 
   const prisma = {
-    efiOnboarding: {
-      findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
-    },
     company: {
       findUnique: jest.fn().mockResolvedValue(company),
     },
@@ -177,6 +174,7 @@ function createService(input: {
 
   const paymentService = {
     createPayment,
+    hasActiveFinancialProfile: jest.fn().mockResolvedValue(true),
   } as unknown as PaymentService;
 
   const ruleEngine = {

@@ -241,6 +241,11 @@ export class AdminService {
       await this.validateEnabledMethods(id, dto.billing.enabledBillingMethods);
     const company = await this.findClientOrThrow(id);
     const companyData = this.buildCompanyUpdateData(dto);
+    if (
+      typeof companyData.document === 'string' &&
+      companyData.document !== company.document
+    )
+      await this.assertDocumentChangeAllowed(id);
 
     if (Object.keys(companyData).length > 0) {
       await this.prisma.company.update({
@@ -296,6 +301,28 @@ export class AdminService {
     });
 
     return { userId: user.id, temporaryPassword };
+  }
+
+  // The Efí account holder was verified against this document. Changing it
+  // after activation, or while credentials are registered, would detach the
+  // bank identity from the company; it requires a new financial activation.
+  private async assertDocumentChangeAllowed(companyId: string): Promise<void> {
+    const [company, registered] = await Promise.all([
+      this.prisma.company.findUnique({
+        where: { id: companyId },
+        select: { activeFinancialProfileId: true },
+      }),
+      this.prisma.efiAccountIdentity.count({ where: { companyId } }),
+    ]);
+    if (company?.activeFinancialProfileId || registered > 0)
+      throw new HttpException(
+        {
+          code: 'COMPANY_DOCUMENT_LOCKED',
+          message:
+            'O CNPJ/CPF está vinculado à conta Efí da ativação financeira. Cancele ou substitua a ativação antes de alterá-lo.',
+        },
+        HttpStatus.CONFLICT,
+      );
   }
 
   private async findClientOrThrow(id: string): Promise<AdminClientRecord> {
