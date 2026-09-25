@@ -11,6 +11,7 @@ import { OnboardingNotifications } from './onboarding-notifications';
 import { OnboardingJobs } from './onboarding-jobs';
 import { functionalRefusal } from './onboarding-policy';
 import { readCheckpoint } from './onboarding-checkpoint';
+import { hasActiveManualProfile } from '../financial-activation/opening-profile';
 
 const NOTICE_DELAYS = [5 * 60_000, 30 * 60_000, 2 * 60 * 60_000] as const;
 type OnboardingWithCompany = EfiOnboarding & { company: Company };
@@ -34,7 +35,9 @@ export class OnboardingWorkflow {
       (expectedRevision !== undefined &&
         row.draftRevision !== expectedRevision) ||
       row.status !== 'NOTICE_PENDING' ||
-      !(await this.openingEnabled())
+      !(await this.openingEnabled()) ||
+      // A queued submission must not open an account after a manual activation.
+      (await hasActiveManualProfile(this.prisma, companyId))
     )
       return;
     const checkpoint = readCheckpoint(row.provisioningCheckpoint);

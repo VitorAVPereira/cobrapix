@@ -54,7 +54,73 @@ export async function rotatePaymentSecrets(
     if (!lastCompany) break;
     cursor = lastCompany.id;
   }
+  await rotateCredentialVersions(prisma, crypto, summary, batchSize);
   return summary;
+}
+
+// Credential versions of every identity (company or platform). Wiped
+// versions (empty ciphertext) have nothing to rotate.
+async function rotateCredentialVersions(
+  prisma: PrismaService,
+  crypto: PaymentCryptoService,
+  summary: RotationSummary,
+  batchSize: number,
+): Promise<void> {
+  let cursor: string | undefined;
+  while (true) {
+    const rows = await prisma.efiCredentialVersion.findMany({
+      where: cursor ? { id: { gt: cursor } } : {},
+      orderBy: { id: 'asc' },
+      take: batchSize,
+    });
+    if (rows.length === 0) break;
+    const changed = await prisma.$transaction(
+      async (tx: Prisma.TransactionClient): Promise<number> => {
+        let count = 0;
+        for (const row of rows) {
+          const present = (value: string | null): string | null =>
+            value ? value : null;
+          const rotation = rotateEncryptedFields(
+            {
+              encryptedClientId: present(row.encryptedClientId),
+              encryptedClientSecret: present(row.encryptedClientSecret),
+              encryptedCertificate: present(row.encryptedCertificate),
+              encryptedCertificatePassword: present(
+                row.encryptedCertificatePassword,
+              ),
+            },
+            crypto,
+          );
+          if (!rotation.changed) continue;
+          count++;
+          if (!summary.apply) continue;
+          const result = await tx.efiCredentialVersion.updateMany({
+            where: { id: row.id, updatedAt: row.updatedAt },
+            data: {
+              encryptedClientId:
+                rotation.fields.encryptedClientId ?? row.encryptedClientId,
+              encryptedClientSecret:
+                rotation.fields.encryptedClientSecret ??
+                row.encryptedClientSecret,
+              encryptedCertificate:
+                rotation.fields.encryptedCertificate ??
+                row.encryptedCertificate,
+              encryptedCertificatePassword:
+                rotation.fields.encryptedCertificatePassword,
+              credentialKeyVersion: crypto.activeKeyVersion,
+            },
+          });
+          if (result.count !== 1)
+            throw new Error('Registro alterado durante rotação');
+        }
+        return count;
+      },
+      { timeout: 60_000 },
+    );
+    summary.inspected += rows.length;
+    summary.changed += changed;
+    cursor = rows.at(-1)?.id;
+  }
 }
 
 async function rotateCompany(

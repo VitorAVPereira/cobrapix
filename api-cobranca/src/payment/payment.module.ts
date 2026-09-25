@@ -12,6 +12,7 @@ import { PublicPaymentLinkService } from './payment-link.service';
 import { ResendMailerService } from '../common/resend-mailer.service';
 import { EfiGatewayClient } from './efi-gateway.client';
 import { GatewayHealthService } from './gateway-health.service';
+import { FinancialEligibilityService } from '../financial-activation/financial-eligibility.service';
 import {
   PaymentFeeController,
   AdminPaymentFeeController,
@@ -42,6 +43,7 @@ import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
     ResendMailerService,
     EfiGatewayClient,
     GatewayHealthService,
+    FinancialEligibilityService,
   ],
   exports: [
     PaymentFeeService,
@@ -53,6 +55,7 @@ import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
     PublicPaymentLinkService,
     EfiGatewayClient,
     GatewayHealthService,
+    FinancialEligibilityService,
   ],
 })
 export class PaymentModule {}

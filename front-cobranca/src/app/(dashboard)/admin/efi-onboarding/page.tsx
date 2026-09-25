@@ -38,6 +38,16 @@ interface Detail {
   } | null;
   timeline: Array<{ action: string; createdAt: string }>;
 }
+// Openings still in progress at Efí; they must be closed explicitly before
+// a manual activation takes over.
+const OPENING_IN_FLIGHT = [
+  "NOTICE_PENDING",
+  "AWAITING_REPRESENTATIVE",
+  "EFI_PROCESSING",
+  "SUBMISSION_UNCERTAIN",
+  "PROVISIONING",
+];
+
 export default function AdminEfiOnboardingPage(): ReactNode {
   const api = useApiClient();
   const { data: session } = useSession();
@@ -109,6 +119,23 @@ export default function AdminEfiOnboardingPage(): ReactNode {
       setBusy(false);
     }
   }
+  async function closeForManual(
+    event: FormEvent<HTMLFormElement>,
+  ): Promise<void> {
+    event.preventDefault();
+    if (!selected) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    await action(
+      `/admin/efi-onboarding/${selected.companyId}/close-for-manual`,
+      "POST",
+      {
+        outcome: String(data.get("outcome") ?? ""),
+        evidenceReference: String(data.get("evidenceReference") ?? "").trim(),
+      },
+    );
+    form.reset();
+  }
   async function manual(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (!selected) return;
@@ -170,14 +197,15 @@ export default function AdminEfiOnboardingPage(): ReactNode {
               {{
                 META: "WhatsApp central",
                 RESEND: "E-mail central",
-                EFI_ONBOARDING: "Novas ativações",
+                EFI_ONBOARDING: "Abertura de contas Efí",
                 EFI_PAYMENTS: "Novas emissões",
+                FINANCIAL_MANUAL_ACTIVATION: "Ativação financeira manual",
               }[item.integration] ?? item.integration}
             </h2>
             <p className="mt-2 text-sm text-slate-600">
               {item.enabled ? "Liberado" : "Pausado"} · {item.healthStatus}
             </p>
-            {["EFI_ONBOARDING", "EFI_PAYMENTS", "META", "RESEND"].includes(
+            {["EFI_ONBOARDING", "EFI_PAYMENTS", "FINANCIAL_MANUAL_ACTIVATION", "META", "RESEND"].includes(
               item.integration,
             ) && (
               <button
@@ -185,7 +213,7 @@ export default function AdminEfiOnboardingPage(): ReactNode {
                 className="mt-3 rounded-lg border px-3 py-2 text-sm disabled:opacity-50"
                 onClick={() =>
                   void action(
-                    `/admin/integrations/${{ EFI_ONBOARDING: "efi-onboarding", EFI_PAYMENTS: "efi-payments", META: "meta", RESEND: "resend" }[item.integration]}`,
+                    `/admin/integrations/${{ EFI_ONBOARDING: "efi-onboarding", EFI_PAYMENTS: "efi-payments", FINANCIAL_MANUAL_ACTIVATION: "financial-manual-activation", META: "meta", RESEND: "resend" }[item.integration]}`,
                     "PUT",
                     { enabled: !item.enabled },
                   )
@@ -348,7 +376,7 @@ export default function AdminEfiOnboardingPage(): ReactNode {
                   onSubmit={(event) => void manual(event)}
                   className="space-y-3 border-t pt-4"
                 >
-                  <h3 className="font-medium">Recuperação manual validada</h3>
+                  <h3 className="font-medium">Recuperar abertura existente</h3>
                   <p className="text-sm text-slate-600">
                     Use o identificador confirmado pela Efí para esta empresa. O
                     certificado recupera uma geração incerta e é obrigatório
@@ -420,6 +448,54 @@ export default function AdminEfiOnboardingPage(): ReactNode {
                     className="rounded-lg bg-emerald-700 px-4 py-3 text-white disabled:opacity-40"
                   >
                     Validar e retomar
+                  </button>
+                </form>
+              )}
+              {OPENING_IN_FLIGHT.includes(detail.onboarding?.status ?? "") && (
+                <form
+                  onSubmit={(event) => void closeForManual(event)}
+                  className="space-y-3 border-t pt-4"
+                >
+                  <h3 className="font-medium">
+                    Encerrar abertura para ativação manual
+                  </h3>
+                  <p className="text-sm text-slate-600">
+                    Use quando a empresa vai operar com a conta cadastrada em
+                    Ativação financeira. Nada é enviado à Efí: a abertura é
+                    encerrada aqui, os dados do representante são apagados e a
+                    decisão fica na auditoria. Ativar financeiro manualmente
+                    continua na tela Ativação financeira.
+                  </p>
+                  <label className="block text-sm">
+                    Resultado conferido na Efí
+                    <select
+                      name="outcome"
+                      required
+                      className="mt-1 w-full rounded-lg border bg-white p-3"
+                    >
+                      <option value="NO_ACCOUNT_OPENED">
+                        Nenhuma conta foi aberta
+                      </option>
+                      <option value="ACCOUNT_OPENED_NOT_USED">
+                        Conta aberta, mas não será usada
+                      </option>
+                    </select>
+                  </label>
+                  <label className="block text-sm">
+                    Referência da evidência
+                    <input
+                      name="evidenceReference"
+                      required
+                      minLength={3}
+                      maxLength={200}
+                      className="mt-1 w-full rounded-lg border p-3"
+                    />
+                  </label>
+                  <button
+                    disabled={busy}
+                    className="rounded-lg border border-red-300 px-4 py-3 font-semibold text-red-700 disabled:opacity-40"
+                  >
+                    Encerrar abertura
                   </button>
                 </form>
               )}

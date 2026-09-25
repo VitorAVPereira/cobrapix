@@ -53,6 +53,8 @@ export default function EfiOnboardingPage(): ReactNode {
   const { data: session } = useSession();
   const {
     state,
+    profile,
+    openingEnabled,
     loading,
     error: loadError,
     refresh,
@@ -148,6 +150,31 @@ export default function EfiOnboardingPage(): ReactNode {
         >
           Acompanhar ativações no painel administrativo
         </Link>
+      </div>
+    );
+  // While the opening API is not approved, activation is done by CifraMais.
+  if (profile && !openingEnabled)
+    return (
+      <div className="mx-auto max-w-3xl p-5 sm:p-8">
+        <div
+          role="status"
+          className="rounded-xl border border-slate-200 bg-white p-6 text-slate-700"
+        >
+          <h1 className="text-xl font-semibold text-slate-900">
+            Ativação financeira
+          </h1>
+          <p className="mt-3">
+            {profile.canIssue
+              ? `Sua conta de recebimento está ativa${profile.issuerAccount ? ` (conta ${profile.issuerAccount})` : ""}.`
+              : "A equipe CifraMais está configurando sua conta de recebimento. Você será avisado quando as emissões forem liberadas."}
+          </p>
+          <Link
+            href="/cobrancas"
+            className="mt-4 inline-block font-semibold text-emerald-700 underline"
+          >
+            Voltar às cobranças
+          </Link>
+        </div>
       </div>
     );
   if (loading && !state)

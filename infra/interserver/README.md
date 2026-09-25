@@ -110,11 +110,18 @@ espaços. O CORS da API lê `ALLOWED_ORIGINS`, não `FRONTEND_URL`.
 Credenciais com `$`, `#` ou espaços devem ser colocadas entre aspas simples no
 arquivo de ambiente, conforme as regras do Docker Compose.
 
-Copie os certificados cliente Efí para
-`/opt/ciframais/secrets/efi/opening.p12` e `platform.p12`, conforme os caminhos
-configurados. Dê a esses arquivos proprietário `1000:1000` e modo `0400` para
-permitir leitura pelo usuário `node` do container. Os certificados TLS do
-Nginx são diferentes dos certificados cliente usados pela API para chamar a Efí.
+Com `EFI_OPENING_ENABLED=false` (abertura de contas desligada até a Efí liberar)
+não há certificado central a copiar: cada cliente entrega o próprio `.p12`, que é
+enviado pela tela **Admin → Ativação financeira** e guardado cifrado no banco.
+Só quando a abertura for ligada, copie o certificado da aplicação de abertura para
+`/opt/ciframais/secrets/efi/opening.p12` (proprietário `1000:1000`, modo `0400`).
+`platform.p12` só será usado nos modos de conta CifraMais (Fase B). Os
+certificados TLS do Nginx são diferentes dos certificados cliente usados pela API
+para chamar a Efí.
+
+A operação diária (ativar clientes, renovar certificados, diagnosticar falhas,
+conciliar e pausar emissões) está em
+[docs/operations/financial-activation.md](../../docs/operations/financial-activation.md).
 
 Crie `/opt/ciframais/secrets/seed.env` com permissão `0600`, contendo:
 
@@ -155,6 +162,14 @@ O endereço fixo `172.29.42.10`, a validação mTLS e o tratamento do cabeçalho
 Antes de receber clientes: validar HTTPS/webhooks e o frontend apontando para a
 API nova; configurar backup externo com restauração testada. A publicação e a
 ativação das integrações não são realizadas pelos scripts desta pasta.
+
+## Atualizar uma instalação existente
+
+`setup.sh` não altera um `api.env` existente. Antes de publicar uma versão nova,
+compare `/opt/ciframais/secrets/api.env` com `api.env.example` e acrescente as
+variáveis novas (por exemplo `PLATFORM_ALERT_EMAIL`, e `EFI_OPENING_ENABLED=false`).
+Depois siga a seção 2 do runbook financeiro: build, `prisma:deploy`, conferência
+das migrations, subida da API e só então o frontend.
 
 ## Persistência e operação
 

@@ -172,6 +172,8 @@ describe('validateEnv', () => {
     'EFI_OPENING_CLIENT_SECRET',
     'EFI_OPENING_CERT_PATH',
     'EFI_PLATFORM_CNPJ',
+    'EFI_PLATFORM_PAYEE_CODE',
+    'EFI_PLATFORM_ACCOUNT_NUMBER',
     'PAYMENT_ENCRYPTION_KEYS',
     'RESEND_REPLY_TO',
   ])('exige %s em produção', (field: string) => {
@@ -180,6 +182,65 @@ describe('validateEnv', () => {
         buildValidConfig({ NODE_ENV: 'production', [field]: undefined }),
       ),
     ).toThrow(field);
+  });
+
+  it('trata como ausentes os opcionais deixados em branco no api.env', () => {
+    expect(() =>
+      validateEnv(
+        buildValidConfig({
+          NODE_ENV: 'production',
+          EFI_OPENING_ENABLED: 'false',
+          EFI_OPENING_CLIENT_ID: '',
+          EFI_OPENING_CLIENT_SECRET: ' ',
+          EFI_OPENING_CERT_PATH: '',
+          EFI_PLATFORM_CLIENT_ID: '',
+          PLATFORM_ALERT_EMAIL: '',
+        }),
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateEnv(
+        buildValidConfig({ NODE_ENV: 'production', EFI_PLATFORM_CNPJ: '' }),
+      ),
+    ).toThrow('EFI_PLATFORM_CNPJ');
+  });
+
+  it('não exige credenciais de API da conta CifraMais (sem uso na conta do cliente)', () => {
+    expect(() =>
+      validateEnv(
+        buildValidConfig({
+          NODE_ENV: 'production',
+          EFI_PLATFORM_CLIENT_ID: undefined,
+          EFI_PLATFORM_CLIENT_SECRET: undefined,
+          EFI_PLATFORM_CERT_PATH: undefined,
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('dispensa as credenciais de abertura quando EFI_OPENING_ENABLED=false', () => {
+    expect(() =>
+      validateEnv(
+        buildValidConfig({
+          NODE_ENV: 'production',
+          EFI_OPENING_ENABLED: 'false',
+          EFI_OPENING_CLIENT_ID: undefined,
+          EFI_OPENING_CLIENT_SECRET: undefined,
+          EFI_OPENING_CERT_PATH: undefined,
+        }),
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateEnv(
+        buildValidConfig({
+          NODE_ENV: 'production',
+          EFI_OPENING_CLIENT_ID: undefined,
+        }),
+      ),
+    ).toThrow('EFI_OPENING_CLIENT_ID');
+    expect(() =>
+      validateEnv(buildValidConfig({ EFI_OPENING_ENABLED: 'no' })),
+    ).toThrow('EFI_OPENING_ENABLED');
   });
 
   it('rejeita mapa criptográfico inválido sem revelar a chave', () => {

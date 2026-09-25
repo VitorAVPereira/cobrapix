@@ -5,6 +5,7 @@ const PLATFORM_ADMIN_ALLOWED_PATHS = [
   "/admin/clientes",
   "/admin/visao-geral",
   "/admin/efi-onboarding",
+  "/admin/ativacao-financeira",
   "/admin/payment-fees",
   "/admin/communications",
   "/admin/templates",

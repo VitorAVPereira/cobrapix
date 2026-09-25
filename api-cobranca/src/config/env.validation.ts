@@ -89,6 +89,9 @@ export const envSchema = z
     FRONTEND_URL: z.string().url().default('http://localhost:3000'),
     EFI_ENV: z.enum(['homologation', 'production']).default('homologation'),
     EFI_LEGAL_APPROVED: z.enum(['true', 'false']).default('false'),
+    // Account-opening API (gn.registration.*). When false its credentials are
+    // not required and manual financial activation is the only path.
+    EFI_OPENING_ENABLED: z.enum(['true', 'false']).default('true'),
     EFI_OPENING_CLIENT_ID: z.string().min(1).optional(),
     EFI_OPENING_CLIENT_SECRET: z.string().min(1).optional(),
     EFI_OPENING_CERT_PATH: z.string().min(1).optional(),
@@ -144,13 +147,10 @@ export const envSchema = z
       'RESEND_FROM_EMAIL',
       'RESEND_REPLY_TO',
       'RESEND_WEBHOOK_SECRET',
-      'EFI_OPENING_CLIENT_ID',
-      'EFI_OPENING_CLIENT_SECRET',
-      'EFI_OPENING_CERT_PATH',
       'EFI_CHARGES_WEBHOOK_BASE_URL',
-      'EFI_PLATFORM_CLIENT_ID',
-      'EFI_PLATFORM_CLIENT_SECRET',
-      'EFI_PLATFORM_CERT_PATH',
+      // CifraMais account that receives its fee through split. Its API
+      // credentials (EFI_PLATFORM_CLIENT_*) are only needed by the CifraMais
+      // account modes (Phase B) and are not required yet.
       'EFI_PLATFORM_PAYEE_CODE',
       'EFI_PLATFORM_ACCOUNT_NUMBER',
       'EFI_PLATFORM_CNPJ',
@@ -158,6 +158,20 @@ export const envSchema = z
       'PAYMENT_ENCRYPTION_KEYS',
       'PAYMENT_ACTIVE_KEY_VERSION',
     ] as const;
+    if (env.NODE_ENV === 'production' && env.EFI_OPENING_ENABLED === 'true') {
+      for (const field of [
+        'EFI_OPENING_CLIENT_ID',
+        'EFI_OPENING_CLIENT_SECRET',
+        'EFI_OPENING_CERT_PATH',
+      ] as const) {
+        if (!env[field])
+          ctx.addIssue({
+            code: 'custom',
+            path: [field],
+            message: `${field} é obrigatória em produção com EFI_OPENING_ENABLED=true`,
+          });
+      }
+    }
     if (env.NODE_ENV === 'production') {
       for (const field of requiredInProduction) {
         if (!env[field])
@@ -296,8 +310,26 @@ export const envSchema = z
 
 export type Env = z.infer<typeof envSchema>;
 
+// Optional settings left blank in api.env (the VPS template lists every key)
+// mean "not configured", not an invalid value.
+const BLANK_MEANS_ABSENT = [
+  'EFI_OPENING_CLIENT_ID',
+  'EFI_OPENING_CLIENT_SECRET',
+  'EFI_OPENING_CERT_PATH',
+  'EFI_OPENING_CERT_PASSWORD',
+  'EFI_PLATFORM_CLIENT_ID',
+  'EFI_PLATFORM_CLIENT_SECRET',
+  'EFI_PLATFORM_CERT_PATH',
+  'EFI_PLATFORM_CERT_PASSWORD',
+  'PLATFORM_ALERT_EMAIL',
+];
+
 export const validateEnv = (config: Record<string, unknown>): Env => {
-  const parsed = envSchema.safeParse(config);
+  const normalized = { ...config };
+  for (const key of BLANK_MEANS_ABSENT)
+    if (typeof normalized[key] === 'string' && !normalized[key].trim())
+      delete normalized[key];
+  const parsed = envSchema.safeParse(normalized);
   if (!parsed.success) {
     const formatted = parsed.error.issues
       .map((i) => `  ${i.path.join('.')}: ${i.message}`)

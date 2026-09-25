@@ -184,6 +184,13 @@ describe('Efí notification ordering', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       collectionLog: { create: jest.fn() },
+      efiAccountIdentity: {
+        findUnique: jest.fn().mockResolvedValue({
+          companyId: 'company-1',
+          pixKey: 'issuer-key',
+        }),
+      },
+      paymentWebhookAnomaly: { upsert: jest.fn() },
     };
     const charges = {
       recordSettlement: jest.fn(),
@@ -211,8 +218,152 @@ describe('Efí notification ordering', () => {
         'createSdkClient',
       )
       .mockReturnValue(sdk);
-    return { service, charges, prisma };
+    jest
+      .spyOn(
+        service as unknown as {
+          accountForIdentity(): Promise<Record<string, unknown>>;
+        },
+        'accountForIdentity',
+      )
+      .mockResolvedValue({
+        companyId: 'company-1',
+        issuerIdentityId: 'identity-1',
+      });
+    return { service, charges, prisma, sdk };
   }
+  it('queries and scopes a charge notification by the issuing account', async () => {
+    const { service, charges, prisma, sdk } = fixture('paid');
+    sdk.getNotification.mockResolvedValue({
+      data: [
+        { custom_id: 'charge-1', status: { current: 'paid' }, value: 10650 },
+      ],
+    });
+    await service.handleChargesWebhook(
+      { notification: 'token' },
+      undefined,
+      'identity-1',
+    );
+    expect(prisma.paymentCharge.findFirst).toHaveBeenCalledWith({
+      where: { id: 'charge-1', issuerIdentityId: 'identity-1' },
+    });
+    expect(prisma.gatewayAccount.findFirst).not.toHaveBeenCalled();
+    expect(charges.recordSettlement).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'charge-1' }),
+      null,
+      'paid',
+      10650,
+      { source: 'PROVIDER_WEBHOOK', reference: null },
+    );
+  });
+  it('records an unknown issuing account without querying Efí', async () => {
+    const { service, prisma, sdk } = fixture('paid');
+    prisma.efiAccountIdentity.findUnique.mockResolvedValue(null);
+    await expect(
+      service.handleChargesWebhook(
+        { notification: 'token' },
+        undefined,
+        'forged',
+      ),
+    ).resolves.toEqual({ processed: false });
+    expect(sdk.getNotification).not.toHaveBeenCalled();
+    expect(prisma.paymentWebhookAnomaly.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          source: 'CHARGES',
+          reasonCode: 'UNKNOWN_ACCOUNT',
+          externalReference: 'forged',
+        }) as unknown,
+      }),
+    );
+  });
+  it('does not apply a notification for a charge of another account', async () => {
+    const { service, charges, prisma } = fixture('paid');
+    prisma.paymentCharge.findFirst.mockResolvedValue(null);
+    await expect(
+      service.handleChargesWebhook(
+        { notification: 'token' },
+        undefined,
+        'identity-1',
+      ),
+    ).resolves.toEqual({ processed: false });
+    expect(charges.recordSettlement).not.toHaveBeenCalled();
+    expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+    expect(prisma.paymentWebhookAnomaly.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          reasonCode: 'UNKNOWN_CHARGE',
+        }) as unknown,
+      }),
+    );
+  });
+  it('settles Pix with the paid amount when the receiving key is the issuer key', async () => {
+    const { service, charges, prisma } = fixture('paid');
+    prisma.paymentCharge.findFirst.mockResolvedValue({
+      id: 'charge-1',
+      companyId: 'company-1',
+      invoiceId: 'invoice-1',
+      status: 'ACTIVE',
+      issuerIdentityId: 'identity-1',
+    });
+    await service.handlePixWebhook({
+      pix: [
+        {
+          txid: 'txid',
+          chave: 'issuer-key',
+          valor: '106.50',
+          endToEndId: 'E2E-1',
+        },
+      ],
+    });
+    expect(charges.recordSettlement).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'charge-1' }),
+      null,
+      'CONCLUIDA',
+      10650,
+      {
+        source: 'PROVIDER_WEBHOOK',
+        reference: 'E2E-1',
+        distinctPayment: true,
+      },
+    );
+  });
+  it('ignores and records a Pix event received by another key', async () => {
+    const { service, charges, prisma } = fixture('paid');
+    prisma.paymentCharge.findFirst.mockResolvedValue({
+      id: 'charge-1',
+      companyId: 'company-1',
+      invoiceId: 'invoice-1',
+      status: 'ACTIVE',
+      issuerIdentityId: 'identity-1',
+    });
+    await service.handlePixWebhook({
+      pix: [{ txid: 'txid', chave: 'other-key', valor: '100.00' }],
+    });
+    expect(charges.recordSettlement).not.toHaveBeenCalled();
+    expect(prisma.paymentWebhookAnomaly.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          source: 'PIX',
+          reasonCode: 'RECEIVER_MISMATCH',
+          companyId: 'company-1',
+        }) as unknown,
+      }),
+    );
+  });
+  it('records a Pix event with an unknown txid', async () => {
+    const { service, charges, prisma } = fixture('paid');
+    prisma.paymentCharge.findFirst.mockResolvedValue(null);
+    prisma.invoice.findFirst.mockResolvedValue(null);
+    await service.handlePixWebhook({ pix: [{ txid: 'unknown' }] });
+    expect(charges.recordSettlement).not.toHaveBeenCalled();
+    expect(prisma.paymentWebhookAnomaly.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          reasonCode: 'UNKNOWN_TXID',
+        }) as unknown,
+      }),
+    );
+  });
   it('does not treat canceled boleto as paid', async () => {
     const { service, charges } = fixture('canceled');
     await service.handleChargesWebhook({ notification: 'token' }, 'company-1');
@@ -285,5 +436,66 @@ describe('Efí notification ordering', () => {
       'refunded',
     );
     expect(charges.recordSettlement).not.toHaveBeenCalled();
+  });
+});
+
+describe('Efí late terms payload', () => {
+  interface LateTermsBuilder {
+    buildPixLateTerms(issuance: object): Record<string, unknown>;
+    buildBoletoLateTerms(issuance: object): Record<string, unknown>;
+  }
+  const service = new EfiService(
+    {} as ConfigService,
+    {} as PrismaService,
+    {} as PaymentCryptoService,
+    {} as PaymentNotificationsService,
+    null,
+    {} as PaymentChargeService,
+  ) as unknown as LateTermsBuilder;
+  const issuance = (terms: object) => ({
+    chargeId: 'charge',
+    issuerIdentityId: 'identity',
+    platformFeeKind: 'PERCENTAGE',
+    platformFeeAmountCents: 0,
+    platformFeeBasisPoints: 0,
+    grossAmountCents: 10000,
+    lateFineBasisPoints: 0,
+    lateInterestMonthlyBasisPoints: 0,
+    paymentDaysAfterDue: 0,
+    ...terms,
+  });
+
+  it('maps fine and monthly interest to Pix CobV modalities', () => {
+    expect(
+      service.buildPixLateTerms(
+        issuance({
+          lateFineBasisPoints: 200,
+          lateInterestMonthlyBasisPoints: 100,
+        }),
+      ),
+    ).toEqual({
+      multa: { modalidade: 2, valorPerc: '2.00' },
+      juros: { modalidade: 3, valorPerc: '1.00' },
+    });
+    expect(service.buildPixLateTerms(issuance({}))).toEqual({});
+  });
+
+  it('maps fine, monthly interest and write-off days to boleto configurations', () => {
+    expect(
+      service.buildBoletoLateTerms(
+        issuance({
+          lateFineBasisPoints: 250,
+          lateInterestMonthlyBasisPoints: 100,
+          paymentDaysAfterDue: 30,
+        }),
+      ),
+    ).toEqual({
+      configurations: {
+        fine: 250,
+        interest: { value: 100, type: 'monthly' },
+        days_to_write_off: 30,
+      },
+    });
+    expect(service.buildBoletoLateTerms(issuance({}))).toEqual({});
   });
 });

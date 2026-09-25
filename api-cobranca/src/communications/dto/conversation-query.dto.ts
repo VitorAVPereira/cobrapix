@@ -13,6 +13,7 @@ import {
 } from 'class-validator';
 import { ConversationStatus } from '@prisma/client';
 import { CommunicationsQueryDto } from './communications-query.dto';
+import { ToBoolean } from '../../common/to-boolean';
 
 const toInt = ({ value }: { value: string }): number => Number(value);
 
@@ -78,15 +79,7 @@ export class AdminConversationsQueryDto extends CommunicationsQueryDto {
 
   /** Conversations with inbound messages not attributed to any company. */
   @IsOptional()
-  // Read the raw query value: implicit conversion would already have made 'false' true.
-  @Transform(({ obj, key }: { obj: Record<string, unknown>; key: string }) => {
-    const raw = obj[key];
-    return raw === 'true' || raw === true
-      ? true
-      : raw === 'false' || raw === false
-        ? false
-        : raw;
-  })
+  @ToBoolean()
   @IsBoolean()
   pendingClassification?: boolean;
 }

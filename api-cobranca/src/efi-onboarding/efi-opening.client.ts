@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { readFile } from 'fs/promises';
 import { request } from 'https';
 import { z } from 'zod';
+import { isEfiOpeningEnabled } from '../config/account-opening';
 
 export const EFI_REQUIRED_SCOPES: readonly string[] = [
   'cobv.write',
@@ -228,6 +229,9 @@ export class EfiOpeningClient {
   }
 
   private async authenticate(): Promise<string> {
+    // Never reach gn.registration.* when the capability is off.
+    if (!isEfiOpeningEnabled(this.config))
+      throw new EfiOpeningError('EFI_OPENING_DISABLED', false);
     try {
       const credentials = `${this.config.getOrThrow<string>('EFI_OPENING_CLIENT_ID')}:${this.config.getOrThrow<string>('EFI_OPENING_CLIENT_SECRET')}`;
       const response = await this.transport.request(

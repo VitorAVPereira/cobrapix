@@ -25,3 +25,18 @@ it("changes only the selected integration toggle",async()=>{
  render(<Page/>);fireEvent.click(await screen.findByRole("button",{name:"Liberar"}));
  await waitFor(()=>expect(mockFinancial).toHaveBeenCalledWith("/admin/integrations/efi-onboarding","PUT",{enabled:true}));
 });
+it("closes an in-flight opening for manual activation with evidence",async()=>{
+ mockFinancial.mockImplementation(async(path:string)=>{
+  if(path==="/admin/integrations/health")return [];
+  if(path.startsWith("/admin/efi-onboarding?"))return {items:[{companyId:"company-1",company:{corporateName:"Empresa Modelo",document:"11222333000181"},status:"EFI_PROCESSING",lastProgressAt:"2026-09-12T00:00:00Z",provisioningAttempts:0}],total:1};
+  if(path==="/admin/efi-onboarding/company-1")return {onboarding:{status:"EFI_PROCESSING",simplifiedAccountRequestId:"request-1",provisioningAttempts:0},gateway:null,timeline:[]};
+  return {};
+ });
+ render(<Page/>);
+ fireEvent.click(await screen.findByRole("button",{name:"Detalhes"}));
+ expect(await screen.findByText("Encerrar abertura para ativação manual")).toBeInTheDocument();
+ fireEvent.change(screen.getByLabelText("Resultado conferido na Efí"),{target:{value:"ACCOUNT_OPENED_NOT_USED"}});
+ fireEvent.change(screen.getByLabelText("Referência da evidência"),{target:{value:"chamado-123"}});
+ fireEvent.click(screen.getByRole("button",{name:"Encerrar abertura"}));
+ await waitFor(()=>expect(mockFinancial).toHaveBeenCalledWith("/admin/efi-onboarding/company-1/close-for-manual","POST",{outcome:"ACCOUNT_OPENED_NOT_USED",evidenceReference:"chamado-123"}));
+});

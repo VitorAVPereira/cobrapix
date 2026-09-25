@@ -20,10 +20,11 @@
    - `DATAFY_API_TOKEN` (`sk_live_`), `DATAFY_WEBHOOK_SECRET` (`whsec_`), `DATAFY_WEBHOOK_BASE_URL` (obrigatórias em produção)
    - `META_PHONE_NUMBER_ID`, `META_BUSINESS_ACCOUNT_ID` (IDs da WABA, conferidos contra o `/me` do Datafy)
    - `COMMUNICATION_MEDIA_DIR`, `COMMUNICATION_MEDIA_LIMIT_BYTES` (anexos cifrados, opcionais)
-   - `PAYMENT_SECRET_KEY` (criptografia das credenciais do gateway)
-   - `EFI_PLATFORM_CLIENT_ID`, `EFI_PLATFORM_CLIENT_SECRET`
-   - `EFI_PLATFORM_PAYEE_CODE`, `EFI_PLATFORM_SPLIT_PERCENTAGE`
-   - `EFI_WEBHOOK_BASE_URL`
+   - `PAYMENT_ENCRYPTION_KEYS`, `PAYMENT_ACTIVE_KEY_VERSION` (credenciais e certificados dos clientes cifrados no banco)
+   - `EFI_PLATFORM_PAYEE_CODE`, `EFI_PLATFORM_ACCOUNT_NUMBER`, `EFI_PLATFORM_CNPJ` (conta CifraMais que recebe a remuneração por split)
+   - `EFI_OPENING_ENABLED` (`false` enquanto a API de abertura não for liberada; ativação manual pelo admin)
+   - `EFI_WEBHOOK_BASE_URL` (Pix, mTLS) e `EFI_CHARGES_WEBHOOK_BASE_URL` (Cobranças)
+   - `PLATFORM_ALERT_EMAIL` (alertas de certificado)
    - `RESEND_WEBHOOK_SECRET` (signing secret do webhook Resend em producao)
    - `REDIS_HOST`, `REDIS_PORT` (para filas)
 
@@ -72,7 +73,7 @@ Endpoints para geração de PIX e Boleto:
 |----------|-------------|
 | POST | `/webhooks/datafy` | Mensagens, status e templates do WhatsApp (assinatura Datafy) |
 | POST | `/webhooks/efi/pix` | Notificações de pagamento Pix |
-| POST | `/webhooks/efi/cobrancas` | Notificações de cobranças/boleto |
+| POST | `/webhooks/efi/cobrancas` | Notificações de cobranças/boleto (`account=` identifica a conta emissora) |
 | POST | `/webhooks/resend` | Eventos de email Resend (entrega, abertura, clique, bounce, falha) |
 
 ## Prisma Schema
@@ -111,6 +112,9 @@ cd api-cobranca && npm test
 - `api-cobranca/src/queue/` - Message queue (BullMQ)
 - `api-cobranca/src/whatsapp/` - Transporte Datafy, envios e templates (ver `transport/README.md`)
 - `infra/interserver/DATAFY.md` - Publicação na VPS e configuração do Datafy
+- `api-cobranca/src/financial-activation/` - Ativação financeira manual (perfil, credenciais, validação, elegibilidade)
+- `api-cobranca/src/settlements/` - Lançamentos e conciliação
+- `docs/operations/financial-activation.md` - Runbook de ativação, emissão e conciliação
 
 ## Removed Files
 

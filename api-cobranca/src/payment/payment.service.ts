@@ -5,6 +5,7 @@ import {
   Inject,
   Injectable,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { PaymentCharge } from '@prisma/client';
 import {
@@ -14,6 +15,7 @@ import {
 } from './efi.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentChargeService } from './payment-charge.service';
+import { FinancialEligibilityService } from '../financial-activation/financial-eligibility.service';
 
 type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
 
@@ -38,7 +40,17 @@ export class PaymentService {
     private readonly prisma: PrismaService,
     @Inject(PaymentChargeService)
     private readonly charges: PaymentChargeService | null,
+    @Optional()
+    private readonly eligibility?: FinancialEligibilityService,
   ) {}
+
+  // Collection rule and first-charge scheduling run only for companies with a
+  // published financial profile (manual activation or completed opening).
+  async hasActiveFinancialProfile(companyId: string): Promise<boolean> {
+    return this.eligibility
+      ? this.eligibility.hasActiveProfile(companyId)
+      : false;
+  }
 
   async createPayment(
     invoiceId: string,
@@ -92,7 +104,11 @@ export class PaymentService {
     }
 
     // Reject paused or unhealthy integrations before creating an issuance reservation.
-    await this.efiService.assertIssuable(companyId);
+    const financial = await this.efiService.assertIssuable(
+      companyId,
+      billingType,
+    );
+    this.assertSupportedMode(financial.accountMode);
 
     const invoice = await this.prisma.invoice.findFirst({
       where: { id: invoiceId, companyId },
@@ -106,6 +122,7 @@ export class PaymentService {
       invoiceId,
       billingType,
       grossAmountCents,
+      financial,
     );
     const context = this.buildIssuanceContext(charge);
     await this.charges.transition(charge.id, companyId, 'PENDING', {});
@@ -176,7 +193,7 @@ export class PaymentService {
       paymentLink: string;
     }>;
   }> {
-    await this.efiService.assertIssuable(companyId);
+    await this.efiService.assertIssuable(companyId, billingType);
     await this.ensureBillingMethodEnabled(companyId, billingType);
     const results: Array<{
       invoiceId: string;
@@ -301,11 +318,18 @@ export class PaymentService {
       });
       if (!invoice || invoice.status === 'PAID')
         throw new HttpException('Fatura não pode ser substituída.', 409);
+      // The replacement uses the profile active now; the old charge stays on its account.
+      const financial = await this.efiService.assertIssuable(
+        companyId,
+        previous.billingMethod,
+      );
+      this.assertSupportedMode(financial.accountMode);
       replacement = await this.charges.createDraft(
         companyId,
         invoiceId,
         previous.billingMethod,
         Math.round(Number(invoice.originalAmount) * 100),
+        financial,
         previous.id,
         newDueDate,
       );
@@ -400,6 +424,7 @@ export class PaymentService {
     const kind = platformFee.kind === 'FIXED' ? 'FIXED' : 'PERCENTAGE';
     return {
       chargeId: charge.id,
+      issuerIdentityId: this.requireIssuer(charge),
       platformFeeKind: kind,
       platformFeeAmountCents:
         kind === 'FIXED' && typeof platformFee.amountCents === 'number'
@@ -410,7 +435,38 @@ export class PaymentService {
           ? platformFee.basisPoints
           : 0,
       grossAmountCents: charge.grossAmountCents,
+      lateFineBasisPoints: charge.lateFineBasisPoints ?? 0,
+      lateInterestMonthlyBasisPoints:
+        charge.lateInterestMonthlyBasisPoints ?? 0,
+      paymentDaysAfterDue: charge.paymentDaysAfterDue ?? 0,
     };
+  }
+
+  // Issuance only ever targets the account recorded on the charge. Only the
+  // customer's own account (Phase A) has an issuance path so far.
+  private requireIssuer(charge: PaymentCharge): string {
+    if (charge.accountMode) this.assertSupportedMode(charge.accountMode);
+    if (!charge.issuerIdentityId)
+      throw new HttpException(
+        {
+          code: 'EFI_SUBMISSION_UNCERTAIN',
+          message: 'Cobrança sem conta emissora registrada.',
+        },
+        HttpStatus.CONFLICT,
+      );
+    return charge.issuerIdentityId;
+  }
+
+  // Checked before reserving, so an unsupported mode leaves no reservation.
+  private assertSupportedMode(accountMode: string): void {
+    if (accountMode !== 'CUSTOMER_ACCOUNT')
+      throw new HttpException(
+        {
+          code: 'FINANCIAL_MODE_NOT_SUPPORTED',
+          message: 'Emissão pela conta CifraMais ainda não está disponível.',
+        },
+        HttpStatus.CONFLICT,
+      );
   }
 
   private toPaymentResult(charge: PaymentCharge): EfiPaymentResult {

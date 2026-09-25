@@ -19,6 +19,12 @@ import {
 } from '../common/debtor-document';
 import { normalizeWhatsAppNumber } from '../common/whatsapp-number';
 import {
+  LATE_FINE_MAX_PERCENTAGE,
+  LATE_INTEREST_MONTHLY_MAX_PERCENTAGE,
+  parseOptionalCsvDays,
+  parseOptionalCsvPercentage,
+} from './late-terms';
+import {
   DebtorPaymentHistoryResponse,
   DebtorSettingsResponse,
   InvoicesService,
@@ -55,6 +61,9 @@ interface ImportRowInput {
   student_enrollment?: unknown;
   studentGroup?: unknown;
   student_group?: unknown;
+  late_fine_percentage?: unknown;
+  late_interest_monthly_percentage?: unknown;
+  payment_days_after_due?: unknown;
 }
 
 interface ValidImportRow {
@@ -69,6 +78,9 @@ interface ValidImportRow {
   studentName?: string;
   studentEnrollment?: string;
   studentGroup?: string;
+  late_fine_percentage?: number;
+  late_interest_monthly_percentage?: number;
+  payment_days_after_due?: number;
 }
 
 @Controller('invoices')
@@ -130,6 +142,9 @@ export class InvoicesController {
         studentName: dto.studentName,
         studentEnrollment: dto.studentEnrollment,
         studentGroup: dto.studentGroup,
+        late_fine_percentage: dto.late_fine_percentage,
+        late_interest_monthly_percentage: dto.late_interest_monthly_percentage,
+        payment_days_after_due: dto.payment_days_after_due,
       });
     } catch (error) {
       throw new HttpException(
@@ -165,6 +180,9 @@ export class InvoicesController {
         amount: dto.amount,
         billingType: dto.billingType,
         dueDay: dto.dueDay,
+        lateFinePercentage: dto.lateFinePercentage,
+        lateInterestMonthlyPercentage: dto.lateInterestMonthlyPercentage,
+        paymentDaysAfterDue: dto.paymentDaysAfterDue,
       },
     );
 
@@ -251,6 +269,10 @@ export class InvoicesController {
           studentName: dto.studentName,
           studentEnrollment: dto.studentEnrollment,
           studentGroup: dto.studentGroup,
+          late_fine_percentage: dto.late_fine_percentage,
+          late_interest_monthly_percentage:
+            dto.late_interest_monthly_percentage,
+          payment_days_after_due: dto.payment_days_after_due,
         },
       );
     } catch (error) {
@@ -473,7 +495,8 @@ export class InvoicesController {
 
     for (let i = 0; i < body.length; i++) {
       const row = body[i] as ImportRowInput;
-      const err = this.validateRow(row, i);
+      const late = this.parseImportLateTerms(row, i);
+      const err = this.validateRow(row, i) ?? late.error;
 
       if (err) {
         errors.push(err);
@@ -507,6 +530,7 @@ export class InvoicesController {
           studentGroup: this.normalizeOptionalText(
             row.studentGroup ?? row.student_group,
           ),
+          ...late.terms,
         });
       }
     }
@@ -569,6 +593,54 @@ export class InvoicesController {
     }
 
     return null;
+  }
+
+  // Optional columns: empty uses the company default, zero means none.
+  private parseImportLateTerms(
+    row: ImportRowInput,
+    index: number,
+  ): {
+    error: string | null;
+    terms: Pick<
+      ValidImportRow,
+      | 'late_fine_percentage'
+      | 'late_interest_monthly_percentage'
+      | 'payment_days_after_due'
+    >;
+  } {
+    const line = index + 1;
+    const fine = parseOptionalCsvPercentage(
+      row.late_fine_percentage,
+      LATE_FINE_MAX_PERCENTAGE,
+    );
+    if ('error' in fine)
+      return {
+        error: `Linha ${line}: Multa ${fine.error}.`,
+        terms: {},
+      };
+    const interest = parseOptionalCsvPercentage(
+      row.late_interest_monthly_percentage,
+      LATE_INTEREST_MONTHLY_MAX_PERCENTAGE,
+    );
+    if ('error' in interest)
+      return {
+        error: `Linha ${line}: Juros ao mês ${interest.error}.`,
+        terms: {},
+      };
+    const days = parseOptionalCsvDays(row.payment_days_after_due);
+    if ('error' in days)
+      return {
+        error: `Linha ${line}: Dias após o vencimento ${days.error}.`,
+        terms: {},
+      };
+    return {
+      error: null,
+      terms: {
+        late_fine_percentage: fine.value,
+        late_interest_monthly_percentage: interest.value,
+        payment_days_after_due: days.value,
+      },
+    };
   }
 
   private normalizeOptionalText(value: unknown): string | undefined {

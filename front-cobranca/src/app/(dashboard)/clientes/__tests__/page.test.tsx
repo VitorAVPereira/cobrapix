@@ -26,7 +26,9 @@ const updateDebtor = jest.fn() as jest.MockedFunction<
   ) => Promise<DebtorListResponse["data"][number]>
 >;
 const createDebtorInvoice = jest.fn();
+const getBillingSettings = jest.fn();
 const mockApiClient = {
+  getBillingSettings,
   getDebtors,
   getRules,
   createDebtor,
@@ -118,6 +120,11 @@ describe("ClientesPage", () => {
     createDebtor.mockResolvedValue(debtorResponse.data[0]);
     updateDebtor.mockResolvedValue(debtorResponse.data[0]);
     createDebtorInvoice.mockResolvedValue({});
+    getBillingSettings.mockResolvedValue({
+      lateFinePercentage: 2,
+      lateInterestMonthlyPercentage: 1,
+      paymentDaysAfterDue: 30,
+    });
   });
 
   it("renders operational debtor data", async () => {
@@ -214,7 +221,47 @@ describe("ClientesPage", () => {
         original_amount: 120,
         due_date: "2026-07-10",
         billing_type: "BOLIX",
+        late_fine_percentage: 2,
+        late_interest_monthly_percentage: 1,
+        payment_days_after_due: 30,
       });
+    });
+  });
+
+  it("starts a charge with the company late terms and lets the user change them", async () => {
+    const user = userEvent.setup();
+    render(<ClientesPage />);
+
+    await screen.findByText("Maria Silva");
+    await waitFor(() => expect(getBillingSettings).toHaveBeenCalled());
+    await user.click(
+      screen.getByRole("button", { name: /abrir acoes do cliente maria/i }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: /nova cobranca/i }));
+    expect(screen.getByLabelText(/^multa \(%\)/i)).toHaveValue("2");
+    expect(screen.getByLabelText(/^juros ao mês/i)).toHaveValue("1");
+    expect(screen.getByLabelText(/^dias aceitando pagamento/i)).toHaveValue("30");
+
+    await user.clear(screen.getByLabelText(/^multa \(%\)/i));
+    await user.type(screen.getByLabelText(/^multa \(%\)/i), "3");
+    expect(screen.getByRole("alert")).toHaveTextContent(/limita a multa a 2%/i);
+    await user.clear(screen.getByLabelText(/^juros ao mês/i));
+    await user.clear(screen.getByLabelText(/^dias aceitando pagamento/i));
+    await user.type(screen.getByLabelText(/^dias aceitando pagamento/i), "0");
+    await user.type(screen.getByLabelText(/valor/i), "120");
+    await user.type(screen.getByLabelText(/data de vencimento/i), "2026-07-10");
+    await user.click(screen.getByRole("button", { name: /salvar cobranca/i }));
+
+    await waitFor(() => {
+      expect(createDebtorInvoice).toHaveBeenCalledWith(
+        "debtor-1",
+        expect.objectContaining({
+          late_fine_percentage: 3,
+          // Cleared: the company default applies on the server.
+          late_interest_monthly_percentage: null,
+          payment_days_after_due: 0,
+        }),
+      );
     });
   });
 });

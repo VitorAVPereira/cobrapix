@@ -1,6 +1,11 @@
-import { HttpException, Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
+import { BillingMethod, IntegrationHealthStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  FinancialEligibilityService,
+  IssuanceContext,
+} from '../financial-activation/financial-eligibility.service';
 import { EfiGatewayClient } from './efi-gateway.client';
 
 @Injectable()
@@ -9,39 +14,16 @@ export class GatewayHealthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly client: EfiGatewayClient,
+    private readonly eligibility: FinancialEligibilityService,
   ) {}
-  async assertIssuable(companyId: string): Promise<void> {
-    const onboarding = await this.prisma.efiOnboarding.findUnique({
-      where: { companyId },
-      select: { status: true },
-    });
-    if (onboarding?.status !== 'ACTIVE')
-      this.fail(
-        'EFI_ONBOARDING_REQUIRED',
-        'Conclua a ativação financeira antes de emitir cobranças.',
-      );
-    const state = await this.prisma.platformIntegrationState.findUnique({
-      where: { integration: 'EFI_PAYMENTS' },
-      select: { enabled: true },
-    });
-    if (!state?.enabled)
-      this.fail(
-        'EFI_PAYMENTS_PAUSED',
-        'Novas emissões estão temporariamente pausadas.',
-      );
-    const account = await this.prisma.gatewayAccount.findUnique({
-      where: { companyId },
-    });
-    if (!account || account.status !== 'ACTIVE')
-      this.fail(
-        'EFI_ONBOARDING_REQUIRED',
-        'A conta financeira precisa estar ativa.',
-      );
-    if (account.consecutiveFailures >= 2 || !(await this.validate(companyId)))
-      this.fail(
-        'EFI_INTEGRATION_UNHEALTHY',
-        'A integração financeira está indisponível. Tente novamente após a validação.',
-      );
+  // Eligibility follows the published financial profile (manual or opening).
+  // Provider health comes from the scheduled validation, not from a live
+  // round-trip on every issuance.
+  async assertIssuable(
+    companyId: string,
+    method?: BillingMethod,
+  ): Promise<IssuanceContext> {
+    return this.eligibility.resolveIssuance(companyId, method);
   }
   async validate(companyId: string): Promise<boolean> {
     const account = await this.prisma.gatewayAccount.findUnique({
@@ -64,6 +46,7 @@ export class GatewayHealthService {
           lastError: null,
         },
       });
+      await this.mirrorIdentityHealth(account.efiAccountIdentityId, 'HEALTHY');
       return true;
     } catch {
       const failed = await this.prisma.gatewayAccount.update({
@@ -75,11 +58,14 @@ export class GatewayHealthService {
           healthStatus: 'DEGRADED',
         },
       });
-      if (failed.consecutiveFailures >= 2)
+      const status: IntegrationHealthStatus =
+        failed.consecutiveFailures >= 2 ? 'UNAVAILABLE' : 'DEGRADED';
+      if (status === 'UNAVAILABLE')
         await this.prisma.gatewayAccount.update({
           where: { companyId },
           data: { healthStatus: 'UNAVAILABLE' },
         });
+      await this.mirrorIdentityHealth(account.efiAccountIdentityId, status);
       return false;
     }
   }
@@ -103,7 +89,21 @@ export class GatewayHealthService {
       cursor = accounts.length === 100 ? accounts.at(-1)?.id : undefined;
     } while (cursor);
   }
-  private fail(code: string, message: string): never {
-    throw new HttpException({ code, message }, 409);
+  // Eligibility reads the identity, the stable account the profile points to.
+  private async mirrorIdentityHealth(
+    identityId: string | null,
+    healthStatus: IntegrationHealthStatus,
+  ): Promise<void> {
+    if (!identityId) return;
+    await this.prisma.efiAccountIdentity.update({
+      where: { id: identityId },
+      data: {
+        healthStatus,
+        lastValidatedAt: new Date(),
+        consecutiveFailures: healthStatus === 'HEALTHY' ? 0 : { increment: 1 },
+        sanitizedLastError:
+          healthStatus === 'HEALTHY' ? null : 'EFI_VALIDATION_FAILED',
+      },
+    });
   }
 }

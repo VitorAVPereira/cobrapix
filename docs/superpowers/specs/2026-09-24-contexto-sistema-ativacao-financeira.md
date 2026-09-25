@@ -33,7 +33,7 @@ Uma empresa é um **tenant**: seus dados são separados pelo `companyId`. Um dev
 - Prisma/PostgreSQL: persistência; o schema canônico é `api-cobranca/prisma/schema.prisma`.
 - Redis/BullMQ: filas de trabalho. A fila transporta referências; o banco precisa preservar estados e impedir duplicação de operações financeiras.
 - Efí: integração de pagamentos e, separadamente, abertura de contas.
-- WhatsApp: número central compartilhado, com transporte Meta direto ou Datafy; as empresas terão visualização das mensagens autorizadas e as respostas ficam com o administrador.
+- WhatsApp: número central compartilhado, com transporte exclusivo pelo Datafy (integração direta com a Meta removida em 25/09/2026); as empresas terão visualização das mensagens autorizadas e as respostas ficam com o administrador.
 - Resend: e-mails transacionais e de cobrança.
 
 O histórico da configuração relata frontend na Vercel e API, PostgreSQL, Redis e Nginx na VPS InterServer. Os domínios utilizados são `ciframais.com.br`, `api.ciframais.com.br` e `efi-webhooks.ciframais.com.br`. HTTPS e renovação por Certbot foram testados na configuração anterior. A publicação continua manual; não se deve pressupor que o código local já está publicado.

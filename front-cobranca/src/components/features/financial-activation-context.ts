@@ -2,9 +2,13 @@
 
 import { createContext, useContext } from "react";
 import type { EfiOnboardingState } from "@/lib/efi-onboarding";
+import type { CompanyFinancialProfile } from "@/lib/financial-activation";
 
 export interface FinancialActivationContextValue {
   state: EfiOnboardingState | null;
+  profile?: CompanyFinancialProfile | null;
+  // Self-service account opening is offered only when the server enables it.
+  openingEnabled?: boolean;
   loading: boolean;
   error: string | null;
   canIssue: boolean;
@@ -14,6 +18,8 @@ export interface FinancialActivationContextValue {
 export const FinancialActivationContext =
   createContext<FinancialActivationContextValue>({
     state: null,
+    profile: null,
+    openingEnabled: false,
     loading: true,
     error: null,
     canIssue: false,
