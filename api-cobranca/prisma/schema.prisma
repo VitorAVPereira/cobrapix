@@ -344,6 +344,8 @@ model Company {
   defaultLateFineBasisPoints            Int                      @default(0)
   defaultLateInterestMonthlyBasisPoints Int                      @default(0)
   defaultPaymentDaysAfterDue            Int                      @default(30)
+  // When a payment is refunded, also return the proportional CifraMais fee.
+  refundPlatformFeeOnRefund             Boolean                  @default(false)
   activeFinancialProfileId              String?                  @unique
   activeFinancialProfile                FinancialProfileVersion? @relation("CompanyActiveFinancialProfile", fields: [activeFinancialProfileId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
@@ -510,6 +512,10 @@ model Invoice {
   lateFineBasisPoints            Int                   @default(0)
   lateInterestMonthlyBasisPoints Int                   @default(0)
   paymentDaysAfterDue            Int                   @default(30)
+  // Balance of an underpaid invoice, issued as a separate invoice.
+  complementsInvoiceId           String?               @unique
+  complementsInvoice             Invoice?              @relation("InvoiceComplement", fields: [complementsInvoiceId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  complementInvoices             Invoice[]             @relation("InvoiceComplement")
 
   collectionLogs        CollectionLog[]
   collectionAttempts    CollectionAttempt[]
@@ -657,6 +663,8 @@ model PaymentCharge {
   createdAt                      DateTime                     @default(now())
   updatedAt                      DateTime                     @updatedAt
   statusHistory                  PaymentChargeStatusHistory[]
+  settlement                     PaymentSettlement?
+  ledgerEntries                  FinancialLedgerEntry[]
 
   @@unique([id, companyId, invoiceId])
   @@unique([replacesChargeId, companyId, invoiceId])
@@ -1165,6 +1173,8 @@ model User {
   verifiedFinancialProfiles      FinancialProfileVersion[]       @relation("FinancialProfileOwnershipVerifiedBy")
   createdEfiCredentials          EfiCredentialVersion[]          @relation("EfiCredentialCreatedBy")
   requestedFinancialValidations  FinancialValidationAttempt[]    @relation("FinancialValidationRequestedBy")
+  recordedPlatformFeeEvidence    PlatformFeeEvidence[]           @relation("PlatformFeeEvidenceRecordedBy")
+  resolvedSettlementDivergences  SettlementDivergence[]          @relation("SettlementDivergenceResolvedBy")
   communicationAttributionAudits CommunicationAttributionAudit[]
 
   createdAt DateTime @default(now())
@@ -1488,4 +1498,131 @@ model AuditLog {
   @@index([companyId, createdAt])
   @@index([entityType, entityId])
   @@index([retentionExpiresAt])
+}
+
+enum PaymentSettlementStatus {
+  AWAITING_EVIDENCE
+  RECONCILED
+  DIVERGENT
+}
+
+enum PlatformFeeEvidenceStatus {
+  NOT_REQUIRED
+  PENDING
+  CONFIRMED
+  MISMATCH
+}
+
+enum LedgerEntryKind {
+  PAYMENT
+  EFI_FEE
+  PLATFORM_FEE
+  REFUND
+  PLATFORM_FEE_REVERSAL
+  DUPLICATE_PAYMENT
+}
+
+enum LedgerEntrySource {
+  PROVIDER_WEBHOOK
+  PROVIDER_RECONCILIATION
+  ADMIN
+  SYSTEM
+}
+
+enum SettlementDivergenceStatus {
+  OPEN
+  RESOLVED
+}
+
+// Reconciliation state of a paid charge. With the customer's own account the
+// money goes straight to the customer; CifraMais only reconciles its fee
+// (received through split) and the payment divergences.
+model PaymentSettlement {
+  id                    String                    @id @default(uuid())
+  companyId             String
+  paymentChargeId       String                    @unique
+  paymentCharge         PaymentCharge             @relation(fields: [paymentChargeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  invoiceId             String
+  accountMode           FinancialAccountMode?
+  financialEnvironment  EfiEnvironment?
+  status                PaymentSettlementStatus
+  evidenceStatus        PlatformFeeEvidenceStatus
+  // CifraMais fee expected through split, from the ledger.
+  platformFeeDueCents   Int
+  platformFeeEvidenceId String?
+  platformFeeEvidence   PlatformFeeEvidence?      @relation(fields: [platformFeeEvidenceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  version               Int                       @default(0)
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime                  @updatedAt
+  divergences           SettlementDivergence[]
+  ledgerEntries         FinancialLedgerEntry[]
+
+  @@index([companyId, status])
+  @@index([status, createdAt])
+  @@index([platformFeeEvidenceId])
+}
+
+// Append-only. Amounts are signed from the customer's side of the charge:
+// payment (+), Efí fee (-), CifraMais fee (-), refund (-), fee reversal (+).
+// Later changes are new entries with the difference, never updates.
+model FinancialLedgerEntry {
+  id                String            @id @default(uuid())
+  companyId         String
+  paymentChargeId   String
+  paymentCharge     PaymentCharge     @relation(fields: [paymentChargeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  settlementId      String
+  settlement        PaymentSettlement @relation(fields: [settlementId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  kind              LedgerEntryKind
+  amountCents       Int
+  estimated         Boolean           @default(false)
+  source            LedgerEntrySource
+  evidenceReference String?
+  idempotencyKey    String            @unique
+  occurredAt        DateTime          @default(now())
+
+  @@index([settlementId, kind])
+  @@index([companyId, occurredAt])
+}
+
+// A statement entry (or set) proving CifraMais received its split fees.
+model PlatformFeeEvidence {
+  id                  String              @id @default(uuid())
+  // Environment of the charges, or LEGACY for charges without a profile.
+  scope               String
+  reference           String
+  receivedAmountCents Int
+  expectedAmountCents Int
+  matched             Boolean
+  note                String?
+  recordedByUserId    String
+  recordedByUser      User                @relation("PlatformFeeEvidenceRecordedBy", fields: [recordedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  createdAt           DateTime            @default(now())
+  settlements         PaymentSettlement[]
+
+  @@unique([scope, reference])
+}
+
+// Something that needs an administrative decision before the charge counts
+// as reconciled: amount paid, duplicate payment, fee evidence, fee reversal.
+model SettlementDivergence {
+  id                     String                     @id @default(uuid())
+  settlementId           String
+  settlement             PaymentSettlement          @relation(fields: [settlementId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  companyId              String
+  code                   String
+  // Distinguishes repeated occurrences (e.g. each duplicate payment).
+  reference              String                     @default("")
+  amountCents            Int?
+  status                 SettlementDivergenceStatus @default(OPEN)
+  decision               String?
+  decisionReference      String?
+  decisionNote           String?
+  complementaryInvoiceId String?
+  resolvedByUserId       String?
+  resolvedByUser         User?                      @relation("SettlementDivergenceResolvedBy", fields: [resolvedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  resolvedAt             DateTime?
+  detectedAt             DateTime                   @default(now())
+
+  @@unique([settlementId, code, reference])
+  @@index([companyId, status])
 }

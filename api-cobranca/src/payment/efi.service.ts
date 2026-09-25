@@ -81,6 +81,8 @@ interface EfiNotificationResponse {
     };
     // Amount paid, in cents, on "paid" events (includes fine and interest).
     value?: number;
+    // Sequential id of the event in the charge history.
+    id?: number;
   }>;
 }
 
@@ -407,16 +409,34 @@ export class EfiService {
       providerStatus === 'paid' ||
       providerStatus === 'settled'
     ) {
-      const paidCents = receipts.reduce<number | null>((total, entry) => {
-        const amount = this.providerAmountCents(entry.valor);
-        return amount === null ? total : (total ?? 0) + amount;
-      }, null);
+      // Each Pix receipt is one payment: the first settles the charge, any
+      // other one is recorded as a duplicate payment.
+      const [first, ...others] = receipts;
+      const endToEnd = (entry: Record<string, unknown> | undefined) =>
+        typeof entry?.endToEndId === 'string' ? entry.endToEndId : null;
       const newlyPaid = await this.charges.recordSettlement(
         charge,
         null,
         providerStatus,
-        paidCents,
+        first ? this.providerAmountCents(first.valor) : null,
+        {
+          source: 'PROVIDER_RECONCILIATION',
+          reference: endToEnd(first),
+          distinctPayment: true,
+        },
       );
+      for (const other of others)
+        await this.charges.recordSettlement(
+          charge,
+          null,
+          providerStatus,
+          this.providerAmountCents(other.valor),
+          {
+            source: 'PROVIDER_RECONCILIATION',
+            reference: endToEnd(other),
+            distinctPayment: true,
+          },
+        );
       if (newlyPaid)
         await this.paymentNotifications.notifyPaidInvoice(
           companyId,
@@ -539,6 +559,12 @@ export class EfiService {
           effectiveFee,
           'CONCLUIDA',
           this.providerAmountCents(event.valor),
+          {
+            source: 'PROVIDER_WEBHOOK',
+            reference:
+              typeof event.endToEndId === 'string' ? event.endToEndId : null,
+            distinctPayment: true,
+          },
         );
         if (newlyPaid)
           await this.paymentNotifications.notifyPaidInvoice(
@@ -692,6 +718,11 @@ export class EfiService {
           Number.isSafeInteger(event.value) && event.value! > 0
             ? event.value!
             : null,
+          {
+            source: 'PROVIDER_WEBHOOK',
+            reference:
+              event.id !== undefined ? `efi-charge-event:${event.id}` : null,
+          },
         );
         if (newlyPaid)
           await this.paymentNotifications.notifyPaidInvoice(

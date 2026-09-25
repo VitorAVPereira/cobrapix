@@ -11,6 +11,17 @@ import { PrismaService } from '../prisma/prisma.service';
 import { EfiPaymentResult } from './efi.service';
 import type { IssuanceContext } from '../financial-activation/financial-eligibility.service';
 import { resolveChargeDistribution } from '../financial-activation/financial-activation.types';
+import {
+  recordDuplicatePayment,
+  SettlementEvidence,
+  syncSettlement,
+} from '../settlements/settlement-ledger';
+
+// `distinctPayment`: the reference identifies one payment (Pix endToEndId),
+// so another reference on a paid charge is a second payment.
+export type PaymentEvidence = SettlementEvidence & {
+  distinctPayment?: boolean;
+};
 
 type SettlementCharge = Pick<
   PaymentCharge,
@@ -221,6 +232,7 @@ export class PaymentChargeService {
     providerStatus: string,
     // Amount the payer actually paid (with fine and interest), when known.
     paidAmountCents: number | null = null,
+    evidence: PaymentEvidence = { source: 'SYSTEM' },
   ): Promise<boolean> {
     if (
       paidAmountCents !== null &&
@@ -245,7 +257,21 @@ export class PaymentChargeService {
         const current = await tx.paymentCharge.findFirst({
           where: { id: charge.id, companyId: charge.companyId },
         });
-        if (!current || current.status === 'REFUNDED') return false;
+        if (!current) return false;
+        if (
+          (current.status === 'PAID' || current.status === 'REFUNDED') &&
+          (await this.isAnotherPayment(tx, current.id, evidence))
+        ) {
+          await recordDuplicatePayment(
+            tx,
+            current.id,
+            current.companyId,
+            paidAmountCents ?? current.grossAmountCents,
+            { source: evidence.source, reference: evidence.reference ?? '' },
+          );
+          return false;
+        }
+        if (current.status === 'REFUNDED') return false;
         const paid = paidAmountCents ?? current.paidAmountCents ?? null;
         // The CifraMais fee is charged on the amount actually paid.
         const effectivePlatformFeeCents =
@@ -330,6 +356,7 @@ export class PaymentChargeService {
             gatewayStatusRaw,
           },
         });
+        await syncSettlement(tx, current.id, current.companyId, evidence);
         return updated.count === 1;
       },
     );
@@ -374,6 +401,8 @@ export class PaymentChargeService {
             known.set(data.providerRefundId, data.amountCents);
         }
         let total = [...known.values()].reduce((sum, value) => sum + value, 0);
+        // Refunds are limited to what was actually paid (fine/interest included).
+        const refundable = current.paidAmountCents ?? current.grossAmountCents;
         let previousStatus: PaymentChargeStatus = current.status;
         for (const refund of refunds) {
           if (
@@ -389,10 +418,9 @@ export class PaymentChargeService {
             continue;
           }
           total += refund.amountCents;
-          if (total > current.grossAmountCents)
+          if (total > refundable)
             throw new HttpException('Devolução excede a cobrança.', 409);
-          const status =
-            total === current.grossAmountCents ? 'REFUNDED' : 'PAID';
+          const status = total === refundable ? 'REFUNDED' : 'PAID';
           await tx.paymentChargeStatusHistory.create({
             data: {
               paymentChargeId: charge.id,
@@ -408,7 +436,7 @@ export class PaymentChargeService {
           known.set(refund.providerRefundId, refund.amountCents);
           previousStatus = status;
         }
-        const status = total === current.grossAmountCents ? 'REFUNDED' : 'PAID';
+        const status = total === refundable ? 'REFUNDED' : 'PAID';
         const gatewayStatusRaw =
           status === 'REFUNDED' ? 'refunded' : 'partially_refunded';
         await tx.paymentCharge.updateMany({
@@ -422,8 +450,30 @@ export class PaymentChargeService {
             gatewayStatusRaw,
           },
         });
+        await syncSettlement(tx, current.id, current.companyId, {
+          source: 'PROVIDER_WEBHOOK',
+          reference: refunds.at(-1)?.providerRefundId,
+        });
         return status;
       },
+    );
+  }
+
+  // True when the evidence names a payment other than the one already
+  // recorded for this charge.
+  private async isAnotherPayment(
+    tx: Prisma.TransactionClient,
+    chargeId: string,
+    evidence: PaymentEvidence,
+  ): Promise<boolean> {
+    if (!evidence.distinctPayment || !evidence.reference) return false;
+    const first = await tx.financialLedgerEntry.findUnique({
+      where: { idempotencyKey: `PAYMENT:${chargeId}:0` },
+      select: { evidenceReference: true },
+    });
+    return Boolean(
+      first?.evidenceReference &&
+      first.evidenceReference !== evidence.reference.trim().slice(0, 128),
     );
   }
 
@@ -510,6 +560,11 @@ export class PaymentChargeService {
             data: { status: 'CANCELED', gatewayStatusRaw: providerStatus },
           });
         }
+        if (changed.count === 1 && target === 'REFUNDED')
+          await syncSettlement(tx, chargeId, companyId, {
+            source: 'PROVIDER_WEBHOOK',
+            reference: providerStatus,
+          });
         if (changed.count !== 1 || current.status === target) return;
         await tx.paymentChargeStatusHistory.create({
           data: {

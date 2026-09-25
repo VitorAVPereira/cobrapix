@@ -3,6 +3,16 @@ import { PaymentFeeService } from '../payment-fees/payment-fee.service';
 import { PaymentChargeService } from './payment-charge.service';
 import { Prisma } from '@prisma/client';
 import type { IssuanceContext } from '../financial-activation/financial-eligibility.service';
+import {
+  recordDuplicatePayment,
+  syncSettlement,
+} from '../settlements/settlement-ledger';
+
+// The ledger itself runs against PostgreSQL in test/settlements-postgres.cjs.
+jest.mock('../settlements/settlement-ledger', () => ({
+  syncSettlement: jest.fn(),
+  recordDuplicatePayment: jest.fn(),
+}));
 
 const financial: IssuanceContext = {
   financialProfileId: 'profile-1',
@@ -61,6 +71,9 @@ function fixture(
     },
     invoice: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     collectionLog: { create: jest.fn() },
+    financialLedgerEntry: {
+      findUnique: jest.fn().mockResolvedValue({ evidenceReference: 'E2E-1' }),
+    },
     paymentFeeVersion: {
       findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 'fee-1' }),
     },
@@ -370,5 +383,60 @@ describe('PaymentChargeService', () => {
     );
     expect(tx.paymentCharge.updateMany).not.toHaveBeenCalled();
     expect(tx.collectionLog.create).not.toHaveBeenCalled();
+  });
+  it('keeps the ledger in line with every settlement and refund', async () => {
+    const { service, row } = fixture('ACTIVE');
+    const evidence = {
+      source: 'PROVIDER_WEBHOOK' as const,
+      reference: 'E2E-1',
+    };
+    await service.recordSettlement(row, 120, 'paid', 10000, evidence);
+    expect(syncSettlement).toHaveBeenCalledWith(
+      expect.anything(),
+      'charge-1',
+      'company-1',
+      evidence,
+    );
+    await service.recordPixRefunds(row, [
+      { providerRefundId: 'refund-1', amountCents: 1000 },
+    ]);
+    expect(syncSettlement).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'charge-1',
+      'company-1',
+      { source: 'PROVIDER_WEBHOOK', reference: 'refund-1' },
+    );
+  });
+  it('records another Pix on a paid charge as a duplicate, not a new settlement', async () => {
+    const { service, tx, row } = fixture('PAID');
+    (syncSettlement as jest.Mock).mockClear();
+    await expect(
+      service.recordSettlement(row, null, 'CONCLUIDA', 10000, {
+        source: 'PROVIDER_WEBHOOK',
+        reference: 'E2E-2',
+        distinctPayment: true,
+      }),
+    ).resolves.toBe(false);
+    expect(recordDuplicatePayment).toHaveBeenCalledWith(
+      expect.anything(),
+      'charge-1',
+      'company-1',
+      10000,
+      { source: 'PROVIDER_WEBHOOK', reference: 'E2E-2' },
+    );
+    expect(tx.paymentCharge.updateMany).not.toHaveBeenCalled();
+    expect(syncSettlement).not.toHaveBeenCalled();
+  });
+  it('limits refunds to the amount actually paid', async () => {
+    const { service, row, tx } = fixture('PAID');
+    tx.paymentCharge.findFirst.mockResolvedValue({
+      ...row,
+      paidAmountCents: 10650,
+    });
+    await expect(
+      service.recordPixRefunds(row, [
+        { providerRefundId: 'all', amountCents: 10650 },
+      ]),
+    ).resolves.toBe('REFUNDED');
   });
 });

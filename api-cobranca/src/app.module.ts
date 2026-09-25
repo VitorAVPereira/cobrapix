@@ -18,6 +18,7 @@ import { AdminModule } from './admin/admin.module';
 import { BullInfrastructureModule } from './queue/bull-infrastructure.module';
 import { EfiOnboardingModule } from './efi-onboarding/efi-onboarding.module';
 import { FinancialActivationModule } from './financial-activation/financial-activation.module';
+import { SettlementsModule } from './settlements/settlements.module';
 import { CommunicationsModule } from './communications/communications.module';
 
 @Module({
@@ -42,6 +43,7 @@ import { CommunicationsModule } from './communications/communications.module';
     AdminModule,
     EfiOnboardingModule,
     FinancialActivationModule,
+    SettlementsModule,
     CommunicationsModule,
   ],
   providers: [

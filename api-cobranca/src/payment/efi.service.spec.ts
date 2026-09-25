@@ -252,6 +252,7 @@ describe('Efí notification ordering', () => {
       null,
       'paid',
       10650,
+      { source: 'PROVIDER_WEBHOOK', reference: null },
     );
   });
   it('records an unknown issuing account without querying Efí', async () => {
@@ -305,13 +306,25 @@ describe('Efí notification ordering', () => {
       issuerIdentityId: 'identity-1',
     });
     await service.handlePixWebhook({
-      pix: [{ txid: 'txid', chave: 'issuer-key', valor: '106.50' }],
+      pix: [
+        {
+          txid: 'txid',
+          chave: 'issuer-key',
+          valor: '106.50',
+          endToEndId: 'E2E-1',
+        },
+      ],
     });
     expect(charges.recordSettlement).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'charge-1' }),
       null,
       'CONCLUIDA',
       10650,
+      {
+        source: 'PROVIDER_WEBHOOK',
+        reference: 'E2E-1',
+        distinctPayment: true,
+      },
     );
   });
   it('ignores and records a Pix event received by another key', async () => {
