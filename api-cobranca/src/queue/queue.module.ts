@@ -11,11 +11,26 @@ import { PaymentModule } from '../payment/payment.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { EmailModule } from '../email/email.module';
 import { BullInfrastructureModule } from './bull-infrastructure.module';
+import { WhatsappTransportModule } from '../whatsapp/transport/whatsapp-transport.module';
+import { ConfigService } from '@nestjs/config';
+import {
+  DATAFY_WEBHOOK_QUEUE,
+  DatafyWebhookQueue,
+  datafyRedisConnection,
+} from './datafy-webhook.queue';
 
 @Module({
   imports: [
     PrismaModule,
+    WhatsappTransportModule,
     BullInfrastructureModule,
+    BullModule.registerQueueAsync({
+      name: DATAFY_WEBHOOK_QUEUE,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        connection: datafyRedisConnection(config),
+      }),
+    }),
     BullModule.registerQueue({
       name: 'whatsapp-messages',
       defaultJobOptions: {
@@ -35,6 +50,7 @@ import { BullInfrastructureModule } from './bull-infrastructure.module';
   ],
   controllers: [QueueController],
   providers: [
+    DatafyWebhookQueue,
     MessageQueueService,
     MessageWorkerService,
     SpintaxService,
@@ -42,6 +58,7 @@ import { BullInfrastructureModule } from './bull-infrastructure.module';
     MessagingLimitService,
   ],
   exports: [
+    DatafyWebhookQueue,
     MessageQueueService,
     SpintaxService,
     RateLimitService,

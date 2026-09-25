@@ -49,7 +49,7 @@ npm run prisma:generate
 
 ## Environment
 
-Copie `.env.example` para `.env` e configure `DATABASE_URL`, `DIRECT_URL`, Evolution API, Efi Bank e Redis.
+Copie `.env.example` para `.env` e configure `DATABASE_URL`, `DIRECT_URL`, Datafy (WhatsApp), Efi Bank e Redis.
 
 ## Porta
 

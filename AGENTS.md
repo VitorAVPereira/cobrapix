@@ -4,24 +4,22 @@
 
 - **front-cobranca**: Next.js 16 frontend (port 3000)
 - **api-cobranca**: NestJS backend (port 3001)
-- **Meta Cloud API**: WhatsApp oficial via Graph API e webhook `/webhooks/meta`
-- **Evolution API**: legado opcional para migração (port 8080)
+- **Datafy**: único transporte do WhatsApp oficial (API compatível com a Cloud API da Meta) e webhook `/webhooks/datafy`; não há integração direta com a Meta
 - **Neon Database**: PostgreSQL cloud (não requer Docker)
 - **Redis**: Para filas de mensagens (port 6379)
 
 ## Prerequisites
 
-1. Start Redis (and Evolution only if testing the legacy path):
+1. Start Redis:
    ```bash
    docker run -d -p 6379:6379 redis:alpine  # Redis para filas
-   # Opcional legado:
-   # cd api-cobranca && docker-compose up -d  # Evolution API (port 8080)
    ```
 2. Set up `.env` from `.env.example` in each package
 3. Required env vars in api-cobranca:
    - `DATABASE_URL`, `DIRECT_URL`
-   - `META_WEBHOOK_VERIFY_TOKEN`, `META_APP_SECRET`
-   - `META_GRAPH_API_VERSION` (default `v23.0`)
+   - `DATAFY_API_TOKEN` (`sk_live_`), `DATAFY_WEBHOOK_SECRET` (`whsec_`), `DATAFY_WEBHOOK_BASE_URL` (obrigatórias em produção)
+   - `META_PHONE_NUMBER_ID`, `META_BUSINESS_ACCOUNT_ID` (IDs da WABA, conferidos contra o `/me` do Datafy)
+   - `COMMUNICATION_MEDIA_DIR`, `COMMUNICATION_MEDIA_LIMIT_BYTES` (anexos cifrados, opcionais)
    - `PAYMENT_SECRET_KEY` (criptografia das credenciais do gateway)
    - `EFI_PLATFORM_CLIENT_ID`, `EFI_PLATFORM_CLIENT_SECRET`
    - `EFI_PLATFORM_PAYEE_CODE`, `EFI_PLATFORM_SPLIT_PERCENTAGE`
@@ -72,8 +70,7 @@ Endpoints para geração de PIX e Boleto:
 
 | Endpoint | Description |
 |----------|-------------|
-| GET/POST | `/webhooks/meta` | Webhook oficial Meta Cloud API |
-| POST | `/webhooks/evolution` | Status conexão WhatsApp legado |
+| POST | `/webhooks/datafy` | Mensagens, status e templates do WhatsApp (assinatura Datafy) |
 | POST | `/webhooks/efi/pix` | Notificações de pagamento Pix |
 | POST | `/webhooks/efi/cobrancas` | Notificações de cobranças/boleto |
 | POST | `/webhooks/resend` | Eventos de email Resend (entrega, abertura, clique, bounce, falha) |
@@ -112,7 +109,8 @@ cd api-cobranca && npm test
 - `api-cobranca/src/health/` - Health check endpoints
 - `api-cobranca/src/payment/` - Payment service (PIX/Boleto)
 - `api-cobranca/src/queue/` - Message queue (BullMQ)
-- `api-cobranca/src/whatsapp/` - Meta Cloud API client/configuração oficial
+- `api-cobranca/src/whatsapp/` - Transporte Datafy, envios e templates (ver `transport/README.md`)
+- `infra/interserver/DATAFY.md` - Publicação na VPS e configuração do Datafy
 
 ## Removed Files
 

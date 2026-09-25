@@ -94,6 +94,96 @@ describe('TemplatesService global catalog', () => {
     expect(prisma.globalMessageTemplate.update).not.toHaveBeenCalled();
   });
 
+  describe('confirmReview', () => {
+    const provider = {
+      id: 'meta-1',
+      name: 'ciframais_vencimento_hoje',
+      language: 'pt_BR',
+      status: 'APPROVED',
+      category: 'UTILITY',
+      rejectedReason: null,
+      components: [
+        {
+          type: 'BODY',
+          text: '{{1}}, cobrança de {{2}} via CifraMais. {{3}} {{4}}',
+        },
+        { type: 'FOOTER', text: 'Atendimento central CifraMais.' },
+        {
+          type: 'BUTTONS',
+          buttons: [
+            {
+              type: 'URL',
+              text: 'Abrir pagamento',
+              url: 'https://app.test/pagar/{{1}}',
+            },
+          ],
+        },
+      ],
+    };
+    function reviewSetup(status: unknown, count = 1) {
+      const context = setup();
+      const whatsapp = (
+        context.service as unknown as {
+          whatsappService: { listOfficialTemplateStatuses: jest.Mock };
+        }
+      ).whatsappService;
+      whatsapp.listOfficialTemplateStatuses.mockResolvedValue(
+        status ? [status] : [],
+      );
+      const updateMany = jest.fn().mockResolvedValue({ count });
+      context.prisma.globalMessageTemplate.updateMany = updateMany;
+      return { ...context, updateMany };
+    }
+
+    it('releases the review when the provider version matches the local template', async () => {
+      const { service, updateMany } = reviewSetup(provider);
+      await service.confirmReview('company-1', 'global-1');
+      expect(updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'global-1', updatedAt: globalTemplate.updatedAt },
+          data: expect.objectContaining({
+            metaReviewRequired: false,
+          }) as unknown,
+        }),
+      );
+    });
+
+    it.each([
+      [{ ...provider, category: 'MARKETING' }, /categoria/],
+      [
+        {
+          ...provider,
+          components: [
+            { type: 'BODY', text: 'Oferta {{1}} {{2}} {{3}} {{4}}' },
+          ],
+        },
+        /conteúdo/,
+      ],
+      [null, /não encontrado/],
+    ])(
+      'keeps the template blocked and explains why',
+      async (status, reason) => {
+        const { service, updateMany } = reviewSetup(status);
+        await expect(
+          service.confirmReview('company-1', 'global-1'),
+        ).rejects.toThrow(reason);
+        const calls = updateMany.mock.calls as Array<
+          [{ data: { metaReviewRequired: boolean } }]
+        >;
+        expect(calls.every(([args]) => args.data.metaReviewRequired)).toBe(
+          true,
+        );
+      },
+    );
+
+    it('never releases over a concurrent provider change', async () => {
+      const { service } = reviewSetup(provider, 0);
+      await expect(
+        service.confirmReview('company-1', 'global-1'),
+      ).rejects.toThrow(/alterado/);
+    });
+  });
+
   it('rejects links, variables and line breaks in tenant personalization', async () => {
     const { service } = setup();
     await expect(

@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import type { OfficialTemplateStatus } from '../whatsapp/whatsapp.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { CreateTemplateDto, UpdateTemplateDto } from './dto';
+import { templateCompatibility } from './template-provider-state';
 import {
   getTemplateDefinition,
   TEMPLATE_DEFINITIONS,
@@ -165,13 +166,79 @@ export class TemplatesService {
     });
   }
 
+  /**
+   * Concludes a pending review by re-reading the provider catalog. The template is
+   * released only when category, body, footer and buttons match the local template
+   * and its positional variables; otherwise it stays blocked and the reason is returned.
+   */
+  async confirmReview(
+    companyId: string,
+    id: string,
+  ): Promise<GlobalMessageTemplate> {
+    const template = await this.findGlobalOrThrow(id);
+    if (!template.metaTemplateName)
+      throw new HttpException(
+        'Template ainda não foi enviado ao provedor.',
+        HttpStatus.CONFLICT,
+      );
+    const key = this.providerKey(
+      template.metaTemplateName,
+      template.metaLanguage,
+    );
+    const status = (
+      await this.whatsappService.listOfficialTemplateStatuses(companyId)
+    ).find((item) => this.providerKey(item.name, item.language) === key);
+    if (!status)
+      throw new HttpException(
+        'Template não encontrado no catálogo do provedor.',
+        HttpStatus.CONFLICT,
+      );
+    const sameCategory = status.category === template.category;
+    const sameContent = templateCompatibility(template, status.components);
+    // A provider event applied meanwhile changes updatedAt; never release over it.
+    const updated = await this.prisma.globalMessageTemplate.updateMany({
+      where: { id, updatedAt: template.updatedAt },
+      data: {
+        metaStatus: status.status,
+        metaTemplateId: status.id,
+        metaProviderCategory: status.category,
+        metaQuality: status.quality,
+        metaComponents: status.components as Prisma.InputJsonValue | undefined,
+        metaRejectedReason: status.rejectedReason,
+        metaReviewRequired: !(sameCategory && sameContent),
+        lastMetaSyncAt: new Date(),
+      },
+    });
+    if (!updated.count)
+      throw new HttpException(
+        'O template foi alterado pelo provedor durante a revisão. Tente novamente.',
+        HttpStatus.CONFLICT,
+      );
+    if (!sameCategory)
+      throw new HttpException(
+        `A categoria no provedor (${status.category ?? 'desconhecida'}) difere da categoria local (${template.category}).`,
+        HttpStatus.CONFLICT,
+      );
+    if (!sameContent)
+      throw new HttpException(
+        'O conteúdo aprovado no provedor (corpo, rodapé, botões ou variáveis) difere do template local.',
+        HttpStatus.CONFLICT,
+      );
+    return this.findGlobalOrThrow(id);
+  }
+
   async resolveApproved(
     companyId: string,
     slug: string,
   ): Promise<MessageTemplateView | null> {
     await this.ensureGlobalCatalog();
     const template = await this.prisma.globalMessageTemplate.findFirst({
-      where: { slug, isActive: true, metaStatus: 'APPROVED' },
+      where: {
+        slug,
+        isActive: true,
+        metaStatus: 'APPROVED',
+        metaReviewRequired: false,
+      },
     });
     return template ? this.findOne(companyId, template.id) : null;
   }
@@ -278,6 +345,14 @@ export class TemplatesService {
       where: { id: template.id },
       data: {
         metaStatus: status.status,
+        metaTemplateId: status.id,
+        metaProviderCategory: status.category,
+        metaQuality: status.quality,
+        metaComponents: status.components as Prisma.InputJsonValue | undefined,
+        metaReviewRequired:
+          template.metaReviewRequired ||
+          status.category !== template.category ||
+          !templateCompatibility(template, status.components),
         metaRejectedReason: status.rejectedReason,
         lastMetaSyncAt: syncedAt,
       },

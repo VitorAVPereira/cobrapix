@@ -1,0 +1,107 @@
+name: ciframais
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ciframais
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Execute setup.sh primeiro}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Execute setup.sh primeiro}
+      POSTGRES_INITDB_ARGS: --data-checksums
+    command: [postgres, -c, shared_buffers=256MB, -c, max_connections=50]
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/10-app.sh:ro
+    shm_size: 256m
+    mem_limit: 1536m
+    healthcheck:
+      test: [CMD-SHELL, 'PGPASSWORD="$$APP_DB_PASSWORD" psql -h 127.0.0.1 -U ciframais -d ciframais -tAc "SELECT 1" >/dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [backend]
+    logging:
+      driver: local
+      options: {max-size: 10m, max-file: '3'}
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: [redis-server, --appendonly, 'yes', --appendfsync, everysec, --maxmemory, 128mb, --maxmemory-policy, noeviction]
+    volumes: [redis:/data]
+    mem_limit: 384m
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [backend]
+    logging:
+      driver: local
+      options: {max-size: 5m, max-file: '2'}
+
+  api:
+    # Explicitly start with "up -d api" after migrations and configuration.
+    profiles: [app]
+    build: ../../api-cobranca
+    image: ciframais-api:${RELEASE_TAG:-local}
+    restart: unless-stopped
+    init: true
+    env_file: /opt/ciframais/secrets/api.env
+    environment:
+      NODE_ENV: production
+      PORT: '3001'
+      DATABASE_URL: postgresql://ciframais:${APP_DB_PASSWORD:?Execute setup.sh primeiro}@postgres:5432/ciframais?schema=public
+      DIRECT_URL: postgresql://ciframais:${APP_DB_PASSWORD:?Execute setup.sh primeiro}@postgres:5432/ciframais?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      EFI_MTLS_PROXY_IP: 172.29.42.10
+      TRUST_PROXY_HOPS: '1'
+    volumes:
+      - /opt/ciframais/secrets/efi:/run/efi:ro
+      # Private, encrypted WhatsApp attachments (owner UID 1000, mode 700). The only
+      # writable path besides /tmp; never mounted in nginx. Create it with setup.sh.
+      - /var/lib/ciframais/communication-media:/var/lib/ciframais/communication-media
+    read_only: true
+    tmpfs: [/tmp]
+    mem_limit: 1280m
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [backend]
+    logging:
+      driver: local
+      options: {max-size: 10m, max-file: '3'}
+
+  nginx:
+    # Same profile as API: targeting API does not start nginx; targeting nginx
+    # also starts its dependency. Certificates must exist before starting nginx.
+    profiles: [app]
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    ports: ['80:80', '443:443']
+    volumes:
+      - /opt/ciframais/secrets/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /opt/ciframais/secrets/tls:/etc/nginx/tls:ro
+      - /var/www/ciframais-acme:/var/www/acme:ro
+    mem_limit: 128m
+    depends_on:
+      api: {condition: service_healthy}
+    networks:
+      backend:
+        ipv4_address: 172.29.42.10
+    logging:
+      driver: local
+      options: {max-size: 10m, max-file: '3'}
+
+networks:
+  backend:
+    ipam:
+      config: [{subnet: 172.29.42.0/24}]
+
+volumes:
+  postgres:
+  redis:

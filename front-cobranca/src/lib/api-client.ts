@@ -19,6 +19,17 @@ interface ApiClientOptions {
   requireAuth?: boolean;
 }
 
+/** Query string from defined values only, so omitted filters are not sent. */
+function query(
+  params: Record<string, string | number | boolean | undefined>,
+): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params))
+    if (value !== undefined && value !== "") search.set(key, String(value));
+  const text = search.toString();
+  return text ? `?${text}` : "";
+}
+
 export interface BillingRunSummary {
   total: number;
   queued: number;
@@ -428,26 +439,6 @@ export interface UpdateDebtorBillingSettingsInput {
   collectionProfileId?: string | null;
 }
 
-export interface ConfigureMetaWhatsappInput {
-  phoneNumberId: string;
-  businessAccountId: string;
-  accessToken: string;
-  businessPhoneNumber?: string;
-  defaultLanguage?: string;
-}
-
-interface WhatsAppStatusResponse {
-  provider?: "META_CLOUD";
-  state?: string;
-  dbStatus?: string;
-  phoneNumberId?: string | null;
-  businessAccountId?: string | null;
-  businessPhoneNumber?: string | null;
-  defaultLanguage?: string;
-  webhookUrl?: string;
-  templatesRequired?: boolean;
-}
-
 export interface WhatsAppUsageResponse {
   tier: string;
   dailyLimit: number;
@@ -506,30 +497,135 @@ export interface CollectionAttempt {
 
 export type ConversationStatus = "NEW" | "IN_PROGRESS" | "CLOSED";
 
-export interface WhatsAppConversationItem {
-  id: string;
-  phoneNumber: string;
-  status: ConversationStatus;
-  debtorName: string | null;
-  debtorId: string | null;
-  assignee: { id: string; name: string | null } | null;
-  lastMessagePreview: string | null;
-  unreadCount: number;
-  serviceWindowExpiresAt: string | null;
-  lastInboundAt: string | null;
-  messageCount: number;
-  updatedAt: string;
-  createdAt: string;
+export type CommunicationChannel = "WHATSAPP" | "EMAIL";
+
+export interface CursorPage<T> {
+  items: T[];
+  nextCursor: string | null;
 }
 
-export interface WhatsAppConversationMessage {
+export interface InvoiceSummary {
+  id: string;
+  dueDate: string;
+  originalAmount: string | number;
+  status: string;
+}
+
+export interface MessageAttachmentSummary {
+  id: string;
+  contentType: string | null;
+  sizeBytes: number | null;
+  state: "PENDING" | "READY" | "UNAVAILABLE" | "EXPIRED";
+  /** Local reason when unavailable (e.g. FILE_TOO_LARGE); never provider text. */
+  errorCode?: string | null;
+}
+
+/** Message as a company sees it: only its own context, no provider IDs. */
+export interface ConversationMessage {
   id: string;
   direction: "INBOUND" | "OUTBOUND";
   content: string;
-  messageId: string | null;
+  messageType: string | null;
   status: string | null;
-  readAt: string | null;
   createdAt: string;
+  invoice: InvoiceSummary | null;
+  debtor: { id: string; name: string } | null;
+  attachments: MessageAttachmentSummary[];
+  replyTo?: { id: string; direction: string; excerpt: string } | null;
+}
+
+export interface TenantContact {
+  name: string | null;
+  address: string | null;
+}
+
+export interface CompanyConversation {
+  id: string;
+  channel: CommunicationChannel;
+  contact: TenantContact;
+  lastMessageAt: string;
+  messageCount: number;
+  lastMessage: {
+    direction: string;
+    preview: string;
+    status: string | null;
+    messageType: string | null;
+  } | null;
+}
+
+export interface CompanyConversationMessages extends CursorPage<ConversationMessage> {
+  conversation: {
+    id: string;
+    channel: CommunicationChannel;
+    contact: TenantContact;
+  };
+}
+
+export type AttributionMethod =
+  | "UNASSIGNED"
+  | "OUTBOUND_CONTEXT"
+  | "REPLY_CONTEXT"
+  | "INTERACTIVE_CONTEXT"
+  | "MANUAL";
+
+export interface AdminConversationMessage extends ConversationMessage {
+  companyId: string | null;
+  invoiceId: string | null;
+  debtorId: string | null;
+  company: { id: string; corporateName: string; tradeName: string | null } | null;
+  externalMessageId: string | null;
+  replyToMessageId: string | null;
+  source: "LEGACY" | "LIVE" | "IMPORTED";
+  attributionMethod: AttributionMethod | null;
+  attributionRevision: number;
+  outboundIntent: { state: string; lastErrorCode: string | null } | null;
+  readAt: string | null;
+}
+
+export interface AdminConversationSummary {
+  id: string;
+  channel: CommunicationChannel;
+  recipient: string | null;
+  status: ConversationStatus;
+  unreadCount: number;
+  lastMessagePreview: string | null;
+  lastInboundAt: string | null;
+  serviceWindowExpiresAt: string | null;
+  updatedAt: string;
+  unclassifiedCount: number;
+}
+
+export interface AdminConversationDetail {
+  id: string;
+  channel: CommunicationChannel;
+  recipient: string | null;
+  status: ConversationStatus;
+  unreadCount: number;
+  lastInboundAt: string | null;
+  serviceWindowExpiresAt: string | null;
+  updatedAt: string;
+  /** Oldest first; `nextCursor` loads older messages. */
+  messages: AdminConversationMessage[];
+  nextCursor: string | null;
+}
+
+/** `companyId: null` means the message stays with the platform team only. */
+export interface MessageContextInput {
+  companyId: string | null;
+  invoiceId?: string;
+  debtorId?: string;
+}
+
+export interface ContextOption {
+  company: { id: string; name: string };
+  debtor: { id: string; name: string } | null;
+  invoices: InvoiceSummary[];
+}
+
+export interface QueuedReply {
+  id: string;
+  status: string;
+  externalMessageId: string | null;
 }
 
 export interface MessageTemplate {
@@ -549,6 +645,10 @@ export interface MessageTemplate {
   metaStatus: string;
   metaRejectedReason: string | null;
   lastMetaSyncAt: string | null;
+  /** Provider changed content or category; not sent until the admin concludes the review. */
+  metaReviewRequired?: boolean;
+  metaQuality?: string | null;
+  metaProviderCategory?: string | null;
   greeting?: string;
   instructions?: string;
   signature?: string;
@@ -821,7 +921,6 @@ export interface CreateAdminClientInput {
     enabledBillingMethods: BillingMethod[];
     preferredBillingMethod: BillingMethod;
   };
-  meta?: ConfigureMetaWhatsappInput;
   efi?: GatewayAccountInput;
   integrations?: {
     resendApiKey?: string;
@@ -902,7 +1001,6 @@ export interface UpdateAdminClientInput {
     metaBusinessPhoneNumber?: string | null;
     metaDefaultLanguage?: string;
     messagingLimitTier?: MessagingLimitTier | null;
-    metaAccessToken?: string;
   };
   integrations?: {
     resendApiKey?: string;
@@ -1030,6 +1128,20 @@ class ApiClient {
     endpoint: string,
     options: RequestInit = {},
   ): Promise<T> {
+    const response = await this.send(endpoint, options);
+
+    if (response.status === 204) {
+      return null as T;
+    }
+
+    return response.json() as Promise<T>;
+  }
+
+  /** Authenticated request; a non-2xx response becomes an ApiError with status and body. */
+  private async send(
+    endpoint: string,
+    options: RequestInit = {},
+  ): Promise<Response> {
     const url = `${this.baseUrl}${endpoint}`;
     const token = this.getAuthHeader();
 
@@ -1052,14 +1164,16 @@ class ApiClient {
     });
 
     if (!response.ok) {
-      let data: unknown;
+      // Read once: a failed json() would leave the body consumed for text().
+      const text = await response.text().catch(() => "");
+      let data: unknown = text;
       try {
-        data = await response.json();
+        data = JSON.parse(text) as unknown;
       } catch {
-        data = await response.text();
+        /* keep the text body */
       }
 
-      const errorBody = data as ApiErrorBody;
+      const errorBody = (data ?? {}) as ApiErrorBody;
       const errorMessage =
         errorBody.message ||
         `API Error: ${response.status} ${response.statusText}`;
@@ -1073,11 +1187,20 @@ class ApiClient {
       throw error;
     }
 
-    if (response.status === 204) {
-      return null as T;
-    }
+    return response;
+  }
 
-    return response.json() as Promise<T>;
+  /** Attachment bytes through the authenticated API; the provider URL never reaches the browser. */
+  async fetchAttachment(
+    messageId: string,
+    attachmentId: string,
+    signal?: AbortSignal,
+  ): Promise<Blob> {
+    const response = await this.send(
+      `/communications/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      { signal, cache: "no-store" },
+    );
+    return response.blob();
   }
 
   // Auth
@@ -1249,28 +1372,9 @@ class ApiClient {
     );
   }
 
-  // WhatsApp
-  async configureMetaWhatsapp(
-    data: ConfigureMetaWhatsappInput,
-  ): Promise<WhatsAppStatusResponse> {
-    return this.fetch<WhatsAppStatusResponse>("/whatsapp/meta", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-  }
-
-  async getWhatsappStatus(): Promise<WhatsAppStatusResponse> {
-    return this.fetch<WhatsAppStatusResponse>("/whatsapp/status");
-  }
-
+  // WhatsApp (canal central Datafy, administrado pela plataforma)
   async getWhatsappUsage(): Promise<WhatsAppUsageResponse> {
     return this.fetch<WhatsAppUsageResponse>("/whatsapp/usage");
-  }
-
-  async disconnectWhatsapp(): Promise<{ success: boolean }> {
-    return this.fetch<{ success: boolean }>("/whatsapp/disconnect", {
-      method: "POST",
-    });
   }
 
   // Email
@@ -1417,74 +1521,114 @@ class ApiClient {
     });
   }
 
-  // Inbox WhatsApp
-  async getConversations(
+  // Conversations. Company routes are scoped by the session on the server.
+  async listCompanyConversations(
+    params: { cursor?: string; limit?: number; channel?: CommunicationChannel },
+    signal?: AbortSignal,
+  ): Promise<CursorPage<CompanyConversation>> {
+    return this.fetch(`/communications/conversations${query(params)}`, {
+      signal,
+    });
+  }
+
+  async listCompanyConversationMessages(
+    conversationId: string,
+    params: { cursor?: string; limit?: number },
+    signal?: AbortSignal,
+  ): Promise<CompanyConversationMessages> {
+    return this.fetch(
+      `/communications/conversations/${encodeURIComponent(conversationId)}/messages${query(params)}`,
+      { signal },
+    );
+  }
+
+  async listAdminConversations(
     params: {
-      status?: string;
-      search?: string;
       page?: number;
       pageSize?: number;
-    } = {},
-  ): Promise<{
-    data: WhatsAppConversationItem[];
-    total: number;
-    page: number;
-    pageSize: number;
-  }> {
-    const qs = new URLSearchParams();
-    if (params.status) qs.set("status", params.status);
-    if (params.search) qs.set("search", params.search);
-    if (params.page) qs.set("page", String(params.page));
-    if (params.pageSize) qs.set("pageSize", String(params.pageSize));
-    const qsStr = qs.toString();
-    return this.fetch<{
-      data: WhatsAppConversationItem[];
-      total: number;
-      page: number;
-      pageSize: number;
-    }>(`/whatsapp/conversations${qsStr ? `?${qsStr}` : ""}`);
+      channel?: CommunicationChannel;
+      status?: ConversationStatus;
+      companyId?: string;
+      pendingClassification?: boolean;
+    },
+    signal?: AbortSignal,
+  ): Promise<{ items: AdminConversationSummary[]; total: number }> {
+    return this.fetch(`/communications/admin/conversations${query(params)}`, {
+      signal,
+    });
   }
 
-  async getConversationMessages(
+  async getAdminConversation(
     conversationId: string,
-  ): Promise<WhatsAppConversationMessage[]> {
-    return this.fetch<WhatsAppConversationMessage[]>(
-      `/whatsapp/conversations/${conversationId}/messages`,
+    params: { cursor?: string; limit?: number } = {},
+    signal?: AbortSignal,
+  ): Promise<AdminConversationDetail> {
+    return this.fetch(
+      `/communications/admin/conversations/${encodeURIComponent(conversationId)}${query(params)}`,
+      { signal },
     );
   }
 
-  async replyToConversation(
+  async getConversationContextOptions(
     conversationId: string,
-    content: string,
-  ): Promise<{ success: boolean }> {
-    return this.fetch<{ success: boolean }>(
-      `/whatsapp/conversations/${conversationId}/reply`,
-      { method: "POST", body: JSON.stringify({ content }) },
+  ): Promise<{ options: ContextOption[] }> {
+    return this.fetch(
+      `/communications/admin/conversations/${encodeURIComponent(conversationId)}/context-options`,
     );
   }
 
-  async updateConversationStatus(
+  async updateAdminConversationStatus(
     conversationId: string,
     status: ConversationStatus,
-  ): Promise<{ success: boolean }> {
-    return this.fetch<{ success: boolean }>(
-      `/whatsapp/conversations/${conversationId}/status`,
-      { method: "PUT", body: JSON.stringify({ status }) },
+  ): Promise<{ id: string; status: ConversationStatus }> {
+    return this.fetch(
+      `/communications/admin/conversations/${encodeURIComponent(conversationId)}/status`,
+      { method: "PATCH", body: JSON.stringify({ status }) },
     );
   }
 
-  async updateConversationAssignee(
+  async attributeMessage(
+    messageId: string,
+    data: {
+      expectedRevision: number;
+      context: MessageContextInput;
+      reason: string;
+    },
+  ): Promise<{ messageId: string; revision: number }> {
+    return this.fetch(
+      `/communications/admin/messages/${encodeURIComponent(messageId)}/attribution`,
+      { method: "PATCH", body: JSON.stringify(data) },
+    );
+  }
+
+  async replyToAdminConversation(
     conversationId: string,
-    assigneeId: string | null,
-  ): Promise<{ success: boolean }> {
-    return this.fetch<{ success: boolean }>(
-      `/whatsapp/conversations/${conversationId}/assignee`,
-      { method: "PUT", body: JSON.stringify({ assigneeId }) },
+    data: {
+      idempotencyId: string;
+      content: string;
+      context?: MessageContextInput;
+      replyToMessageId?: string;
+    },
+  ): Promise<QueuedReply> {
+    return this.fetch(
+      `/communications/admin/conversations/${encodeURIComponent(conversationId)}/replies`,
+      { method: "POST", body: JSON.stringify(data) },
     );
   }
 
-  async getInboxUnreadCount(): Promise<{ count: number }> {
-    return this.fetch<{ count: number }>("/whatsapp/unread-count");
+  async replyWithTemplate(
+    conversationId: string,
+    data: {
+      idempotencyId: string;
+      templateId: string;
+      parameters: string[];
+      context?: MessageContextInput;
+    },
+  ): Promise<QueuedReply> {
+    return this.fetch(
+      `/communications/admin/conversations/${encodeURIComponent(conversationId)}/template-replies`,
+      { method: "POST", body: JSON.stringify(data) },
+    );
   }
 
   async getInvoiceAttempts(invoiceId: string): Promise<CollectionAttempt[]> {
@@ -1573,6 +1717,14 @@ class ApiClient {
   ): Promise<{ template: MessageTemplate; meta: unknown }> {
     return this.fetch<{ template: MessageTemplate; meta: unknown }>(
       `/templates/${id}/submit-meta`,
+      { method: "POST" },
+    );
+  }
+
+  /** Re-reads the provider version; released only when it matches the local template. */
+  async confirmTemplateReview(id: string): Promise<MessageTemplate> {
+    return this.fetch<MessageTemplate>(
+      `/templates/${encodeURIComponent(id)}/review`,
       { method: "POST" },
     );
   }

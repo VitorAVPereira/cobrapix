@@ -4,7 +4,6 @@ import { UserRole } from '@prisma/client';
 import { AdminService } from './admin.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { EfiService } from '../payment/efi.service';
-import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { PaymentCryptoService } from '../payment/payment-crypto.service';
 
 const baseCompanyRecord = {
@@ -106,7 +105,6 @@ describe('AdminService financial onboarding', () => {
     };
     const service = new AdminService(
       prisma as unknown as PrismaService,
-      {} as WhatsappService,
       {} as EfiService,
       {} as PaymentCryptoService,
       fees as unknown as PaymentFeeService,
@@ -216,7 +214,6 @@ describe('Admin password reset', () => {
     } as unknown as PrismaService;
     const service = new AdminService(
       prisma,
-      { configureMetaIntegration: jest.fn() } as unknown as WhatsappService,
       { upsertManualGatewayAccount: jest.fn() } as unknown as EfiService,
       {
         encrypt: jest.fn(),

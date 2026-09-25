@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  GoneException,
   HttpException,
   HttpStatus,
   Param,
@@ -16,7 +17,6 @@ import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { MessagingLimitService } from '../queue/services/messaging-limit.service';
 import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
 import { WhatsAppConversationService } from './conversation.service';
-import { ConfigureMetaWhatsappDto } from './dto/configure-meta-whatsapp.dto';
 import { WhatsappService } from './whatsapp.service';
 
 interface AuthenticatedUser {
@@ -87,31 +87,13 @@ export class WhatsappController {
     return this.conversationService.getMessages(user.companyId, id);
   }
 
+  /** Legacy inbox sends bypassed intent idempotency; replies go through the communications center. */
   @Post('conversations/:id/reply')
   @UseGuards(PlatformAdminGuard)
-  async reply(
-    @GetUser() user: AuthenticatedUser,
-    @Param('id') id: string,
-    @Body() body: { content: string },
-  ) {
-    if (!body.content?.trim()) {
-      throw new HttpException('Mensagem vazia.', HttpStatus.BAD_REQUEST);
-    }
-
-    try {
-      await this.conversationService.sendReply(
-        user.companyId,
-        id,
-        body.content.trim(),
-        user.userId ?? user.companyId,
-      );
-      return { success: true };
-    } catch (error) {
-      throw new HttpException(
-        error instanceof Error ? error.message : 'Falha ao enviar resposta.',
-        HttpStatus.BAD_REQUEST,
-      );
-    }
+  reply(): never {
+    throw new GoneException(
+      'Envio pela caixa antiga desativado. Responda pela central de comunicacoes.',
+    );
   }
 
   @Put('conversations/:id/status')
@@ -149,45 +131,12 @@ export class WhatsappController {
     return { success: true };
   }
 
-  @Post('meta')
-  async configureMeta(
-    @GetUser() user: AuthenticatedUser,
-    @Body() dto: ConfigureMetaWhatsappDto,
-  ): Promise<unknown> {
-    try {
-      return await this.whatsappService.configureMetaIntegration(
-        user.companyId,
-        dto,
-      );
-    } catch (error) {
-      throw new HttpException(
-        error instanceof Error
-          ? error.message
-          : 'Erro ao configurar Meta Cloud API.',
-        HttpStatus.BAD_GATEWAY,
-      );
-    }
-  }
-
-  @Post('instance')
-  async createInstance(
-    @GetUser() user: AuthenticatedUser,
-    @Body() dto: ConfigureMetaWhatsappDto,
-  ): Promise<unknown> {
-    return this.configureMeta(user, dto);
-  }
-
-  @Get('status')
-  async getStatus(@GetUser() user: AuthenticatedUser): Promise<unknown> {
-    return this.whatsappService.getStatus(user.companyId);
-  }
-
-  @Post('disconnect')
-  async disconnect(
-    @GetUser() user: AuthenticatedUser,
-  ): Promise<{ success: boolean }> {
-    await this.whatsappService.disconnect(user.companyId);
-    return { success: true };
+  @Post('admin/test-integration')
+  @UseGuards(PlatformAdminGuard)
+  async testIntegration(): Promise<
+    Awaited<ReturnType<WhatsappService['testIntegration']>>
+  > {
+    return this.whatsappService.testIntegration();
   }
 
   @Get('usage')
@@ -207,6 +156,7 @@ export class WhatsappController {
   }
 
   @Post('sync-tier')
+  @UseGuards(PlatformAdminGuard)
   async syncTier(@GetUser() user: AuthenticatedUser) {
     const tier = await this.messagingLimitService.syncTierFromMeta(
       user.companyId,

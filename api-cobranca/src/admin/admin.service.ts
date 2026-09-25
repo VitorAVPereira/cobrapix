@@ -14,7 +14,6 @@ import { EfiService } from '../payment/efi.service';
 import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentFeeService } from '../payment-fees/payment-fee.service';
-import { WhatsappService } from '../whatsapp/whatsapp.service';
 import {
   AdminEfiUpdateDto,
   CreateAdminClientDto,
@@ -149,7 +148,6 @@ export class AdminService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly whatsappService: WhatsappService,
     private readonly efiService: EfiService,
     private readonly crypto: PaymentCryptoService,
     private readonly fees?: PaymentFeeService,
@@ -218,22 +216,6 @@ export class AdminService {
       include: adminClientInclude,
     });
 
-    if (dto.meta) {
-      try {
-        await this.whatsappService.configureMetaIntegration(
-          company.id,
-          dto.meta,
-        );
-      } catch {
-        this.logger.warn(
-          `Cliente ${company.id} criado sem concluir a integração Meta.`,
-        );
-        integrationWarnings.push(
-          'Cliente criado, mas a integração com a Meta não pôde ser configurada.',
-        );
-      }
-    }
-
     if (dto.efi) {
       try {
         await this.efiService.upsertManualGatewayAccount(company.id, dto.efi);
@@ -269,10 +251,6 @@ export class AdminService {
         where: { id },
         data: companyData,
       });
-    }
-
-    if (dto.meta) {
-      await this.whatsappService.configureMetaIntegration(id, dto.meta);
     }
 
     if (dto.efi) {
@@ -580,10 +558,6 @@ export class AdminService {
       if (whatsapp.messagingLimitTier !== undefined) {
         data.messagingLimitTier = whatsapp.messagingLimitTier;
       }
-      const metaAccessToken = this.secretString(whatsapp.metaAccessToken);
-      if (metaAccessToken) {
-        data.metaAccessTokenEncrypted = this.crypto.encrypt(metaAccessToken);
-      }
     }
 
     if (dto.integrations) {
@@ -598,7 +572,6 @@ export class AdminService {
   ): void {
     const update = dto as UpdateAdminClientDto;
     if (
-      dto.meta ||
       dto.efi ||
       update.whatsapp ||
       update.company?.gatewayStatus !== undefined ||

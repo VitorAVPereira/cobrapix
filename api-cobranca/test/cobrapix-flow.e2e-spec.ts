@@ -24,6 +24,7 @@ import { WebhooksController } from '../src/webhooks/webhooks.controller';
 import { EfiWebhookGuard } from '../src/webhooks/efi-webhook.guard';
 import { WebhooksService } from '../src/webhooks/webhooks.service';
 import { WhatsAppConversationService } from '../src/whatsapp/conversation.service';
+import { EmailService } from '../src/email/email.service';
 
 jest.mock('sdk-node-apis-efi', () => {
   const client = {
@@ -211,6 +212,11 @@ describe('CobraPix main flow smoke (e2e)', () => {
           provide: WhatsAppConversationService,
           useValue: {},
         },
+        // The Resend webhook route is not exercised by this smoke.
+        {
+          provide: EmailService,
+          useValue: {},
+        },
         {
           provide: APP_FILTER,
           useClass: GlobalExceptionFilter,
@@ -246,14 +252,15 @@ describe('CobraPix main flow smoke (e2e)', () => {
     const accessToken = await createCompanyAndLogin();
 
     const createdInvoice = await createInvoice(accessToken);
-    const selectedInvoice = await selectPendingInvoice(
+    // Invoices start as DRAFT and become PENDING once the charge exists.
+    const selectedInvoice = await selectDraftInvoice(
       accessToken,
       createdInvoice.invoiceId,
     );
 
     expect(selectedInvoice).toMatchObject({
       invoiceId: createdInvoice.invoiceId,
-      status: 'PENDING',
+      status: 'DRAFT',
       billing_type: 'PIX',
       payment: {
         generated: false,
@@ -349,6 +356,15 @@ describe('CobraPix main flow smoke (e2e)', () => {
     });
 
     companyId = company.id;
+    // New debtors are placed in the company's default 'new payer' profile.
+    await prisma.collectionProfile.create({
+      data: {
+        companyId: company.id,
+        name: 'Novo pagador',
+        profileType: 'NEW',
+        isDefault: true,
+      },
+    });
 
     await prisma.user.create({
       data: {
@@ -394,6 +410,8 @@ describe('CobraPix main flow smoke (e2e)', () => {
       .set('Authorization', `Bearer ${accessToken}`)
       .send({
         name: 'Responsavel Smoke',
+        // Synthetic, checksum-valid CPF (required since the debtor profile invariant).
+        document: '52998224725',
         phone_number: '+55 11 99999-0000',
         email: debtorEmail,
         whatsappOptIn: true,
@@ -403,8 +421,11 @@ describe('CobraPix main flow smoke (e2e)', () => {
         studentName: 'Aluno Smoke',
         studentEnrollment: 'MAT-001',
         studentGroup: 'Turma A',
-      })
-      .expect(201);
+      });
+    if (response.status !== 201)
+      throw new Error(
+        `POST /invoices ${response.status}: ${JSON.stringify(response.body)}`,
+      );
 
     const body = responseBody<InvoiceResponse>(response);
     expect(body.invoiceId).toEqual(expect.any(String));
@@ -412,13 +433,13 @@ describe('CobraPix main flow smoke (e2e)', () => {
     return body;
   }
 
-  async function selectPendingInvoice(
+  async function selectDraftInvoice(
     accessToken: string,
     invoiceId: string,
   ): Promise<InvoiceResponse> {
     const response = await request(httpServer)
       .get('/invoices')
-      .query({ status: 'PENDING', search: 'Aluno Smoke' })
+      .query({ status: 'DRAFT', search: 'Aluno Smoke' })
       .set('Authorization', `Bearer ${accessToken}`)
       .expect(200);
 
@@ -438,8 +459,11 @@ describe('CobraPix main flow smoke (e2e)', () => {
     const response = await request(httpServer)
       .post('/payments/create')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ invoiceId, billingType: 'PIX' })
-      .expect(201);
+      .send({ invoiceId, billingType: 'PIX' });
+    if (response.status !== 201)
+      throw new Error(
+        `POST /payments/create ${response.status}: ${JSON.stringify(response.body)}`,
+      );
 
     return responseBody<PaymentResponse>(response);
   }
@@ -527,6 +551,9 @@ describe('CobraPix main flow smoke (e2e)', () => {
     });
     await prisma.invoice.deleteMany({ where: { companyId: targetCompanyId } });
     await prisma.debtor.deleteMany({ where: { companyId: targetCompanyId } });
+    await prisma.collectionProfile.deleteMany({
+      where: { companyId: targetCompanyId },
+    });
     await prisma.originalBankAccount.deleteMany({
       where: { companyId: targetCompanyId },
     });

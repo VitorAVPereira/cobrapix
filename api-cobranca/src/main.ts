@@ -4,6 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import helmet from 'helmet';
+import { datafyBodyParser } from './webhooks/datafy-body-parser';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -11,6 +12,8 @@ async function bootstrap(): Promise<void> {
     logger: new ConsoleLogger({ json: true }),
   });
   const config = app.get(ConfigService);
+  // Bound larger batched webhooks only on this route, preserving the signed bytes.
+  app.use('/webhooks/datafy', datafyBodyParser());
   const trustedProxyHops = config.get<number>('TRUST_PROXY_HOPS', 0);
   app.set('trust proxy', trustedProxyHops);
   app.use(helmet());

@@ -1,5 +1,6 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHash } from 'node:crypto';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { ResendMailerService } from '../common/resend-mailer.service';
 import { OnboardingNotifications } from './onboarding-notifications';
@@ -26,6 +27,10 @@ export class CentralOnboardingNotifications extends OnboardingNotifications {
       languageCode: this.config.get<string>('META_DEFAULT_LANGUAGE') ?? 'pt_BR',
       bodyParameters: [representative, companyName],
       content: 'Aviso de ativação financeira via CifraMais',
+      // Workflow retries reuse the day's pending/accepted/uncertain intent, so nothing is sent twice;
+      // a definitively rejected attempt frees the next key of the series.
+      attemptSeries: true,
+      idempotencyKey: `efi-onboarding-notice:${companyId}:${this.day()}:${createHash('sha256').update(phone).digest('hex').slice(0, 16)}`,
     });
     return response.messageId;
   }
@@ -41,6 +46,9 @@ export class CentralOnboardingNotifications extends OnboardingNotifications {
       languageCode: this.config.get<string>('META_DEFAULT_LANGUAGE') ?? 'pt_BR',
       bodyParameters: [companyName],
       content: 'Lembrete de ativação financeira via CifraMais',
+      // The 24h and 72h reminders fall on different days.
+      attemptSeries: true,
+      idempotencyKey: `efi-onboarding-reminder:${companyId}:${this.day()}`,
     });
     return response.messageId;
   }
@@ -58,6 +66,9 @@ export class CentralOnboardingNotifications extends OnboardingNotifications {
       html: `<p>Empresa: ${safeCompany}</p><p>Código: ${safeCode}</p><p>Consulte o painel administrativo da CifraMais.</p>`,
       idempotencyKey: `efi-alert-${safeCompany}-${safeCode}-${new Date().toISOString().slice(0, 10)}`,
     });
+  }
+  private day(): string {
+    return new Date().toISOString().slice(0, 10);
   }
   private required(name: string): string {
     const value = this.config.get<string>(name)?.trim();

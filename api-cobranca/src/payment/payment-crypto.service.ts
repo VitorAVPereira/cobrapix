@@ -4,6 +4,7 @@ import {
   createCipheriv,
   createDecipheriv,
   createHash,
+  hkdfSync,
   randomBytes,
 } from 'crypto';
 
@@ -76,6 +77,30 @@ export class PaymentCryptoService {
     } catch {
       throw new Error('Dados criptografados inválidos');
     }
+  }
+
+  /**
+   * Purpose-bound 256-bit key (HKDF) from a configured key version, for data stored
+   * outside this envelope (e.g. files). Never the raw payment key.
+   */
+  derivedKey(
+    purpose: string,
+    version: string = this.activeKeyVersion,
+  ): { version: string; key: Buffer } {
+    if (!/^[a-z][a-z0-9-]{1,63}$/.test(purpose))
+      throw new Error('Finalidade de chave inválida');
+    return {
+      version,
+      key: Buffer.from(
+        hkdfSync(
+          'sha256',
+          this.getKey(version),
+          Buffer.alloc(0),
+          `ciframais:${purpose}:${version}`,
+          32,
+        ),
+      ),
+    };
   }
 
   getEnvelopeKeyVersion(value: string): string {

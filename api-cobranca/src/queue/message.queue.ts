@@ -31,7 +31,13 @@ export interface InitialChargeJob {
   channels?: CollectionChannel[];
 }
 
-export type WhatsAppQueueJob = SendMessageJob | InitialChargeJob;
+export interface OutboundIntentJob {
+  intentId: string;
+}
+export type WhatsAppQueueJob =
+  | SendMessageJob
+  | InitialChargeJob
+  | OutboundIntentJob;
 
 @Injectable()
 export class MessageQueueService {
@@ -45,6 +51,17 @@ export class MessageQueueService {
       delay: this.buildSafeDelay(0),
       ...this.buildJobOptions(this.buildSendMessageJobId(job)),
     });
+  }
+
+  async addOutboundIntentJob(intentId: string, attempt = 0): Promise<void> {
+    await this.whatsappQueue.add(
+      'outbound-intent',
+      { intentId },
+      {
+        ...this.buildJobOptions(`outbound-${intentId}-${attempt}`),
+        removeOnComplete: true,
+      },
+    );
   }
 
   async addBulkSendMessageJobs(jobs: SendMessageJob[]): Promise<void> {

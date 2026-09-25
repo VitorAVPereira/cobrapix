@@ -1,5 +1,6 @@
 import {
   Injectable,
+  ConflictException,
   Logger,
   OnModuleInit,
   OnModuleDestroy,
@@ -12,6 +13,7 @@ import {
   Prisma,
 } from '@prisma/client';
 import { Worker, Job } from 'bullmq';
+import { WhatsappTransportError } from '../../whatsapp/transport/whatsapp-transport.error';
 import { normalizeWhatsAppNumberForTransport } from '../../common/whatsapp-number';
 import { PaymentService } from '../../payment/payment.service';
 import { PublicPaymentLinkService } from '../../payment/payment-link.service';
@@ -29,11 +31,6 @@ import {
   SendMessageJob,
   WhatsAppQueueJob,
 } from '../message.queue';
-
-const SENDER_RATE_LIMIT = {
-  maxMessages: 60,
-  windowMs: 60 * 60 * 1000,
-};
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
@@ -80,7 +77,6 @@ interface InitialChargeInvoice {
     autoGenerateFirstCharge: boolean;
     whatsappStatus: string;
     whatsappInstanceId: string | null;
-    metaPhoneNumberId: string | null;
   };
   collectionLogs: Array<{ id: string }>;
 }
@@ -184,6 +180,16 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async processJob(job: Job<WhatsAppQueueJob>): Promise<void> {
+    if (job.name === 'outbound-intent' && 'intentId' in job.data) {
+      try {
+        await this.whatsappService.dispatchIntent(job.data.intentId);
+      } catch (error) {
+        if (!this.isDeferredDispatch(error))
+          await this.recordRejectedIntent(job.data.intentId, error);
+        throw error;
+      }
+      return;
+    }
     if (job.name === 'initial-charge') {
       if (!this.isInitialChargeJob(job.data)) {
         throw new Error('Payload invalido para primeira cobranca.');
@@ -206,7 +212,6 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       companyId,
       debtorId,
       phoneNumber,
-      senderKey,
       templateName,
       templateLanguage,
       templateParameters,
@@ -241,19 +246,8 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const dailyLimit = await this.messagingLimitService.canSend(companyId);
-    if (!dailyLimit.allowed) {
-      const delayMs = Math.max(dailyLimit.resetAt - Date.now(), 60_000);
-      this.logger.warn(
-        `Limite diario do WABA atingido para ${companyId} (${dailyLimit.usage}/${dailyLimit.limit}). Adiando em ${delayMs}ms`,
-      );
-      throw new Error(`Daily limit reached: retry after ${delayMs}ms`);
-    }
-
-    await this.enforceRateLimits(senderKey, phoneNumber);
-
     try {
-      const response = await this.whatsappService.sendTemplateMessage({
+      await this.whatsappService.sendTemplateMessage({
         companyId,
         phoneNumber,
         templateName,
@@ -263,37 +257,13 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         invoiceId,
         debtorId,
         content: `Template: ${templateName}`,
+        idempotencyKey: `collection:${companyId}:${invoiceId}:${data.ruleStepId ?? 'initial'}:WHATSAPP`,
+        ruleStepId: data.ruleStepId,
       });
-
-      await this.messagingLimitService.trackSend(companyId, phoneNumber);
-      await this.messagingLimitService.recordInteraction({
-        companyId,
-        phoneNumber,
-        direction: 'OUTBOUND',
-        status: response.status ?? 'sent',
-        messageId: response.messageId,
-      });
-
-      await this.prisma.collectionLog.create({
-        data: {
-          companyId,
-          invoiceId,
-          actionType: 'WHATSAPP_SENT',
-          description: `Template oficial ${templateName} enviado - Meta ID: ${response.messageId}`,
-          status: 'SENT',
-        },
-      });
-
-      await this.recordCollectionAttempt(
-        companyId,
-        invoiceId,
-        data.ruleStepId,
-        'WHATSAPP',
-        response.messageId,
-      );
 
       this.logger.log(`Mensagem da fatura ${invoiceId} enviada com sucesso`);
     } catch (error) {
+      if (this.isDeferredDispatch(error)) throw error;
       const errorMessage =
         error instanceof Error ? error.message : 'Erro desconhecido';
 
@@ -497,6 +467,44 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  /** Pending, uncertain or already-processed intents are never recorded as a failed collection. */
+  private isDeferredDispatch(error: unknown): boolean {
+    return (
+      error instanceof ConflictException ||
+      (error instanceof WhatsappTransportError &&
+        (error.kind === 'UNCERTAIN' ||
+          error.kind === 'RATE_LIMIT' ||
+          error.kind === 'TEMPORARY'))
+    );
+  }
+
+  /** Intents recovered from the queue have no send-message job to record their rejection. */
+  private async recordRejectedIntent(
+    intentId: string,
+    error: unknown,
+  ): Promise<void> {
+    const collection = await this.whatsappService.rejectedCollection(intentId);
+    if (!collection) return;
+    const errorMessage =
+      error instanceof Error ? error.message : 'Erro desconhecido';
+    await this.prisma.collectionLog.create({
+      data: {
+        companyId: collection.companyId,
+        invoiceId: collection.invoiceId,
+        actionType: 'WHATSAPP_SENT',
+        description: `Falha no envio da fatura ${collection.invoiceId}: ${errorMessage}`,
+        status: 'FAILED',
+      },
+    });
+    await this.recordCollectionAttemptFailed(
+      collection.companyId,
+      collection.invoiceId,
+      collection.ruleStepId,
+      'WHATSAPP',
+      errorMessage,
+    );
+  }
+
   private async recordCollectionAttemptFailed(
     companyId: string,
     invoiceId: string,
@@ -587,14 +595,14 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
 
     if (channels.includes('WHATSAPP')) {
       if (
-        !this.configService.get<string>('META_ACCESS_TOKEN') ||
+        !this.configService.get<string>('DATAFY_API_TOKEN') ||
         !this.configService.get<string>('META_PHONE_NUMBER_ID')
       ) {
         await this.createCollectionLog(
           invoice.companyId,
           invoice.id,
           'INITIAL_CHARGE_PAYMENT_READY',
-          'Cobranca inicial gerada; Meta Cloud API nao conectada para envio automatico.',
+          'Cobranca inicial gerada; canal WhatsApp (Datafy) nao configurado para envio automatico.',
           'PENDING',
         );
       } else {
@@ -792,7 +800,6 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
             autoGenerateFirstCharge: true,
             whatsappStatus: true,
             whatsappInstanceId: true,
-            metaPhoneNumberId: true,
           },
         },
         collectionLogs: {
@@ -948,35 +955,6 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       templatesBySlug.values().next().value ??
       null
     );
-  }
-
-  private async enforceRateLimits(
-    instanceName: string,
-    phoneNumber: string,
-  ): Promise<void> {
-    const senderLimit = await this.rateLimitService.checkRateLimit(
-      `sender:${instanceName}`,
-      SENDER_RATE_LIMIT,
-    );
-
-    if (!senderLimit.allowed) {
-      const delay = Math.max(senderLimit.resetAt - Date.now(), 0);
-      this.logger.warn(
-        `Rate limit do numero ${instanceName} atingido. Retry em ${delay}ms`,
-      );
-      throw new Error(`Rate limit remetente: retry after ${delay}ms`);
-    }
-
-    const recipientLimit =
-      await this.rateLimitService.checkRateLimit(phoneNumber);
-
-    if (!recipientLimit.allowed) {
-      const delay = Math.max(recipientLimit.resetAt - Date.now(), 0);
-      this.logger.warn(
-        `Rate limit de destinatario atingido. Retry em ${delay}ms`,
-      );
-      throw new Error(`Rate limit destinatario: retry after ${delay}ms`);
-    }
   }
 
   private async ensureDebtorOptIn(

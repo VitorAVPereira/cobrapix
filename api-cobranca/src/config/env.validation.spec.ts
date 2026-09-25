@@ -14,12 +14,11 @@ function buildValidConfig(
       EFI_WEBHOOK_SECRET: 'efi_webhook_secret_with_32_characters',
       AUTH_RESEND_API_KEY: 're_test_platform_key',
       AUTH_EMAIL_FROM: 'CobraPix <acesso@cobrapix.test>',
-      META_ACCESS_TOKEN: 'meta-test-token',
+      DATAFY_API_TOKEN: 'sk_live_test_only',
+      DATAFY_WEBHOOK_SECRET: 'whsec_test_only',
+      DATAFY_WEBHOOK_BASE_URL: 'https://api.example.test/webhooks/datafy',
       META_PHONE_NUMBER_ID: '123456789',
       META_BUSINESS_ACCOUNT_ID: '123456780',
-      META_APP_SECRET: 'meta-app-secret',
-      META_WEBHOOK_VERIFY_TOKEN: 'verify-token',
-      META_WEBHOOK_BASE_URL: 'https://api.example.test',
       RESEND_API_KEY: 're_test',
       RESEND_FROM_EMAIL: 'CifraMais <cobranca@example.test>',
       RESEND_REPLY_TO: 'suporte@example.test',
@@ -43,6 +42,120 @@ function buildValidConfig(
 }
 
 describe('validateEnv', () => {
+  it('aceita armazenamento de anexos opcional com caminho absoluto e limite positivo', () => {
+    const env = validateEnv(
+      buildValidConfig({
+        COMMUNICATION_MEDIA_DIR: '/var/lib/ciframais/communication-media',
+        COMMUNICATION_MEDIA_LIMIT_BYTES: '5368709120',
+      }),
+    );
+    expect(env.COMMUNICATION_MEDIA_LIMIT_BYTES).toBe(5368709120);
+    expect(
+      validateEnv(
+        buildValidConfig({
+          COMMUNICATION_MEDIA_DIR: '',
+          COMMUNICATION_MEDIA_LIMIT_BYTES: '',
+        }),
+      ).COMMUNICATION_MEDIA_DIR,
+    ).toBeUndefined();
+    expect(() =>
+      validateEnv(buildValidConfig({ COMMUNICATION_MEDIA_DIR: 'media' })),
+    ).toThrow(/caminho absoluto/);
+    expect(() =>
+      validateEnv(buildValidConfig({ COMMUNICATION_MEDIA_LIMIT_BYTES: '-1' })),
+    ).toThrow();
+  });
+
+  it('usa somente Datafy e descarta variaveis antigas da Meta direta', () => {
+    const env = validateEnv(
+      buildValidConfig({
+        NODE_ENV: 'production',
+        WHATSAPP_TRANSPORT: 'META_DIRECT',
+        META_ACCESS_TOKEN: 'legacy-token',
+        META_APP_SECRET: 'legacy-secret',
+      }),
+    ) as Record<string, unknown>;
+    expect(env.DATAFY_API_TOKEN).toBe('sk_live_test_only');
+    for (const key of [
+      'WHATSAPP_TRANSPORT',
+      'META_ACCESS_TOKEN',
+      'META_APP_SECRET',
+    ])
+      expect(env[key]).toBeUndefined();
+  });
+
+  it('aceita segredo anterior do webhook somente durante rotacao valida', () => {
+    expect(
+      validateEnv(
+        buildValidConfig({
+          DATAFY_WEBHOOK_SECRET: 'whsec_new',
+          DATAFY_WEBHOOK_SECRET_PREVIOUS: 'whsec_old',
+        }),
+      ).DATAFY_WEBHOOK_SECRET_PREVIOUS,
+    ).toBe('whsec_old');
+    for (const previous of ['old-format', 'whsec_new'])
+      expect(() =>
+        validateEnv(
+          buildValidConfig({
+            DATAFY_WEBHOOK_SECRET: 'whsec_new',
+            DATAFY_WEBHOOK_SECRET_PREVIOUS: previous,
+          }),
+        ),
+      ).toThrow('DATAFY_WEBHOOK_SECRET_PREVIOUS');
+  });
+
+  it.each([
+    'DATAFY_API_TOKEN',
+    'DATAFY_WEBHOOK_SECRET',
+    'DATAFY_WEBHOOK_BASE_URL',
+    'META_PHONE_NUMBER_ID',
+    'META_BUSINESS_ACCOUNT_ID',
+  ])('exige %s em producao', (field: string) => {
+    expect(() =>
+      validateEnv(buildValidConfig({ NODE_ENV: 'production', [field]: '' })),
+    ).toThrow(field);
+  });
+
+  it('permite desenvolvimento sem canal WhatsApp configurado', () => {
+    expect(() =>
+      validateEnv(
+        buildValidConfig({
+          DATAFY_API_TOKEN: '',
+          DATAFY_WEBHOOK_SECRET: '',
+          DATAFY_WEBHOOK_BASE_URL: '',
+          META_PHONE_NUMBER_ID: undefined,
+          META_BUSINESS_ACCOUNT_ID: undefined,
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it.each([
+    ['DATAFY_API_TOKEN', 'token-sem-prefixo'],
+    ['DATAFY_WEBHOOK_SECRET', 'segredo-sem-prefixo'],
+    ['META_PHONE_NUMBER_ID', 'abc'],
+  ])('valida o formato de %s', (field: string, value: string) => {
+    expect(() => validateEnv(buildValidConfig({ [field]: value }))).toThrow(
+      field,
+    );
+  });
+
+  it.each([
+    'http://api.example.test/webhooks/datafy',
+    'https://localhost/webhooks/datafy',
+    'https://127.0.0.1/webhooks/datafy',
+    'https://user:pass@api.example.test/webhooks/datafy',
+  ])('recusa webhook Datafy nao publico em producao: %s', (url: string) => {
+    expect(() =>
+      validateEnv(
+        buildValidConfig({
+          NODE_ENV: 'production',
+          DATAFY_WEBHOOK_BASE_URL: url,
+        }),
+      ),
+    ).toThrow('DATAFY_WEBHOOK_BASE_URL');
+  });
+
   it('exige assinatura Resend central em produção', () => {
     expect(() =>
       validateEnv(
@@ -55,7 +168,7 @@ describe('validateEnv', () => {
   });
 
   it.each([
-    'META_ACCESS_TOKEN',
+    'DATAFY_API_TOKEN',
     'EFI_OPENING_CLIENT_SECRET',
     'EFI_OPENING_CERT_PATH',
     'EFI_PLATFORM_CNPJ',
