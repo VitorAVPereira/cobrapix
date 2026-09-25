@@ -15,6 +15,7 @@ import {
 } from './financial-validation.jobs';
 import { FinancialValidationService } from './financial-validation.service';
 import { FinancialValidationWorker } from './financial-validation.worker';
+import { FinancialHistoryService } from './financial-history.service';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { FinancialValidationWorker } from './financial-validation.worker';
   ],
   providers: [
     FinancialActivationService,
+    FinancialHistoryService,
     EfiAccountRegistryService,
     FinancialValidationService,
     FinancialValidationJobs,

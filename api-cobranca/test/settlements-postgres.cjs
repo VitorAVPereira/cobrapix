@@ -14,6 +14,7 @@ const { PaymentChargeService } = require('../src/payment/payment-charge.service.
 const { PaymentFeeService } = require('../src/payment-fees/payment-fee.service.ts');
 const { FinancialEligibilityService } = require('../src/financial-activation/financial-eligibility.service.ts');
 const { SettlementsService } = require('../src/settlements/settlements.service.ts');
+const { FinancialHistoryService } = require('../src/financial-activation/financial-history.service.ts');
 const name = `settlements-test-${randomBytes(6).toString('hex')}`;
 const password = randomBytes(24).toString('hex');
 function docker(args) {
@@ -228,6 +229,28 @@ let containerStarted = false;
     const audits = await prisma.auditLog.count({ where: { action: { in: ['PLATFORM_FEE_EVIDENCE_RECORDED', 'SETTLEMENT_DIVERGENCE_RESOLVED', 'SETTLEMENT_OPTIONS_UPDATED'] } } });
     assert.ok(audits >= 6);
     console.log('PASS summary, filtered list, detail totals and audit trail');
+
+    // 8. Company view and financial history show only the tenant's own data.
+    const betaView = await settlements.companyOverview(beta.company.id, 1, 50);
+    assert.equal(betaView.total, 3);
+    assert.equal(betaView.totals.receivedCents, 30000);
+    assert.equal(betaView.totals.netCents, 30000 - 300 - 750);
+    assert.ok(betaView.data.every((row) => row.debtorName === 'Pagador'));
+    assert.equal(JSON.stringify(betaView).includes('extrato'), false, 'no evidence details for the company');
+    const alphaView = await settlements.companyOverview(alpha.company.id, 1, 50);
+    assert.ok(alphaView.data.some((row) => row.situation === 'IN_REVIEW'));
+    assert.ok(alphaView.data.some((row) => row.situation === 'REFUNDED'));
+    const history = new FinancialHistoryService(prisma);
+    const alphaHistory = await history.get(alpha.company.id);
+    assert.equal(alphaHistory.versions.length, 1);
+    assert.match(alphaHistory.versions[0].issuerAccount, /^••••/);
+    assert.ok(alphaHistory.events.some((event) => event.action === 'SETTLEMENT_DIVERGENCE_RESOLVED'));
+    assert.ok(alphaHistory.events.some((event) => event.action === 'SETTLEMENT_OPTIONS_UPDATED'));
+    const betaIds = new Set((await prisma.paymentSettlement.findMany({ where: { companyId: beta.company.id } })).map((row) => row.id));
+    assert.equal(JSON.stringify(alphaHistory).split('"').some((token) => betaIds.has(token)), false, 'no other tenant in the history');
+    const gammaHistory = await history.get(gamma.company.id);
+    assert.equal(gammaHistory.events.length, 0);
+    console.log('PASS company receipts and financial history are tenant-scoped and redacted');
     console.log(`PASS settlements on ${migrations.length} migrations in PostgreSQL 16`);
   } finally {
     if (prisma) await prisma.$disconnect();

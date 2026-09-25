@@ -11,6 +11,17 @@ import type {
   FinancialProfile,
   ValidationAttempt,
 } from "./financial-activation";
+import type {
+  CompanyReceipts,
+  DivergenceDecision,
+  FinancialHistory,
+  PlatformFeeEvidenceResult,
+  SettlementDetail,
+  SettlementDivergence,
+  SettlementList,
+  SettlementStatus,
+  SettlementSummary,
+} from "./settlements";
 import type { EfiDraftInput, EfiOnboardingState } from "./efi-onboarding";
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
@@ -1124,6 +1135,72 @@ class ApiClient {
         }),
       },
     );
+  }
+  getFinancialHistory(companyId: string): Promise<FinancialHistory> {
+    return this.fetch(
+      `/admin/companies/${encodeURIComponent(companyId)}/financial-history`,
+    );
+  }
+  getSettlements(filters: {
+    companyId?: string;
+    status?: SettlementStatus;
+    page?: number;
+    pageSize?: number;
+  }): Promise<SettlementList> {
+    const query = new URLSearchParams();
+    if (filters.companyId) query.set("companyId", filters.companyId);
+    if (filters.status) query.set("status", filters.status);
+    if (filters.page) query.set("page", String(filters.page));
+    if (filters.pageSize) query.set("pageSize", String(filters.pageSize));
+    const qs = query.toString();
+    return this.fetch(`/admin/settlements${qs ? `?${qs}` : ""}`);
+  }
+  getSettlementSummary(companyId?: string): Promise<SettlementSummary> {
+    return this.fetch(
+      `/admin/settlements/summary${
+        companyId ? `?companyId=${encodeURIComponent(companyId)}` : ""
+      }`,
+    );
+  }
+  getSettlement(id: string): Promise<SettlementDetail> {
+    return this.fetch(`/admin/settlements/${encodeURIComponent(id)}`);
+  }
+  recordPlatformFeeEvidence(input: {
+    settlementIds: string[];
+    reference: string;
+    receivedAmountCents: number;
+    note?: string;
+  }): Promise<PlatformFeeEvidenceResult> {
+    return this.fetch("/admin/settlements/platform-fee-evidence", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+  resolveSettlementDivergence(
+    divergenceId: string,
+    input: {
+      decision: DivergenceDecision;
+      reference?: string;
+      note?: string;
+      dueDate?: string;
+    },
+  ): Promise<SettlementDivergence> {
+    return this.fetch(
+      `/admin/settlements/divergences/${encodeURIComponent(divergenceId)}/resolve`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+  }
+  updateSettlementOptions(
+    companyId: string,
+    refundPlatformFeeOnRefund: boolean,
+  ): Promise<{ companyId: string; refundPlatformFeeOnRefund: boolean }> {
+    return this.fetch(
+      `/admin/companies/${encodeURIComponent(companyId)}/settlement-options`,
+      { method: "PUT", body: JSON.stringify({ refundPlatformFeeOnRefund }) },
+    );
+  }
+  getCompanyReceipts(page = 1, pageSize = 20): Promise<CompanyReceipts> {
+    return this.fetch(`/financial/receipts?page=${page}&pageSize=${pageSize}`);
   }
   getFinancialActivation(id: string): Promise<FinancialProfile> {
     return this.fetch(`/admin/financial-activations/${encodeURIComponent(id)}`);

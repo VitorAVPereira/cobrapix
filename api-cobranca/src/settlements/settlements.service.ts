@@ -196,7 +196,14 @@ export class SettlementsService {
       ]);
     const sum = (kind: string) =>
       byKind.find((row) => row.kind === kind)?._sum.amountCents ?? 0;
+    const options = companyId
+      ? await this.prisma.company.findUnique({
+          where: { id: companyId },
+          select: { refundPlatformFeeOnRefund: true },
+        })
+      : null;
     return {
+      ...(options ? { options } : {}),
       settlements: Object.fromEntries(
         byStatus.map((row) => [row.status, row._count._all]),
       ),
@@ -215,6 +222,89 @@ export class SettlementsService {
         count: row._count._all,
         amountCents: row._sum.amountCents ?? 0,
       })),
+    };
+  }
+
+  // The company's own receipts: read-only, without evidence or decision
+  // details. A charge under administrative review shows as such.
+  async companyOverview(companyId: string, page: number, pageSize: number) {
+    const where = { companyId };
+    const [byKind, total, rows] = await Promise.all([
+      this.prisma.financialLedgerEntry.groupBy({
+        by: ['kind'],
+        where,
+        _sum: { amountCents: true },
+      }),
+      this.prisma.paymentSettlement.count({ where }),
+      this.prisma.paymentSettlement.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: {
+          paymentCharge: {
+            select: {
+              status: true,
+              billingMethod: true,
+              grossAmountCents: true,
+              paidAt: true,
+              invoice: {
+                select: { id: true, debtor: { select: { name: true } } },
+              },
+            },
+          },
+          ledgerEntries: {
+            select: { kind: true, amountCents: true, estimated: true },
+          },
+        },
+      }),
+    ]);
+    const sum = (kind: string) =>
+      byKind.find((row) => row.kind === kind)?._sum.amountCents ?? 0;
+    return {
+      totals: {
+        receivedCents: sum('PAYMENT'),
+        efiFeeCents: -sum('EFI_FEE'),
+        platformFeeCents: -sum('PLATFORM_FEE'),
+        refundedCents: -sum('REFUND'),
+        platformFeeReversalCents: sum('PLATFORM_FEE_REVERSAL'),
+        netCents:
+          sum('PAYMENT') +
+          sum('EFI_FEE') +
+          sum('PLATFORM_FEE') +
+          sum('REFUND') +
+          sum('PLATFORM_FEE_REVERSAL'),
+      },
+      total,
+      page,
+      pageSize,
+      data: rows.map((row) => {
+        const totals = this.totals(row.ledgerEntries);
+        const charge = row.paymentCharge;
+        return {
+          invoiceId: charge.invoice.id,
+          debtorName: charge.invoice.debtor.name,
+          billingMethod: charge.billingMethod,
+          paidAt: charge.paidAt,
+          grossAmountCents: charge.grossAmountCents,
+          paidAmountCents: totals.paymentCents,
+          efiFeeCents: totals.efiFeeCents,
+          efiFeeEstimated: row.ledgerEntries.some(
+            (entry) => entry.kind === 'EFI_FEE' && entry.estimated,
+          ),
+          platformFeeCents: totals.platformFeeCents,
+          refundedCents: totals.refundedCents,
+          netCents: totals.customerNetCents,
+          situation:
+            row.status === 'DIVERGENT'
+              ? 'IN_REVIEW'
+              : charge.status === 'REFUNDED'
+                ? 'REFUNDED'
+                : totals.refundedCents > 0
+                  ? 'PARTIALLY_REFUNDED'
+                  : 'RECEIVED',
+        };
+      }),
     };
   }
 

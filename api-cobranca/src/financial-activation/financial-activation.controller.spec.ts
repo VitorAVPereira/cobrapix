@@ -9,6 +9,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GlobalExceptionFilter } from '../common/filters/http-exception.filter';
 import { FinancialActivationController } from './financial-activation.controller';
 import { FinancialActivationService } from './financial-activation.service';
+import { FinancialHistoryService } from './financial-history.service';
 import { FinancialValidationService } from './financial-validation.service';
 
 describe('Ativação financeira HTTP', () => {
@@ -41,6 +42,7 @@ describe('Ativação financeira HTTP', () => {
       providers: [
         { provide: FinancialActivationService, useValue: service },
         { provide: FinancialValidationService, useValue: validation },
+        { provide: FinancialHistoryService, useValue: { get: jest.fn() } },
       ],
     })
       .overrideGuard(JwtAuthGuard)
@@ -81,6 +83,7 @@ describe('Ativação financeira HTTP', () => {
 
   const routes: Array<[string, string]> = [
     ['get', `/admin/companies/${companyId}/financial-profile`],
+    ['get', `/admin/companies/${companyId}/financial-history`],
     ['post', `/admin/companies/${companyId}/financial-activations`],
     ['get', `/admin/financial-activations/${id}`],
     ['put', `/admin/financial-activations/${id}/configuration`],

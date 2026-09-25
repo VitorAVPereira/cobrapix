@@ -19,6 +19,7 @@ import {
   MessageSquare,
   Settings,
   SlidersHorizontal,
+  Scale,
   Users,
   Wallet,
   X,
@@ -46,6 +47,11 @@ const mainItems = [
     href: "/baixas",
     label: "Baixas",
     icon: BellRing,
+  },
+  {
+    href: "/financeiro",
+    label: "Financeiro",
+    icon: Wallet,
   },
   {
     href: "/devedores-recorrentes",
@@ -84,6 +90,7 @@ const settingsItems = [
 
 const adminItems = [
   {href:'/admin/ativacao-financeira',label:'Ativação financeira',icon:Wallet},
+  {href:'/admin/conciliacao',label:'Conciliação',icon:Scale},
   {href:'/admin/efi-onboarding',label:'Ativações e saúde',icon:Database},
   {href:'/admin/payment-fees',label:'Tarifas',icon:HandCoins},
   {href:'/admin/communications',label:'Atendimento central',icon:MessageSquare},

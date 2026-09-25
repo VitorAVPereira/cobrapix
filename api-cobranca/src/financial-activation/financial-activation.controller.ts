@@ -35,6 +35,10 @@ import {
   FinancialValidationService,
   ValidationAttemptView,
 } from './financial-validation.service';
+import {
+  FinancialHistory,
+  FinancialHistoryService,
+} from './financial-history.service';
 
 // Only this route accepts a file. Without `dest`/`storage`, multer keeps the
 // certificate in memory and never touches the filesystem.
@@ -54,11 +58,20 @@ export class FinancialActivationController {
   constructor(
     private readonly service: FinancialActivationService,
     private readonly validation: FinancialValidationService,
+    private readonly history: FinancialHistoryService,
   ) {}
 
   @Get('companies/:companyId/financial-profile')
   overview(@Param('companyId', ParseUUIDPipe) companyId: string) {
     return this.service.getOverview(companyId);
+  }
+
+  // Versions and audit trail of this company only, with redacted details.
+  @Get('companies/:companyId/financial-history')
+  financialHistory(
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+  ): Promise<FinancialHistory> {
+    return this.history.get(companyId);
   }
 
   @Post('companies/:companyId/financial-activations')
