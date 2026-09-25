@@ -17,6 +17,7 @@ import { EmailModule } from './email/email.module';
 import { AdminModule } from './admin/admin.module';
 import { BullInfrastructureModule } from './queue/bull-infrastructure.module';
 import { EfiOnboardingModule } from './efi-onboarding/efi-onboarding.module';
+import { FinancialActivationModule } from './financial-activation/financial-activation.module';
 import { CommunicationsModule } from './communications/communications.module';
 
 @Module({
@@ -40,6 +41,7 @@ import { CommunicationsModule } from './communications/communications.module';
     EmailModule,
     AdminModule,
     EfiOnboardingModule,
+    FinancialActivationModule,
     CommunicationsModule,
   ],
   providers: [
