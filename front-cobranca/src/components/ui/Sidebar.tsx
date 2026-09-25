@@ -20,6 +20,7 @@ import {
   Settings,
   SlidersHorizontal,
   Users,
+  Wallet,
   X,
 } from "lucide-react";
 import { useFinancialActivation } from "@/components/features/financial-activation-context";
@@ -82,6 +83,7 @@ const settingsItems = [
 ];
 
 const adminItems = [
+  {href:'/admin/ativacao-financeira',label:'Ativação financeira',icon:Wallet},
   {href:'/admin/efi-onboarding',label:'Ativações e saúde',icon:Database},
   {href:'/admin/payment-fees',label:'Tarifas',icon:HandCoins},
   {href:'/admin/communications',label:'Atendimento central',icon:MessageSquare},

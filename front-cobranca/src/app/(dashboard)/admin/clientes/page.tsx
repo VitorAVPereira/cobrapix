@@ -6,6 +6,7 @@ import {
   useEffect,
   useState,
 } from "react";
+import Link from "next/link";
 import { useSession } from "next-auth/react";
 import {
   Building2,
@@ -586,6 +587,13 @@ export default function AdminClientsPage() {
                               <KeyRound size={14} />
                               Resetar
                             </button>
+                            <Link
+                              href={`/admin/ativacao-financeira/${client.id}`}
+                              aria-label={`Ativação financeira de ${client.corporateName}`}
+                              className="inline-flex items-center gap-2 rounded-md border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50"
+                            >
+                              Ativação financeira
+                            </Link>
                           </div>
                         </td>
                       </tr>
