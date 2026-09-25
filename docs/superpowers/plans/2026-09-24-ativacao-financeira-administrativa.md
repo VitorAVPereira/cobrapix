@@ -451,3 +451,9 @@ Complementam as seções anteriores e prevalecem sobre elas quando houver confli
 - Nos modos CifraMais, somente `PLATFORM_ADMIN` devolve. No modo conta do cliente o sistema apenas registra as devoluções notificadas pela Efí.
 - A tarifa Efí não é estornada. A remuneração CifraMais não é estornada por padrão, com opção por cliente “estornar remuneração em devolução”.
 - Devolução antes do repasse reduz o valor a repassar; depois do repasse gera saldo devedor do cliente, compensado em repasses seguintes, sem débito automático.
+
+### 8.6 Fases de entrega
+
+- **Fase A — conta própria do cliente**, completa e publicável: tipos, schema com os três modos previstos, credenciais/certificado, validação, ativação sem API de abertura, elegibilidade, emissão e webhooks pela conta correta, multa/juros e telas administrativas e da empresa para esse modo.
+- **Fase B — conta CifraMais**: emissão pela plataforma, procuração, destinos em qualquer banco, split invertido, conciliação, lotes de repasse e devoluções.
+- As etapas da seção 5 são executadas na Fase A somente no que se aplica à conta do cliente; a Fase B retoma as partes restantes. A Fase B apenas acrescenta, sem refazer o que a Fase A entregou.
