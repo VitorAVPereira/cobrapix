@@ -22,6 +22,6 @@ Revisão em conflito recarrega os dados e explica. Com a ativação manual pausa
 
 ## Verificação
 
-- Backend: `npx jest` 90 suítes / 621 testes (inclui `to-boolean.spec.ts` e `company-financial-profile.service.spec.ts`); ESLint e `nest build` sem erros.
+- Backend: `npx jest` 91 suítes / 621 testes (inclui `to-boolean.spec.ts` e `company-financial-profile.service.spec.ts`); ESLint e `nest build` sem erros.
 - Frontend: `npx jest` 36 suítes / 133 testes (provedor e banner, menu com e sem abertura, aviso em `/onboarding/efi`, tela administrativa: início, upload multipart com limpeza dos segredos, conflito de revisão, confirmações da ativação, pausa); `tsc` sem erros; ESLint sem erros novos; `next build` com as rotas novas.
 - Limite do jsdom encontrado nos testes: `new FormData(form)` devolve arquivo vazio e `required` em campo de arquivo não se satisfaz; a tela anexa o arquivo explicitamente a partir do campo e valida a presença no envio.
