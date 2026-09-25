@@ -8,6 +8,7 @@ import {
   Matches,
 } from 'class-validator';
 import { TEMPLATE_SLUGS } from '../template-catalog';
+import { ToBoolean } from '../../common/to-boolean';
 
 const META_TEMPLATE_CATEGORIES = ['UTILITY', 'MARKETING', 'AUTHENTICATION'];
 const COPY_CODE_SOURCES = ['AUTO', 'PIX_COPY_PASTE', 'BOLETO_LINE_DIGITABLE'];
@@ -34,6 +35,7 @@ export class CreateTemplateDto {
   @MaxLength(60)
   footerText?: string;
 
+  @ToBoolean()
   @IsBoolean()
   @IsOptional()
   paymentButtonEnabled?: boolean;
@@ -43,6 +45,7 @@ export class CreateTemplateDto {
   @MaxLength(25)
   paymentButtonLabel?: string;
 
+  @ToBoolean()
   @IsBoolean()
   @IsOptional()
   copyCodeButtonEnabled?: boolean;
@@ -52,6 +55,7 @@ export class CreateTemplateDto {
   @IsIn(COPY_CODE_SOURCES)
   copyCodeSource?: 'AUTO' | 'PIX_COPY_PASTE' | 'BOLETO_LINE_DIGITABLE';
 
+  @ToBoolean()
   @IsBoolean()
   @IsOptional()
   isActive?: boolean;

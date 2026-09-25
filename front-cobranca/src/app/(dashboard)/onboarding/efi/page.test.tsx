@@ -60,3 +60,10 @@ it("preserves unsaved fields while the periodic status refresh runs", () => {
  rerender(<Page />);
  expect(screen.getByLabelText("Razão social (beneficiário)")).toHaveValue("Rascunho local");
 });
+
+it("shows only a status notice while the opening API is disabled", () => {
+ mockContext={...mockContext,openingEnabled:false,profile:{openingEnabled:false,canIssue:false,status:"PENDING",accountMode:null,enabledMethods:[],activatedAt:null,issuerAccount:null}};
+ render(<Page />);
+ expect(screen.getByText(/equipe CifraMais está configurando/)).toBeInTheDocument();
+ expect(screen.queryByRole("button",{name:"Salvar e continuar"})).not.toBeInTheDocument();
+});

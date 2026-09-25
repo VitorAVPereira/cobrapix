@@ -19,6 +19,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { CreateGatewayAccountDto } from '../../payment/dto/gateway-account.dto';
+import { ToBoolean } from '../../common/to-boolean';
 
 const COMPANY_STATUSES = ['ACTIVE', 'INACTIVE', 'SUSPENDED'] as const;
 const BILLING_METHODS = ['PIX', 'BOLIX'] as const;
@@ -75,18 +76,6 @@ export class AdminBillingDto {
 
   @IsIn(BILLING_METHODS)
   preferredBillingMethod!: (typeof BILLING_METHODS)[number];
-
-  @IsInt()
-  @Min(0)
-  @Max(9999)
-  @IsOptional()
-  onTimeSplitPercentageBps?: number;
-
-  @IsInt()
-  @Min(0)
-  @Max(9999)
-  @IsOptional()
-  overdueSplitPercentageBps?: number;
 }
 
 export class AdminCompanyUpdateDto {
@@ -199,18 +188,6 @@ export class AdminBillingUpdateDto {
   @IsOptional()
   @IsInt()
   @Min(0)
-  @Max(9999)
-  onTimeSplitPercentageBps?: number;
-
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  @Max(9999)
-  overdueSplitPercentageBps?: number;
-
-  @IsOptional()
-  @IsInt()
-  @Min(0)
   @Max(99)
   maxDiscountsPerDebtor?: number;
 
@@ -227,10 +204,12 @@ export class AdminBillingUpdateDto {
   collectionReminderDays?: number[];
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   autoGenerateFirstCharge?: boolean;
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   autoDiscountEnabled?: boolean;
 
@@ -253,6 +232,7 @@ export class AdminNotificationsDto {
   businessSegment?: (typeof BUSINESS_SEGMENTS)[number];
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   paymentNotificationEnabled?: boolean;
 

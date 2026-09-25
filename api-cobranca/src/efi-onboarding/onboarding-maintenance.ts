@@ -1,11 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { EfiOnboarding } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { OnboardingJobs } from './onboarding-jobs';
 import { OnboardingNotifications } from './onboarding-notifications';
 import { readCheckpoint } from './onboarding-checkpoint';
+import { isEfiOpeningEnabled } from '../config/account-opening';
 
 const PENDING = ['AWAITING_REPRESENTATIVE', 'EFI_PROCESSING'] as const;
 
@@ -17,9 +19,11 @@ export class OnboardingMaintenance {
     private readonly crypto: PaymentCryptoService,
     private readonly jobs: OnboardingJobs,
     private readonly notifications: OnboardingNotifications,
+    private readonly config?: ConfigService,
   ) {}
   @Cron('0 */5 * * * *')
   async recover(): Promise<void> {
+    if (this.config && !isEfiOpeningEnabled(this.config)) return;
     // Internal scheduler intentionally enumerates tenants in bounded pages.
     let cursor: string | undefined;
     do {

@@ -2,6 +2,26 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PaymentFeeService } from '../payment-fees/payment-fee.service';
 import { PaymentChargeService } from './payment-charge.service';
 import { Prisma } from '@prisma/client';
+import type { IssuanceContext } from '../financial-activation/financial-eligibility.service';
+import {
+  recordDuplicatePayment,
+  syncSettlement,
+} from '../settlements/settlement-ledger';
+
+// The ledger itself runs against PostgreSQL in test/settlements-postgres.cjs.
+jest.mock('../settlements/settlement-ledger', () => ({
+  syncSettlement: jest.fn(),
+  recordDuplicatePayment: jest.fn(),
+}));
+
+const financial: IssuanceContext = {
+  financialProfileId: 'profile-1',
+  issuerIdentityId: 'identity-1',
+  issuerCredentialVersionId: 'credential-1',
+  accountMode: 'CUSTOMER_ACCOUNT',
+  payoutMode: 'DIRECT_TO_CUSTOMER',
+  financialEnvironment: 'PRODUCTION',
+};
 
 function fixture(
   status = 'ACTIVE',
@@ -24,9 +44,22 @@ function fixture(
     paidAt: status === 'PAID' ? new Date('2026-01-01') : null,
   };
   const tx = {
-    $queryRaw: jest
-      .fn()
-      .mockResolvedValue([{ id: 'invoice-1', status: 'DRAFT' }]),
+    // Company pointer first (FOR SHARE), then the invoice (FOR UPDATE).
+    $queryRaw: jest.fn((sql: Prisma.Sql) =>
+      Promise.resolve(
+        sql.text.includes('"Company"')
+          ? [{ activeFinancialProfileId: 'profile-1' }]
+          : [
+              {
+                id: 'invoice-1',
+                status: 'DRAFT',
+                lateFineBasisPoints: 200,
+                lateInterestMonthlyBasisPoints: 100,
+                paymentDaysAfterDue: 30,
+              },
+            ],
+      ),
+    ),
     paymentCharge: {
       findFirst: jest.fn().mockResolvedValue(row),
       create: jest.fn().mockResolvedValue(row),
@@ -38,6 +71,12 @@ function fixture(
     },
     invoice: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     collectionLog: { create: jest.fn() },
+    financialLedgerEntry: {
+      findUnique: jest.fn().mockResolvedValue({ evidenceReference: 'E2E-1' }),
+    },
+    paymentFeeVersion: {
+      findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 'fee-1' }),
+    },
   };
   const prisma = {
     ...tx,
@@ -47,17 +86,20 @@ function fixture(
     ),
   };
   const fees = {
-    resolveActiveVersion: jest.fn().mockResolvedValue({ id: 'fee-1' }),
-    calculateQuote: jest.fn().mockReturnValue({
+    resolveActiveVersion: jest
+      .fn()
+      .mockResolvedValue({ id: 'fee-1', platformFeeBasisPoints: 250 }),
+    calculateQuote: jest.fn((gross: number) => ({
       estimatedEfiFeeCents: 100,
-      estimatedPlatformFeeCents: 50,
-    }),
+      estimatedPlatformFeeCents: Math.round(gross * 0.025),
+    })),
     toSnapshot: jest.fn().mockReturnValue({ version: 3 }),
     hasEffectiveFeeDivergence: jest.fn().mockReturnValue(true),
   };
   return {
     tx,
     row,
+    fees,
     service: new PaymentChargeService(
       prisma as unknown as PrismaService,
       fees as unknown as PaymentFeeService,
@@ -152,18 +194,34 @@ describe('PaymentChargeService', () => {
   });
   it('rejects an invoice settled before the reservation acquired its lock', async () => {
     const { service, tx } = fixture();
-    tx.$queryRaw.mockResolvedValueOnce([{ id: 'invoice-1', status: 'PAID' }]);
+    tx.$queryRaw
+      .mockResolvedValueOnce([{ activeFinancialProfileId: 'profile-1' }])
+      .mockResolvedValueOnce([
+        {
+          id: 'invoice-1',
+          status: 'PAID',
+          lateFineBasisPoints: 0,
+          lateInterestMonthlyBasisPoints: 0,
+          paymentDaysAfterDue: 30,
+        },
+      ]);
     tx.paymentCharge.findFirst.mockResolvedValueOnce(null);
     await expect(
-      service.createDraft('company-1', 'invoice-1', 'PIX', 10000),
+      service.createDraft('company-1', 'invoice-1', 'PIX', 10000, financial),
     ).rejects.toMatchObject({ status: 409 });
     expect(tx.paymentCharge.create).not.toHaveBeenCalled();
   });
   it('locks the invoice and snapshots fees before reserving an issuance', async () => {
     const { service, tx } = fixture();
     tx.paymentCharge.findFirst.mockResolvedValueOnce(null);
-    await service.createDraft('company-1', 'invoice-1', 'PIX', 10000);
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    await service.createDraft(
+      'company-1',
+      'invoice-1',
+      'PIX',
+      10000,
+      financial,
+    );
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
     expect(tx.paymentCharge.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         status: 'PENDING',
@@ -172,10 +230,76 @@ describe('PaymentChargeService', () => {
       }) as unknown,
     });
   });
+  it('fixes the issuer account, modes and late terms on the charge', async () => {
+    const { service, tx } = fixture();
+    tx.paymentCharge.findFirst.mockResolvedValueOnce(null);
+    await service.createDraft(
+      'company-1',
+      'invoice-1',
+      'BOLIX',
+      10000,
+      financial,
+    );
+    expect(tx.paymentCharge.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        financialProfileId: 'profile-1',
+        issuerIdentityId: 'identity-1',
+        issuerCredentialVersionId: 'credential-1',
+        accountMode: 'CUSTOMER_ACCOUNT',
+        payoutMode: 'DIRECT_TO_CUSTOMER',
+        financialEnvironment: 'PRODUCTION',
+        distributionSnapshot: expect.objectContaining({
+          grossAmountCents: 10000,
+          estimatedPlatformFeeCents: 250,
+        }) as unknown,
+        lateFineBasisPoints: 200,
+        lateInterestMonthlyBasisPoints: 100,
+        paymentDaysAfterDue: 30,
+      }) as unknown,
+    });
+  });
+  it('refuses the reservation when the active profile changed meanwhile', async () => {
+    const { service, tx } = fixture();
+    tx.$queryRaw.mockResolvedValueOnce([
+      { activeFinancialProfileId: 'profile-2' },
+    ]);
+    await expect(
+      service.createDraft('company-1', 'invoice-1', 'PIX', 10000, financial),
+    ).rejects.toMatchObject({
+      response: { code: 'FINANCIAL_PROFILE_CHANGED' },
+    });
+    expect(tx.paymentCharge.create).not.toHaveBeenCalled();
+  });
+  it('rejects legacy billing methods for new charges', async () => {
+    const { service, tx } = fixture();
+    await expect(
+      service.createDraft('company-1', 'invoice-1', 'BOLETO', 10000, financial),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(tx.paymentCharge.create).not.toHaveBeenCalled();
+  });
+  it('charges the platform fee on the amount actually paid', async () => {
+    const { service, tx, row } = fixture();
+    await service.recordSettlement(row, 120, 'paid', 10500);
+    expect(tx.paymentCharge.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          paidAmountCents: 10500,
+          effectivePlatformFeeCents: 263,
+        }) as unknown,
+      }),
+    );
+  });
+  it('rejects an invalid paid amount before any write', async () => {
+    const { service, tx, row } = fixture();
+    await expect(
+      service.recordSettlement(row, null, 'paid', 0),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(tx.paymentCharge.updateMany).not.toHaveBeenCalled();
+  });
   it('blocks a concurrent reservation even for a different billing method', async () => {
     const { service, tx } = fixture();
     await expect(
-      service.createDraft('company-1', 'invoice-1', 'BOLETO', 10000),
+      service.createDraft('company-1', 'invoice-1', 'BOLIX', 10000, financial),
     ).rejects.toThrow();
     expect(tx.paymentCharge.create).not.toHaveBeenCalled();
   });
@@ -259,5 +383,60 @@ describe('PaymentChargeService', () => {
     );
     expect(tx.paymentCharge.updateMany).not.toHaveBeenCalled();
     expect(tx.collectionLog.create).not.toHaveBeenCalled();
+  });
+  it('keeps the ledger in line with every settlement and refund', async () => {
+    const { service, row } = fixture('ACTIVE');
+    const evidence = {
+      source: 'PROVIDER_WEBHOOK' as const,
+      reference: 'E2E-1',
+    };
+    await service.recordSettlement(row, 120, 'paid', 10000, evidence);
+    expect(syncSettlement).toHaveBeenCalledWith(
+      expect.anything(),
+      'charge-1',
+      'company-1',
+      evidence,
+    );
+    await service.recordPixRefunds(row, [
+      { providerRefundId: 'refund-1', amountCents: 1000 },
+    ]);
+    expect(syncSettlement).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'charge-1',
+      'company-1',
+      { source: 'PROVIDER_WEBHOOK', reference: 'refund-1' },
+    );
+  });
+  it('records another Pix on a paid charge as a duplicate, not a new settlement', async () => {
+    const { service, tx, row } = fixture('PAID');
+    (syncSettlement as jest.Mock).mockClear();
+    await expect(
+      service.recordSettlement(row, null, 'CONCLUIDA', 10000, {
+        source: 'PROVIDER_WEBHOOK',
+        reference: 'E2E-2',
+        distinctPayment: true,
+      }),
+    ).resolves.toBe(false);
+    expect(recordDuplicatePayment).toHaveBeenCalledWith(
+      expect.anything(),
+      'charge-1',
+      'company-1',
+      10000,
+      { source: 'PROVIDER_WEBHOOK', reference: 'E2E-2' },
+    );
+    expect(tx.paymentCharge.updateMany).not.toHaveBeenCalled();
+    expect(syncSettlement).not.toHaveBeenCalled();
+  });
+  it('limits refunds to the amount actually paid', async () => {
+    const { service, row, tx } = fixture('PAID');
+    tx.paymentCharge.findFirst.mockResolvedValue({
+      ...row,
+      paidAmountCents: 10650,
+    });
+    await expect(
+      service.recordPixRefunds(row, [
+        { providerRefundId: 'all', amountCents: 10650 },
+      ]),
+    ).resolves.toBe('REFUNDED');
   });
 });

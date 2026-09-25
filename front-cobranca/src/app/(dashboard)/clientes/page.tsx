@@ -30,6 +30,14 @@ import type {
 } from "@/lib/api-client";
 import { normalizeRequiredDebtorDocument } from "@/lib/debtor-document";
 import { useApiClient } from "@/lib/use-api-client";
+import { LateTermsFields } from "@/components/features/LateTermsFields";
+import {
+  EMPTY_LATE_TERMS,
+  isIndividualDocument,
+  lateTermsFormFromValues,
+  parseLateTermsForm,
+  type LateTermsFormValues,
+} from "@/lib/late-terms";
 import {
   formatWhatsAppNumber,
   normalizeWhatsAppNumber,
@@ -48,6 +56,7 @@ interface ChargeForm {
   amount: string;
   dueDate: string;
   billingType: BillingMethod;
+  lateTerms: LateTermsFormValues;
 }
 
 interface ApiErrorData {
@@ -68,6 +77,7 @@ const emptyChargeForm: ChargeForm = {
   amount: "",
   dueDate: "",
   billingType: "BOLIX",
+  lateTerms: EMPTY_LATE_TERMS,
 };
 
 const emptyResponse: DebtorListResponse = {
@@ -183,6 +193,9 @@ export default function ClientesPage() {
   );
   const [chargeTarget, setChargeTarget] = useState<DebtorListItem | null>(null);
   const [chargeForm, setChargeForm] = useState<ChargeForm>(emptyChargeForm);
+  // Company defaults for fine, interest and days after due.
+  const [companyLateTerms, setCompanyLateTerms] =
+    useState<LateTermsFormValues>(EMPTY_LATE_TERMS);
   const [openActionDebtorId, setOpenActionDebtorId] = useState<string | null>(
     null,
   );
@@ -230,6 +243,29 @@ export default function ClientesPage() {
   useEffect(() => {
     void fetchDebtors();
   }, [fetchDebtors]);
+
+  useEffect(() => {
+    let active = true;
+    async function loadCompanyLateTerms(): Promise<void> {
+      try {
+        const settings = await apiClient.getBillingSettings();
+        if (!active) return;
+        setCompanyLateTerms(
+          lateTermsFormFromValues({
+            fine: settings.lateFinePercentage ?? 0,
+            interest: settings.lateInterestMonthlyPercentage ?? 0,
+            days: settings.paymentDaysAfterDue ?? 30,
+          }),
+        );
+      } catch {
+        // Without defaults the fields stay empty and the server applies them.
+      }
+    }
+    void loadCompanyLateTerms();
+    return () => {
+      active = false;
+    };
+  }, [apiClient]);
 
   useEffect(() => {
     if (clientModalMode === "create" && defaultProfileId) {
@@ -280,7 +316,7 @@ export default function ClientesPage() {
     setSuccess(null);
     setOpenActionDebtorId(null);
     setChargeTarget(debtor);
-    setChargeForm(emptyChargeForm);
+    setChargeForm({ ...emptyChargeForm, lateTerms: companyLateTerms });
   }
 
   function closeChargeModal(): void {
@@ -350,10 +386,18 @@ export default function ClientesPage() {
         throw new Error("Informe a data de vencimento.");
       }
 
+      const parsedLateTerms = parseLateTermsForm(chargeForm.lateTerms);
+      if ("error" in parsedLateTerms) {
+        throw new Error(parsedLateTerms.error);
+      }
+
       await apiClient.createDebtorInvoice(chargeTarget.debtorId, {
         original_amount: amount,
         due_date: chargeForm.dueDate,
         billing_type: chargeForm.billingType,
+        late_fine_percentage: parsedLateTerms.terms.fine,
+        late_interest_monthly_percentage: parsedLateTerms.terms.interest,
+        payment_days_after_due: parsedLateTerms.terms.days,
       });
 
       setSuccess(`Cobranca criada para ${chargeTarget.name}.`);
@@ -875,6 +919,34 @@ export default function ClientesPage() {
                     className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                   />
                 </label>
+
+                <fieldset className="sm:col-span-2">
+                  <legend className="mb-2 text-sm font-semibold text-slate-800">
+                    Multa, juros e prazo após o vencimento{" "}
+                    <span className="font-normal text-slate-500">
+                      (opcional)
+                    </span>
+                  </legend>
+                  <LateTermsFields
+                    idPrefix="debtor-charge-late-terms"
+                    values={chargeForm.lateTerms}
+                    disabled={savingCharge}
+                    onChange={(values) =>
+                      setChargeForm((current) => ({
+                        ...current,
+                        lateTerms: values,
+                      }))
+                    }
+                    placeholders={{
+                      fine: "Padrão da empresa",
+                      interest: "Padrão da empresa",
+                      days: "Padrão da empresa",
+                    }}
+                    individualDebtor={isIndividualDocument(
+                      chargeTarget?.document,
+                    )}
+                  />
+                </fieldset>
               </div>
 
               <div className="flex flex-col-reverse gap-2 border-t border-slate-200 px-5 py-4 sm:flex-row sm:justify-end">

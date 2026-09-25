@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom";
 import { render, screen } from "@testing-library/react";
 import { Sidebar } from "../Sidebar";
+import { FinancialActivationContext } from "@/components/features/financial-activation-context";
 
 type MockRole = "PLATFORM_ADMIN" | "COMPANY_ADMIN";
 
@@ -90,4 +91,30 @@ describe("Sidebar", () => {
       screen.getByRole("button", { name: /configuracoes/i }),
     ).toBeInTheDocument();
   });
+
+  it.each([
+    [false, false],
+    [true, true],
+  ])(
+    "shows the self-service activation link only when opening is enabled (%s)",
+    (openingEnabled, visible) => {
+      render(
+        <FinancialActivationContext.Provider
+          value={{
+            state: null,
+            openingEnabled,
+            loading: false,
+            error: null,
+            canIssue: false,
+            refresh: async () => {},
+          }}
+        >
+          <Sidebar open={false} onClose={jest.fn()} />
+        </FinancialActivationContext.Provider>,
+      );
+      const link = screen.queryByRole("link", { name: /ativação financeira/i });
+      if (visible) expect(link).toHaveAttribute("href", "/onboarding/efi");
+      else expect(link).not.toBeInTheDocument();
+    },
+  );
 });

@@ -16,23 +16,25 @@ interface InitialChargeProcessor {
   processInitialChargeJob(data: InitialChargeJob): Promise<void>;
 }
 
-function fixture(onboardingStatus: string): {
+function fixture(financiallyActive: boolean): {
   process: InitialChargeProcessor;
   invoiceFindFirst: jest.Mock;
+  logCreate: jest.Mock;
 } {
   const invoiceFindFirst = jest.fn().mockResolvedValue(null);
+  const logCreate = jest.fn().mockResolvedValue({});
   const prisma = {
-    efiOnboarding: {
-      findUnique: jest.fn().mockResolvedValue({ status: onboardingStatus }),
-    },
     invoice: { findFirst: invoiceFindFirst },
+    collectionLog: { create: logCreate },
   } as unknown as PrismaService;
   const worker = new MessageWorkerService(
     {} as ConfigService,
     prisma,
     {} as RateLimitService,
     {} as MessagingLimitService,
-    {} as PaymentService,
+    {
+      hasActiveFinancialProfile: jest.fn().mockResolvedValue(financiallyActive),
+    } as unknown as PaymentService,
     {} as SpintaxService,
     {} as MessageQueueService,
     {} as WhatsappService,
@@ -44,6 +46,7 @@ function fixture(onboardingStatus: string): {
   return {
     process: worker as unknown as InitialChargeProcessor,
     invoiceFindFirst,
+    logCreate,
   };
 }
 
@@ -54,14 +57,23 @@ describe('initial payment issuance fencing', () => {
     source: 'MANUAL',
   };
 
-  it('consumes a queued draft without issuing it while onboarding is inactive', async () => {
-    const { process, invoiceFindFirst } = fixture('PROVISIONING');
+  it('consumes a queued draft without issuing it and records why', async () => {
+    const { process, invoiceFindFirst, logCreate } = fixture(false);
     await process.processInitialChargeJob(job);
     expect(invoiceFindFirst).not.toHaveBeenCalled();
+    expect(logCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          companyId: 'company-1',
+          invoiceId: 'invoice-1',
+          actionType: 'INITIAL_CHARGE_SKIPPED',
+        }) as unknown,
+      }),
+    );
   });
 
   it('loads active-era initial jobs from draft or pending invoices', async () => {
-    const { process, invoiceFindFirst } = fixture('ACTIVE');
+    const { process, invoiceFindFirst } = fixture(true);
     await process.processInitialChargeJob(job);
     expect(invoiceFindFirst).toHaveBeenCalledWith(
       expect.objectContaining({

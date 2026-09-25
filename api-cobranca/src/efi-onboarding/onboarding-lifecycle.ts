@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpException, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentCryptoService } from '../payment/payment-crypto.service';
@@ -6,6 +6,12 @@ import { EfiGatewayClient } from '../payment/efi-gateway.client';
 import { GatewayHealthService } from '../payment/gateway-health.service';
 import { inspectEfiCertificate } from '../payment/efi-certificate';
 import { EfiOpeningClient } from './efi-opening.client';
+import { isEfiOpeningEnabled } from '../config/account-opening';
+import {
+  hasActiveManualProfile,
+  syncOpeningCredential,
+} from '../financial-activation/opening-profile';
+import { ConfigService } from '@nestjs/config';
 import { OnboardingNotifications } from './onboarding-notifications';
 import { readCheckpoint } from './onboarding-checkpoint';
 
@@ -19,9 +25,12 @@ export class OnboardingLifecycle {
     private readonly gateway: EfiGatewayClient,
     private readonly health: GatewayHealthService,
     private readonly notifications: OnboardingNotifications,
+    private readonly config?: ConfigService,
   ) {}
   @Cron('0 0 3 * * *')
   async certificates(): Promise<void> {
+    // Renewal here goes through the opening API; manual accounts renew by upload.
+    if (this.config && !isEfiOpeningEnabled(this.config)) return;
     let cursor: string | undefined;
     do {
       const accounts = await this.prisma.gatewayAccount.findMany({
@@ -52,7 +61,9 @@ export class OnboardingLifecycle {
       !row ||
       row.status !== 'ACTIVE' ||
       !row.simplifiedAccountRequestId ||
-      !account?.certificateExpiresAt
+      !account?.certificateExpiresAt ||
+      // Manually activated accounts renew by upload in the admin panel.
+      (await hasActiveManualProfile(this.prisma, companyId))
     )
       return;
     const days = Math.ceil(
@@ -113,6 +124,7 @@ export class OnboardingLifecycle {
         },
       });
       if (saved.count !== 1) return;
+      await syncOpeningCredential(this.prisma, companyId);
       if (!(await this.health.validate(companyId)))
         throw new Error('EFI_RENEWAL_VALIDATION_FAILED');
     } catch {
@@ -124,6 +136,17 @@ export class OnboardingLifecycle {
     }
   }
   async disconnect(companyId: string, userId: string): Promise<void> {
+    // Disconnecting wipes the gateway credentials; a manual activation is
+    // suspended through the company status or replaced by a new version.
+    if (await hasActiveManualProfile(this.prisma, companyId))
+      throw new HttpException(
+        {
+          code: 'FINANCIAL_PROFILE_MANUAL',
+          message:
+            'Esta empresa usa ativação financeira manual. Suspenda a empresa ou publique uma nova versão pela tela de ativação financeira.',
+        },
+        409,
+      );
     // Invalidate workers and discard secrets before waiting on any provider request.
     const account = await this.prisma.$transaction(async (tx) => {
       await tx.efiOnboarding.updateMany({

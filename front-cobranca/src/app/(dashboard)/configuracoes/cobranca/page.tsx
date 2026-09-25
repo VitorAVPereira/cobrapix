@@ -13,6 +13,7 @@ import {
   Loader2,
   Mail,
   MessageCircle,
+  Percent,
   Play,
   Save,
   SlidersHorizontal,
@@ -28,6 +29,14 @@ import {
   getBillingMethodLabel,
 } from "@/lib/billing-fees";
 import { useApiClient } from "@/lib/use-api-client";
+import { LateTermsFields } from "@/components/features/LateTermsFields";
+import {
+  describeLateTerms,
+  EMPTY_LATE_TERMS,
+  lateTermsFormFromValues,
+  parseLateTermsForm,
+  type LateTermsFormValues,
+} from "@/lib/late-terms";
 
 const BILLING_METHODS: BillingMethod[] = ["PIX", "BOLIX"];
 
@@ -83,6 +92,8 @@ export default function BillingSettingsPage() {
   const [autoDiscountEnabled, setAutoDiscountEnabled] = useState(false);
   const [autoDiscountDaysAfterDue, setAutoDiscountDaysAfterDue] = useState("0");
   const [autoDiscountPercentage, setAutoDiscountPercentage] = useState("");
+  const [lateTerms, setLateTerms] =
+    useState<LateTermsFormValues>(EMPTY_LATE_TERMS);
   const [businessSegment, setBusinessSegment] =
     useState<BusinessSegment>("GENERAL");
   const [paymentNotificationEnabled, setPaymentNotificationEnabled] =
@@ -129,6 +140,7 @@ export default function BillingSettingsPage() {
         setAutoDiscountPercentage(
           response.autoDiscountPercentage?.toString() ?? "",
         );
+        setLateTerms(lateTermsFromSettings(response));
         setBusinessSegment(response.businessSegment);
         setPaymentNotificationEnabled(response.paymentNotificationEnabled);
         setPaymentNotificationEmails(
@@ -176,6 +188,17 @@ export default function BillingSettingsPage() {
       }
     }
 
+    // Company defaults: an empty fine or interest means none.
+    const parsedLateTerms = parseLateTermsForm(lateTerms);
+    if ("error" in parsedLateTerms) {
+      setError(parsedLateTerms.error);
+      return;
+    }
+    if (parsedLateTerms.terms.days === null) {
+      setError("Informe quantos dias após o vencimento o pagamento é aceito.");
+      return;
+    }
+
     setSaving(true);
     setError(null);
     setSuccess(null);
@@ -203,6 +226,9 @@ export default function BillingSettingsPage() {
         businessSegment,
         paymentNotificationEnabled,
         paymentNotificationEmails: parsedEmails.emails,
+        lateFinePercentage: parsedLateTerms.terms.fine ?? 0,
+        lateInterestMonthlyPercentage: parsedLateTerms.terms.interest ?? 0,
+        paymentDaysAfterDue: parsedLateTerms.terms.days,
       });
 
       setSettings(saved);
@@ -215,6 +241,7 @@ export default function BillingSettingsPage() {
       setAutoDiscountEnabled(saved.autoDiscountEnabled);
       setAutoDiscountDaysAfterDue(String(saved.autoDiscountDaysAfterDue ?? 0));
       setAutoDiscountPercentage(saved.autoDiscountPercentage?.toString() ?? "");
+      setLateTerms(lateTermsFromSettings(saved));
       setBusinessSegment(saved.businessSegment);
       setPaymentNotificationEnabled(saved.paymentNotificationEnabled);
       setPaymentNotificationEmails(saved.paymentNotificationEmails.join("\n"));
@@ -622,6 +649,45 @@ export default function BillingSettingsPage() {
 
         <section className="rounded-md border border-slate-200 bg-white">
           <div className="flex items-center gap-2 border-b border-slate-200 px-5 py-4">
+            <Percent size={20} className="text-emerald-600" />
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">
+                Multa, juros e prazo após o vencimento
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Padrão das novas cobranças. Cada cobrança pode alterar esses
+                valores; alterações aqui não mudam cobranças já emitidas.
+              </p>
+            </div>
+          </div>
+          <div className="space-y-3 p-5">
+            <LateTermsFields
+              idPrefix="company-late-terms"
+              values={lateTerms}
+              disabled={loading || saving}
+              onChange={(values) => {
+                setLateTerms(values);
+                setSuccess(null);
+              }}
+            />
+            <p className="text-sm text-slate-600">
+              {settings
+                ? `Novas cobranças: ${describeLateTerms({
+                    fine: Number(lateTerms.fine.replace(",", ".")) || 0,
+                    interest: Number(lateTerms.interest.replace(",", ".")) || 0,
+                    days: Number(lateTerms.days) || 0,
+                  })}.`
+                : null}
+            </p>
+            <p className="text-xs text-slate-500">
+              Para devedor pessoa física, o Código de Defesa do Consumidor
+              limita a multa a 2%.
+            </p>
+          </div>
+        </section>
+
+        <section className="rounded-md border border-slate-200 bg-white">
+          <div className="flex items-center gap-2 border-b border-slate-200 px-5 py-4">
             <CreditCard size={20} className="text-emerald-600" />
             <div>
               <h2 className="text-sm font-semibold text-slate-900">
@@ -731,4 +797,12 @@ export default function BillingSettingsPage() {
       </div>
     </main>
   );
+}
+
+function lateTermsFromSettings(settings: BillingSettings): LateTermsFormValues {
+  return lateTermsFormFromValues({
+    fine: settings.lateFinePercentage ?? 0,
+    interest: settings.lateInterestMonthlyPercentage ?? 0,
+    days: settings.paymentDaysAfterDue ?? 30,
+  });
 }

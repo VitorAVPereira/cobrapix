@@ -9,6 +9,19 @@ import {
 import { PaymentFeeService } from '../payment-fees/payment-fee.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { EfiPaymentResult } from './efi.service';
+import type { IssuanceContext } from '../financial-activation/financial-eligibility.service';
+import { resolveChargeDistribution } from '../financial-activation/financial-activation.types';
+import {
+  recordDuplicatePayment,
+  SettlementEvidence,
+  syncSettlement,
+} from '../settlements/settlement-ledger';
+
+// `distinctPayment`: the reference identifies one payment (Pix endToEndId),
+// so another reference on a paid charge is a second payment.
+export type PaymentEvidence = SettlementEvidence & {
+  distinctPayment?: boolean;
+};
 
 type SettlementCharge = Pick<
   PaymentCharge,
@@ -48,21 +61,54 @@ export class PaymentChargeService {
     invoiceId: string,
     billingMethod: BillingMethod,
     grossAmountCents: number,
+    financial: IssuanceContext,
     replacesChargeId?: string,
     replacementDueDate?: Date,
   ): Promise<PaymentCharge> {
+    if (billingMethod !== 'PIX' && billingMethod !== 'BOLIX')
+      throw new HttpException('Novas cobranças devem usar Pix ou Bolix.', 403);
     const feeVersion = await this.fees.resolveActiveVersion(
       companyId,
       billingMethod,
     );
     const quote = this.fees.calculateQuote(grossAmountCents, feeVersion);
+    const distribution = resolveChargeDistribution({
+      accountMode: financial.accountMode,
+      payoutMode: financial.payoutMode,
+      method: billingMethod,
+      platformFeeCharged:
+        (feeVersion.platformFeeAmountCents ?? 0) > 0 ||
+        (feeVersion.platformFeeBasisPoints ?? 0) > 0,
+    });
     const id = randomUUID();
     return this.prisma.$transaction(
       async (tx: Prisma.TransactionClient): Promise<PaymentCharge> => {
-        const locked = await tx.$queryRaw<
-          Array<{ id: string; status: string }>
+        // Activation locks the company FOR UPDATE: the profile read here is
+        // the one this charge is issued under, or the issuance is refused.
+        const [company] = await tx.$queryRaw<
+          Array<{ activeFinancialProfileId: string | null }>
         >(
-          Prisma.sql`SELECT id, status FROM "Invoice" WHERE id=${invoiceId} AND "companyId"=${companyId} FOR UPDATE`,
+          Prisma.sql`SELECT "activeFinancialProfileId" FROM "Company" WHERE id=${companyId} FOR SHARE`,
+        );
+        if (company?.activeFinancialProfileId !== financial.financialProfileId)
+          throw new HttpException(
+            {
+              code: 'FINANCIAL_PROFILE_CHANGED',
+              message:
+                'A ativação financeira mudou durante a emissão. Tente novamente.',
+            },
+            409,
+          );
+        const locked = await tx.$queryRaw<
+          Array<{
+            id: string;
+            status: string;
+            lateFineBasisPoints: number;
+            lateInterestMonthlyBasisPoints: number;
+            paymentDaysAfterDue: number;
+          }>
+        >(
+          Prisma.sql`SELECT id, status, "lateFineBasisPoints", "lateInterestMonthlyBasisPoints", "paymentDaysAfterDue" FROM "Invoice" WHERE id=${invoiceId} AND "companyId"=${companyId} FOR UPDATE`,
         );
         const lockedInvoice = locked[0];
         if (!lockedInvoice || locked.length !== 1)
@@ -134,6 +180,24 @@ export class PaymentChargeService {
             estimatedPlatformFeeCents: quote.estimatedPlatformFeeCents,
             feeSnapshot: this.fees.toSnapshot(feeVersion),
             status: 'PENDING',
+            // Issuance context: account, credential and modes are fixed now,
+            // before any provider call, and never change afterwards.
+            financialProfileId: financial.financialProfileId,
+            issuerIdentityId: financial.issuerIdentityId,
+            issuerCredentialVersionId: financial.issuerCredentialVersionId,
+            accountMode: financial.accountMode,
+            payoutMode: financial.payoutMode,
+            financialEnvironment: financial.financialEnvironment,
+            distributionSnapshot: {
+              ...distribution,
+              grossAmountCents,
+              estimatedEfiFeeCents: quote.estimatedEfiFeeCents,
+              estimatedPlatformFeeCents: quote.estimatedPlatformFeeCents,
+            },
+            lateFineBasisPoints: lockedInvoice.lateFineBasisPoints,
+            lateInterestMonthlyBasisPoints:
+              lockedInvoice.lateInterestMonthlyBasisPoints,
+            paymentDaysAfterDue: lockedInvoice.paymentDaysAfterDue,
           },
         });
       },
@@ -166,7 +230,16 @@ export class PaymentChargeService {
     charge: SettlementCharge,
     effectiveEfiFeeCents: number | null,
     providerStatus: string,
+    // Amount the payer actually paid (with fine and interest), when known.
+    paidAmountCents: number | null = null,
+    evidence: PaymentEvidence = { source: 'SYSTEM' },
   ): Promise<boolean> {
+    if (
+      paidAmountCents !== null &&
+      (!Number.isSafeInteger(paidAmountCents) || paidAmountCents <= 0)
+    ) {
+      throw new HttpException('Valor pago inválido.', 400);
+    }
     if (
       effectiveEfiFeeCents !== null &&
       (!Number.isSafeInteger(effectiveEfiFeeCents) || effectiveEfiFeeCents < 0)
@@ -184,7 +257,33 @@ export class PaymentChargeService {
         const current = await tx.paymentCharge.findFirst({
           where: { id: charge.id, companyId: charge.companyId },
         });
-        if (!current || current.status === 'REFUNDED') return false;
+        if (!current) return false;
+        if (
+          (current.status === 'PAID' || current.status === 'REFUNDED') &&
+          (await this.isAnotherPayment(tx, current.id, evidence))
+        ) {
+          await recordDuplicatePayment(
+            tx,
+            current.id,
+            current.companyId,
+            paidAmountCents ?? current.grossAmountCents,
+            { source: evidence.source, reference: evidence.reference ?? '' },
+          );
+          return false;
+        }
+        if (current.status === 'REFUNDED') return false;
+        const paid = paidAmountCents ?? current.paidAmountCents ?? null;
+        // The CifraMais fee is charged on the amount actually paid.
+        const effectivePlatformFeeCents =
+          paid !== null
+            ? this.fees.calculateQuote(
+                paid,
+                await tx.paymentFeeVersion.findUniqueOrThrow({
+                  where: { id: current.feeVersionId },
+                }),
+              ).estimatedPlatformFeeCents
+            : (current.effectivePlatformFeeCents ??
+              current.estimatedPlatformFeeCents);
         const gatewayStatusRaw =
           current.gatewayStatusRaw === 'partially_refunded'
             ? current.gatewayStatusRaw
@@ -195,9 +294,8 @@ export class PaymentChargeService {
             status: 'PAID',
             effectiveEfiFeeCents:
               effectiveEfiFeeCents ?? current.effectiveEfiFeeCents,
-            effectivePlatformFeeCents:
-              current.effectivePlatformFeeCents ??
-              current.estimatedPlatformFeeCents,
+            effectivePlatformFeeCents,
+            paidAmountCents: paid,
             paidAt: current.paidAt ?? new Date(),
             gatewayStatusRaw,
           },
@@ -230,6 +328,23 @@ export class PaymentChargeService {
             },
           });
         }
+        // Less than the charged amount is a partial payment: it settles the
+        // charge as reported, but needs an administrative decision.
+        if (
+          paid !== null &&
+          paid < current.grossAmountCents &&
+          current.paidAmountCents === null
+        )
+          await tx.collectionLog.create({
+            data: {
+              companyId: charge.companyId,
+              invoiceId: charge.invoiceId,
+              actionType: 'PAYMENT_AMOUNT_DIVERGENCE',
+              description:
+                'Valor pago menor que o valor da cobrança; requer decisão administrativa.',
+              status: 'REVIEW_REQUIRED',
+            },
+          });
         const updated = await tx.invoice.updateMany({
           where: {
             ...this.currentInvoiceWhere(current),
@@ -241,6 +356,7 @@ export class PaymentChargeService {
             gatewayStatusRaw,
           },
         });
+        await syncSettlement(tx, current.id, current.companyId, evidence);
         return updated.count === 1;
       },
     );
@@ -285,6 +401,8 @@ export class PaymentChargeService {
             known.set(data.providerRefundId, data.amountCents);
         }
         let total = [...known.values()].reduce((sum, value) => sum + value, 0);
+        // Refunds are limited to what was actually paid (fine/interest included).
+        const refundable = current.paidAmountCents ?? current.grossAmountCents;
         let previousStatus: PaymentChargeStatus = current.status;
         for (const refund of refunds) {
           if (
@@ -300,10 +418,9 @@ export class PaymentChargeService {
             continue;
           }
           total += refund.amountCents;
-          if (total > current.grossAmountCents)
+          if (total > refundable)
             throw new HttpException('Devolução excede a cobrança.', 409);
-          const status =
-            total === current.grossAmountCents ? 'REFUNDED' : 'PAID';
+          const status = total === refundable ? 'REFUNDED' : 'PAID';
           await tx.paymentChargeStatusHistory.create({
             data: {
               paymentChargeId: charge.id,
@@ -319,7 +436,7 @@ export class PaymentChargeService {
           known.set(refund.providerRefundId, refund.amountCents);
           previousStatus = status;
         }
-        const status = total === current.grossAmountCents ? 'REFUNDED' : 'PAID';
+        const status = total === refundable ? 'REFUNDED' : 'PAID';
         const gatewayStatusRaw =
           status === 'REFUNDED' ? 'refunded' : 'partially_refunded';
         await tx.paymentCharge.updateMany({
@@ -333,8 +450,30 @@ export class PaymentChargeService {
             gatewayStatusRaw,
           },
         });
+        await syncSettlement(tx, current.id, current.companyId, {
+          source: 'PROVIDER_WEBHOOK',
+          reference: refunds.at(-1)?.providerRefundId,
+        });
         return status;
       },
+    );
+  }
+
+  // True when the evidence names a payment other than the one already
+  // recorded for this charge.
+  private async isAnotherPayment(
+    tx: Prisma.TransactionClient,
+    chargeId: string,
+    evidence: PaymentEvidence,
+  ): Promise<boolean> {
+    if (!evidence.distinctPayment || !evidence.reference) return false;
+    const first = await tx.financialLedgerEntry.findUnique({
+      where: { idempotencyKey: `PAYMENT:${chargeId}:0` },
+      select: { evidenceReference: true },
+    });
+    return Boolean(
+      first?.evidenceReference &&
+      first.evidenceReference !== evidence.reference.trim().slice(0, 128),
     );
   }
 
@@ -421,6 +560,11 @@ export class PaymentChargeService {
             data: { status: 'CANCELED', gatewayStatusRaw: providerStatus },
           });
         }
+        if (changed.count === 1 && target === 'REFUNDED')
+          await syncSettlement(tx, chargeId, companyId, {
+            source: 'PROVIDER_WEBHOOK',
+            reference: providerStatus,
+          });
         if (changed.count !== 1 || current.status === target) return;
         await tx.paymentChargeStatusHistory.create({
           data: {

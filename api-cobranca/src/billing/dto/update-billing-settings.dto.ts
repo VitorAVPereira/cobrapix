@@ -13,6 +13,12 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
+import { ToBoolean } from '../../common/to-boolean';
+import {
+  LATE_FINE_MAX_PERCENTAGE,
+  LATE_INTEREST_MONTHLY_MAX_PERCENTAGE,
+  PAYMENT_DAYS_AFTER_DUE_MAX,
+} from '../../invoices/late-terms';
 
 export class UpdateBillingSettingsDto {
   @IsIn(['PIX', 'BOLIX'])
@@ -27,9 +33,11 @@ export class UpdateBillingSettingsDto {
   @Max(365, { each: true })
   collectionReminderDays!: number[];
 
+  @ToBoolean()
   @IsBoolean()
   autoGenerateFirstCharge!: boolean;
 
+  @ToBoolean()
   @IsBoolean()
   autoDiscountEnabled!: boolean;
 
@@ -50,6 +58,7 @@ export class UpdateBillingSettingsDto {
   businessSegment?: 'GENERAL' | 'EDUCATION';
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   paymentNotificationEnabled?: boolean;
 
@@ -59,4 +68,23 @@ export class UpdateBillingSettingsDto {
   @ArrayUnique()
   @IsEmail({}, { each: true })
   paymentNotificationEmails?: string[];
+
+  // Company defaults for new charges. Absent keeps the current value.
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(LATE_FINE_MAX_PERCENTAGE)
+  lateFinePercentage?: number;
+
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(LATE_INTEREST_MONTHLY_MAX_PERCENTAGE)
+  lateInterestMonthlyPercentage?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(PAYMENT_DAYS_AFTER_DUE_MAX)
+  paymentDaysAfterDue?: number;
 }

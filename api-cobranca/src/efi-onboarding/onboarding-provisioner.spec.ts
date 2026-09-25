@@ -6,6 +6,14 @@ import { EfiOpeningClient, EFI_REQUIRED_SCOPES } from './efi-opening.client';
 import { OnboardingJobs } from './onboarding-jobs';
 import { OnboardingNotifications } from './onboarding-notifications';
 import { OnboardingProvisioner } from './onboarding-provisioner';
+import * as openingProfile from '../financial-activation/opening-profile';
+
+jest.mock('../financial-activation/opening-profile', (): object => ({
+  ...jest.requireActual('../financial-activation/opening-profile'),
+  hasActiveManualProfile: jest.fn().mockResolvedValue(false),
+  publishOpeningProfile: jest.fn().mockResolvedValue('profile-1'),
+  syncOpeningCredential: jest.fn().mockResolvedValue(undefined),
+}));
 
 jest.mock('../payment/efi-certificate', (): object => ({
   inspectEfiCertificate: (): object => ({
@@ -151,6 +159,42 @@ describe('durable Efí provisioning', () => {
     expect(account.encryptedClientSecret).toBe('encrypted:secret');
     expect(row.representativeCpfEncrypted).toBeNull();
     expect(gateway.configureWebhooks).toHaveBeenCalledTimes(1);
+    // The opening publishes its financial profile in the same transaction.
+    expect(openingProfile.publishOpeningProfile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        companyId: 'tenant',
+        onboardingId: 'onboarding',
+        draftRevision: 1,
+        requestId: 'request',
+        account: expect.objectContaining({ status: 'ACTIVE' }) as unknown,
+      }),
+    );
+  });
+  // The rollback itself is covered with PostgreSQL in
+  // test/financial-activation-lifecycle-postgres.cjs; this mock has no transactions.
+  it('treats a profile publication conflict as terminal and alerts', async () => {
+    const { service, alert, schedule } = fixture();
+    jest
+      .mocked(openingProfile.publishOpeningProfile)
+      .mockRejectedValueOnce(
+        new openingProfile.OpeningProfileConflict('ACCOUNT_ALREADY_REGISTERED'),
+      );
+    await service.run('tenant', 101);
+    expect(alert).toHaveBeenCalledWith('tenant', 'ACCOUNT_ALREADY_REGISTERED');
+    expect(schedule).not.toHaveBeenCalled();
+  });
+  it('leaves a manually activated company untouched', async () => {
+    const { service, row, account, opening, alert } = fixture();
+    jest
+      .mocked(openingProfile.hasActiveManualProfile)
+      .mockResolvedValueOnce(true);
+    await service.run('tenant', 101);
+    expect(opening.getCredentials).not.toHaveBeenCalled();
+    expect(account).toEqual({});
+    expect(row.status).toBe('CONFIGURATION_ERROR');
+    expect(row.sanitizedErrorCode).toBe('FINANCIAL_MANUAL_ACTIVE');
+    expect(alert).toHaveBeenCalledWith('tenant', 'FINANCIAL_MANUAL_ACTIVE');
   });
   it('rejects missing scopes and never requests a certificate', async () => {
     const { service, row, opening } = fixture();

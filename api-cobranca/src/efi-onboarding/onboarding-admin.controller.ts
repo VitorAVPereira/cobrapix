@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import {
   IsBoolean,
+  IsIn,
   IsOptional,
   IsString,
   MaxLength,
@@ -24,13 +25,19 @@ import { GetUser } from '../auth/decorators/get-user.decorator';
 import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
 import { OnboardingAdminService } from './onboarding-admin.service';
 import { OnboardingLifecycle } from './onboarding-lifecycle';
+import { ToBoolean } from '../common/to-boolean';
 
-class EnabledDto {
-  @IsBoolean() enabled!: boolean;
+export class EnabledDto {
+  @ToBoolean() @IsBoolean() enabled!: boolean;
+}
+class CloseForManualDto {
+  @IsIn(['NO_ACCOUNT_OPENED', 'ACCOUNT_OPENED_NOT_USED'])
+  outcome!: 'NO_ACCOUNT_OPENED' | 'ACCOUNT_OPENED_NOT_USED';
+  @IsString() @MinLength(3) @MaxLength(200) evidenceReference!: string;
 }
 class ManualRecoveryDto {
   @IsString() @MinLength(1) @MaxLength(128) requestId!: string;
-  @IsOptional() @IsBoolean() ownershipVerified?: boolean;
+  @IsOptional() @ToBoolean() @IsBoolean() ownershipVerified?: boolean;
   @IsOptional() @Matches(/^\d{14}$/) verifiedCompanyDocument?: string;
   @IsOptional() @IsString() @MaxLength(2_000_000) certificateBase64?: string;
   @IsOptional() @IsString() @MaxLength(256) certificatePassword?: string;
@@ -72,6 +79,13 @@ export class OnboardingAdminController {
     @Body() body: ManualRecoveryDto,
   ): Promise<unknown> {
     return this.service.manual(companyId, user.userId, body);
+  }
+  @Post('efi-onboarding/:companyId/close-for-manual') closeForManual(
+    @Param('companyId') companyId: string,
+    @GetUser() user: AuthenticatedUser,
+    @Body() body: CloseForManualDto,
+  ): Promise<unknown> {
+    return this.service.closeForManual(companyId, user.userId, body);
   }
   @Post('efi-onboarding/:companyId/validate') validate(
     @Param('companyId') companyId: string,

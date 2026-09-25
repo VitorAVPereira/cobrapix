@@ -3,6 +3,25 @@
  * O frontend nao acessa banco diretamente; toda persistencia passa por aqui.
  */
 
+import type {
+  CompanyFinancialProfile,
+  FinancialEnvironment,
+  FinancialMethod,
+  FinancialOverview,
+  FinancialProfile,
+  ValidationAttempt,
+} from "./financial-activation";
+import type {
+  CompanyReceipts,
+  DivergenceDecision,
+  FinancialHistory,
+  PlatformFeeEvidenceResult,
+  SettlementDetail,
+  SettlementDivergence,
+  SettlementList,
+  SettlementStatus,
+  SettlementSummary,
+} from "./settlements";
 import type { EfiDraftInput, EfiOnboardingState } from "./efi-onboarding";
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
@@ -121,6 +140,11 @@ export interface BillingSettings {
   businessSegment: BusinessSegment;
   paymentNotificationEnabled: boolean;
   paymentNotificationEmails: string[];
+  // Company defaults for new charges: percent fine, percent interest per
+  // month and days accepting payment after the due date.
+  lateFinePercentage: number;
+  lateInterestMonthlyPercentage: number;
+  paymentDaysAfterDue: number;
   tariffs: Record<
     BillingMethod,
     {
@@ -141,6 +165,15 @@ export interface UpdateBillingSettingsInput {
   businessSegment?: BusinessSegment;
   paymentNotificationEnabled?: boolean;
   paymentNotificationEmails?: string[];
+  lateFinePercentage?: number;
+  lateInterestMonthlyPercentage?: number;
+  paymentDaysAfterDue?: number;
+}
+
+export interface LateTerms {
+  late_fine_percentage: number;
+  late_interest_monthly_percentage: number;
+  payment_days_after_due: number;
 }
 
 export type BillingMethod = "PIX" | "BOLETO" | "BOLIX";
@@ -213,6 +246,7 @@ export interface InvoiceListItem {
   studentGroup: string | null;
   paidAt: string | null;
   payment: InvoicePaymentSummary;
+  lateTerms?: LateTerms;
   createdAt: string;
   recurrence?: {
     recurrenceId: string;
@@ -242,6 +276,10 @@ export interface CreateInvoiceInput {
   studentName?: string;
   studentEnrollment?: string;
   studentGroup?: string;
+  // Empty (null/absent) uses the company default; zero means none.
+  late_fine_percentage?: number | null;
+  late_interest_monthly_percentage?: number | null;
+  payment_days_after_due?: number | null;
 }
 
 export interface RecurringInvoice {
@@ -257,6 +295,7 @@ export interface RecurringInvoice {
   billingType: BillingMethod;
   dueDay: number;
   status: RecurringInvoiceStatus;
+  lateTerms?: LateTerms;
   nextDueDate: string | null;
   lastGeneratedPeriod: string | null;
   pendingInvoice: {
@@ -273,6 +312,9 @@ export interface UpdateRecurringInvoiceInput {
   amount: number;
   billingType: BillingMethod;
   dueDay: number;
+  lateFinePercentage?: number;
+  lateInterestMonthlyPercentage?: number;
+  paymentDaysAfterDue?: number;
 }
 
 export interface PaymentNotificationItem {
@@ -1066,6 +1108,155 @@ class ApiClient {
       method: "POST",
     });
   }
+  getFinancialProfile(): Promise<CompanyFinancialProfile> {
+    return this.fetch("/financial-profile");
+  }
+  getFinancialOverview(companyId: string): Promise<FinancialOverview> {
+    return this.fetch(
+      `/admin/companies/${encodeURIComponent(companyId)}/financial-profile`,
+    );
+  }
+  createFinancialActivation(
+    companyId: string,
+    input: {
+      idempotencyKey: string;
+      environment: FinancialEnvironment;
+      enabledMethods: FinancialMethod[];
+    },
+  ): Promise<FinancialProfile> {
+    return this.fetch(
+      `/admin/companies/${encodeURIComponent(companyId)}/financial-activations`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ...input,
+          accountMode: "CUSTOMER_ACCOUNT",
+          payoutMode: "DIRECT_TO_CUSTOMER",
+        }),
+      },
+    );
+  }
+  getFinancialHistory(companyId: string): Promise<FinancialHistory> {
+    return this.fetch(
+      `/admin/companies/${encodeURIComponent(companyId)}/financial-history`,
+    );
+  }
+  getSettlements(filters: {
+    companyId?: string;
+    status?: SettlementStatus;
+    page?: number;
+    pageSize?: number;
+  }): Promise<SettlementList> {
+    const query = new URLSearchParams();
+    if (filters.companyId) query.set("companyId", filters.companyId);
+    if (filters.status) query.set("status", filters.status);
+    if (filters.page) query.set("page", String(filters.page));
+    if (filters.pageSize) query.set("pageSize", String(filters.pageSize));
+    const qs = query.toString();
+    return this.fetch(`/admin/settlements${qs ? `?${qs}` : ""}`);
+  }
+  getSettlementSummary(companyId?: string): Promise<SettlementSummary> {
+    return this.fetch(
+      `/admin/settlements/summary${
+        companyId ? `?companyId=${encodeURIComponent(companyId)}` : ""
+      }`,
+    );
+  }
+  getSettlement(id: string): Promise<SettlementDetail> {
+    return this.fetch(`/admin/settlements/${encodeURIComponent(id)}`);
+  }
+  recordPlatformFeeEvidence(input: {
+    settlementIds: string[];
+    reference: string;
+    receivedAmountCents: number;
+    note?: string;
+  }): Promise<PlatformFeeEvidenceResult> {
+    return this.fetch("/admin/settlements/platform-fee-evidence", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+  resolveSettlementDivergence(
+    divergenceId: string,
+    input: {
+      decision: DivergenceDecision;
+      reference?: string;
+      note?: string;
+      dueDate?: string;
+    },
+  ): Promise<SettlementDivergence> {
+    return this.fetch(
+      `/admin/settlements/divergences/${encodeURIComponent(divergenceId)}/resolve`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+  }
+  updateSettlementOptions(
+    companyId: string,
+    refundPlatformFeeOnRefund: boolean,
+  ): Promise<{ companyId: string; refundPlatformFeeOnRefund: boolean }> {
+    return this.fetch(
+      `/admin/companies/${encodeURIComponent(companyId)}/settlement-options`,
+      { method: "PUT", body: JSON.stringify({ refundPlatformFeeOnRefund }) },
+    );
+  }
+  getCompanyReceipts(page = 1, pageSize = 20): Promise<CompanyReceipts> {
+    return this.fetch(`/financial/receipts?page=${page}&pageSize=${pageSize}`);
+  }
+  getFinancialActivation(id: string): Promise<FinancialProfile> {
+    return this.fetch(`/admin/financial-activations/${encodeURIComponent(id)}`);
+  }
+  updateFinancialConfiguration(
+    id: string,
+    input: Record<string, unknown>,
+  ): Promise<FinancialProfile> {
+    return this.fetch(
+      `/admin/financial-activations/${encodeURIComponent(id)}/configuration`,
+      { method: "PUT", body: JSON.stringify(input) },
+    );
+  }
+  /** Multipart upload; the browser sets the boundary. */
+  uploadFinancialCredentials(
+    id: string,
+    form: FormData,
+  ): Promise<FinancialProfile> {
+    return this.fetch(
+      `/admin/financial-activations/${encodeURIComponent(id)}/credentials`,
+      { method: "PUT", body: form },
+    );
+  }
+  requestFinancialValidation(
+    id: string,
+    input: { expectedRevision: number; idempotencyKey: string },
+  ): Promise<ValidationAttempt> {
+    return this.fetch(
+      `/admin/financial-activations/${encodeURIComponent(id)}/validate`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+  }
+  activateFinancialProfile(
+    id: string,
+    input: {
+      expectedRevision: number;
+      validationAttemptId: string;
+      idempotencyKey: string;
+      confirmEffects: true;
+      acknowledgeUnverifiedSteps: boolean;
+    },
+  ): Promise<FinancialProfile> {
+    return this.fetch(
+      `/admin/financial-activations/${encodeURIComponent(id)}/activate`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+  }
+  cancelFinancialActivation(
+    id: string,
+    input: { expectedRevision: number; reason: string },
+  ): Promise<FinancialProfile> {
+    return this.fetch(
+      `/admin/financial-activations/${encodeURIComponent(id)}/cancel`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+  }
   financialAdmin<T>(
     path: string,
     method: "GET" | "POST" | "PUT" | "PATCH" = "GET",
@@ -1150,7 +1341,10 @@ class ApiClient {
     }
 
     const headers: Record<string, string> = {
-      "Content-Type": "application/json",
+      // FormData needs the browser-generated multipart boundary.
+      ...(options.body instanceof FormData
+        ? {}
+        : { "Content-Type": "application/json" }),
       ...(options.headers as Record<string, string> | undefined),
     };
 

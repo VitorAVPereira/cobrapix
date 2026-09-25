@@ -7,6 +7,7 @@ import { AlertCircle, Download, FileType, UploadCloud } from "lucide-react";
 import type { CollectionProfileType, InvoicePaymentSummary } from "@/lib/api-client";
 import { normalizeRequiredDebtorDocument } from "@/lib/debtor-document";
 import { normalizeWhatsAppNumber } from "@/lib/whatsapp-number";
+import { parseLateTermsForm } from "@/lib/late-terms";
 
 export type PaymentMethod = "PIX" | "BOLETO" | "BOLIX";
 
@@ -26,6 +27,10 @@ export interface ParsedDebtor {
   studentName?: string | null;
   studentEnrollment?: string | null;
   studentGroup?: string | null;
+  // Optional import columns: empty uses the company default, 0 means none.
+  late_fine_percentage?: number;
+  late_interest_monthly_percentage?: number;
+  payment_days_after_due?: number;
   paidAt?: string | null;
   payment?: InvoicePaymentSummary;
   recurrence?: {
@@ -128,6 +133,28 @@ export function parseInvoiceCsvRows(
       "student_group",
     ]);
 
+    const lateTerms = parseLateTermsForm({
+      fine: getFirstCellValue(row, [
+        "Multa (%)",
+        "Multa",
+        "multa",
+        "late_fine_percentage",
+      ]),
+      interest: getFirstCellValue(row, [
+        "Juros ao mês (%)",
+        "Juros ao mes (%)",
+        "Juros",
+        "juros",
+        "late_interest_monthly_percentage",
+      ]),
+      days: getFirstCellValue(row, [
+        "Dias após vencimento",
+        "Dias apos vencimento",
+        "dias_apos_vencimento",
+        "payment_days_after_due",
+      ]),
+    });
+
     if (
       !nome ||
       !documentoRaw ||
@@ -171,6 +198,10 @@ export function parseInvoiceCsvRows(
       );
     }
 
+    if ("error" in lateTerms) {
+      throw new Error(`Linha ${index + 2}: ${lateTerms.error}`);
+    }
+
     return {
       name: nome,
       document,
@@ -185,6 +216,9 @@ export function parseInvoiceCsvRows(
       studentName: studentName || undefined,
       studentEnrollment: studentEnrollment || undefined,
       studentGroup: studentGroup || undefined,
+      late_fine_percentage: lateTerms.terms.fine ?? undefined,
+      late_interest_monthly_percentage: lateTerms.terms.interest ?? undefined,
+      payment_days_after_due: lateTerms.terms.days ?? undefined,
     };
   });
 }
@@ -198,8 +232,8 @@ export function UploadCSV({
 
   const downloadTemplate = (): void => {
     const templateContent = showEducationFields
-      ? "Nome,CPF/CNPJ,WhatsApp,Email,Valor,Vencimento,Forma de Pagamento,Opt-in WhatsApp,Aluno,Matricula,Turma/Curso\nResponsavel Silva,12345678909,+5511999999999,responsavel@email.com,150.50,2026-12-01,BOLIX,SIM,Joao Silva,2026-001,7A"
-      : "Nome,CPF/CNPJ,WhatsApp,Email,Valor,Vencimento,Forma de Pagamento,Opt-in WhatsApp\nJoao Silva,12345678909,+5511999999999,joao@email.com,150.50,2026-12-01,BOLIX,SIM";
+      ? "Nome,CPF/CNPJ,WhatsApp,Email,Valor,Vencimento,Forma de Pagamento,Opt-in WhatsApp,Multa (%),Juros ao mês (%),Dias após vencimento,Aluno,Matricula,Turma/Curso\nResponsavel Silva,12345678909,+5511999999999,responsavel@email.com,150.50,2026-12-01,BOLIX,SIM,,,,Joao Silva,2026-001,7A"
+      : "Nome,CPF/CNPJ,WhatsApp,Email,Valor,Vencimento,Forma de Pagamento,Opt-in WhatsApp,Multa (%),Juros ao mês (%),Dias após vencimento\nJoao Silva,12345678909,+5511999999999,joao@email.com,150.50,2026-12-01,BOLIX,SIM,,,";
     const blob = new Blob([templateContent], {
       type: "text/csv;charset=utf-8;",
     });
@@ -304,6 +338,10 @@ export function UploadCSV({
             </h3>
             <p className="mx-auto mb-6 max-w-xs text-slate-500">
               Ou clique para procurar no seu computador. Formato aceito: .csv
+            </p>
+            <p className="mx-auto max-w-sm text-xs text-slate-500">
+              Multa, juros e dias após o vencimento são opcionais: vazio usa o
+              padrão de Configurações → Cobrança; 0 significa nenhum.
             </p>
           </>
         )}

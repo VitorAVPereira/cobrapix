@@ -16,6 +16,9 @@ const root = path.resolve(__dirname, '..');
 require('ts-node').register({ transpileOnly: true, project: path.join(root, 'tsconfig.json') });
 const { PaymentCryptoService } = require('../src/payment/payment-crypto.service.ts');
 const { CommunicationMediaService } = require('../src/communications/communication-media.service.ts');
+const { PaymentChargeService } = require('../src/payment/payment-charge.service.ts');
+const { PaymentFeeService } = require('../src/payment-fees/payment-fee.service.ts');
+const { FinancialEligibilityService } = require('../src/financial-activation/financial-eligibility.service.ts');
 
 const runId = randomBytes(8).toString('hex');
 const password = randomBytes(24).toString('hex');
@@ -53,6 +56,25 @@ async function database(name) {
     const transport = { downloadMedia: async () => ({ bytes: PNG, contentType: 'image/png' }) };
     const crypto = new PaymentCryptoService(new ConfigService(keys));
     await new CommunicationMediaService(prismaSource, new ConfigService({ COMMUNICATION_MEDIA_DIR: sourceMedia }), crypto, transport).processPending();
+
+    // Financial data: customer credentials cifradas no banco e um pagamento conciliado.
+    const fees = new PaymentFeeService(prismaSource);
+    await fees.createVersion(null, { billingMethod: 'PIX', efiFee: { kind: 'FIXED', amountCents: 100 }, platformFee: { kind: 'PERCENTAGE', basisPoints: 250 }, effectiveFrom: new Date(0) });
+    await prismaSource.platformIntegrationState.create({ data: { integration: 'EFI_PAYMENTS', enabled: true } });
+    const identity = await prismaSource.efiAccountIdentity.create({ data: { ownership: 'COMPANY', companyId: company.id, environment: 'HOMOLOGATION', holderDocument: company.document, efiAccountNumber: '4001', payeeCode: 'payee4001', pixKey: 'chave-4001', healthStatus: 'HEALTHY' } });
+    const credential = await prismaSource.efiCredentialVersion.create({ data: { identityId: identity.id, version: 1, status: 'ACTIVE', encryptedClientId: crypto.encrypt('client-id-backup'), encryptedClientSecret: crypto.encrypt('client-secret-backup'), encryptedCertificate: crypto.encrypt('p12-backup'), credentialKeyVersion: 'v1', certificateFingerprint: Array.from(randomBytes(32), (b) => b.toString(16).padStart(2, '0').toUpperCase()).join(':'), certificateExpiresAt: new Date(Date.now() + 90 * 86_400_000) } });
+    await prismaSource.$transaction(async (tx) => {
+      const profile = await tx.financialProfileVersion.create({ data: { companyId: company.id, version: 1, status: 'ACTIVE', origin: 'MANUAL_ADMIN', accountMode: 'CUSTOMER_ACCOUNT', payoutMode: 'DIRECT_TO_CUSTOMER', environment: 'HOMOLOGATION', enabledMethods: ['PIX'], issuerIdentityId: identity.id, issuerCredentialVersionId: credential.id, authorizationKind: 'ACCOUNT_INTEGRATION_AUTHORIZATION', authorizationReference: 'contrato', ownershipVerifiedAt: new Date(), validatedAt: new Date(), validationHash: 'h', creationIdempotencyKey: randomUUID(), activationIdempotencyKey: randomUUID(), activatedAt: new Date() } });
+      await tx.company.update({ where: { id: company.id }, data: { activeFinancialProfileId: profile.id } });
+    });
+    const debtor = await prismaSource.debtor.create({ data: { companyId: company.id, name: 'Pagador', phoneNumber: '5511911111111', document: '52998224725' } });
+    const invoice = await prismaSource.invoice.create({ data: { companyId: company.id, debtorId: debtor.id, originalAmount: 100, dueDate: new Date() } });
+    const charges = new PaymentChargeService(prismaSource, fees);
+    const charge = await charges.createDraft(company.id, invoice.id, 'PIX', 10000, await new FinancialEligibilityService(prismaSource).resolveIssuance(company.id, 'PIX'));
+    await charges.markIssued(charge.id, company.id, { gatewayId: charge.efiTxid, txid: charge.efiTxid, paymentLink: 'https://example.test', expiresAt: new Date(Date.now() + 86_400_000) });
+    await charges.recordSettlement(charge, 120, 'CONCLUIDA', 10000, { source: 'PROVIDER_WEBHOOK', reference: 'E2E-BACKUP', distinctPayment: true });
+    const ledgerBefore = (await source.query('SELECT kind, "amountCents", "idempotencyKey" FROM "FinancialLedgerEntry" ORDER BY "idempotencyKey"')).rows;
+    assert.equal(ledgerBefore.length, 3);
     await prismaSource.$disconnect();
 
     // Same commands as backup.sh.
@@ -75,7 +97,16 @@ async function database(name) {
     const migrations = (await target.query('SELECT count(*)::int AS n FROM "_prisma_migrations"').catch(() => ({ rows: [{ n: null }] }))).rows[0].n;
     const otherKeys = new PaymentCryptoService(new ConfigService({ PAYMENT_ENCRYPTION_KEYS: JSON.stringify({ v1: randomBytes(32).toString('hex') }), PAYMENT_ACTIVE_KEY_VERSION: 'v1' }));
     await assert.rejects(new CommunicationMediaService(prismaTarget, new ConfigService({ COMMUNICATION_MEDIA_DIR: restoredMedia }), otherKeys, transport).openForViewer(viewer, message.id, attachment.id), error => error.getStatus() === 422, 'without the original keys the file is unreadable');
+    // Financial data after restore: same ledger, credentials readable only with the same keys, rules still enforced.
+    assert.deepEqual((await target.query('SELECT kind, "amountCents", "idempotencyKey" FROM "FinancialLedgerEntry" ORDER BY "idempotencyKey"')).rows, ledgerBefore);
+    const restoredCredential = await prismaTarget.efiCredentialVersion.findFirstOrThrow({ where: { status: 'ACTIVE' } });
+    assert.equal(crypto.decrypt(restoredCredential.encryptedClientSecret), 'client-secret-backup');
+    assert.throws(() => otherKeys.decrypt(restoredCredential.encryptedClientSecret));
+    await assert.rejects(target.query('UPDATE "FinancialLedgerEntry" SET "amountCents" = 1'), /LEDGER_APPEND_ONLY/);
+    const restoredSettlement = await prismaTarget.paymentSettlement.findFirstOrThrow();
+    assert.equal(restoredSettlement.status, 'AWAITING_EVIDENCE');
     await prismaTarget.$disconnect();
+    console.log('PASS backup restore of financial data: ledger identical, customer credentials decrypt only with the original keys, append-only rule restored');
     console.log(`PASS backup restore: dump ${dump.length} bytes, attachment decrypted with original keys and refused with others (migration table: ${migrations ?? 'n/a'})`);
   } finally {
     for (const pool of pools) await pool.end().catch(() => undefined);

@@ -406,3 +406,55 @@ Antes de considerar a demanda concluída, revisar especialmente:
 - O pacote publicado contém os arquivos novos e o runbook explica as dependências externas ainda não validadas.
 
 O trabalho estará completo quando um administrador conseguir ativar uma empresa em qualquer uma das três configurações, operar PIX/BOLIX nos caminhos habilitados, acompanhar recebimento e repasse e mudar a configuração para futuras cobranças preservando todo o histórico anterior.
+
+## 8. Decisões do responsável (25/09/2026)
+
+Complementam as seções anteriores e prevalecem sobre elas quando houver conflito.
+
+### 8.1 Situação atual
+
+- Os clientes em negociação usarão **conta própria na Efí** e entregarão certificado e credenciais. Nenhum cliente real foi cadastrado.
+- O banco de produção contém somente dados de teste; nada precisa ser preservado além do login do administrador. O backfill da Etapa 2 se reduz a um relatório de verificação.
+- A conta Efí da CifraMais está liberada para split e webhooks. A validação real depende apenas de testes em homologação.
+- Cada etapa é revisada e aprovada pelo responsável antes do início da seguinte.
+
+### 8.2 Modo conta CifraMais
+
+- Pix CobV e BOLIX são emitidos em nome da CifraMais, amparados por **procuração** do cliente. A procuração é a autorização registrada nesse modo: tipo, referência/documento, vigência e responsável pela conferência.
+- O split só alcança contas Efí; no modo split o cliente precisa ter conta Efí.
+- Destino do repasse manual: **qualquer banco**, por chave Pix ou agência/conta, com titularidade conferida contra o documento do cliente e evidência registrada. Cada alteração cria nova versão de `FinancialRecipientVersion`. Dados de `OriginalBankAccount` servem apenas como sugestão de preenchimento, nunca como destino verificado.
+- Repasse manual somente após **conciliação pelo administrador**; não há prazo automático D+N.
+
+### 8.3 Tarifas e remuneração
+
+- Tarifas continuam configuráveis por cliente em `PaymentFeeVersion` (padrão global com exceção por empresa, versionadas e fotografadas na cobrança).
+- A **tarifa Efí é suportada pelo cliente** em todos os modos. No split pela plataforma, a parcela da CifraMais cobre a tarifa Efí debitada da conta emissora.
+- A **remuneração CifraMais incide sobre o valor efetivamente pago**, incluindo multa e juros. Na emissão grava-se a estimativa sobre o valor original; na confirmação do pagamento, `effectivePlatformFeeCents`/`effectiveEfiFeeCents`. Repasses usam sempre o valor efetivo.
+- No split, a composição é percentual sempre que possível. Quando houver parcela fixa, a diferença causada por multa/juros vira **ajuste na conciliação**, nunca retenção silenciosa.
+- `Company.onTimeSplitPercentageBps` e `Company.overdueSplitPercentageBps` não são usados pela emissão e serão removidos (schema, DTO administrativo e tela).
+
+### 8.4 Multa, juros e prazo após vencimento
+
+- Configuração opcional por cobrança: multa (nenhuma, percentual ou fixa), juros (nenhum ou percentual ao mês) e dias aceitando pagamento após o vencimento.
+- O padrão da empresa é definido pelo próprio cliente em **Configurações → Cobrança** e começa como “sem multa e sem juros”. O formulário de nova cobrança vem preenchido com esse padrão e pode ser alterado por cobrança; nenhum campo é obrigatório.
+- Recorrências guardam a configuração e a copiam para cada fatura gerada. Importação CSV e API/ERP aceitam campos opcionais; campo vazio usa o padrão da empresa e zero explícito significa sem multa/juros.
+- Os valores ficam na `Invoice` e são fotografados na `PaymentCharge` na emissão. Alteração após emissão exige substituição da cobrança.
+- Mapeamento: Pix CobV `valor.multa`/`valor.juros` e `calendario.validadeAposVencimento`; boleto/BOLIX `configurations.fine`/`configurations.interest` com a mesma política. Hoje `efi.service.ts` envia `validadeAposVencimento: 0`, o que impede o pagamento do Pix após o vencimento. Os campos e limites devem ser conferidos na documentação Efí na Etapa 1, e o comportamento do Pix do BOLIX após o vencimento deve ser testado em homologação.
+- O painel alerta multa acima de 2% para devedor pessoa física (limite do CDC).
+- Multa somente percentual (boleto/BOLIX não aceita multa fixa). Padrão de dias aceitando pagamento após o vencimento: **30 dias** para empresas, faturas e recorrências novas (decisão de 25/09/2026).
+
+### 8.5 Pagamento com valor diferente, duplicidade e devolução
+
+- Pagamento parcial não é fluxo normal. Valor recebido diferente do esperado deixa a cobrança **paga com divergência**, bloqueia o repasse e o administrador decide: aceitar como quitação, ou aceitar e emitir cobrança complementar pelo saldo na mesma fatura.
+- Pagamento em duplicidade (boleto e Pix do mesmo BOLIX, ou dois pagamentos) vira **crédito a devolver**, fora de qualquer repasse até o administrador devolver ou manter como crédito.
+- Pix: devolução pela API Efí, total ou parcial, soma limitada ao valor pago e prazo de até 90 dias. Devoluções MED seguem a mesma regra, com origem marcada.
+- Boleto: devolução fora do sistema, registrada com comprovante.
+- Nos modos CifraMais, somente `PLATFORM_ADMIN` devolve. No modo conta do cliente o sistema apenas registra as devoluções notificadas pela Efí.
+- A tarifa Efí não é estornada. A remuneração CifraMais não é estornada por padrão, com opção por cliente “estornar remuneração em devolução”.
+- Devolução antes do repasse reduz o valor a repassar; depois do repasse gera saldo devedor do cliente, compensado em repasses seguintes, sem débito automático.
+
+### 8.6 Fases de entrega
+
+- **Fase A — conta própria do cliente**, completa e publicável: tipos, schema com os três modos previstos, credenciais/certificado, validação, ativação sem API de abertura, elegibilidade, emissão e webhooks pela conta correta, multa/juros e telas administrativas e da empresa para esse modo.
+- **Fase B — conta CifraMais**: emissão pela plataforma, procuração, destinos em qualquer banco, split invertido, conciliação, lotes de repasse e devoluções.
+- As etapas da seção 5 são executadas na Fase A somente no que se aplica à conta do cliente; a Fase B retoma as partes restantes. A Fase B apenas acrescenta, sem refazer o que a Fase A entregou.

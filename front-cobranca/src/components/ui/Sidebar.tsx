@@ -19,9 +19,12 @@ import {
   MessageSquare,
   Settings,
   SlidersHorizontal,
+  Scale,
   Users,
+  Wallet,
   X,
 } from "lucide-react";
+import { useFinancialActivation } from "@/components/features/financial-activation-context";
 
 const dashboardItem = {
   href: "/",
@@ -44,6 +47,11 @@ const mainItems = [
     href: "/baixas",
     label: "Baixas",
     icon: BellRing,
+  },
+  {
+    href: "/financeiro",
+    label: "Financeiro",
+    icon: Wallet,
   },
   {
     href: "/devedores-recorrentes",
@@ -81,6 +89,8 @@ const settingsItems = [
 ];
 
 const adminItems = [
+  {href:'/admin/ativacao-financeira',label:'Ativação financeira',icon:Wallet},
+  {href:'/admin/conciliacao',label:'Conciliação',icon:Scale},
   {href:'/admin/efi-onboarding',label:'Ativações e saúde',icon:Database},
   {href:'/admin/payment-fees',label:'Tarifas',icon:HandCoins},
   {href:'/admin/communications',label:'Atendimento central',icon:MessageSquare},
@@ -112,9 +122,12 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const [settingsOpen, setSettingsOpen] = useState(true);
   const DashboardIcon = dashboardItem.icon;
   const isPlatformAdmin = session?.user.role === "PLATFORM_ADMIN";
+  const { openingEnabled } = useFinancialActivation();
+  // Self-service activation stays hidden while the opening API is disabled.
   const visibleSettingsItems = settingsItems.filter(
     (item) =>
-      item.href !== "/configuracoes/conecte-seu-banco",
+      item.href !== "/configuracoes/conecte-seu-banco" &&
+      (openingEnabled || item.href !== "/onboarding/efi"),
   );
 
   return (

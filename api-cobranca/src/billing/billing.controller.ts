@@ -38,6 +38,7 @@ import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizeWhatsAppNumber } from '../common/whatsapp-number';
+import { ToBoolean } from '../common/to-boolean';
 
 interface AuthenticatedUser {
   companyId: string;
@@ -80,6 +81,7 @@ class RunSelectedBillingContactDto {
   phoneNumber?: string;
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   whatsappOptIn?: boolean;
 }
@@ -93,6 +95,7 @@ class CreateRuleDto {
   profileType!: CollectionProfileType;
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   isDefault?: boolean;
 
@@ -120,6 +123,7 @@ class UpdateRuleDto {
   profileType?: CollectionProfileType;
 
   @IsOptional()
+  @ToBoolean()
   @IsBoolean()
   isDefault?: boolean;
 
@@ -358,6 +362,9 @@ export class BillingController {
       businessSegment: dto.businessSegment,
       paymentNotificationEnabled: dto.paymentNotificationEnabled,
       paymentNotificationEmails: dto.paymentNotificationEmails,
+      lateFinePercentage: dto.lateFinePercentage,
+      lateInterestMonthlyPercentage: dto.lateInterestMonthlyPercentage,
+      paymentDaysAfterDue: dto.paymentDaysAfterDue,
     });
   }
 

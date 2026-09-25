@@ -148,11 +148,14 @@ export class WebhooksController {
   async handleEfiChargesWebhook(
     @Body() payload: unknown,
     @Query('companyId') companyId?: string,
+    // Issuer account of charges created with a financial profile.
+    @Query('account') accountId?: string,
   ) {
     try {
       return await this.webhooksService.handleEfiChargesWebhook(
         payload,
         companyId,
+        accountId,
       );
     } catch (error) {
       this.logger.error(
