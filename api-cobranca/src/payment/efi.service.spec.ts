@@ -184,6 +184,13 @@ describe('Efí notification ordering', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       collectionLog: { create: jest.fn() },
+      efiAccountIdentity: {
+        findUnique: jest.fn().mockResolvedValue({
+          companyId: 'company-1',
+          pixKey: 'issuer-key',
+        }),
+      },
+      paymentWebhookAnomaly: { upsert: jest.fn() },
     };
     const charges = {
       recordSettlement: jest.fn(),
@@ -211,8 +218,139 @@ describe('Efí notification ordering', () => {
         'createSdkClient',
       )
       .mockReturnValue(sdk);
-    return { service, charges, prisma };
+    jest
+      .spyOn(
+        service as unknown as {
+          accountForIdentity(): Promise<Record<string, unknown>>;
+        },
+        'accountForIdentity',
+      )
+      .mockResolvedValue({
+        companyId: 'company-1',
+        issuerIdentityId: 'identity-1',
+      });
+    return { service, charges, prisma, sdk };
   }
+  it('queries and scopes a charge notification by the issuing account', async () => {
+    const { service, charges, prisma, sdk } = fixture('paid');
+    sdk.getNotification.mockResolvedValue({
+      data: [
+        { custom_id: 'charge-1', status: { current: 'paid' }, value: 10650 },
+      ],
+    });
+    await service.handleChargesWebhook(
+      { notification: 'token' },
+      undefined,
+      'identity-1',
+    );
+    expect(prisma.paymentCharge.findFirst).toHaveBeenCalledWith({
+      where: { id: 'charge-1', issuerIdentityId: 'identity-1' },
+    });
+    expect(prisma.gatewayAccount.findFirst).not.toHaveBeenCalled();
+    expect(charges.recordSettlement).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'charge-1' }),
+      null,
+      'paid',
+      10650,
+    );
+  });
+  it('records an unknown issuing account without querying Efí', async () => {
+    const { service, prisma, sdk } = fixture('paid');
+    prisma.efiAccountIdentity.findUnique.mockResolvedValue(null);
+    await expect(
+      service.handleChargesWebhook(
+        { notification: 'token' },
+        undefined,
+        'forged',
+      ),
+    ).resolves.toEqual({ processed: false });
+    expect(sdk.getNotification).not.toHaveBeenCalled();
+    expect(prisma.paymentWebhookAnomaly.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          source: 'CHARGES',
+          reasonCode: 'UNKNOWN_ACCOUNT',
+          externalReference: 'forged',
+        }) as unknown,
+      }),
+    );
+  });
+  it('does not apply a notification for a charge of another account', async () => {
+    const { service, charges, prisma } = fixture('paid');
+    prisma.paymentCharge.findFirst.mockResolvedValue(null);
+    await expect(
+      service.handleChargesWebhook(
+        { notification: 'token' },
+        undefined,
+        'identity-1',
+      ),
+    ).resolves.toEqual({ processed: false });
+    expect(charges.recordSettlement).not.toHaveBeenCalled();
+    expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+    expect(prisma.paymentWebhookAnomaly.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          reasonCode: 'UNKNOWN_CHARGE',
+        }) as unknown,
+      }),
+    );
+  });
+  it('settles Pix with the paid amount when the receiving key is the issuer key', async () => {
+    const { service, charges, prisma } = fixture('paid');
+    prisma.paymentCharge.findFirst.mockResolvedValue({
+      id: 'charge-1',
+      companyId: 'company-1',
+      invoiceId: 'invoice-1',
+      status: 'ACTIVE',
+      issuerIdentityId: 'identity-1',
+    });
+    await service.handlePixWebhook({
+      pix: [{ txid: 'txid', chave: 'issuer-key', valor: '106.50' }],
+    });
+    expect(charges.recordSettlement).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'charge-1' }),
+      null,
+      'CONCLUIDA',
+      10650,
+    );
+  });
+  it('ignores and records a Pix event received by another key', async () => {
+    const { service, charges, prisma } = fixture('paid');
+    prisma.paymentCharge.findFirst.mockResolvedValue({
+      id: 'charge-1',
+      companyId: 'company-1',
+      invoiceId: 'invoice-1',
+      status: 'ACTIVE',
+      issuerIdentityId: 'identity-1',
+    });
+    await service.handlePixWebhook({
+      pix: [{ txid: 'txid', chave: 'other-key', valor: '100.00' }],
+    });
+    expect(charges.recordSettlement).not.toHaveBeenCalled();
+    expect(prisma.paymentWebhookAnomaly.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          source: 'PIX',
+          reasonCode: 'RECEIVER_MISMATCH',
+          companyId: 'company-1',
+        }) as unknown,
+      }),
+    );
+  });
+  it('records a Pix event with an unknown txid', async () => {
+    const { service, charges, prisma } = fixture('paid');
+    prisma.paymentCharge.findFirst.mockResolvedValue(null);
+    prisma.invoice.findFirst.mockResolvedValue(null);
+    await service.handlePixWebhook({ pix: [{ txid: 'unknown' }] });
+    expect(charges.recordSettlement).not.toHaveBeenCalled();
+    expect(prisma.paymentWebhookAnomaly.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          reasonCode: 'UNKNOWN_TXID',
+        }) as unknown,
+      }),
+    );
+  });
   it('does not treat canceled boleto as paid', async () => {
     const { service, charges } = fixture('canceled');
     await service.handleChargesWebhook({ notification: 'token' }, 'company-1');

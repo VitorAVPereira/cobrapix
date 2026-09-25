@@ -69,6 +69,87 @@ describe('PaymentService billing method restrictions', () => {
     expect(markFailed).toHaveBeenCalledWith('replacement-1', 'company-1');
   });
 
+  function issuanceFixture(issuerIdentityId: string | null) {
+    const financial = {
+      financialProfileId: 'profile-1',
+      issuerIdentityId: 'identity-1',
+      issuerCredentialVersionId: 'credential-1',
+      accountMode: 'CUSTOMER_ACCOUNT',
+      payoutMode: 'DIRECT_TO_CUSTOMER',
+      financialEnvironment: 'PRODUCTION',
+    };
+    const prisma = {
+      invoice: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ status: 'PENDING', originalAmount: 100 }),
+      },
+      company: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'company-1',
+          enabledBillingMethods: ['PIX', 'BOLIX'],
+        }),
+      },
+    } as unknown as PrismaService;
+    const efiCreatePayment = jest
+      .fn()
+      .mockResolvedValue({ gatewayId: 'gateway-1' });
+    const efiService = {
+      assertIssuable: jest.fn().mockResolvedValue(financial),
+      createPayment: efiCreatePayment,
+    } as unknown as EfiService;
+    const createDraft = jest.fn().mockResolvedValue({
+      id: 'charge-1',
+      grossAmountCents: 10000,
+      issuerIdentityId,
+      feeSnapshot: { platformFee: { kind: 'PERCENTAGE', basisPoints: 250 } },
+    });
+    const charges = {
+      findReusable: jest.fn().mockResolvedValue(null),
+      createDraft,
+      transition: jest.fn().mockResolvedValue(undefined),
+      markIssued: jest.fn().mockResolvedValue(undefined),
+      markFailed: jest.fn().mockResolvedValue(undefined),
+    } as unknown as PaymentChargeService;
+    return {
+      financial,
+      createDraft,
+      efiCreatePayment,
+      service: new PaymentService(efiService, prisma, charges),
+    };
+  }
+
+  it('reserves the charge under the resolved profile and issues on its account', async () => {
+    const { service, financial, createDraft, efiCreatePayment } =
+      issuanceFixture('identity-1');
+    await service.createPayment('invoice-1', 'company-1', 'PIX');
+    expect(createDraft).toHaveBeenCalledWith(
+      'company-1',
+      'invoice-1',
+      'PIX',
+      10000,
+      financial,
+    );
+    expect(efiCreatePayment).toHaveBeenCalledWith(
+      'invoice-1',
+      'company-1',
+      'PIX',
+      expect.objectContaining({
+        chargeId: 'charge-1',
+        issuerIdentityId: 'identity-1',
+        platformFeeBasisPoints: 250,
+      }),
+    );
+  });
+
+  it('never issues a charge without a recorded issuer account', async () => {
+    const { service, efiCreatePayment } = issuanceFixture(null);
+    await expect(
+      service.createPayment('invoice-1', 'company-1', 'PIX'),
+    ).rejects.toMatchObject({ response: { code: 'EFI_SUBMISSION_UNCERTAIN' } });
+    expect(efiCreatePayment).not.toHaveBeenCalled();
+  });
+
   it('bloqueia emissao quando o metodo nao esta habilitado para a empresa', async () => {
     const findInvoice = jest.fn().mockResolvedValue({ status: 'PENDING' });
     const prisma = {

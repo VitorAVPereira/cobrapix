@@ -23,6 +23,7 @@ interface SplitBuilder {
 describe('Split fee routing', () => {
   const fixed: EfiIssuanceContext = {
     chargeId: 'charge',
+    issuerIdentityId: 'identity',
     platformFeeKind: 'FIXED',
     platformFeeAmountCents: 250,
     platformFeeBasisPoints: 0,

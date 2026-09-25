@@ -17,11 +17,12 @@ export class WebhooksService {
   async handleEfiChargesWebhook(
     payload: unknown,
     companyId?: string,
+    accountId?: string,
   ): Promise<{
     processed: boolean;
     invoiceId?: string;
     status?: string;
   }> {
-    return this.efiService.handleChargesWebhook(payload, companyId);
+    return this.efiService.handleChargesWebhook(payload, companyId, accountId);
   }
 }

@@ -13,6 +13,8 @@ require('ts-node').register({ transpileOnly: true, project: path.join(root, 'tsc
 const { PaymentChargeService } = require('../src/payment/payment-charge.service.ts');
 const { PaymentFeeService } = require('../src/payment-fees/payment-fee.service.ts');
 const { InvoicesService } = require('../src/invoices/invoices.service.ts');
+const { FinancialEligibilityService } = require('../src/financial-activation/financial-eligibility.service.ts');
+const { EfiService } = require('../src/payment/efi.service.ts');
 const name = `efi-payment-test-${randomBytes(6).toString('hex')}`;
 const password = randomBytes(24).toString('hex');
 function docker(args) {
@@ -44,9 +46,26 @@ let containerStarted = false;
     const debtor = await prisma.debtor.create({ data: { companyId: company.id, name: 'Fixture', phoneNumber: '5511999999999' } });
     const feeInput = { billingMethod: 'PIX', efiFee: { kind: 'FIXED', amountCents: 100 }, platformFee: { kind: 'PERCENTAGE', basisPoints: 250 }, effectiveFrom: new Date(0) };
     await fees.createVersion(null, feeInput);
+    const eligibility = new FinancialEligibilityService(prisma);
+    await prisma.platformIntegrationState.upsert({ where: { integration: 'EFI_PAYMENTS' }, create: { integration: 'EFI_PAYMENTS', enabled: true }, update: { enabled: true } });
+    // Publishes a manual profile on its own Efí account, superseding the current one.
+    let profileSeq = 0;
+    async function activate(companyId, account) {
+      const target = await prisma.company.findUniqueOrThrow({ where: { id: companyId } });
+      const identity = await prisma.efiAccountIdentity.create({ data: { ownership: 'COMPANY', companyId, environment: 'HOMOLOGATION', holderDocument: target.document, efiAccountNumber: account, payeeCode: `payee${account}`, pixKey: `chave-${account}`, healthStatus: 'HEALTHY' } });
+      const credential = await prisma.efiCredentialVersion.create({ data: { identityId: identity.id, version: 1, status: 'ACTIVE', encryptedClientId: 'c', encryptedClientSecret: 's', encryptedCertificate: 'p12', credentialKeyVersion: 'v1', certificateFingerprint: Array.from(randomBytes(32), (byte) => byte.toString(16).padStart(2, '0').toUpperCase()).join(':'), certificateExpiresAt: new Date(Date.now() + 90 * 86400000) } });
+      await prisma.$transaction(async (tx) => {
+        await tx.financialProfileVersion.updateMany({ where: { companyId, status: 'ACTIVE' }, data: { status: 'SUPERSEDED', supersededAt: new Date() } });
+        const profile = await tx.financialProfileVersion.create({ data: { companyId, version: ++profileSeq, status: 'ACTIVE', origin: 'MANUAL_ADMIN', accountMode: 'CUSTOMER_ACCOUNT', payoutMode: 'DIRECT_TO_CUSTOMER', environment: 'HOMOLOGATION', enabledMethods: ['PIX', 'BOLIX'], issuerIdentityId: identity.id, issuerCredentialVersionId: credential.id, authorizationKind: 'ACCOUNT_INTEGRATION_AUTHORIZATION', authorizationReference: 'contrato', ownershipVerifiedAt: new Date(), validatedAt: new Date(), validationHash: 'h', creationIdempotencyKey: randomBytes(8).toString('hex'), activationIdempotencyKey: randomBytes(8).toString('hex'), activatedAt: new Date() } });
+        await tx.company.update({ where: { id: companyId }, data: { activeFinancialProfileId: profile.id } });
+      });
+      return identity;
+    }
+    const identityA = await activate(company.id, '1001');
+    const issuance = () => eligibility.resolveIssuance(company.id, 'PIX');
     async function fixture() {
       const invoice = await prisma.invoice.create({ data: { companyId: company.id, debtorId: debtor.id, originalAmount: 100, dueDate: new Date(Date.now() - 86400000) } });
-      const charge = await charges.createDraft(company.id, invoice.id, 'PIX', 10000);
+      const charge = await charges.createDraft(company.id, invoice.id, 'PIX', 10000, await issuance());
       await charges.markIssued(charge.id, company.id, { gatewayId: charge.efiTxid, txid: charge.efiTxid, paymentLink: 'https://example.test/pay', expiresAt: invoice.dueDate });
       await prisma.invoice.update({ where: { id: invoice.id, companyId: company.id }, data: { gatewayId: charge.efiTxid, efiTxid: charge.efiTxid, status: 'PENDING' } });
       return { invoice, charge };
@@ -76,7 +95,7 @@ let containerStarted = false;
     console.log('PASS concurrent settlement, actual fee divergence, partial/full duplicate refunds, rollback and late settlement');
 
     const original = await fixture();
-    const replacement = await charges.createDraft(company.id, original.invoice.id, 'PIX', 10000, original.charge.id, new Date(Date.now() + 86400000));
+    const replacement = await charges.createDraft(company.id, original.invoice.id, 'PIX', 10000, await issuance(), original.charge.id, new Date(Date.now() + 86400000));
     await charges.transition(original.charge.id, company.id, 'REPLACED', {});
     await charges.markIssued(replacement.id, company.id, { gatewayId: replacement.efiTxid, txid: replacement.efiTxid, paymentLink: 'https://example.test/new', expiresAt: new Date(Date.now() + 86400000) });
     await prisma.invoice.update({ where: { id: original.invoice.id, companyId: company.id }, data: { gatewayId: replacement.efiTxid, efiTxid: replacement.efiTxid } });
@@ -90,7 +109,7 @@ let containerStarted = false;
     console.log('PASS replaced charge ownership and cross-tenant refund rejection');
 
     const racing = await fixture();
-    await charges.createDraft(company.id, racing.invoice.id, 'PIX', 10000, racing.charge.id, new Date(Date.now() + 86400000));
+    await charges.createDraft(company.id, racing.invoice.id, 'PIX', 10000, await issuance(), racing.charge.id, new Date(Date.now() + 86400000));
     await charges.recordSettlement(racing.charge, null, 'CONCLUIDA');
     assert.equal((await prisma.invoice.findUnique({ where: { id: racing.invoice.id } })).status, 'PAID', 'payment during replacement cancellation still belongs to current charge');
     console.log('PASS payment during replacement reservation stops the invoice from being reissued');
@@ -98,7 +117,7 @@ let containerStarted = false;
     const fresh = await fixture();
     const oldVersion = fresh.charge.feeVersionId;
     await fees.createVersion(company.id, { ...feeInput, efiFee: { kind: 'FIXED', amountCents: 200 } });
-    const next = await charges.createDraft(company.id, fresh.invoice.id, 'PIX', 10000, fresh.charge.id, new Date(Date.now() + 86400000));
+    const next = await charges.createDraft(company.id, fresh.invoice.id, 'PIX', 10000, await issuance(), fresh.charge.id, new Date(Date.now() + 86400000));
     assert.notEqual(next.feeVersionId, oldVersion);
     assert.equal(next.estimatedEfiFeeCents, 200);
     assert.equal((await prisma.paymentCharge.findUnique({ where: { id: fresh.charge.id } })).estimatedEfiFeeCents, 100);
@@ -107,6 +126,72 @@ let containerStarted = false;
     await invoices.cancelInvoice(company.id, canceling.invoice.id);
     assert.equal((await prisma.paymentCharge.findUnique({ where: { id: canceling.charge.id } })).status, 'CANCELED', 'manual cancellation closes charge and invoice together');
     console.log('PASS manual cancellation synchronizes charge lifecycle');
+
+    // Etapa 6: the charge carries its issuing account for its whole life.
+    const efiSdkAccounts = [];
+    let notification = null;
+    const efi = new EfiService({ get: () => undefined, getOrThrow: () => 'x' }, prisma, { decrypt: (value) => value }, { notifyPaidInvoice: async () => undefined }, null, charges);
+    efi.createSdkClient = (account) => {
+      efiSdkAccounts.push(account);
+      return {
+        pixUpdateDueCharge: async () => ({ status: 'REMOVIDA_PELO_USUARIO_RECEBEDOR' }),
+        getNotification: async () => notification,
+      };
+    };
+    const onA = await fixture();
+    assert.equal(onA.charge.issuerIdentityId, identityA.id);
+    assert.equal(onA.charge.financialEnvironment, 'HOMOLOGATION');
+    assert.equal(onA.charge.distributionSnapshot.grossAmountCents, 10000);
+    await assert.rejects(prisma.paymentCharge.update({ where: { id: onA.charge.id }, data: { issuerIdentityId: null } }), 'the issuing account of a charge cannot change');
+    const staleContext = await issuance();
+    const identityB = await activate(company.id, '2002');
+    const stale = await prisma.invoice.create({ data: { companyId: company.id, debtorId: debtor.id, originalAmount: 100, dueDate: new Date() } });
+    await assert.rejects(charges.createDraft(company.id, stale.id, 'PIX', 10000, staleContext), (error) => error.response?.code === 'FINANCIAL_PROFILE_CHANGED');
+    assert.equal(await prisma.paymentCharge.count({ where: { invoiceId: stale.id } }), 0, 'no reservation under a superseded profile');
+    const onB = await fixture();
+    assert.equal(onB.charge.issuerIdentityId, identityB.id);
+    assert.equal((await prisma.paymentCharge.findUnique({ where: { id: onA.charge.id } })).issuerIdentityId, identityA.id);
+    await efi.cancelPixDueCharge(company.id, onA.charge.efiTxid);
+    assert.equal(efiSdkAccounts.at(-1).efiAccountNumber, '1001', 'an old charge is canceled on the account that issued it');
+    await efi.cancelPixDueCharge(company.id, onB.charge.efiTxid);
+    assert.equal(efiSdkAccounts.at(-1).efiAccountNumber, '2002');
+    console.log('PASS charge context fixed at reservation, stale profile refused, old charge operated on its own account after a switch');
+
+    // Pix: only the issuing key settles; unknown txids are recorded without payload.
+    await efi.handlePixWebhook({ pix: [{ txid: onB.charge.efiTxid, chave: 'chave-1001', valor: '100.00' }] });
+    assert.equal((await prisma.paymentCharge.findUnique({ where: { id: onB.charge.id } })).status, 'ACTIVE', 'a receipt on another key does not settle');
+    const mismatch = await prisma.paymentWebhookAnomaly.findFirst({ where: { reasonCode: 'RECEIVER_MISMATCH' } });
+    assert.equal(mismatch.externalReference, onB.charge.efiTxid);
+    assert.equal(mismatch.companyId, company.id);
+    await efi.handlePixWebhook({ pix: [{ txid: 'nao-existe', chave: 'x', valor: '1.00' }] });
+    await efi.handlePixWebhook({ pix: [{ txid: 'nao-existe', chave: 'x', valor: '1.00' }] });
+    assert.equal((await prisma.paymentWebhookAnomaly.findFirst({ where: { reasonCode: 'UNKNOWN_TXID', externalReference: 'nao-existe' } })).occurrences, 2);
+    // Paid with fine and interest: the CifraMais fee follows the amount actually paid.
+    await efi.handlePixWebhook({ pix: [{ txid: onB.charge.efiTxid, chave: 'chave-2002', valor: '106.50', endToEndId: 'E1' }] });
+    const paidB = await prisma.paymentCharge.findUnique({ where: { id: onB.charge.id } });
+    assert.equal(paidB.status, 'PAID');
+    assert.equal(paidB.paidAmountCents, 10650);
+    const feeVersion = await prisma.paymentFeeVersion.findUnique({ where: { id: paidB.feeVersionId } });
+    assert.equal(paidB.effectivePlatformFeeCents, fees.calculateQuote(10650, feeVersion).estimatedPlatformFeeCents);
+    assert.ok(paidB.effectivePlatformFeeCents > paidB.estimatedPlatformFeeCents);
+    console.log('PASS Pix receiver check, anomaly counting and platform fee on the paid amount');
+
+    // Charges webhook: the account in the URL picks credentials and scopes the lookup.
+    const partial = await fixture();
+    notification = { data: [{ custom_id: partial.charge.id, status: { current: 'paid' }, value: 9000 }] };
+    await efi.handleChargesWebhook({ notification: 'n1' }, undefined, identityA.id);
+    assert.equal((await prisma.paymentCharge.findUnique({ where: { id: partial.charge.id } })).status, 'ACTIVE', 'account A cannot settle a charge issued on B');
+    assert.equal(await prisma.paymentWebhookAnomaly.count({ where: { source: 'CHARGES', reasonCode: 'UNKNOWN_CHARGE', externalReference: partial.charge.id } }), 1);
+    await efi.handleChargesWebhook({ notification: 'n1' }, undefined, randomBytes(16).toString('hex'));
+    assert.equal(await prisma.paymentWebhookAnomaly.count({ where: { source: 'CHARGES', reasonCode: 'UNKNOWN_ACCOUNT' } }), 1);
+    await efi.handleChargesWebhook({ notification: 'n1' }, undefined, identityB.id);
+    assert.equal(efiSdkAccounts.at(-1).efiAccountNumber, '2002');
+    const paidPartial = await prisma.paymentCharge.findUnique({ where: { id: partial.charge.id } });
+    assert.equal(paidPartial.status, 'PAID');
+    assert.equal(paidPartial.paidAmountCents, 9000);
+    assert.equal(await prisma.collectionLog.count({ where: { invoiceId: partial.invoice.id, actionType: 'PAYMENT_AMOUNT_DIVERGENCE' } }), 1, 'a payment below the charge needs review');
+    await assert.rejects(pool.query(`INSERT INTO "PaymentWebhookAnomaly" (id, source, "reasonCode", "externalReference", "lastSeenAt") VALUES ('x', 'EMAIL', 'A', 'r', now())`));
+    console.log('PASS account-scoped charges webhook, unknown account/charge anomalies and partial payment review');
     console.log(`PASS payment lifecycle on ${migrations.length} migrations in PostgreSQL 16`);
   } finally {
     if (prisma) await prisma.$disconnect();

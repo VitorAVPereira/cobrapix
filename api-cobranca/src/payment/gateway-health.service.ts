@@ -2,7 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { BillingMethod, IntegrationHealthStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { FinancialEligibilityService } from '../financial-activation/financial-eligibility.service';
+import {
+  FinancialEligibilityService,
+  IssuanceContext,
+} from '../financial-activation/financial-eligibility.service';
 import { EfiGatewayClient } from './efi-gateway.client';
 
 @Injectable()
@@ -19,8 +22,8 @@ export class GatewayHealthService {
   async assertIssuable(
     companyId: string,
     method?: BillingMethod,
-  ): Promise<void> {
-    await this.eligibility.resolveIssuance(companyId, method);
+  ): Promise<IssuanceContext> {
+    return this.eligibility.resolveIssuance(companyId, method);
   }
   async validate(companyId: string): Promise<boolean> {
     const account = await this.prisma.gatewayAccount.findUnique({

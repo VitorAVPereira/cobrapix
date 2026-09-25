@@ -9,6 +9,8 @@ import {
 import { PaymentFeeService } from '../payment-fees/payment-fee.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { EfiPaymentResult } from './efi.service';
+import type { IssuanceContext } from '../financial-activation/financial-eligibility.service';
+import { resolveChargeDistribution } from '../financial-activation/financial-activation.types';
 
 type SettlementCharge = Pick<
   PaymentCharge,
@@ -48,21 +50,54 @@ export class PaymentChargeService {
     invoiceId: string,
     billingMethod: BillingMethod,
     grossAmountCents: number,
+    financial: IssuanceContext,
     replacesChargeId?: string,
     replacementDueDate?: Date,
   ): Promise<PaymentCharge> {
+    if (billingMethod !== 'PIX' && billingMethod !== 'BOLIX')
+      throw new HttpException('Novas cobranças devem usar Pix ou Bolix.', 403);
     const feeVersion = await this.fees.resolveActiveVersion(
       companyId,
       billingMethod,
     );
     const quote = this.fees.calculateQuote(grossAmountCents, feeVersion);
+    const distribution = resolveChargeDistribution({
+      accountMode: financial.accountMode,
+      payoutMode: financial.payoutMode,
+      method: billingMethod,
+      platformFeeCharged:
+        (feeVersion.platformFeeAmountCents ?? 0) > 0 ||
+        (feeVersion.platformFeeBasisPoints ?? 0) > 0,
+    });
     const id = randomUUID();
     return this.prisma.$transaction(
       async (tx: Prisma.TransactionClient): Promise<PaymentCharge> => {
-        const locked = await tx.$queryRaw<
-          Array<{ id: string; status: string }>
+        // Activation locks the company FOR UPDATE: the profile read here is
+        // the one this charge is issued under, or the issuance is refused.
+        const [company] = await tx.$queryRaw<
+          Array<{ activeFinancialProfileId: string | null }>
         >(
-          Prisma.sql`SELECT id, status FROM "Invoice" WHERE id=${invoiceId} AND "companyId"=${companyId} FOR UPDATE`,
+          Prisma.sql`SELECT "activeFinancialProfileId" FROM "Company" WHERE id=${companyId} FOR SHARE`,
+        );
+        if (company?.activeFinancialProfileId !== financial.financialProfileId)
+          throw new HttpException(
+            {
+              code: 'FINANCIAL_PROFILE_CHANGED',
+              message:
+                'A ativação financeira mudou durante a emissão. Tente novamente.',
+            },
+            409,
+          );
+        const locked = await tx.$queryRaw<
+          Array<{
+            id: string;
+            status: string;
+            lateFineBasisPoints: number;
+            lateInterestMonthlyBasisPoints: number;
+            paymentDaysAfterDue: number;
+          }>
+        >(
+          Prisma.sql`SELECT id, status, "lateFineBasisPoints", "lateInterestMonthlyBasisPoints", "paymentDaysAfterDue" FROM "Invoice" WHERE id=${invoiceId} AND "companyId"=${companyId} FOR UPDATE`,
         );
         const lockedInvoice = locked[0];
         if (!lockedInvoice || locked.length !== 1)
@@ -134,6 +169,24 @@ export class PaymentChargeService {
             estimatedPlatformFeeCents: quote.estimatedPlatformFeeCents,
             feeSnapshot: this.fees.toSnapshot(feeVersion),
             status: 'PENDING',
+            // Issuance context: account, credential and modes are fixed now,
+            // before any provider call, and never change afterwards.
+            financialProfileId: financial.financialProfileId,
+            issuerIdentityId: financial.issuerIdentityId,
+            issuerCredentialVersionId: financial.issuerCredentialVersionId,
+            accountMode: financial.accountMode,
+            payoutMode: financial.payoutMode,
+            financialEnvironment: financial.financialEnvironment,
+            distributionSnapshot: {
+              ...distribution,
+              grossAmountCents,
+              estimatedEfiFeeCents: quote.estimatedEfiFeeCents,
+              estimatedPlatformFeeCents: quote.estimatedPlatformFeeCents,
+            },
+            lateFineBasisPoints: lockedInvoice.lateFineBasisPoints,
+            lateInterestMonthlyBasisPoints:
+              lockedInvoice.lateInterestMonthlyBasisPoints,
+            paymentDaysAfterDue: lockedInvoice.paymentDaysAfterDue,
           },
         });
       },
@@ -166,7 +219,15 @@ export class PaymentChargeService {
     charge: SettlementCharge,
     effectiveEfiFeeCents: number | null,
     providerStatus: string,
+    // Amount the payer actually paid (with fine and interest), when known.
+    paidAmountCents: number | null = null,
   ): Promise<boolean> {
+    if (
+      paidAmountCents !== null &&
+      (!Number.isSafeInteger(paidAmountCents) || paidAmountCents <= 0)
+    ) {
+      throw new HttpException('Valor pago inválido.', 400);
+    }
     if (
       effectiveEfiFeeCents !== null &&
       (!Number.isSafeInteger(effectiveEfiFeeCents) || effectiveEfiFeeCents < 0)
@@ -185,6 +246,18 @@ export class PaymentChargeService {
           where: { id: charge.id, companyId: charge.companyId },
         });
         if (!current || current.status === 'REFUNDED') return false;
+        const paid = paidAmountCents ?? current.paidAmountCents ?? null;
+        // The CifraMais fee is charged on the amount actually paid.
+        const effectivePlatformFeeCents =
+          paid !== null
+            ? this.fees.calculateQuote(
+                paid,
+                await tx.paymentFeeVersion.findUniqueOrThrow({
+                  where: { id: current.feeVersionId },
+                }),
+              ).estimatedPlatformFeeCents
+            : (current.effectivePlatformFeeCents ??
+              current.estimatedPlatformFeeCents);
         const gatewayStatusRaw =
           current.gatewayStatusRaw === 'partially_refunded'
             ? current.gatewayStatusRaw
@@ -195,9 +268,8 @@ export class PaymentChargeService {
             status: 'PAID',
             effectiveEfiFeeCents:
               effectiveEfiFeeCents ?? current.effectiveEfiFeeCents,
-            effectivePlatformFeeCents:
-              current.effectivePlatformFeeCents ??
-              current.estimatedPlatformFeeCents,
+            effectivePlatformFeeCents,
+            paidAmountCents: paid,
             paidAt: current.paidAt ?? new Date(),
             gatewayStatusRaw,
           },
@@ -230,6 +302,23 @@ export class PaymentChargeService {
             },
           });
         }
+        // Less than the charged amount is a partial payment: it settles the
+        // charge as reported, but needs an administrative decision.
+        if (
+          paid !== null &&
+          paid < current.grossAmountCents &&
+          current.paidAmountCents === null
+        )
+          await tx.collectionLog.create({
+            data: {
+              companyId: charge.companyId,
+              invoiceId: charge.invoiceId,
+              actionType: 'PAYMENT_AMOUNT_DIVERGENCE',
+              description:
+                'Valor pago menor que o valor da cobrança; requer decisão administrativa.',
+              status: 'REVIEW_REQUIRED',
+            },
+          });
         const updated = await tx.invoice.updateMany({
           where: {
             ...this.currentInvoiceWhere(current),

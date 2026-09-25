@@ -104,7 +104,10 @@ export class PaymentService {
     }
 
     // Reject paused or unhealthy integrations before creating an issuance reservation.
-    await this.efiService.assertIssuable(companyId, billingType);
+    const financial = await this.efiService.assertIssuable(
+      companyId,
+      billingType,
+    );
 
     const invoice = await this.prisma.invoice.findFirst({
       where: { id: invoiceId, companyId },
@@ -118,6 +121,7 @@ export class PaymentService {
       invoiceId,
       billingType,
       grossAmountCents,
+      financial,
     );
     const context = this.buildIssuanceContext(charge);
     await this.charges.transition(charge.id, companyId, 'PENDING', {});
@@ -313,11 +317,17 @@ export class PaymentService {
       });
       if (!invoice || invoice.status === 'PAID')
         throw new HttpException('Fatura não pode ser substituída.', 409);
+      // The replacement uses the profile active now; the old charge stays on its account.
+      const financial = await this.efiService.assertIssuable(
+        companyId,
+        previous.billingMethod,
+      );
       replacement = await this.charges.createDraft(
         companyId,
         invoiceId,
         previous.billingMethod,
         Math.round(Number(invoice.originalAmount) * 100),
+        financial,
         previous.id,
         newDueDate,
       );
@@ -412,6 +422,7 @@ export class PaymentService {
     const kind = platformFee.kind === 'FIXED' ? 'FIXED' : 'PERCENTAGE';
     return {
       chargeId: charge.id,
+      issuerIdentityId: this.requireIssuer(charge),
       platformFeeKind: kind,
       platformFeeAmountCents:
         kind === 'FIXED' && typeof platformFee.amountCents === 'number'
@@ -423,6 +434,19 @@ export class PaymentService {
           : 0,
       grossAmountCents: charge.grossAmountCents,
     };
+  }
+
+  // Issuance only ever targets the account recorded on the charge.
+  private requireIssuer(charge: PaymentCharge): string {
+    if (!charge.issuerIdentityId)
+      throw new HttpException(
+        {
+          code: 'EFI_SUBMISSION_UNCERTAIN',
+          message: 'Cobrança sem conta emissora registrada.',
+        },
+        HttpStatus.CONFLICT,
+      );
+    return charge.issuerIdentityId;
   }
 
   private toPaymentResult(charge: PaymentCharge): EfiPaymentResult {

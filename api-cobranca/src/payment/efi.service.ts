@@ -18,6 +18,7 @@ import { PaymentNotificationsService } from './payment-notifications.service';
 import { GatewayHealthService } from './gateway-health.service';
 import { PaymentChargeService } from './payment-charge.service';
 import { matchesBoletoMode } from './efi-boleto-mode';
+import type { IssuanceContext } from '../financial-activation/financial-eligibility.service';
 
 type EfiEnvironment = 'homologation' | 'production';
 type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
@@ -78,6 +79,8 @@ interface EfiNotificationResponse {
     status?: {
       current?: string;
     };
+    // Amount paid, in cents, on "paid" events (includes fine and interest).
+    value?: number;
   }>;
 }
 
@@ -176,7 +179,26 @@ export interface EfiIssuanceContext {
   platformFeeAmountCents: number;
   platformFeeBasisPoints: number;
   grossAmountCents: number;
+  // Account recorded on the charge before any provider call.
+  issuerIdentityId: string;
 }
+
+// Account an Efí operation runs with: the charge's issuer identity and its
+// current ACTIVE credential, or, for charges issued before financial
+// profiles existed, the company's gateway account.
+type EfiAccountRef = Pick<
+  GatewayAccount,
+  | 'companyId'
+  | 'environment'
+  | 'pixKey'
+  | 'efiAccountNumber'
+  | 'payeeCode'
+  | 'encryptedClientId'
+  | 'encryptedClientSecret'
+  | 'encryptedCertificate'
+  | 'encryptedCertificatePassword'
+  | 'certificatePath'
+> & { issuerIdentityId: string | null };
 
 @Injectable()
 export class EfiService {
@@ -208,7 +230,10 @@ export class EfiService {
       403,
     );
   }
-  async assertIssuable(companyId: string, method?: BillingType): Promise<void> {
+  async assertIssuable(
+    companyId: string,
+    method?: BillingType,
+  ): Promise<IssuanceContext> {
     if (!this.gatewayHealth)
       throw new HttpException(
         {
@@ -217,7 +242,7 @@ export class EfiService {
         },
         409,
       );
-    await this.gatewayHealth.assertIssuable(companyId, method);
+    return this.gatewayHealth.assertIssuable(companyId, method);
   }
 
   async createPayment(
@@ -245,20 +270,24 @@ export class EfiService {
         409,
       );
     await this.gatewayHealth.assertIssuable(companyId, billingType);
-    const gatewayAccount = await this.getActiveGatewayAccount(companyId);
+    // Never the company's "current" account: the one recorded on the charge.
+    const account = await this.accountForIdentity(
+      issuance.issuerIdentityId,
+      companyId,
+    );
 
     if (billingType === 'BOLETO' || billingType === 'BOLIX') {
-      return this.createBoleto(invoice, gatewayAccount, billingType, issuance);
+      return this.createBoleto(invoice, account, billingType, issuance);
     }
 
-    return this.createPixCobv(invoice, gatewayAccount, issuance);
+    return this.createPixCobv(invoice, account, issuance);
   }
 
   async cancelPixDueCharge(companyId: string, txid: string): Promise<string> {
-    const gatewayAccount = await this.getActiveGatewayAccount(companyId);
-    this.ensurePixCertificate(gatewayAccount);
+    const account = await this.accountForCharge({ companyId, efiTxid: txid });
+    this.ensurePixCertificate(account);
 
-    const client = this.createSdkClient(gatewayAccount);
+    const client = this.createSdkClient(account);
     const response = await this.runEfiRequest(
       () =>
         client.pixUpdateDueCharge(
@@ -272,8 +301,11 @@ export class EfiService {
   }
 
   async cancelCharge(companyId: string, chargeId: string): Promise<string> {
-    const gatewayAccount = await this.getActiveGatewayAccount(companyId);
-    const client = this.createSdkClient(gatewayAccount);
+    const account = await this.accountForCharge({
+      companyId,
+      efiChargeId: chargeId,
+    });
+    const client = this.createSdkClient(account);
 
     await this.runEfiRequest(
       () => client.cancelCharge({ id: chargeId }),
@@ -305,11 +337,9 @@ export class EfiService {
     });
     if (!charge.efiTxid && !charge.efiChargeId)
       return { status: 'REVIEW_REQUIRED' };
-    const account = await this.prisma.gatewayAccount.findFirst({
-      where: { companyId, provider: 'EFI' },
-    });
-    if (!account)
-      throw new HttpException('Conta Efí indisponível para conciliação.', 409);
+    const account = charge.issuerIdentityId
+      ? await this.accountForIdentity(charge.issuerIdentityId, companyId)
+      : await this.legacyAccount(companyId, false);
     const client = this.createSdkClient(account);
     const response: unknown = await this.runEfiRequest(
       () =>
@@ -373,10 +403,15 @@ export class EfiService {
       providerStatus === 'paid' ||
       providerStatus === 'settled'
     ) {
+      const paidCents = receipts.reduce<number | null>((total, entry) => {
+        const amount = this.providerAmountCents(entry.valor);
+        return amount === null ? total : (total ?? 0) + amount;
+      }, null);
       const newlyPaid = await this.charges.recordSettlement(
         charge,
         null,
         providerStatus,
+        paidCents,
       );
       if (newlyPaid)
         await this.paymentNotifications.notifyPaidInvoice(
@@ -441,7 +476,21 @@ export class EfiService {
         : await this.prisma.invoice.findFirst({ where: { efiTxid: txid } });
 
       if (!invoice) {
-        this.logger.warn(`Webhook Efi Pix sem fatura para txid ${txid}`);
+        this.logger.warn('Webhook Efi Pix sem fatura para o txid');
+        await this.recordWebhookAnomaly('PIX', 'UNKNOWN_TXID', txid);
+        continue;
+      }
+      // The notification must come from the key of the account that issued it.
+      if (
+        paymentCharge?.issuerIdentityId &&
+        !(await this.pixReceiverMatches(paymentCharge.issuerIdentityId, event))
+      ) {
+        await this.recordWebhookAnomaly(
+          'PIX',
+          'RECEIVER_MISMATCH',
+          txid,
+          paymentCharge.companyId,
+        );
         continue;
       }
 
@@ -485,6 +534,7 @@ export class EfiService {
           paymentCharge,
           effectiveFee,
           'CONCLUIDA',
+          this.providerAmountCents(event.valor),
         );
         if (newlyPaid)
           await this.paymentNotifications.notifyPaidInvoice(
@@ -512,6 +562,7 @@ export class EfiService {
   async handleChargesWebhook(
     payload: unknown,
     companyId?: string,
+    accountId?: string,
   ): Promise<{
     processed: boolean;
     invoiceId?: string;
@@ -524,18 +575,39 @@ export class EfiService {
       return { processed: false };
     }
 
-    const gatewayAccount = companyId
-      ? await this.prisma.gatewayAccount.findFirst({
-          where: { companyId, provider: 'EFI' },
-        })
-      : await this.findGatewayAccountByNotification(notification);
-
-    if (!gatewayAccount) {
-      this.logger.warn('Webhook Efi Cobrancas sem conta Efi relacionada');
-      return { processed: false };
+    // New charges name their issuing account in the notification URL; it only
+    // selects whose credentials query Efí. Legacy charges keep the old path.
+    let account: EfiAccountRef;
+    let legacyCompanyId: string | null = null;
+    if (accountId) {
+      const identity = await this.prisma.efiAccountIdentity.findUnique({
+        where: { id: accountId },
+        select: { companyId: true },
+      });
+      if (!identity?.companyId) {
+        await this.recordWebhookAnomaly(
+          'CHARGES',
+          'UNKNOWN_ACCOUNT',
+          accountId,
+        );
+        return { processed: false };
+      }
+      account = await this.accountForIdentity(accountId, identity.companyId);
+    } else {
+      const gatewayAccount = companyId
+        ? await this.prisma.gatewayAccount.findFirst({
+            where: { companyId, provider: 'EFI' },
+          })
+        : await this.findGatewayAccountByNotification(notification);
+      if (!gatewayAccount) {
+        this.logger.warn('Webhook Efi Cobrancas sem conta Efi relacionada');
+        return { processed: false };
+      }
+      account = { ...gatewayAccount, issuerIdentityId: null };
+      legacyCompanyId = gatewayAccount.companyId;
     }
 
-    const client = this.createSdkClient(gatewayAccount);
+    const client = this.createSdkClient(account);
     const response = await this.runEfiRequest(
       () => client.getNotification({ token: notification }),
       'consultar notificacao de cobranca',
@@ -547,34 +619,42 @@ export class EfiService {
       return { processed: false };
     }
 
-    const paymentCharge =
-      event.custom_id && this.prisma.paymentCharge
-        ? await this.prisma.paymentCharge.findFirst({
-            where: { id: event.custom_id, companyId: gatewayAccount.companyId },
-          })
-        : event.identifiers?.charge_id && this.prisma.paymentCharge
-          ? await this.prisma.paymentCharge.findFirst({
-              where: {
-                efiChargeId: event.identifiers.charge_id.toString(),
-                companyId: gatewayAccount.companyId,
-              },
-            })
-          : null;
+    // The charge must have been issued by the account that was queried.
+    const scope = account.issuerIdentityId
+      ? { issuerIdentityId: account.issuerIdentityId }
+      : { companyId: legacyCompanyId ?? '', financialProfileId: null };
+    const paymentCharge = event.custom_id
+      ? await this.prisma.paymentCharge.findFirst({
+          where: { id: event.custom_id, ...scope },
+        })
+      : await this.prisma.paymentCharge.findFirst({
+          where: {
+            efiChargeId: event.identifiers?.charge_id?.toString(),
+            ...scope,
+          },
+        });
+    if (!paymentCharge && account.issuerIdentityId) {
+      await this.recordWebhookAnomaly(
+        'CHARGES',
+        'UNKNOWN_CHARGE',
+        String(event.custom_id ?? event.identifiers?.charge_id),
+        account.companyId,
+      );
+      return { processed: false };
+    }
+    const ownerCompanyId = paymentCharge?.companyId ?? legacyCompanyId ?? '';
     const invoice = paymentCharge
       ? await this.prisma.invoice.findFirst({
-          where: {
-            id: paymentCharge.invoiceId,
-            companyId: gatewayAccount.companyId,
-          },
+          where: { id: paymentCharge.invoiceId, companyId: ownerCompanyId },
         })
       : event.custom_id
         ? await this.prisma.invoice.findFirst({
-            where: { id: event.custom_id, companyId: gatewayAccount.companyId },
+            where: { id: event.custom_id, companyId: ownerCompanyId },
           })
         : await this.prisma.invoice.findFirst({
             where: {
               efiChargeId: event.identifiers?.charge_id?.toString(),
-              companyId: gatewayAccount.companyId,
+              companyId: ownerCompanyId,
             },
           });
 
@@ -587,7 +667,7 @@ export class EfiService {
     if (!mappedStatus) {
       if (paymentCharge) return { processed: true, invoiceId: invoice.id };
       await this.prisma.invoice.updateMany({
-        where: { id: invoice.id, companyId: gatewayAccount.companyId },
+        where: { id: invoice.id, companyId: ownerCompanyId },
         data: {
           notificationToken: notification,
           gatewayStatusRaw: event.status?.current,
@@ -605,6 +685,9 @@ export class EfiService {
           paymentCharge,
           null,
           providerStatus,
+          Number.isSafeInteger(event.value) && event.value! > 0
+            ? event.value!
+            : null,
         );
         if (newlyPaid)
           await this.paymentNotifications.notifyPaidInvoice(
@@ -656,7 +739,7 @@ export class EfiService {
 
   private async createPixCobv(
     invoice: PaymentInvoice,
-    gatewayAccount: GatewayAccount,
+    gatewayAccount: EfiAccountRef,
     issuance?: EfiIssuanceContext,
   ): Promise<EfiPaymentResult> {
     const existing = issuance ? null : this.buildExistingPixResult(invoice);
@@ -780,7 +863,7 @@ export class EfiService {
 
   private async createBoleto(
     invoice: PaymentInvoice,
-    gatewayAccount: GatewayAccount,
+    gatewayAccount: EfiAccountRef,
     billingType: 'BOLETO' | 'BOLIX',
     issuance?: EfiIssuanceContext,
   ): Promise<EfiPaymentResult> {
@@ -790,9 +873,13 @@ export class EfiService {
     }
 
     const client = this.createSdkClient(gatewayAccount);
+    // The notification names the issuing account; the company comes from the
+    // charge linked to it, never from the URL.
     const webhookUrl = this.buildWebhookUrl(
       '/webhooks/efi/cobrancas',
-      invoice.companyId,
+      gatewayAccount.issuerIdentityId
+        ? { account: gatewayAccount.issuerIdentityId }
+        : { companyId: invoice.companyId },
     );
     const customer = this.buildBoletoCustomer(invoice);
     const marketplaceRepasses = this.buildBoletoMarketplaceRepasses(
@@ -950,7 +1037,7 @@ export class EfiService {
 
   private async createPixSplitConfig(
     client: EfiPay,
-    gatewayAccount: GatewayAccount,
+    gatewayAccount: EfiAccountRef,
     txid: string,
     issuance?: EfiIssuanceContext,
   ): Promise<string | null> {
@@ -1030,7 +1117,7 @@ export class EfiService {
   }
 
   private buildBoletoMarketplaceRepasses(
-    gatewayAccount: GatewayAccount,
+    gatewayAccount: EfiAccountRef,
     issuance?: EfiIssuanceContext,
   ): Array<{ payee_code: string; percentage?: number; fixed?: number }> {
     const platformPayeeCode = this.config.get<string>(
@@ -1165,6 +1252,87 @@ export class EfiService {
     };
   }
 
+  private async accountForIdentity(
+    identityId: string,
+    companyId: string,
+  ): Promise<EfiAccountRef> {
+    const identity = await this.prisma.efiAccountIdentity.findUnique({
+      where: { id: identityId },
+      include: {
+        // Later operations may use a newer credential of the same account.
+        credentialVersions: { where: { status: 'ACTIVE' }, take: 1 },
+      },
+    });
+    if (
+      !identity ||
+      (identity.ownership === 'COMPANY' && identity.companyId !== companyId)
+    )
+      throw new HttpException(
+        {
+          code: 'EFI_ACCOUNT_MISMATCH',
+          message: 'Conta Efí da cobrança indisponível.',
+        },
+        HttpStatus.CONFLICT,
+      );
+    const credential = identity.credentialVersions[0];
+    if (!credential)
+      throw new HttpException(
+        {
+          code: 'EFI_CREDENTIALS_UNAVAILABLE',
+          message:
+            'Não há credencial ativa para a conta da cobrança. Renove as credenciais.',
+        },
+        HttpStatus.CONFLICT,
+      );
+    return {
+      companyId,
+      environment:
+        identity.environment === 'PRODUCTION' ? 'production' : 'homologation',
+      pixKey: identity.pixKey ?? '',
+      efiAccountNumber: identity.efiAccountNumber,
+      payeeCode: identity.payeeCode ?? '',
+      encryptedClientId: credential.encryptedClientId,
+      encryptedClientSecret: credential.encryptedClientSecret,
+      encryptedCertificate: credential.encryptedCertificate,
+      encryptedCertificatePassword: credential.encryptedCertificatePassword,
+      certificatePath: null,
+      issuerIdentityId: identity.id,
+    };
+  }
+
+  // Operations on an existing charge use the account recorded on it.
+  private async accountForCharge(where: {
+    companyId: string;
+    efiTxid?: string;
+    efiChargeId?: string;
+  }): Promise<EfiAccountRef> {
+    const charge = await this.prisma.paymentCharge.findFirst({
+      where,
+      orderBy: { createdAt: 'desc' },
+      select: { issuerIdentityId: true },
+    });
+    return charge?.issuerIdentityId
+      ? this.accountForIdentity(charge.issuerIdentityId, where.companyId)
+      : this.legacyAccount(where.companyId);
+  }
+
+  // Charges from before financial profiles: the company's gateway account.
+  // Charges issued before financial profiles. Reads (reconciliation) do not
+  // require the account to still be ACTIVE; cancellations do.
+  private async legacyAccount(
+    companyId: string,
+    requireActive = true,
+  ): Promise<EfiAccountRef> {
+    const gatewayAccount = requireActive
+      ? await this.getActiveGatewayAccount(companyId)
+      : await this.prisma.gatewayAccount.findFirst({
+          where: { companyId, provider: 'EFI' },
+        });
+    if (!gatewayAccount)
+      throw new HttpException('Conta Efí não configurada.', 409);
+    return { ...gatewayAccount, issuerIdentityId: null };
+  }
+
   private async getActiveGatewayAccount(
     companyId: string,
   ): Promise<GatewayAccount> {
@@ -1205,7 +1373,7 @@ export class EfiService {
     return null;
   }
 
-  private createSdkClient(gatewayAccount: GatewayAccount): EfiPay {
+  private createSdkClient(gatewayAccount: EfiAccountRef): EfiPay {
     const credentials = this.getCredentials(gatewayAccount);
 
     if (!credentials.clientId || !credentials.clientSecret) {
@@ -1226,11 +1394,9 @@ export class EfiService {
     });
   }
 
-  private getCredentials(gatewayAccount: GatewayAccount): EfiCredentials {
-    const platformClientId = this.config.get<string>('EFI_PLATFORM_CLIENT_ID');
-    const platformClientSecret = this.config.get<string>(
-      'EFI_PLATFORM_CLIENT_SECRET',
-    );
+  // Only the account's own material. There is no fallback to the platform
+  // credentials: a company without credentials cannot operate on Efí.
+  private getCredentials(gatewayAccount: EfiAccountRef): EfiCredentials {
     const certificateBase64 = gatewayAccount.encryptedCertificate
       ? this.crypto.decrypt(gatewayAccount.encryptedCertificate)
       : undefined;
@@ -1238,19 +1404,17 @@ export class EfiService {
     return {
       clientId: gatewayAccount.encryptedClientId
         ? this.crypto.decrypt(gatewayAccount.encryptedClientId)
-        : (platformClientId ?? ''),
+        : '',
       clientSecret: gatewayAccount.encryptedClientSecret
         ? this.crypto.decrypt(gatewayAccount.encryptedClientSecret)
-        : (platformClientSecret ?? ''),
+        : '',
       certificate:
-        certificateBase64 ??
-        gatewayAccount.certificatePath ??
-        this.config.get<string>('EFI_PLATFORM_CERT_PATH'),
+        certificateBase64 ?? gatewayAccount.certificatePath ?? undefined,
       certificateIsBase64: Boolean(certificateBase64),
     };
   }
 
-  private ensurePixCertificate(gatewayAccount: GatewayAccount): void {
+  private ensurePixCertificate(gatewayAccount: EfiAccountRef): void {
     if (!this.getCredentials(gatewayAccount).certificate) {
       throw new HttpException(
         'Certificado Efi nao configurado para Pix.',
@@ -1431,6 +1595,50 @@ export class EfiService {
     };
   }
 
+  private async pixReceiverMatches(
+    identityId: string,
+    event: Record<string, unknown>,
+  ): Promise<boolean> {
+    // Efí includes the receiving key; an event without it cannot be checked
+    // against the account and is not applied.
+    if (typeof event.chave !== 'string') return false;
+    const identity = await this.prisma.efiAccountIdentity.findUnique({
+      where: { id: identityId },
+      select: { pixKey: true },
+    });
+    return Boolean(identity?.pixKey) && identity?.pixKey === event.chave;
+  }
+
+  // Kept for diagnosis without the payload, which may carry payer data.
+  private async recordWebhookAnomaly(
+    source: 'PIX' | 'CHARGES',
+    reasonCode: string,
+    externalReference: string,
+    companyId?: string,
+  ): Promise<void> {
+    const reference = externalReference.slice(0, 128) || 'unknown';
+    try {
+      await this.prisma.paymentWebhookAnomaly.upsert({
+        where: {
+          source_externalReference_reasonCode: {
+            source,
+            externalReference: reference,
+            reasonCode,
+          },
+        },
+        create: {
+          source,
+          reasonCode,
+          externalReference: reference,
+          companyId: companyId ?? null,
+        },
+        update: { occurrences: { increment: 1 }, lastSeenAt: new Date() },
+      });
+    } catch {
+      this.logger.error('PAYMENT_WEBHOOK_ANOMALY_NOT_RECORDED');
+    }
+  }
+
   private extractPixEvents(
     payload: unknown,
   ): Array<Record<string, unknown> & { txid: string }> {
@@ -1558,7 +1766,10 @@ export class EfiService {
     });
   }
 
-  private buildWebhookUrl(path: string, companyId?: string): string {
+  private buildWebhookUrl(
+    path: string,
+    target: { account: string } | { companyId: string },
+  ): string {
     const chargesBaseUrl = this.config.get<string>(
       'EFI_CHARGES_WEBHOOK_BASE_URL',
     );
@@ -1575,9 +1786,8 @@ export class EfiService {
       'token',
       this.config.getOrThrow<string>('EFI_WEBHOOK_SECRET'),
     );
-    if (companyId) {
-      url.searchParams.set('companyId', companyId);
-    }
+    if ('account' in target) url.searchParams.set('account', target.account);
+    else url.searchParams.set('companyId', target.companyId);
 
     return url.toString();
   }

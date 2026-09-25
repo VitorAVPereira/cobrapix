@@ -640,6 +640,7 @@ model PaymentCharge {
   paidAt                         DateTime?
   canceledAt                     DateTime?
   expiresAt                      DateTime?
+  paidAmountCents                Int?
   financialProfileId             String?
   financialProfile               FinancialProfileVersion?     @relation(fields: [financialProfileId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
   issuerIdentityId               String?
@@ -677,6 +678,23 @@ model PaymentChargeStatusHistory {
   occurredAt       DateTime             @default(now())
 
   @@index([paymentChargeId, occurredAt])
+}
+
+// Webhook events that could not be applied safely (unknown charge, receiver
+// or account mismatch). Only the reason and a reference are kept; the raw
+// payload may contain payer data and is not stored.
+model PaymentWebhookAnomaly {
+  id                String   @id @default(uuid())
+  source            String
+  reasonCode        String
+  externalReference String
+  companyId         String?
+  occurrences       Int      @default(1)
+  firstSeenAt       DateTime @default(now())
+  lastSeenAt        DateTime @default(now())
+
+  @@unique([source, externalReference, reasonCode])
+  @@index([lastSeenAt])
 }
 
 // Stable identity of an Efí bank account in one environment. A PLATFORM
