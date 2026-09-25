@@ -147,8 +147,6 @@ interface PaymentInvoice {
     autoDiscountEnabled: boolean;
     autoDiscountDaysAfterDue: number | null;
     autoDiscountPercentage: { toNumber(): number } | null;
-    onTimeSplitPercentageBps: number;
-    overdueSplitPercentageBps: number;
   };
 }
 
@@ -1655,19 +1653,6 @@ export class EfiService {
     const target = new Date(date);
     target.setDate(target.getDate() + days);
     return target;
-  }
-
-  private ensureValidSplitPercentage(percentage: number): void {
-    if (
-      !Number.isInteger(percentage) ||
-      percentage < 0 ||
-      percentage >= 10000
-    ) {
-      throw new HttpException(
-        'Percentual de split da empresa deve estar entre 0 e 9999.',
-        HttpStatus.SERVICE_UNAVAILABLE,
-      );
-    }
   }
 
   private formatBasisPointsAsPercent(value: number): string {

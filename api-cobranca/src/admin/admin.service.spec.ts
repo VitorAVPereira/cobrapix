@@ -55,8 +55,6 @@ const baseCompanyRecord = {
   erpEnabledEvents: ['invoice.created'],
   status: 'ACTIVE',
   enabledBillingMethods: ['PIX'],
-  onTimeSplitPercentageBps: 350,
-  overdueSplitPercentageBps: 1200,
   createdAt: new Date('2026-05-01T12:00:00.000Z'),
   updatedAt: new Date('2026-05-01T12:00:00.000Z'),
   users: [
@@ -168,7 +166,6 @@ describe('AdminService financial onboarding', () => {
     { company: { gatewayStatus: 'ACTIVE' } },
     { whatsapp: { metaAccessToken: 'secret' } },
     { integrations: { resendApiKey: 'secret' } },
-    { billing: { onTimeSplitPercentageBps: 100 } },
   ])(
     'rejects obsolete gateway/secret/tariff updates before writing',
     async (dto) => {

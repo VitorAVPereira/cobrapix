@@ -76,8 +76,6 @@ export interface AdminClientResponse {
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue: number | null;
   autoDiscountPercentage: number | null;
-  onTimeSplitPercentageBps: number;
-  overdueSplitPercentageBps: number;
   businessSegment: BusinessSegment;
   paymentNotificationEnabled: boolean;
   paymentNotificationEmails: string[];
@@ -200,8 +198,6 @@ export class AdminService {
         status: dto.company.status ?? 'ACTIVE',
         enabledBillingMethods: dto.billing.enabledBillingMethods,
         preferredBillingMethod: dto.billing.preferredBillingMethod,
-        onTimeSplitPercentageBps: dto.billing.onTimeSplitPercentageBps,
-        overdueSplitPercentageBps: dto.billing.overdueSplitPercentageBps,
         ...integrationData,
         users: {
           create: {
@@ -337,8 +333,6 @@ export class AdminService {
       autoDiscountPercentage: this.decimalToNumber(
         company.autoDiscountPercentage,
       ),
-      onTimeSplitPercentageBps: company.onTimeSplitPercentageBps,
-      overdueSplitPercentageBps: company.overdueSplitPercentageBps,
       businessSegment: company.businessSegment,
       paymentNotificationEnabled: company.paymentNotificationEnabled,
       paymentNotificationEmails: company.paymentNotificationEmails,
@@ -480,12 +474,6 @@ export class AdminService {
       if (billing.preferredBillingMethod !== undefined) {
         data.preferredBillingMethod = billing.preferredBillingMethod;
       }
-      if (billing.onTimeSplitPercentageBps !== undefined) {
-        data.onTimeSplitPercentageBps = billing.onTimeSplitPercentageBps;
-      }
-      if (billing.overdueSplitPercentageBps !== undefined) {
-        data.overdueSplitPercentageBps = billing.overdueSplitPercentageBps;
-      }
       if (billing.maxDiscountsPerDebtor !== undefined) {
         data.maxDiscountsPerDebtor = billing.maxDiscountsPerDebtor;
       }
@@ -581,15 +569,6 @@ export class AdminService {
     ) {
       throw new HttpException(
         'Canais são centrais. Utilize a ativação financeira validada para a conta Efí.',
-        HttpStatus.BAD_REQUEST,
-      );
-    }
-    if (
-      dto.billing?.onTimeSplitPercentageBps !== undefined ||
-      dto.billing?.overdueSplitPercentageBps !== undefined
-    ) {
-      throw new HttpException(
-        'Utilize versões de tarifas por meio de pagamento.',
         HttpStatus.BAD_REQUEST,
       );
     }
