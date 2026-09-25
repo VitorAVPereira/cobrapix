@@ -425,3 +425,64 @@ describe('Efí notification ordering', () => {
     expect(charges.recordSettlement).not.toHaveBeenCalled();
   });
 });
+
+describe('Efí late terms payload', () => {
+  interface LateTermsBuilder {
+    buildPixLateTerms(issuance: object): Record<string, unknown>;
+    buildBoletoLateTerms(issuance: object): Record<string, unknown>;
+  }
+  const service = new EfiService(
+    {} as ConfigService,
+    {} as PrismaService,
+    {} as PaymentCryptoService,
+    {} as PaymentNotificationsService,
+    null,
+    {} as PaymentChargeService,
+  ) as unknown as LateTermsBuilder;
+  const issuance = (terms: object) => ({
+    chargeId: 'charge',
+    issuerIdentityId: 'identity',
+    platformFeeKind: 'PERCENTAGE',
+    platformFeeAmountCents: 0,
+    platformFeeBasisPoints: 0,
+    grossAmountCents: 10000,
+    lateFineBasisPoints: 0,
+    lateInterestMonthlyBasisPoints: 0,
+    paymentDaysAfterDue: 0,
+    ...terms,
+  });
+
+  it('maps fine and monthly interest to Pix CobV modalities', () => {
+    expect(
+      service.buildPixLateTerms(
+        issuance({
+          lateFineBasisPoints: 200,
+          lateInterestMonthlyBasisPoints: 100,
+        }),
+      ),
+    ).toEqual({
+      multa: { modalidade: 2, valorPerc: '2.00' },
+      juros: { modalidade: 3, valorPerc: '1.00' },
+    });
+    expect(service.buildPixLateTerms(issuance({}))).toEqual({});
+  });
+
+  it('maps fine, monthly interest and write-off days to boleto configurations', () => {
+    expect(
+      service.buildBoletoLateTerms(
+        issuance({
+          lateFineBasisPoints: 250,
+          lateInterestMonthlyBasisPoints: 100,
+          paymentDaysAfterDue: 30,
+        }),
+      ),
+    ).toEqual({
+      configurations: {
+        fine: 250,
+        interest: { value: 100, type: 'monthly' },
+        days_to_write_off: 30,
+      },
+    });
+    expect(service.buildBoletoLateTerms(issuance({}))).toEqual({});
+  });
+});

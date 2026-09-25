@@ -108,6 +108,7 @@ export class PaymentService {
       companyId,
       billingType,
     );
+    this.assertSupportedMode(financial.accountMode);
 
     const invoice = await this.prisma.invoice.findFirst({
       where: { id: invoiceId, companyId },
@@ -322,6 +323,7 @@ export class PaymentService {
         companyId,
         previous.billingMethod,
       );
+      this.assertSupportedMode(financial.accountMode);
       replacement = await this.charges.createDraft(
         companyId,
         invoiceId,
@@ -433,11 +435,17 @@ export class PaymentService {
           ? platformFee.basisPoints
           : 0,
       grossAmountCents: charge.grossAmountCents,
+      lateFineBasisPoints: charge.lateFineBasisPoints ?? 0,
+      lateInterestMonthlyBasisPoints:
+        charge.lateInterestMonthlyBasisPoints ?? 0,
+      paymentDaysAfterDue: charge.paymentDaysAfterDue ?? 0,
     };
   }
 
-  // Issuance only ever targets the account recorded on the charge.
+  // Issuance only ever targets the account recorded on the charge. Only the
+  // customer's own account (Phase A) has an issuance path so far.
   private requireIssuer(charge: PaymentCharge): string {
+    if (charge.accountMode) this.assertSupportedMode(charge.accountMode);
     if (!charge.issuerIdentityId)
       throw new HttpException(
         {
@@ -447,6 +455,18 @@ export class PaymentService {
         HttpStatus.CONFLICT,
       );
     return charge.issuerIdentityId;
+  }
+
+  // Checked before reserving, so an unsupported mode leaves no reservation.
+  private assertSupportedMode(accountMode: string): void {
+    if (accountMode !== 'CUSTOMER_ACCOUNT')
+      throw new HttpException(
+        {
+          code: 'FINANCIAL_MODE_NOT_SUPPORTED',
+          message: 'Emissão pela conta CifraMais ainda não está disponível.',
+        },
+        HttpStatus.CONFLICT,
+      );
   }
 
   private toPaymentResult(charge: PaymentCharge): EfiPaymentResult {

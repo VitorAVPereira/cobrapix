@@ -74,3 +74,41 @@ describe("parseInvoiceCsvRows", () => {
 it("rejeita boleto tradicional em novas importações", () => {
   expect(() => parseInvoiceCsvRows([{Nome: "Maria Silva", cpf_cnpj: "12345678909", WhatsApp: "+5511999999999", Email: "maria@email.com", Valor: "150", Vencimento: "2026-12-01", "Forma de Pagamento": "BOLETO"}])).toThrow("Use PIX ou BOLIX");
 });
+
+describe("parseInvoiceCsvRows late terms", () => {
+  const base = {
+    Nome: "Maria Silva",
+    cpf_cnpj: "529.982.247-25",
+    WhatsApp: "+5511999999999",
+    Email: "maria@email.com",
+    Valor: "100",
+    Vencimento: "2026-12-01",
+    "Forma de Pagamento": "PIX",
+  };
+
+  it("reads optional fine, interest and days; empty keeps the company default", () => {
+    const [withTerms, withoutTerms] = parseInvoiceCsvRows([
+      {
+        ...base,
+        "Multa (%)": "2,5",
+        "Juros ao mês (%)": "1",
+        "Dias após vencimento": "0",
+      },
+      { ...base, "Multa (%)": "", "Juros ao mês (%)": "" },
+    ]);
+    expect(withTerms).toMatchObject({
+      late_fine_percentage: 2.5,
+      late_interest_monthly_percentage: 1,
+      payment_days_after_due: 0,
+    });
+    expect(withoutTerms?.late_fine_percentage).toBeUndefined();
+    expect(withoutTerms?.late_interest_monthly_percentage).toBeUndefined();
+    expect(withoutTerms?.payment_days_after_due).toBeUndefined();
+  });
+
+  it("rejects a fine above 10%", () => {
+    expect(() =>
+      parseInvoiceCsvRows([{ ...base, "Multa (%)": "15" }]),
+    ).toThrow("Linha 2: Multa deve estar entre 0 e 10%");
+  });
+});

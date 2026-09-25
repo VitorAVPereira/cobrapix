@@ -362,6 +362,9 @@ export class BillingController {
       businessSegment: dto.businessSegment,
       paymentNotificationEnabled: dto.paymentNotificationEnabled,
       paymentNotificationEmails: dto.paymentNotificationEmails,
+      lateFinePercentage: dto.lateFinePercentage,
+      lateInterestMonthlyPercentage: dto.lateInterestMonthlyPercentage,
+      paymentDaysAfterDue: dto.paymentDaysAfterDue,
     });
   }
 

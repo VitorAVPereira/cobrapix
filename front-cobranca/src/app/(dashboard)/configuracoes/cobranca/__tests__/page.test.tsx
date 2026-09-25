@@ -27,6 +27,9 @@ const settings: BillingSettings = {
   businessSegment: "GENERAL",
   paymentNotificationEnabled: true,
   paymentNotificationEmails: [],
+  lateFinePercentage: 0,
+  lateInterestMonthlyPercentage: 0,
+  paymentDaysAfterDue: 30,
   tariffs: {
     PIX: { method: "PIX", combinedLabel: "Pix", configured: true },
     BOLIX: { method: "BOLIX", combinedLabel: "Bolix", configured: true },
@@ -79,5 +82,46 @@ describe("automatic discounts after login", () => {
     expect(screen.getByLabelText("Dias apos o vencimento")).toHaveValue(5);
     expect(screen.getByLabelText("Percentual de desconto")).toHaveValue(15);
     expect(screen.getByRole("checkbox", { name: /ativar desconto automatico/i })).toBeChecked();
+  });
+});
+
+describe("late terms defaults", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetBillingSettings.mockResolvedValue(settings);
+    mockUpdateBillingSettings.mockImplementation(async (input) => ({ ...settings, ...input }));
+  });
+
+  it("starts without fine or interest and 30 days, and saves new defaults", async () => {
+    const user = userEvent.setup();
+    render(<BillingSettingsPage />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^salvar$/i })).toBeEnabled());
+    expect(screen.getByLabelText(/^multa \(%\)/i)).toHaveValue("0");
+    expect(screen.getByLabelText(/^juros ao mês/i)).toHaveValue("0");
+    expect(screen.getByLabelText(/^dias aceitando pagamento/i)).toHaveValue("30");
+    expect(screen.getByText(/sem multa, sem juros/i)).toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText(/^multa \(%\)/i));
+    await user.type(screen.getByLabelText(/^multa \(%\)/i), "2,5");
+    await user.clear(screen.getByLabelText(/^juros ao mês/i));
+    await user.type(screen.getByLabelText(/^juros ao mês/i), "1");
+    await user.clear(screen.getByLabelText(/^dias aceitando pagamento/i));
+    await user.type(screen.getByLabelText(/^dias aceitando pagamento/i), "10");
+    await user.click(screen.getByRole("button", { name: /^salvar$/i }));
+
+    await waitFor(() => expect(mockUpdateBillingSettings).toHaveBeenCalledWith(expect.objectContaining({
+      lateFinePercentage: 2.5, lateInterestMonthlyPercentage: 1, paymentDaysAfterDue: 10,
+    })));
+  });
+
+  it("refuses a fine above the Efí limit without saving", async () => {
+    const user = userEvent.setup();
+    render(<BillingSettingsPage />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^salvar$/i })).toBeEnabled());
+    await user.clear(screen.getByLabelText(/^multa \(%\)/i));
+    await user.type(screen.getByLabelText(/^multa \(%\)/i), "12");
+    await user.click(screen.getByRole("button", { name: /^salvar$/i }));
+    expect(await screen.findByText(/multa deve estar entre 0 e 10%/i)).toBeInTheDocument();
+    expect(mockUpdateBillingSettings).not.toHaveBeenCalled();
   });
 });

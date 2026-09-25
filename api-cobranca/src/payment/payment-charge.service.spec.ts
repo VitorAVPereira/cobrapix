@@ -183,7 +183,15 @@ describe('PaymentChargeService', () => {
     const { service, tx } = fixture();
     tx.$queryRaw
       .mockResolvedValueOnce([{ activeFinancialProfileId: 'profile-1' }])
-      .mockResolvedValueOnce([{ id: 'invoice-1', status: 'PAID' }]);
+      .mockResolvedValueOnce([
+        {
+          id: 'invoice-1',
+          status: 'PAID',
+          lateFineBasisPoints: 0,
+          lateInterestMonthlyBasisPoints: 0,
+          paymentDaysAfterDue: 30,
+        },
+      ]);
     tx.paymentCharge.findFirst.mockResolvedValueOnce(null);
     await expect(
       service.createDraft('company-1', 'invoice-1', 'PIX', 10000, financial),

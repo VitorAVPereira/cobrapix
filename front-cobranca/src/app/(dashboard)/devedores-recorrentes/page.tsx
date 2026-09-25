@@ -23,11 +23,20 @@ import {
 } from "@/lib/billing-fees";
 import { useApiClient } from "@/lib/use-api-client";
 import { formatWhatsAppNumber } from "@/lib/whatsapp-number";
+import { LateTermsFields } from "@/components/features/LateTermsFields";
+import {
+  EMPTY_LATE_TERMS,
+  isIndividualDocument,
+  lateTermsFormFromValues,
+  parseLateTermsForm,
+  type LateTermsFormValues,
+} from "@/lib/late-terms";
 
 interface EditForm {
   amount: string;
   billingType: BillingMethod;
   dueDay: string;
+  lateTerms: LateTermsFormValues;
 }
 
 interface ApiErrorData {
@@ -81,6 +90,7 @@ export default function DevedoresRecorrentesPage() {
     amount: "",
     billingType: "BOLIX",
     dueDay: "10",
+    lateTerms: EMPTY_LATE_TERMS,
   });
   const [searchQuery, setSearchQuery] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -148,6 +158,13 @@ export default function DevedoresRecorrentesPage() {
       amount: String(recurrence.amount),
       billingType,
       dueDay: String(recurrence.dueDay),
+      lateTerms: recurrence.lateTerms
+        ? lateTermsFormFromValues({
+            fine: recurrence.lateTerms.late_fine_percentage,
+            interest: recurrence.lateTerms.late_interest_monthly_percentage,
+            days: recurrence.lateTerms.payment_days_after_due,
+          })
+        : EMPTY_LATE_TERMS,
     });
   }
 
@@ -174,6 +191,13 @@ export default function DevedoresRecorrentesPage() {
       return;
     }
 
+    // An empty field keeps the current value of the recurrence.
+    const parsedLateTerms = parseLateTermsForm(editForm.lateTerms);
+    if ("error" in parsedLateTerms) {
+      setErrorMsg(parsedLateTerms.error);
+      return;
+    }
+
     setIsSaving(true);
     setErrorMsg(null);
 
@@ -182,6 +206,10 @@ export default function DevedoresRecorrentesPage() {
         amount,
         billingType: editForm.billingType,
         dueDay,
+        lateFinePercentage: parsedLateTerms.terms.fine ?? undefined,
+        lateInterestMonthlyPercentage:
+          parsedLateTerms.terms.interest ?? undefined,
+        paymentDaysAfterDue: parsedLateTerms.terms.days ?? undefined,
       });
       closeEditModal();
       await fetchData();
@@ -457,6 +485,30 @@ export default function DevedoresRecorrentesPage() {
                   })}
                 </select>
               </label>
+
+              <fieldset className="sm:col-span-2">
+                <legend className="mb-2 text-sm font-semibold text-slate-800">
+                  Multa, juros e prazo após o vencimento
+                </legend>
+                <LateTermsFields
+                  idPrefix="recurrence-late-terms"
+                  values={editForm.lateTerms}
+                  disabled={isSaving}
+                  onChange={(values) =>
+                    setEditForm((currentForm) => ({
+                      ...currentForm,
+                      lateTerms: values,
+                    }))
+                  }
+                  individualDebtor={isIndividualDocument(
+                    selectedRecurrence.debtor.document,
+                  )}
+                />
+                <p className="mt-2 text-xs text-slate-500">
+                  Vale para as próximas faturas geradas; faturas já criadas
+                  mantêm os valores.
+                </p>
+              </fieldset>
             </div>
 
             <div className="flex flex-col-reverse gap-2 border-t border-slate-200 px-5 py-4 sm:flex-row sm:justify-end">

@@ -181,6 +181,10 @@ export interface EfiIssuanceContext {
   grossAmountCents: number;
   // Account recorded on the charge before any provider call.
   issuerIdentityId: string;
+  // Late terms fixed on the charge (basis points; days after due).
+  lateFineBasisPoints: number;
+  lateInterestMonthlyBasisPoints: number;
+  paymentDaysAfterDue: number;
 }
 
 // Account an Efí operation runs with: the charge's issuer identity and its
@@ -753,6 +757,7 @@ export class EfiService {
     const txid = this.generateTxid(issuance?.chargeId ?? invoice.id);
     const dueDate = this.formatDate(invoice.dueDate);
     const amount = this.formatAmount(invoice.originalAmount);
+    const daysAfterDue = issuance?.paymentDaysAfterDue ?? 0;
     const discountSettings: ResolvedDiscountSettings = {
       enabled: false,
       daysAfterDue: null,
@@ -761,11 +766,13 @@ export class EfiService {
     const cobvPayload = {
       calendario: {
         dataDeVencimento: dueDate,
-        validadeAposVencimento: 0,
+        // Days the CobV stays payable after the due date (with fine/interest).
+        validadeAposVencimento: daysAfterDue,
       },
       devedor: this.buildPixDebtorPayload(invoice),
       valor: {
         original: amount,
+        ...this.buildPixLateTerms(issuance),
         ...(discountSettings.enabled
           ? {
               desconto: {
@@ -815,8 +822,7 @@ export class EfiService {
         )) as EfiPixQrCodeResponse)
       : null;
     const pixCopyPaste = qrCode?.qrcode ?? detail.pixCopiaECola ?? '';
-    const expiresAt = new Date(invoice.dueDate);
-    expiresAt.setDate(expiresAt.getDate() + 1);
+    const expiresAt = this.addDays(invoice.dueDate, daysAfterDue + 1);
 
     await this.prisma.invoice.updateMany({
       where: {
@@ -927,6 +933,7 @@ export class EfiService {
           expire_at: this.formatDate(invoice.dueDate),
           customer,
           ...boletoDiscount,
+          ...this.buildBoletoLateTerms(issuance),
         },
       },
       metadata: {
@@ -950,6 +957,10 @@ export class EfiService {
     }
 
     const boletoLink = chargeData?.billet_link ?? chargeData?.link ?? '';
+    const expiresAt = this.addDays(
+      invoice.dueDate,
+      (issuance?.paymentDaysAfterDue ?? 0) + 1,
+    );
     const boletoPdf = chargeData?.pdf?.charge ?? '';
     const boletoCode = chargeData?.barcode ?? '';
 
@@ -998,7 +1009,7 @@ export class EfiService {
         gatewayId: chargeId,
         billingType,
         status: 'PENDING',
-        pixExpiresAt: invoice.dueDate,
+        pixExpiresAt: expiresAt,
         efiChargeId: chargeId,
         boletoLinhaDigitavel: boletoCode,
         boletoLink,
@@ -1030,7 +1041,7 @@ export class EfiService {
       boletoPdf,
       pixCopyPaste: chargeData?.pix?.qrcode,
       pixQrCode: chargeData?.pix?.qrcode_image,
-      expiresAt: invoice.dueDate,
+      expiresAt,
       paymentLink: boletoLink,
     };
   }
@@ -1114,6 +1125,66 @@ export class EfiService {
     }
 
     return splitConfigId;
+  }
+
+  // Pix CobV: percentage fine (modalidade 2) and monthly interest over
+  // calendar days (modalidade 3). Omitted when zero.
+  private buildPixLateTerms(issuance?: EfiIssuanceContext): {
+    multa?: { modalidade: 2; valorPerc: string };
+    juros?: { modalidade: 3; valorPerc: string };
+  } {
+    if (!issuance) return {};
+    return {
+      ...(issuance.lateFineBasisPoints > 0
+        ? {
+            multa: {
+              modalidade: 2,
+              valorPerc: this.formatBasisPointsAsPercent(
+                issuance.lateFineBasisPoints,
+              ),
+            },
+          }
+        : {}),
+      ...(issuance.lateInterestMonthlyBasisPoints > 0
+        ? {
+            juros: {
+              modalidade: 3,
+              valorPerc: this.formatBasisPointsAsPercent(
+                issuance.lateInterestMonthlyBasisPoints,
+              ),
+            },
+          }
+        : {}),
+    };
+  }
+
+  // Boleto/BOLIX: `fine` in basis points (200 = 2%), monthly `interest` in
+  // the same unit and `days_to_write_off` for payment after the due date.
+  private buildBoletoLateTerms(issuance?: EfiIssuanceContext): {
+    configurations?: {
+      fine?: number;
+      interest?: { value: number; type: 'monthly' };
+      days_to_write_off?: number;
+    };
+  } {
+    if (!issuance) return {};
+    const configurations = {
+      ...(issuance.lateFineBasisPoints > 0
+        ? { fine: issuance.lateFineBasisPoints }
+        : {}),
+      ...(issuance.lateInterestMonthlyBasisPoints > 0
+        ? {
+            interest: {
+              value: issuance.lateInterestMonthlyBasisPoints,
+              type: 'monthly' as const,
+            },
+          }
+        : {}),
+      ...(issuance.paymentDaysAfterDue > 0
+        ? { days_to_write_off: issuance.paymentDaysAfterDue }
+        : {}),
+    };
+    return Object.keys(configurations).length > 0 ? { configurations } : {};
   }
 
   private buildBoletoMarketplaceRepasses(

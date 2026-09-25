@@ -43,6 +43,14 @@ import { normalizeRequiredDebtorDocument } from "@/lib/debtor-document";
 import { useApiClient } from "@/lib/use-api-client";
 import { useFinancialActivation } from "@/components/features/financial-activation-context";
 import { normalizeWhatsAppNumber } from "@/lib/whatsapp-number";
+import { LateTermsFields } from "@/components/features/LateTermsFields";
+import {
+  EMPTY_LATE_TERMS,
+  isIndividualDocument,
+  lateTermsFormFromValues,
+  parseLateTermsForm,
+  type LateTermsFormValues,
+} from "@/lib/late-terms";
 
 interface ApiErrorData {
   details?: string[];
@@ -63,6 +71,7 @@ interface ManualChargeForm {
   studentName: string;
   studentEnrollment: string;
   studentGroup: string;
+  lateTerms: LateTermsFormValues;
 }
 
 interface RunningInvoiceAction {
@@ -100,6 +109,7 @@ const initialManualChargeForm: ManualChargeForm = {
   studentName: "",
   studentEnrollment: "",
   studentGroup: "",
+  lateTerms: EMPTY_LATE_TERMS,
 };
 
 const initialSendBillingForm: SendBillingForm = {
@@ -659,6 +669,17 @@ function CobrancasContent() {
     setManualForm((currentForm) => ({ ...currentForm, [field]: value }));
   }
 
+  // New charges start with the company defaults (Configurações → Cobrança).
+  function companyLateTerms(): LateTermsFormValues {
+    return billingSettings
+      ? lateTermsFormFromValues({
+          fine: billingSettings.lateFinePercentage ?? 0,
+          interest: billingSettings.lateInterestMonthlyPercentage ?? 0,
+          days: billingSettings.paymentDaysAfterDue ?? 30,
+        })
+      : EMPTY_LATE_TERMS;
+  }
+
   function closeManualModal(): void {
     setIsModalOpen(false);
     setInvoiceTargetDebtor(null);
@@ -698,6 +719,7 @@ function CobrancasContent() {
     setManualForm({
       ...initialManualChargeForm,
       billingType,
+      lateTerms: companyLateTerms(),
     });
     setIsModalOpen(true);
   }
@@ -728,6 +750,17 @@ function CobrancasContent() {
         throw new Error("Informe a data de vencimento.");
       }
 
+      // Optional: an empty field uses the company default, zero means none.
+      const parsedLateTerms = parseLateTermsForm(manualForm.lateTerms);
+      if ("error" in parsedLateTerms) {
+        throw new Error(parsedLateTerms.error);
+      }
+      const lateTerms = {
+        late_fine_percentage: parsedLateTerms.terms.fine,
+        late_interest_monthly_percentage: parsedLateTerms.terms.interest,
+        payment_days_after_due: parsedLateTerms.terms.days,
+      };
+
       if (invoiceTargetDebtor?.debtorId) {
         await apiClient.createDebtorInvoice(invoiceTargetDebtor.debtorId, {
           original_amount: amount,
@@ -735,6 +768,7 @@ function CobrancasContent() {
           billing_type: manualForm.billingType,
           recurring: manualForm.recurring,
           due_day: manualForm.recurring ? dueDay : undefined,
+          ...lateTerms,
           ...(isEducationSegment
             ? {
                 studentName: manualForm.studentName.trim() || undefined,
@@ -759,6 +793,7 @@ function CobrancasContent() {
           billing_type: manualForm.billingType,
           recurring: manualForm.recurring,
           due_day: manualForm.recurring ? dueDay : undefined,
+          ...lateTerms,
           ...(isEducationSegment
             ? {
                 studentName: manualForm.studentName.trim() || undefined,
@@ -846,7 +881,10 @@ function CobrancasContent() {
               type="button"
               onClick={() => {
                 setInvoiceTargetDebtor(null);
-                setManualForm(initialManualChargeForm);
+                setManualForm({
+                  ...initialManualChargeForm,
+                  lateTerms: companyLateTerms(),
+                });
                 setIsModalOpen(true);
               }}
               className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:bg-emerald-700"
@@ -1222,6 +1260,34 @@ function CobrancasContent() {
                     className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                   />
                 </label>
+
+                <fieldset className="sm:col-span-2">
+                  <legend className="mb-2 text-sm font-semibold text-slate-800">
+                    Multa, juros e prazo após o vencimento{" "}
+                    <span className="font-normal text-slate-500">
+                      (opcional)
+                    </span>
+                  </legend>
+                  <LateTermsFields
+                    idPrefix="manual-charge-late-terms"
+                    values={manualForm.lateTerms}
+                    onChange={(values) => updateManualForm("lateTerms", values)}
+                    disabled={isSavingInvoice}
+                    placeholders={{
+                      fine: "Padrão da empresa",
+                      interest: "Padrão da empresa",
+                      days: "Padrão da empresa",
+                    }}
+                    individualDebtor={isIndividualDocument(
+                      invoiceTargetDebtor?.document ?? manualForm.document,
+                    )}
+                  />
+                  <p className="mt-2 text-xs text-slate-500">
+                    Vem com o padrão de Configurações → Cobrança. Campo vazio
+                    usa o padrão; 0 significa sem multa, sem juros ou sem
+                    pagamento após o vencimento.
+                  </p>
+                </fieldset>
               </div>
 
               <div className="flex flex-col-reverse gap-2 border-t border-slate-200 px-5 py-4 sm:flex-row sm:justify-end">

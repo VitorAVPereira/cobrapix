@@ -18,6 +18,11 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { ToBoolean } from '../../common/to-boolean';
+import {
+  LATE_FINE_MAX_PERCENTAGE,
+  LATE_INTEREST_MONTHLY_MAX_PERCENTAGE,
+  PAYMENT_DAYS_AFTER_DUE_MAX,
+} from '../late-terms';
 
 export type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
 
@@ -85,6 +90,25 @@ export class CreateInvoiceDto {
   @IsString()
   @Length(1, 80)
   studentGroup?: string;
+
+  // Empty uses the company default; zero means none.
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(LATE_FINE_MAX_PERCENTAGE)
+  late_fine_percentage?: number | null;
+
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(LATE_INTEREST_MONTHLY_MAX_PERCENTAGE)
+  late_interest_monthly_percentage?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(PAYMENT_DAYS_AFTER_DUE_MAX)
+  payment_days_after_due?: number | null;
 }
 
 export class CreateDebtorInvoiceDto {
@@ -125,6 +149,25 @@ export class CreateDebtorInvoiceDto {
   @IsString()
   @Length(1, 80)
   studentGroup?: string;
+
+  // Empty uses the company default; zero means none.
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(LATE_FINE_MAX_PERCENTAGE)
+  late_fine_percentage?: number | null;
+
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(LATE_INTEREST_MONTHLY_MAX_PERCENTAGE)
+  late_interest_monthly_percentage?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(PAYMENT_DAYS_AFTER_DUE_MAX)
+  payment_days_after_due?: number | null;
 }
 
 export class CreateDebtorDto {
@@ -193,6 +236,25 @@ export class UpdateRecurringInvoiceDto {
   @Min(1)
   @Max(31)
   dueDay!: number;
+
+  // Absent keeps the current value; zero means none.
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(LATE_FINE_MAX_PERCENTAGE)
+  lateFinePercentage?: number;
+
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(LATE_INTEREST_MONTHLY_MAX_PERCENTAGE)
+  lateInterestMonthlyPercentage?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(PAYMENT_DAYS_AFTER_DUE_MAX)
+  paymentDaysAfterDue?: number;
 }
 
 export class UpdateDebtorSettingsDto {

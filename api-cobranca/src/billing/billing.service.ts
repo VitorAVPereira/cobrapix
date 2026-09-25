@@ -7,6 +7,11 @@ import {
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  basisPointsToPercentage,
+  DEFAULT_PAYMENT_DAYS_AFTER_DUE,
+  percentageToBasisPoints,
+} from '../invoices/late-terms';
 import { PaymentFeeService } from '../payment-fees/payment-fee.service';
 import { PaymentService } from '../payment/payment.service';
 import { PublicPaymentLinkService } from '../payment/payment-link.service';
@@ -77,6 +82,10 @@ export interface BillingSettingsResponse {
   businessSegment: BusinessSegment;
   paymentNotificationEnabled: boolean;
   paymentNotificationEmails: string[];
+  // Company defaults for new charges (percent; days after due).
+  lateFinePercentage: number;
+  lateInterestMonthlyPercentage: number;
+  paymentDaysAfterDue: number;
   tariffs: Record<BillingMethod, TariffDetails>;
 }
 
@@ -90,6 +99,9 @@ interface BillingSettingsInput {
   businessSegment?: BusinessSegment;
   paymentNotificationEnabled?: boolean;
   paymentNotificationEmails?: string[];
+  lateFinePercentage?: number;
+  lateInterestMonthlyPercentage?: number;
+  paymentDaysAfterDue?: number;
 }
 
 interface NormalizedBillingSettings {
@@ -459,6 +471,9 @@ export class BillingService {
         businessSegment: true,
         paymentNotificationEnabled: true,
         paymentNotificationEmails: true,
+        defaultLateFineBasisPoints: true,
+        defaultLateInterestMonthlyBasisPoints: true,
+        defaultPaymentDaysAfterDue: true,
       },
     });
 
@@ -528,6 +543,16 @@ export class BillingService {
       );
     }
 
+    if (settings.lateFinePercentage !== undefined)
+      updateData.defaultLateFineBasisPoints = percentageToBasisPoints(
+        settings.lateFinePercentage,
+      );
+    if (settings.lateInterestMonthlyPercentage !== undefined)
+      updateData.defaultLateInterestMonthlyBasisPoints =
+        percentageToBasisPoints(settings.lateInterestMonthlyPercentage);
+    if (settings.paymentDaysAfterDue !== undefined)
+      updateData.defaultPaymentDaysAfterDue = settings.paymentDaysAfterDue;
+
     const company = await this.prisma.company.update({
       where: { id: companyId },
       data: updateData,
@@ -542,6 +567,9 @@ export class BillingService {
         businessSegment: true,
         paymentNotificationEnabled: true,
         paymentNotificationEmails: true,
+        defaultLateFineBasisPoints: true,
+        defaultLateInterestMonthlyBasisPoints: true,
+        defaultPaymentDaysAfterDue: true,
       },
     });
 
@@ -1313,6 +1341,9 @@ export class BillingService {
       businessSegment?: BusinessSegment | null;
       paymentNotificationEnabled?: boolean | null;
       paymentNotificationEmails?: string[] | null;
+      defaultLateFineBasisPoints?: number | null;
+      defaultLateInterestMonthlyBasisPoints?: number | null;
+      defaultPaymentDaysAfterDue?: number | null;
     } | null,
     tariffs: Record<BillingMethod, TariffDetails>,
   ): BillingSettingsResponse {
@@ -1344,6 +1375,14 @@ export class BillingService {
       paymentNotificationEmails: this.normalizeNotificationEmails(
         company?.paymentNotificationEmails ?? [],
       ),
+      lateFinePercentage: basisPointsToPercentage(
+        company?.defaultLateFineBasisPoints ?? 0,
+      ),
+      lateInterestMonthlyPercentage: basisPointsToPercentage(
+        company?.defaultLateInterestMonthlyBasisPoints ?? 0,
+      ),
+      paymentDaysAfterDue:
+        company?.defaultPaymentDaysAfterDue ?? DEFAULT_PAYMENT_DAYS_AFTER_DUE,
       tariffs,
     };
   }

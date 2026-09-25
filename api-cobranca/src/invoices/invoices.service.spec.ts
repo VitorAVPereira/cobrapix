@@ -358,7 +358,10 @@ describe('InvoicesService', () => {
   it('enfileira primeira cobranca apos importacao CSV', async () => {
     const debtorFindMany = jest.fn().mockResolvedValue([]);
     const debtorCreate = jest.fn().mockResolvedValue({ id: 'debtor-1' });
-    const invoiceCreate = jest.fn().mockResolvedValue({ id: 'invoice-1' });
+    const invoiceCreate = jest
+      .fn()
+      .mockResolvedValueOnce({ id: 'invoice-1' })
+      .mockResolvedValueOnce({ id: 'invoice-2' });
     const profileFindFirst = jest.fn().mockResolvedValue({
       id: 'profile-new',
       name: 'Novo Cliente',
@@ -369,6 +372,13 @@ describe('InvoicesService', () => {
     } as unknown as MessageQueueService;
     const prisma = {
       collectionProfile: { findFirst: profileFindFirst },
+      company: {
+        findUnique: jest.fn().mockResolvedValue({
+          defaultLateFineBasisPoints: 200,
+          defaultLateInterestMonthlyBasisPoints: 100,
+          defaultPaymentDaysAfterDue: 30,
+        }),
+      },
       $transaction: jest.fn(
         async (
           callback: (tx: {
@@ -401,13 +411,42 @@ describe('InvoicesService', () => {
         due_date: '2026-05-10',
         billing_type: 'PIX',
       },
+      {
+        name: 'Joao Souza',
+        document: '529.982.247-25',
+        phone_number: '11988888888',
+        email: 'joao@email.com',
+        original_amount: 50,
+        due_date: '2026-05-10',
+        billing_type: 'PIX',
+        late_fine_percentage: 0,
+        late_interest_monthly_percentage: 0.5,
+        payment_days_after_due: 0,
+      },
     ]);
 
     expect(result).toEqual({
       success: true,
-      count: 1,
-      initialChargeQueued: 1,
+      count: 2,
+      initialChargeQueued: 2,
     });
+    // Empty columns use the company default; an explicit zero means none.
+    expect(
+      (invoiceCreate.mock.calls as Array<[{ data: unknown }]>).map(
+        ([args]) => args.data,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        lateFineBasisPoints: 200,
+        lateInterestMonthlyBasisPoints: 100,
+        paymentDaysAfterDue: 30,
+      }),
+      expect.objectContaining({
+        lateFineBasisPoints: 0,
+        lateInterestMonthlyBasisPoints: 50,
+        paymentDaysAfterDue: 0,
+      }),
+    ]);
     expect(debtorCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -424,6 +463,11 @@ describe('InvoicesService', () => {
     expect(addInitialChargeJobs).toHaveBeenCalledWith([
       {
         invoiceId: 'invoice-1',
+        companyId: 'company-1',
+        source: 'CSV',
+      },
+      {
+        invoiceId: 'invoice-2',
         companyId: 'company-1',
         source: 'CSV',
       },

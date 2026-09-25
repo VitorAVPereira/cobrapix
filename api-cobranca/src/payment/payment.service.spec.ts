@@ -69,7 +69,10 @@ describe('PaymentService billing method restrictions', () => {
     expect(markFailed).toHaveBeenCalledWith('replacement-1', 'company-1');
   });
 
-  function issuanceFixture(issuerIdentityId: string | null) {
+  function issuanceFixture(
+    issuerIdentityId: string | null,
+    accountMode = 'CUSTOMER_ACCOUNT',
+  ) {
     const financial = {
       financialProfileId: 'profile-1',
       issuerIdentityId: 'identity-1',
@@ -95,13 +98,16 @@ describe('PaymentService billing method restrictions', () => {
       .fn()
       .mockResolvedValue({ gatewayId: 'gateway-1' });
     const efiService = {
-      assertIssuable: jest.fn().mockResolvedValue(financial),
+      assertIssuable: jest
+        .fn()
+        .mockResolvedValue({ ...financial, accountMode }),
       createPayment: efiCreatePayment,
     } as unknown as EfiService;
     const createDraft = jest.fn().mockResolvedValue({
       id: 'charge-1',
       grossAmountCents: 10000,
       issuerIdentityId,
+      accountMode,
       feeSnapshot: { platformFee: { kind: 'PERCENTAGE', basisPoints: 250 } },
     });
     const charges = {
@@ -147,6 +153,20 @@ describe('PaymentService billing method restrictions', () => {
     await expect(
       service.createPayment('invoice-1', 'company-1', 'PIX'),
     ).rejects.toMatchObject({ response: { code: 'EFI_SUBMISSION_UNCERTAIN' } });
+    expect(efiCreatePayment).not.toHaveBeenCalled();
+  });
+
+  it('has no issuance path for CifraMais account modes yet', async () => {
+    const { service, createDraft, efiCreatePayment } = issuanceFixture(
+      'identity-1',
+      'PLATFORM_ACCOUNT',
+    );
+    await expect(
+      service.createPayment('invoice-1', 'company-1', 'PIX'),
+    ).rejects.toMatchObject({
+      response: { code: 'FINANCIAL_MODE_NOT_SUPPORTED' },
+    });
+    expect(createDraft).not.toHaveBeenCalled();
     expect(efiCreatePayment).not.toHaveBeenCalled();
   });
 

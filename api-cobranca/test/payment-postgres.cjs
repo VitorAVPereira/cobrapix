@@ -15,6 +15,8 @@ const { PaymentFeeService } = require('../src/payment-fees/payment-fee.service.t
 const { InvoicesService } = require('../src/invoices/invoices.service.ts');
 const { FinancialEligibilityService } = require('../src/financial-activation/financial-eligibility.service.ts');
 const { EfiService } = require('../src/payment/efi.service.ts');
+const { PaymentService } = require('../src/payment/payment.service.ts');
+const { BillingService } = require('../src/billing/billing.service.ts');
 const name = `efi-payment-test-${randomBytes(6).toString('hex')}`;
 const password = randomBytes(24).toString('hex');
 function docker(args) {
@@ -192,6 +194,68 @@ let containerStarted = false;
     assert.equal(await prisma.collectionLog.count({ where: { invoiceId: partial.invoice.id, actionType: 'PAYMENT_AMOUNT_DIVERGENCE' } }), 1, 'a payment below the charge needs review');
     await assert.rejects(pool.query(`INSERT INTO "PaymentWebhookAnomaly" (id, source, "reasonCode", "externalReference", "lastSeenAt") VALUES ('x', 'EMAIL', 'A', 'r', now())`));
     console.log('PASS account-scoped charges webhook, unknown account/charge anomalies and partial payment review');
+
+    // Late terms travel from the invoice to the charge and into the Efí payloads.
+    await fees.createVersion(null, { ...feeInput, billingMethod: 'BOLIX' });
+    const sent = [];
+    const settings = { EFI_PLATFORM_ACCOUNT_NUMBER: '9999', EFI_PLATFORM_CNPJ: '11222333000181', EFI_PLATFORM_PAYEE_CODE: 'platformpayee', EFI_CHARGES_WEBHOOK_BASE_URL: 'https://api.example.test', EFI_WEBHOOK_SECRET: 'hook-secret' };
+    const config = { get: (key) => settings[key], getOrThrow: (key) => settings[key] };
+    const issuer = new EfiService(config, prisma, { decrypt: (value) => value }, { notifyPaidInvoice: async () => undefined }, { assertIssuable: (companyId, method) => eligibility.resolveIssuance(companyId, method) }, charges);
+    issuer.createSdkClient = (account) => ({
+      pixSplitConfigId: async () => ({ id: 'split-1' }),
+      pixCreateDueCharge: async (params, body) => { sent.push({ kind: 'PIX', account: account.efiAccountNumber, body }); return {}; },
+      pixDetailDueCharge: async () => ({ loc: { id: 7, location: 'https://pix.example.test/7' }, status: 'ATIVA' }),
+      pixSplitLinkDueCharge: async () => ({}),
+      pixGenerateQRCode: async () => ({ qrcode: '000201pix' }),
+      createOneStepCharge: async (params, body) => { sent.push({ kind: 'BOLIX', account: account.efiAccountNumber, body }); return { data: { charge_id: 555, status: 'waiting', barcode: '0019', billet_link: 'https://boleto.example.test', pix: { qrcode: '000201bolix' } } }; },
+    });
+    const payments = new PaymentService(issuer, prisma, charges, eligibility);
+    await prisma.debtor.update({ where: { id: debtor.id }, data: { document: '52998224725', email: 'fixture@example.test' } });
+    await prisma.company.update({ where: { id: company.id }, data: { addressStreet: 'Rua A', addressNumber: '1', addressDistrict: 'Centro', addressPostalCode: '01001000', addressCity: 'São Paulo', addressState: 'SP' } });
+    const dueDate = new Date(Date.UTC(2030, 0, 10));
+    const withTerms = await prisma.invoice.create({ data: { companyId: company.id, debtorId: debtor.id, originalAmount: 100, dueDate, lateFineBasisPoints: 200, lateInterestMonthlyBasisPoints: 150, paymentDaysAfterDue: 10 } });
+    await payments.createPayment(withTerms.id, company.id, 'PIX');
+    const pixSent = sent.at(-1);
+    assert.equal(pixSent.account, '2002', 'issued on the account of the active profile');
+    assert.equal(pixSent.body.calendario.validadeAposVencimento, 10);
+    assert.deepEqual(pixSent.body.valor.multa, { modalidade: 2, valorPerc: '2.00' });
+    assert.deepEqual(pixSent.body.valor.juros, { modalidade: 3, valorPerc: '1.50' });
+    const pixCharge = await prisma.paymentCharge.findFirst({ where: { invoiceId: withTerms.id } });
+    assert.equal(pixCharge.status, 'ACTIVE');
+    assert.equal(pixCharge.lateFineBasisPoints, 200);
+    assert.equal(pixCharge.paymentDaysAfterDue, 10);
+    assert.equal(pixCharge.expiresAt.toISOString(), new Date(Date.UTC(2030, 0, 21)).toISOString(), 'payable until the last day after due');
+    const noTerms = await prisma.invoice.create({ data: { companyId: company.id, debtorId: debtor.id, originalAmount: 80, dueDate, lateFineBasisPoints: 0, lateInterestMonthlyBasisPoints: 0, paymentDaysAfterDue: 0 } });
+    await payments.createPayment(noTerms.id, company.id, 'PIX');
+    assert.equal(sent.at(-1).body.calendario.validadeAposVencimento, 0);
+    assert.equal(sent.at(-1).body.valor.multa, undefined);
+    assert.equal(sent.at(-1).body.valor.juros, undefined);
+    const bolix = await prisma.invoice.create({ data: { companyId: company.id, debtorId: debtor.id, originalAmount: 100, dueDate, lateFineBasisPoints: 200, lateInterestMonthlyBasisPoints: 100, paymentDaysAfterDue: 30 } });
+    await payments.createPayment(bolix.id, company.id, 'BOLIX');
+    const bolixSent = sent.at(-1);
+    assert.deepEqual(bolixSent.body.payment.banking_billet.configurations, { fine: 200, interest: { value: 100, type: 'monthly' }, days_to_write_off: 30 });
+    const notificationUrl = new URL(bolixSent.body.metadata.notification_url);
+    assert.equal(notificationUrl.searchParams.get('account'), identityB.id, 'boleto notifications name the issuing account');
+    assert.equal(notificationUrl.searchParams.get('companyId'), null);
+    console.log('PASS late terms from invoice to charge and Efí payloads (Pix CobV and BOLIX), issued on the active account');
+
+    // Company defaults (Configurações → Cobrança) fill what a new charge leaves empty.
+    const billing = new BillingService(prisma, {}, {}, {}, {}, {}, {}, {}, {}, undefined, undefined, fees);
+    const saved = await billing.updateSettings(company.id, { preferredBillingMethod: 'PIX', collectionReminderDays: [0], autoGenerateFirstCharge: false, autoDiscountEnabled: false, lateFinePercentage: 2, lateInterestMonthlyPercentage: 1, paymentDaysAfterDue: 15 });
+    assert.deepEqual([saved.lateFinePercentage, saved.lateInterestMonthlyPercentage, saved.paymentDaysAfterDue], [2, 1, 15]);
+    const kept = await billing.updateSettings(company.id, { preferredBillingMethod: 'PIX', collectionReminderDays: [0], autoGenerateFirstCharge: false, autoDiscountEnabled: false });
+    assert.equal(kept.paymentDaysAfterDue, 15, 'absent fields keep the saved default');
+    const creator = new InvoicesService(prisma, {}, { hasActiveFinancialProfile: async () => false }, fees);
+    const byDefault = await creator.createInvoice(company.id, { debtorId: debtor.id, original_amount: 50, due_date: '2030-02-10', billing_type: 'PIX' });
+    assert.deepEqual(byDefault.lateTerms, { late_fine_percentage: 2, late_interest_monthly_percentage: 1, payment_days_after_due: 15 });
+    const overridden = await creator.createInvoice(company.id, { debtorId: debtor.id, original_amount: 50, due_date: '2030-02-10', billing_type: 'PIX', late_fine_percentage: 0, late_interest_monthly_percentage: null, payment_days_after_due: 5 });
+    assert.deepEqual(overridden.lateTerms, { late_fine_percentage: 0, late_interest_monthly_percentage: 1, payment_days_after_due: 5 });
+    await creator.createInvoice(company.id, { debtorId: debtor.id, original_amount: 70, billing_type: 'PIX', recurring: true, due_day: 5, late_interest_monthly_percentage: 0.5 });
+    const recurrence = await prisma.recurringInvoice.findFirst({ where: { companyId: company.id }, include: { invoices: true } });
+    assert.deepEqual([recurrence.lateFineBasisPoints, recurrence.lateInterestMonthlyBasisPoints, recurrence.paymentDaysAfterDue], [200, 50, 15]);
+    assert.ok(recurrence.invoices.length >= 1);
+    for (const generated of recurrence.invoices) assert.deepEqual([generated.lateFineBasisPoints, generated.lateInterestMonthlyBasisPoints, generated.paymentDaysAfterDue], [200, 50, 15], 'the recurrence copies its terms to each invoice');
+    console.log('PASS company defaults, per-invoice override (zero = none) and recurrence copying its late terms');
     console.log(`PASS payment lifecycle on ${migrations.length} migrations in PostgreSQL 16`);
   } finally {
     if (prisma) await prisma.$disconnect();

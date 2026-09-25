@@ -28,6 +28,14 @@ import { PrismaService } from '../prisma/prisma.service';
 import { InitialChargeJob, MessageQueueService } from '../queue/message.queue';
 import { PaymentService } from '../payment/payment.service';
 import { BillingType } from './dto/invoice.dto';
+import {
+  CompanyLateDefaults,
+  LateTermsInput,
+  LateTermsView,
+  percentageToBasisPoints,
+  resolveLateTerms,
+  toLateTermsView,
+} from './late-terms';
 
 const RECURRING_GENERATION_LOOKAHEAD_DAYS = 30;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -58,6 +66,10 @@ interface ImportRow {
   studentName?: string;
   studentEnrollment?: string;
   studentGroup?: string;
+  // Empty uses the company default; zero means none.
+  late_fine_percentage?: number;
+  late_interest_monthly_percentage?: number;
+  payment_days_after_due?: number;
 }
 
 interface InvoiceListItem {
@@ -80,6 +92,7 @@ interface InvoiceListItem {
   studentGroup: string | null;
   paidAt: string | null;
   payment: InvoicePaymentSummary;
+  lateTerms: LateTermsView;
   createdAt: string;
   recurrence?: {
     recurrenceId: string;
@@ -138,6 +151,9 @@ interface CreateInvoiceInput {
   studentName?: string;
   studentEnrollment?: string;
   studentGroup?: string;
+  late_fine_percentage?: number | null;
+  late_interest_monthly_percentage?: number | null;
+  payment_days_after_due?: number | null;
 }
 
 interface RecurringInvoiceListItem {
@@ -153,6 +169,7 @@ interface RecurringInvoiceListItem {
   billingType: BillingMethod;
   dueDay: number;
   status: RecurringInvoiceStatus;
+  lateTerms: LateTermsView;
   nextDueDate: string | null;
   lastGeneratedPeriod: string | null;
   pendingInvoice: {
@@ -211,6 +228,10 @@ interface UpdateRecurringInvoiceInput {
   amount: number;
   billingType: BillingType;
   dueDay: number;
+  // Absent keeps the current value; applies to invoices generated from now on.
+  lateFinePercentage?: number;
+  lateInterestMonthlyPercentage?: number;
+  paymentDaysAfterDue?: number;
 }
 
 interface DebtorUpsertInput {
@@ -261,6 +282,9 @@ interface InvoiceWithRelations {
   studentGroup: string | null;
   paidAt: Date | null;
   createdAt: Date;
+  lateFineBasisPoints: number;
+  lateInterestMonthlyBasisPoints: number;
+  paymentDaysAfterDue: number;
   recurringInvoiceId: string | null;
   recurrencePeriod: string | null;
   recurringInvoice: {
@@ -282,6 +306,9 @@ interface RecurringInvoiceWithRelations {
   billingType: BillingMethod;
   dueDay: number;
   status: RecurringInvoiceStatus;
+  lateFineBasisPoints: number;
+  lateInterestMonthlyBasisPoints: number;
+  paymentDaysAfterDue: number;
   nextDueDate: Date | null;
   lastGeneratedPeriod: string | null;
   invoices: Array<{
@@ -571,6 +598,7 @@ export class InvoicesService {
       companyId,
       undefined,
     );
+    const lateDefaults = await this.companyLateDefaults(companyId);
     const result = await this.prisma.$transaction(async (tx) => {
       let created = 0;
       const invoiceIds: string[] = [];
@@ -595,6 +623,15 @@ export class InvoicesService {
             originalAmount: row.original_amount,
             dueDate,
             billingType: row.billing_type,
+            ...resolveLateTerms(
+              {
+                lateFinePercentage: row.late_fine_percentage,
+                lateInterestMonthlyPercentage:
+                  row.late_interest_monthly_percentage,
+                paymentDaysAfterDue: row.payment_days_after_due,
+              },
+              lateDefaults,
+            ),
             studentName: this.normalizeOptionalText(row.studentName),
             studentEnrollment: this.normalizeOptionalText(
               row.studentEnrollment,
@@ -889,6 +926,10 @@ export class InvoicesService {
     const collectionProfileId = debtorId
       ? null
       : await this.resolveRequiredCollectionProfileId(companyId, undefined);
+    const lateTerms = resolveLateTerms(
+      this.lateTermsInput(input),
+      await this.companyLateDefaults(companyId),
+    );
 
     const invoice = await this.prisma.$transaction(async (tx) => {
       const debtor = debtorId
@@ -919,6 +960,7 @@ export class InvoicesService {
           originalAmount: input.original_amount,
           dueDate,
           billingType: input.billing_type,
+          ...lateTerms,
           ...this.buildEducationalInvoiceData(input),
         },
         include: {
@@ -1104,6 +1146,23 @@ export class InvoicesService {
         billingType: input.billingType,
         dueDay: input.dueDay,
         nextDueDate,
+        ...(input.lateFinePercentage !== undefined
+          ? {
+              lateFineBasisPoints: percentageToBasisPoints(
+                input.lateFinePercentage,
+              ),
+            }
+          : {}),
+        ...(input.lateInterestMonthlyPercentage !== undefined
+          ? {
+              lateInterestMonthlyBasisPoints: percentageToBasisPoints(
+                input.lateInterestMonthlyPercentage,
+              ),
+            }
+          : {}),
+        ...(input.paymentDaysAfterDue !== undefined
+          ? { paymentDaysAfterDue: input.paymentDaysAfterDue }
+          : {}),
       },
     });
 
@@ -1611,6 +1670,11 @@ export class InvoicesService {
         billingType: input.billing_type,
         dueDay: input.due_day,
         nextDueDate,
+        // The recurrence keeps its terms and copies them to each invoice.
+        ...resolveLateTerms(
+          this.lateTermsInput(input),
+          await this.companyLateDefaults(companyId),
+        ),
       },
     });
 
@@ -1622,6 +1686,29 @@ export class InvoicesService {
     }
 
     return created;
+  }
+
+  private async companyLateDefaults(
+    companyId: string,
+  ): Promise<CompanyLateDefaults> {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: {
+        defaultLateFineBasisPoints: true,
+        defaultLateInterestMonthlyBasisPoints: true,
+        defaultPaymentDaysAfterDue: true,
+      },
+    });
+    if (!company) throw new Error('Empresa nao encontrada.');
+    return company;
+  }
+
+  private lateTermsInput(input: CreateInvoiceInput): LateTermsInput {
+    return {
+      lateFinePercentage: input.late_fine_percentage,
+      lateInterestMonthlyPercentage: input.late_interest_monthly_percentage,
+      paymentDaysAfterDue: input.payment_days_after_due,
+    };
   }
 
   private async getRecurringInvoice(
@@ -1680,6 +1767,10 @@ export class InvoicesService {
             originalAmount: recurrence.amount,
             dueDate: nextDueDate,
             billingType: recurrence.billingType,
+            lateFineBasisPoints: recurrence.lateFineBasisPoints,
+            lateInterestMonthlyBasisPoints:
+              recurrence.lateInterestMonthlyBasisPoints,
+            paymentDaysAfterDue: recurrence.paymentDaysAfterDue,
             recurringInvoiceId: recurrence.id,
             recurrencePeriod,
           },
@@ -1730,6 +1821,7 @@ export class InvoicesService {
       studentGroup: invoice.studentGroup,
       paidAt: invoice.paidAt?.toISOString() ?? null,
       payment: this.buildInvoicePaymentSummary(invoice),
+      lateTerms: toLateTermsView(invoice),
       createdAt: invoice.createdAt.toISOString(),
       recurrence:
         invoice.recurringInvoiceId && invoice.recurrencePeriod
@@ -1985,6 +2077,7 @@ export class InvoicesService {
       billingType: recurrence.billingType,
       dueDay: recurrence.dueDay,
       status: recurrence.status,
+      lateTerms: toLateTermsView(recurrence),
       nextDueDate: recurrence.nextDueDate
         ? this.formatDateOnly(recurrence.nextDueDate)
         : null,

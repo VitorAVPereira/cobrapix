@@ -129,6 +129,11 @@ export interface BillingSettings {
   businessSegment: BusinessSegment;
   paymentNotificationEnabled: boolean;
   paymentNotificationEmails: string[];
+  // Company defaults for new charges: percent fine, percent interest per
+  // month and days accepting payment after the due date.
+  lateFinePercentage: number;
+  lateInterestMonthlyPercentage: number;
+  paymentDaysAfterDue: number;
   tariffs: Record<
     BillingMethod,
     {
@@ -149,6 +154,15 @@ export interface UpdateBillingSettingsInput {
   businessSegment?: BusinessSegment;
   paymentNotificationEnabled?: boolean;
   paymentNotificationEmails?: string[];
+  lateFinePercentage?: number;
+  lateInterestMonthlyPercentage?: number;
+  paymentDaysAfterDue?: number;
+}
+
+export interface LateTerms {
+  late_fine_percentage: number;
+  late_interest_monthly_percentage: number;
+  payment_days_after_due: number;
 }
 
 export type BillingMethod = "PIX" | "BOLETO" | "BOLIX";
@@ -221,6 +235,7 @@ export interface InvoiceListItem {
   studentGroup: string | null;
   paidAt: string | null;
   payment: InvoicePaymentSummary;
+  lateTerms?: LateTerms;
   createdAt: string;
   recurrence?: {
     recurrenceId: string;
@@ -250,6 +265,10 @@ export interface CreateInvoiceInput {
   studentName?: string;
   studentEnrollment?: string;
   studentGroup?: string;
+  // Empty (null/absent) uses the company default; zero means none.
+  late_fine_percentage?: number | null;
+  late_interest_monthly_percentage?: number | null;
+  payment_days_after_due?: number | null;
 }
 
 export interface RecurringInvoice {
@@ -265,6 +284,7 @@ export interface RecurringInvoice {
   billingType: BillingMethod;
   dueDay: number;
   status: RecurringInvoiceStatus;
+  lateTerms?: LateTerms;
   nextDueDate: string | null;
   lastGeneratedPeriod: string | null;
   pendingInvoice: {
@@ -281,6 +301,9 @@ export interface UpdateRecurringInvoiceInput {
   amount: number;
   billingType: BillingMethod;
   dueDay: number;
+  lateFinePercentage?: number;
+  lateInterestMonthlyPercentage?: number;
+  paymentDaysAfterDue?: number;
 }
 
 export interface PaymentNotificationItem {
