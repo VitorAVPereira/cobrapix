@@ -127,6 +127,7 @@ describe("financial onboarding route authorization", () => {
   it.each([
     "/admin/efi-onboarding",
     "/admin/payment-fees",
+    "/admin/conciliacao",
     "/admin/communications",
     "/admin/templates",
   ])("permits platform admins and rejects tenant access to %s", (path) => {
