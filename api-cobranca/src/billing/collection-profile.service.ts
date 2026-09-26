@@ -4,7 +4,11 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { CollectionChannel, CollectionProfileType } from '@prisma/client';
+import {
+  CollectionChannel,
+  CollectionProfileType,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TemplatesService } from '../templates/templates.service';
 
@@ -478,24 +482,41 @@ export class CollectionProfileService {
         continue;
       }
 
-      const createdProfile = await this.prisma.collectionProfile.create({
-        data: {
-          companyId,
-          name: standardProfile.name,
-          profileType: standardProfile.profileType,
-          isDefault: standardProfile.isDefault && !hasDefault,
-          isActive: true,
-          daysOverdueMin: standardProfile.daysOverdueMin,
-          daysOverdueMax: standardProfile.daysOverdueMax,
-          steps: {
-            create: this.buildStandardStepRows(
-              standardProfile.steps,
-              defaultTemplateIds,
-            ),
+      const createdProfile = await this.prisma.collectionProfile
+        .create({
+          data: {
+            companyId,
+            name: standardProfile.name,
+            profileType: standardProfile.profileType,
+            isDefault: standardProfile.isDefault && !hasDefault,
+            isActive: true,
+            daysOverdueMin: standardProfile.daysOverdueMin,
+            daysOverdueMax: standardProfile.daysOverdueMax,
+            steps: {
+              create: this.buildStandardStepRows(
+                standardProfile.steps,
+                defaultTemplateIds,
+              ),
+            },
           },
-        },
-        include: { steps: { select: { id: true } } },
-      });
+          include: { steps: { select: { id: true } } },
+        })
+        .catch(async (error: unknown): Promise<ExistingProfile> => {
+          if (
+            !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+            error.code !== 'P2002'
+          ) {
+            throw error;
+          }
+          // Both pages may load the same tenant's defaults before either request finishes.
+          const concurrentProfile =
+            await this.prisma.collectionProfile.findFirst({
+              where: { companyId, name: standardProfile.name },
+              include: { steps: { select: { id: true } } },
+            });
+          if (!concurrentProfile) throw error;
+          return concurrentProfile;
+        });
 
       profiles.push(createdProfile);
 
@@ -737,13 +758,16 @@ export class CollectionProfileService {
       return;
     }
 
-    const templates = await this.prisma.messageTemplate.count({
-      where: { companyId, id: { in: templateIds }, isActive: true },
-    });
+    const templates = await this.templatesService.findAll(companyId);
+    const activeTemplateIds = new Set(
+      templates
+        .filter((template) => template.isActive)
+        .map((template) => template.id),
+    );
 
-    if (templates !== templateIds.length) {
+    if (templateIds.some((templateId) => !activeTemplateIds.has(templateId))) {
       throw new BadRequestException(
-        'Um ou mais templates nao pertencem a esta empresa.',
+        'Um ou mais templates nao estao disponiveis para esta empresa.',
       );
     }
   }

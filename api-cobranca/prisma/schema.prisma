@@ -1239,7 +1239,6 @@ model MessageTemplate {
   lastMetaSyncAt        DateTime?
   companyId             String
   company               Company                       @relation(fields: [companyId], references: [id])
-  ruleSteps             CollectionRuleStep[]
   createdAt             DateTime                      @default(now())
   updatedAt             DateTime                      @updatedAt
 
@@ -1297,6 +1296,7 @@ model GlobalMessageTemplate {
   metaCategoryAt        DateTime?
   metaComponentsAt      DateTime?
   preferences           CompanyTemplatePreference[]
+  ruleSteps             CollectionRuleStep[]
   createdAt             DateTime                      @default(now())
   updatedAt             DateTime                      @updatedAt
 }
@@ -1389,20 +1389,20 @@ model CollectionProfile {
 }
 
 model CollectionRuleStep {
-  id            String              @id @default(uuid())
+  id            String                 @id @default(uuid())
   profileId     String
-  profile       CollectionProfile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  profile       CollectionProfile      @relation(fields: [profileId], references: [id], onDelete: Cascade)
   stepOrder     Int
   channel       CollectionChannel
   templateId    String?
-  template      MessageTemplate?    @relation(fields: [templateId], references: [id], onDelete: SetNull)
-  delayDays     Int                 @default(0)
+  template      GlobalMessageTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  delayDays     Int                    @default(0)
   sendTimeStart String?
   sendTimeEnd   String?
-  isActive      Boolean             @default(true)
+  isActive      Boolean                @default(true)
   attempts      CollectionAttempt[]
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @updatedAt
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
 
   @@unique([profileId, stepOrder, channel])
   @@index([profileId, stepOrder])

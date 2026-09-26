@@ -108,45 +108,8 @@ function createService(input: {
     company: {
       findUnique: jest.fn().mockResolvedValue(company),
     },
-    messageTemplate: {
-      findFirst: jest.fn().mockResolvedValue({
-        id: 'template-1',
-        slug: 'vencimento-hoje',
-        content:
-          input.templateContent ??
-          [
-            'Ola {{nome_devedor}}, sua cobranca de {{valor}} vence em {{data_vencimento}}.',
-            '',
-            'Forma de pagamento: {{metodo_pagamento}}',
-            'Acesse/pague por aqui: {{payment_link}}',
-            'Pix copia e cola: {{pix_copia_e_cola}}',
-            'Linha digitavel: {{boleto_linha_digitavel}}',
-            'Boleto: {{boleto_link}}',
-            'PDF do boleto: {{boleto_pdf}}',
-          ].join('\n'),
-        isActive: true,
-        metaTemplateName: null,
-        metaLanguage: 'pt_BR',
-      }),
-      findMany: jest.fn().mockResolvedValue([
-        {
-          id: 'template-1',
-          slug: 'vencimento-hoje',
-          content:
-            input.templateContent ??
-            [
-              'Ola {{nome_devedor}}, sua cobranca de {{valor}} vence em {{data_vencimento}}.',
-              '',
-              'Forma de pagamento: {{metodo_pagamento}}',
-              'Acesse/pague por aqui: {{payment_link}}',
-              'Pix copia e cola: {{pix_copia_e_cola}}',
-              'Linha digitavel: {{boleto_linha_digitavel}}',
-              'Boleto: {{boleto_link}}',
-              'PDF do boleto: {{boleto_pdf}}',
-            ].join('\n'),
-          isActive: true,
-        },
-      ]),
+    globalMessageTemplate: {
+      findFirst: jest.fn().mockResolvedValue({ slug: 'vencimento-hoje' }),
     },
     invoice: {
       findMany: jest.fn().mockResolvedValue(invoices),
@@ -251,7 +214,13 @@ function createService(input: {
     prisma: prisma as unknown as {
       collectionLog: { create: jest.Mock };
       debtor: { updateMany: jest.Mock };
+      globalMessageTemplate: { findFirst: jest.Mock };
     },
+    templatesService: templatesService as unknown as {
+      resolveApproved: jest.Mock;
+      findAll: jest.Mock;
+    },
+    approvedTemplate,
     messageQueue: messageQueue as unknown as {
       addBulkSendMessageJobs: jest.Mock;
       addSelectedInitialChargeJobs: jest.Mock;
@@ -294,6 +263,104 @@ describe('BillingService', () => {
 
   afterEach(() => {
     jest.useRealTimers();
+  });
+
+  it.each(['WHATSAPP', 'EMAIL'] as const)(
+    'respeita o template global escolhido na regua para %s',
+    async (channel) => {
+      const invoice = buildInvoice({
+        email: 'maria@example.test',
+        gatewayId: 'tx-invoice-1',
+        efiTxid: 'tx-invoice-1',
+        efiPixCopiaECola: 'pix-copia-e-cola',
+      });
+      const fixture = createService({ invoices: [invoice] });
+      const selected = {
+        ...fixture.approvedTemplate,
+        id: 'global-pre-vencimento',
+        slug: 'pre-vencimento',
+      };
+      fixture.ruleEngine.getNextStep.mockResolvedValue({
+        ruleStepId: 'step-1',
+        channel,
+        templateId: selected.id,
+        delayDays: -2,
+      });
+      fixture.prisma.globalMessageTemplate.findFirst.mockResolvedValue({
+        slug: selected.slug,
+      });
+      fixture.templatesService.resolveApproved.mockResolvedValue(selected);
+      fixture.templatesService.findAll.mockResolvedValue([
+        fixture.approvedTemplate,
+        selected,
+      ]);
+
+      expect(await fixture.service.executeBilling('company-1')).toEqual({
+        queued: 1,
+        skipped: 0,
+      });
+      if (channel === 'WHATSAPP') {
+        expect(fixture.templatesService.resolveApproved).toHaveBeenCalledWith(
+          'company-1',
+          selected.slug,
+        );
+      } else {
+        expect(
+          fixture.emailTemplatesService.findActiveOrDefault,
+        ).toHaveBeenCalledWith('company-1', selected.slug);
+      }
+    },
+  );
+
+  it.each(['WHATSAPP', 'EMAIL'] as const)(
+    'nao substitui uma selecao global indisponivel por outro template em %s',
+    async (channel) => {
+      const invoice = buildInvoice({
+        email: 'maria@example.test',
+        gatewayId: 'tx-invoice-1',
+        efiTxid: 'tx-invoice-1',
+        efiPixCopiaECola: 'pix-copia-e-cola',
+      });
+      const fixture = createService({ invoices: [invoice] });
+      fixture.ruleEngine.getNextStep.mockResolvedValue({
+        ruleStepId: 'step-1',
+        channel,
+        templateId: 'global-unavailable',
+        delayDays: 0,
+      });
+      fixture.prisma.globalMessageTemplate.findFirst.mockResolvedValue(null);
+
+      expect(await fixture.service.executeBilling('company-1')).toEqual({
+        queued: 0,
+        skipped: 1,
+      });
+      expect(
+        fixture.messageQueue.addBulkSendMessageJobs,
+      ).not.toHaveBeenCalled();
+      expect(fixture.emailQueue.addBulk).not.toHaveBeenCalled();
+    },
+  );
+
+  it('nao envia um template aprovado desativado nas preferencias da empresa', async () => {
+    const fixture = createService({
+      invoices: [
+        buildInvoice({
+          gatewayId: 'tx-invoice-1',
+          efiTxid: 'tx-invoice-1',
+          efiPixCopiaECola: 'pix-copia-e-cola',
+        }),
+      ],
+    });
+    fixture.templatesService.resolveApproved.mockResolvedValue({
+      ...fixture.approvedTemplate,
+      isActive: false,
+    });
+
+    expect(await fixture.service.executeBilling('company-1')).toEqual({
+      queued: 0,
+      skipped: 1,
+    });
+    expect(fixture.messageQueue.addBulkSendMessageJobs).not.toHaveBeenCalled();
   });
 
   it('gera pagamento antes de enfileirar a mensagem de cobranca', async () => {

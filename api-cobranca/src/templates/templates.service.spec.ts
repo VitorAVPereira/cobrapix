@@ -34,7 +34,7 @@ function setup(): {
 } {
   const prisma = {
     globalMessageTemplate: {
-      upsert: jest.fn().mockResolvedValue(globalTemplate),
+      createMany: jest.fn().mockResolvedValue({ count: 0 }),
       findMany: jest.fn().mockResolvedValue([globalTemplate]),
       findUnique: jest.fn().mockResolvedValue(globalTemplate),
       findFirst: jest.fn().mockResolvedValue(globalTemplate),

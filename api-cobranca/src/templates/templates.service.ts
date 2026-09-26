@@ -244,30 +244,25 @@ export class TemplatesService {
   }
 
   private async ensureGlobalCatalog(): Promise<void> {
-    await Promise.all(
-      TEMPLATE_DEFINITIONS.map((definition) =>
-        this.prisma.globalMessageTemplate.upsert({
-          where: { slug: definition.slug },
-          create: {
-            name: definition.name,
-            slug: definition.slug,
-            content: definition.defaultContent,
-            footerText: definition.footerText,
-            paymentButtonEnabled: definition.paymentButtonEnabled,
-            paymentButtonLabel: definition.paymentButtonLabel,
-            copyCodeButtonEnabled: definition.copyCodeButtonEnabled,
-            copyCodeSource: definition.copyCodeSource,
-            metaTemplateName: this.whatsappService.buildMetaTemplateName(
-              definition.slug,
-            ),
-            metaLanguage: 'pt_BR',
-            category: 'UTILITY',
-            metaStatus: 'LOCAL',
-          },
-          update: {},
-        }),
-      ),
-    );
+    await this.prisma.globalMessageTemplate.createMany({
+      data: TEMPLATE_DEFINITIONS.map((definition) => ({
+        name: definition.name,
+        slug: definition.slug,
+        content: definition.defaultContent,
+        footerText: definition.footerText,
+        paymentButtonEnabled: definition.paymentButtonEnabled,
+        paymentButtonLabel: definition.paymentButtonLabel,
+        copyCodeButtonEnabled: definition.copyCodeButtonEnabled,
+        copyCodeSource: definition.copyCodeSource,
+        metaTemplateName: this.whatsappService.buildMetaTemplateName(
+          definition.slug,
+        ),
+        metaLanguage: 'pt_BR',
+        category: 'UTILITY',
+        metaStatus: 'LOCAL',
+      })),
+      skipDuplicates: true,
+    });
   }
 
   private fromDto(

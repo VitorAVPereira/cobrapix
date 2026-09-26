@@ -792,6 +792,10 @@ export class BillingService {
             templateId,
             false,
           );
+          if (templateId && !template) {
+            skippedCount++;
+            continue;
+          }
           const emailTemplate =
             await this.emailTemplatesService.findActiveOrDefault(
               company.id,
@@ -901,22 +905,29 @@ export class BillingService {
   } | null> {
     let slug: string | null = null;
     if (templateId) {
-      const selected = await this.prisma.messageTemplate.findFirst({
-        where: { id: templateId, companyId },
+      const selected = await this.prisma.globalMessageTemplate.findFirst({
+        where: { id: templateId, isActive: true },
         select: { slug: true },
       });
-      slug = selected?.slug ?? null;
+      if (!selected) return null;
+      slug = selected.slug;
     }
     const targetSlug = slug ?? 'vencimento-hoje';
-    if (requireApprovedMeta)
-      return this.templatesService.resolveApproved(companyId, targetSlug);
+    if (requireApprovedMeta) {
+      const template = await this.templatesService.resolveApproved(
+        companyId,
+        targetSlug,
+      );
+      return template?.isActive ? template : null;
+    }
     const catalog = await this.templatesService.findAll(companyId);
     return (
       catalog.find(
         (template) => template.slug === targetSlug && template.isActive,
       ) ??
-      catalog.find((template) => template.isActive) ??
-      null
+      (templateId
+        ? null
+        : (catalog.find((template) => template.isActive) ?? null))
     );
   }
 
