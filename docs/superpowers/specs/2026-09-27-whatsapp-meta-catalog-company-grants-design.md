@@ -2,7 +2,7 @@
 
 **Data:** 27/09/2026.
 
-**Estado:** desenho aprovado na conversa e consolidado para revisão desta especificação. Implementação não iniciada.
+**Estado:** especificação escrita aprovada pelo usuário em 27/09/2026. Implementação não iniciada. Plano técnico em `docs/superpowers/plans/2026-09-27-whatsapp-meta-catalog-company-grants.md`.
 
 **Base inspecionada:** commit `e942e16` do repositório CifraMais.
 
