@@ -77,6 +77,17 @@ export const CATALOG = [
         type: 'BODY',
         text: 'Olá, {{nome_devedor}}. Sua cobrança da empresa {{nome_empresa}}, no valor de {{valor}}, vence em {{data_vencimento}}.\n\nForma de pagamento: {{metodo_pagamento}}',
       },
+      {
+        type: 'BUTTONS',
+        buttons: [
+          {
+            type: 'URL',
+            text: 'Link do pagamento',
+            url: `${FRONTEND}/pagar/{{1}}`,
+          },
+          { type: 'QUICK_REPLY', text: 'Preciso de ajuda' },
+        ],
+      },
     ],
   },
 ];

@@ -174,6 +174,11 @@ export function CompanyWhatsappTemplates(): ReactNode {
               Botão: {selected.content.button.label}
             </p>
           )}
+          {selected.content.quickReplies?.length ? (
+            <p className="mt-2 text-xs text-slate-500">
+              Respostas rápidas: {selected.content.quickReplies.join(", ")}
+            </p>
+          ) : null}
         </div>
         {selected.defaultFor.length > 0 && (
           <p className="text-sm text-slate-600">

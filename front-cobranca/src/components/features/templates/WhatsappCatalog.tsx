@@ -224,6 +224,11 @@ export function WhatsappCatalog({
               Botão: {item.content.button.label}
             </p>
           )}
+          {item.content.quickReplies?.length ? (
+            <p className="text-xs text-slate-500">
+              Respostas rápidas: {item.content.quickReplies.join(", ")}
+            </p>
+          ) : null}
           <p className="text-xs text-slate-500">
             Liberado para {item.grantedCompanies}{" "}
             {item.grantedCompanies === 1 ? "empresa" : "empresas"} · última

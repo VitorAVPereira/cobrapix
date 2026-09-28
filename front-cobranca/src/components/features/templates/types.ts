@@ -60,7 +60,7 @@ export type TemplateBinding =
 
 export interface TemplateMapping {
   body: Record<string, TemplateBinding>;
-  paymentButton?: { index: 0; source: "PAYMENT_URL_SUFFIX" };
+  paymentButton?: { index: number; source: "PAYMENT_URL_SUFFIX" };
 }
 
 export type TemplateBlockCode =
@@ -91,7 +91,10 @@ export const BLOCK_LABELS: Record<TemplateBlockCode, string> = {
 export interface TemplateContentView {
   body: string;
   footer: string | null;
-  button: { label: string; url: string } | null;
+  /** `index`: the payment button's position among the template's buttons. */
+  button: { label: string; url: string; index?: number } | null;
+  /** Static quick reply buttons, sent as approved. */
+  quickReplies?: string[];
 }
 
 export interface Readiness {

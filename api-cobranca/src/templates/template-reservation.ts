@@ -151,7 +151,10 @@ export async function reserveTemplateIntent(
       ? { bodyParameterNames: rendered.bodyParameterNames }
       : {}),
     ...(template.parsed.paymentButton
-      ? { paymentButtonFromInvoice: true }
+      ? {
+          paymentButtonFromInvoice: true,
+          paymentButtonIndex: template.parsed.paymentButton.index,
+        }
       : {}),
     ...(adminReply ? { origin: 'ADMIN_REPLY' as const } : {}),
     ...(request.replyToExternalMessageId

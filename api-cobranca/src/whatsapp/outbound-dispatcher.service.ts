@@ -130,6 +130,8 @@ export interface DispatchInput {
   replyToExternalMessageId?: string;
   /** Payment button link built at transmission; its signed token expires and cannot be hashed. */
   paymentButtonFromInvoice?: boolean;
+  /** Position of the payment button among the template's buttons (absent: 0). */
+  paymentButtonIndex?: number;
   /** Template quick-reply button indexes that receive server-issued opaque references. */
   quickReplyButtons?: number[];
 }
@@ -566,7 +568,7 @@ export class OutboundDispatcherService {
       components.push({
         type: 'button',
         sub_type: 'url',
-        index: '0',
+        index: String(input.paymentButtonIndex ?? 0),
         parameters: [{ type: 'text', text: urlSuffix }],
       });
     for (const index of input.quickReplyButtons ?? []) {

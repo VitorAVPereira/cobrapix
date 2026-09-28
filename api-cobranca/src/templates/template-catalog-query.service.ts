@@ -23,7 +23,10 @@ export type CatalogPage<T> = { items: T[]; nextCursor: string | null };
 export interface TemplateContentView {
   body: string;
   footer: string | null;
-  button: { label: string; url: string } | null;
+  /** `index` is the payment button's position among the template's buttons. */
+  button: { label: string; url: string; index: number } | null;
+  /** Static quick reply buttons, shown as approved. */
+  quickReplies: string[];
 }
 
 /** What a company sees: approved content only, no mapping, grants or diagnostics. */
@@ -329,8 +332,13 @@ export class TemplateCatalogQueryService {
         body: parsed.body,
         footer: parsed.footer,
         button: parsed.paymentButton
-          ? { label: parsed.paymentButton.label, url: parsed.paymentButton.url }
+          ? {
+              label: parsed.paymentButton.label,
+              url: parsed.paymentButton.url,
+              index: parsed.paymentButton.index,
+            }
           : null,
+        quickReplies: parsed.quickReplies,
       },
       defaultFor: defaults.map((row) => row.purpose),
     };
@@ -385,8 +393,10 @@ export class TemplateCatalogQueryService {
               ? {
                   label: parsed.template.paymentButton.label,
                   url: parsed.template.paymentButton.url,
+                  index: parsed.template.paymentButton.index,
                 }
               : null,
+            quickReplies: parsed.template.quickReplies,
           }
         : rawContent(row.metaComponents),
       mapping: (revision?.mapping as unknown as TemplateMapping) ?? null,
@@ -405,5 +415,10 @@ function rawContent(components: Prisma.JsonValue): TemplateContentView {
     const part = parts.find((item) => String(item.type).toUpperCase() === type);
     return part && typeof part.text === 'string' ? part.text : null;
   };
-  return { body: text('BODY') ?? '', footer: text('FOOTER'), button: null };
+  return {
+    body: text('BODY') ?? '',
+    footer: text('FOOTER'),
+    button: null,
+    quickReplies: [],
+  };
 }
