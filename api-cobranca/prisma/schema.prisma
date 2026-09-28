@@ -349,33 +349,35 @@ model Company {
   activeFinancialProfileId              String?                  @unique
   activeFinancialProfile                FinancialProfileVersion? @relation("CompanyActiveFinancialProfile", fields: [activeFinancialProfileId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
-  templates             MessageTemplate[]
-  emailTemplates        EmailTemplate[]
-  templatePreferences   CompanyTemplatePreference[]
-  users                 User[]
-  debtors               Debtor[]
-  invoices              Invoice[]
-  paymentNotifications  PaymentNotification[]
-  recurringInvoices     RecurringInvoice[]
-  collectionLogs        CollectionLog[]
-  subscription          Subscription?
-  paymentGateway        GatewayAccount?
-  originalBankAccount   OriginalBankAccount?
-  messagingUsage        MessagingUsage[]
-  whatsappInteractions  WhatsAppInteraction[]
-  collectionProfiles    CollectionProfile[]
-  collectionAttempts    CollectionAttempt[]
-  emailEvents           EmailEvent[]
-  conversations         WhatsAppConversation[]
-  auditLogs             AuditLog[]
-  efiOnboarding         EfiOnboarding?
-  paymentFeeVersions    PaymentFeeVersion[]
-  paymentCharges        PaymentCharge[]
-  communicationMessages CommunicationMessage[]
-  communicationIntents  CommunicationOutboundIntent[]
-  financialProfiles     FinancialProfileVersion[]     @relation("CompanyFinancialProfiles")
-  efiAccountIdentities  EfiAccountIdentity[]
-  financialValidations  FinancialValidationAttempt[]
+  templates                MessageTemplate[]
+  emailTemplates           EmailTemplate[]
+  templatePreferences      CompanyTemplatePreference[]
+  users                    User[]
+  debtors                  Debtor[]
+  invoices                 Invoice[]
+  paymentNotifications     PaymentNotification[]
+  recurringInvoices        RecurringInvoice[]
+  collectionLogs           CollectionLog[]
+  subscription             Subscription?
+  paymentGateway           GatewayAccount?
+  originalBankAccount      OriginalBankAccount?
+  messagingUsage           MessagingUsage[]
+  whatsappInteractions     WhatsAppInteraction[]
+  collectionProfiles       CollectionProfile[]
+  collectionAttempts       CollectionAttempt[]
+  emailEvents              EmailEvent[]
+  conversations            WhatsAppConversation[]
+  auditLogs                AuditLog[]
+  efiOnboarding            EfiOnboarding?
+  paymentFeeVersions       PaymentFeeVersion[]
+  paymentCharges           PaymentCharge[]
+  communicationMessages    CommunicationMessage[]
+  communicationIntents     CommunicationOutboundIntent[]
+  financialProfiles        FinancialProfileVersion[]        @relation("CompanyFinancialProfiles")
+  efiAccountIdentities     EfiAccountIdentity[]
+  financialValidations     FinancialValidationAttempt[]
+  whatsappTemplateGrants   CompanyWhatsappTemplateGrant[]
+  whatsappTemplateDefaults CompanyWhatsappTemplateDefault[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1270,35 +1272,155 @@ model EmailTemplate {
 }
 
 model GlobalMessageTemplate {
-  id                    String                        @id @default(uuid())
+  id                    String                            @id @default(uuid())
   name                  String
-  slug                  String                        @unique
-  content               String                        @db.Text
-  footerText            String?                       @db.Text
-  paymentButtonEnabled  Boolean                       @default(true)
-  paymentButtonLabel    String                        @default("Abrir pagamento")
-  copyCodeButtonEnabled Boolean                       @default(false)
-  copyCodeSource        MessageTemplateCopyCodeSource @default(AUTO)
-  isActive              Boolean                       @default(true)
+  slug                  String                            @unique
+  content               String                            @db.Text
+  footerText            String?                           @db.Text
+  paymentButtonEnabled  Boolean                           @default(true)
+  paymentButtonLabel    String                            @default("Abrir pagamento")
+  copyCodeButtonEnabled Boolean                           @default(false)
+  copyCodeSource        MessageTemplateCopyCodeSource     @default(AUTO)
+  isActive              Boolean                           @default(true)
   metaTemplateName      String?
-  metaLanguage          String                        @default("pt_BR")
-  category              WhatsAppTemplateCategory      @default(UTILITY)
-  metaStatus            String                        @default("LOCAL")
-  metaRejectedReason    String?                       @db.Text
+  metaLanguage          String                            @default("pt_BR")
+  category              WhatsAppTemplateCategory          @default(UTILITY)
+  metaStatus            String                            @default("LOCAL")
+  metaRejectedReason    String?                           @db.Text
   lastMetaSyncAt        DateTime?
   metaTemplateId        String?
   metaQuality           String?
   metaProviderCategory  String?
   metaComponents        Json?
-  metaReviewRequired    Boolean                       @default(false)
+  metaReviewRequired    Boolean                           @default(false)
   metaStatusAt          DateTime?
   metaQualityAt         DateTime?
   metaCategoryAt        DateTime?
   metaComponentsAt      DateTime?
+  /// Identity in the provider: WABA + template ID. The slug is only a technical key.
+  origin                WhatsappTemplateOrigin            @default(LEGACY_INTERNAL)
+  providerAccountId     String?
+  /// Increments when the relevant content (components, language, category, format) changes.
+  providerRevision      Int                               @default(0)
+  providerFingerprint   String?                           @db.VarChar(64)
+  parameterFormat       String?                           @db.VarChar(32)
+  /// Increments on every change of eligibility; snapshots pin it.
+  policyVersion         Int                               @default(0)
+  /// Revision of the admin mapping currently approved (0 = none).
+  mappingRevision       Int                               @default(0)
+  /// Null when the format is supported; otherwise the blocking component.
+  supportReason         String?                           @db.Text
+  archivedAt            DateTime?
   preferences           CompanyTemplatePreference[]
   ruleSteps             CollectionRuleStep[]
-  createdAt             DateTime                      @default(now())
-  updatedAt             DateTime                      @updatedAt
+  mappingRevisions      WhatsappTemplateMappingRevision[]
+  grants                CompanyWhatsappTemplateGrant[]
+  defaults              CompanyWhatsappTemplateDefault[]
+  createdAt             DateTime                          @default(now())
+  updatedAt             DateTime                          @updatedAt
+
+  @@unique([providerAccountId, metaTemplateId])
+  @@index([providerAccountId, metaTemplateName, metaLanguage])
+  @@index([origin, archivedAt, metaStatus])
+}
+
+enum WhatsappTemplateOrigin {
+  LEGACY_INTERNAL
+  META_IMPORTED
+}
+
+enum WhatsappTemplatePurpose {
+  EMISSION
+  BEFORE_DUE
+  DUE_TODAY
+  FIRST_OVERDUE
+  RECURRING_OVERDUE
+  CRITICAL_OVERDUE
+  ACTIVATION_NOTICE
+  ACTIVATION_REMINDER
+}
+
+/// Immutable admin mapping of one provider revision of a template.
+model WhatsappTemplateMappingRevision {
+  id                  String                @id @default(uuid())
+  templateId          String
+  template            GlobalMessageTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  revision            Int
+  providerRevision    Int
+  providerFingerprint String                @db.VarChar(64)
+  components          Json
+  mapping             Json
+  createdByUserId     String?
+  createdAt           DateTime              @default(now())
+
+  @@unique([templateId, revision])
+}
+
+/// Explicit permission of a company to use a template; preferences never grant it.
+model CompanyWhatsappTemplateGrant {
+  id              String                @id @default(uuid())
+  companyId       String
+  company         Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  templateId      String
+  template        GlobalMessageTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  enabled         Boolean               @default(false)
+  /// Increments on every effective change; a revoke and re-grant never restores an old number.
+  version         Int                   @default(0)
+  grantedAt       DateTime?
+  grantedByUserId String?
+  revokedAt       DateTime?
+  revokedByUserId String?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@unique([companyId, templateId])
+  @@index([templateId, enabled])
+}
+
+model CompanyWhatsappTemplateDefault {
+  id              String                  @id @default(uuid())
+  companyId       String
+  company         Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  purpose         WhatsappTemplatePurpose
+  templateId      String?
+  template        GlobalMessageTemplate?  @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  version         Int                     @default(0)
+  updatedByUserId String?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  @@unique([companyId, purpose])
+  @@index([templateId])
+}
+
+/// Catalog, mapping, grant and default changes. Never stores rendered values.
+model WhatsappTemplateAudit {
+  id          String   @id @default(uuid())
+  companyId   String?
+  templateId  String?
+  action      String   @db.VarChar(64)
+  actorUserId String?
+  details     Json
+  createdAt   DateTime @default(now())
+
+  @@index([companyId, createdAt])
+  @@index([templateId, createdAt])
+}
+
+/// One row per WABA: sync lease, durable sync request and last outcome.
+model WhatsappTemplateSyncState {
+  id                String    @id @default(uuid())
+  providerAccountId String    @unique
+  leaseToken        String?
+  leaseExpiresAt    DateTime?
+  syncRequestedAt   DateTime?
+  lastStartedAt     DateTime?
+  lastCompletedAt   DateTime?
+  lastErrorCode     String?   @db.VarChar(64)
+  lastErrorAt       DateTime?
+  lastResult        Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 }
 
 model GlobalEmailTemplate {
@@ -1390,24 +1512,24 @@ model CollectionProfile {
 }
 
 model CollectionRuleStep {
-  id            String                 @id @default(uuid())
-  profileId     String
-  profile       CollectionProfile      @relation(fields: [profileId], references: [id], onDelete: Cascade)
-  stepOrder     Int
-  channel       CollectionChannel
+  id              String                 @id @default(uuid())
+  profileId       String
+  profile         CollectionProfile      @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  stepOrder       Int
+  channel         CollectionChannel
   /// WhatsApp only; a CHECK keeps each channel on its own catalog.
   templateId      String?
   template        GlobalMessageTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
   /// EMAIL only; null keeps the email default.
   emailTemplateId String?
   emailTemplate   GlobalEmailTemplate?   @relation(fields: [emailTemplateId], references: [id], onDelete: Restrict)
-  delayDays     Int                    @default(0)
-  sendTimeStart String?
-  sendTimeEnd   String?
-  isActive      Boolean                @default(true)
-  attempts      CollectionAttempt[]
-  createdAt     DateTime               @default(now())
-  updatedAt     DateTime               @updatedAt
+  delayDays       Int                    @default(0)
+  sendTimeStart   String?
+  sendTimeEnd     String?
+  isActive        Boolean                @default(true)
+  attempts        CollectionAttempt[]
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
 
   @@unique([profileId, stepOrder, channel])
   @@index([profileId, stepOrder])
