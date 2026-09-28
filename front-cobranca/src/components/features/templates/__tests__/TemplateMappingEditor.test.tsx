@@ -203,6 +203,41 @@ describe("TemplateMappingEditor", () => {
     );
   });
 
+  it("binds the payment button at its approved position and lists quick replies", async () => {
+    mockApi.getAdminWhatsappTemplate.mockResolvedValue(
+      template({
+        variables: [],
+        content: {
+          body: "Sua cobrança está disponível.",
+          footer: null,
+          button: {
+            label: "Link do pagamento",
+            url: "https://app.test/pagar/{{1}}",
+            index: 1,
+          },
+          quickReplies: ["Preciso de ajuda"],
+        },
+      }),
+    );
+    mockApi.saveWhatsappTemplateMapping.mockResolvedValue({ mappingRevision: 1 });
+    renderEditor();
+    expect(
+      await screen.findByText(/Respostas rápidas enviadas como aprovadas: Preciso de ajuda/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Salvar variáveis" }));
+    await waitFor(() =>
+      expect(mockApi.saveWhatsappTemplateMapping).toHaveBeenCalledWith(
+        "tpl-1",
+        expect.objectContaining({
+          mapping: {
+            body: {},
+            paymentButton: { index: 1, source: "PAYMENT_URL_SUFFIX" },
+          },
+        }),
+      ),
+    );
+  });
+
   it("offers no mapping for an unsupported format", async () => {
     mockApi.getAdminWhatsappTemplate.mockResolvedValue(
       template({ supported: false, supportReason: "HEADER_MEDIA", variables: [] }),

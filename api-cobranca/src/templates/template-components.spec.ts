@@ -35,7 +35,47 @@ describe('parseTemplate', () => {
         variables: ['1', '2'],
         footer: 'CifraMais',
         paymentButton: { index: 0, label: 'Pagar', url: `${BASE}/{{1}}` },
+        quickReplies: [],
       },
+    });
+  });
+
+  it('accepts static quick replies next to the payment button, in any order', () => {
+    const body = { type: 'BODY', text: 'Olá {{nome_devedor}}' };
+    const payment = {
+      type: 'URL',
+      text: 'Link do pagamento',
+      url: `${BASE}/{{1}}`,
+    };
+    const help = { type: 'QUICK_REPLY', text: 'Preciso de ajuda' };
+    const named = { parameterFormat: 'NAMED' };
+    expect(
+      parseTemplate(
+        input([body, { type: 'BUTTONS', buttons: [payment, help] }], named),
+      ),
+    ).toMatchObject({
+      supported: true,
+      template: {
+        paymentButton: { index: 0, label: 'Link do pagamento' },
+        quickReplies: ['Preciso de ajuda'],
+      },
+    });
+    expect(
+      parseTemplate(
+        input([body, { type: 'BUTTONS', buttons: [help, payment] }], named),
+      ),
+    ).toMatchObject({
+      supported: true,
+      template: {
+        paymentButton: { index: 1 },
+        quickReplies: ['Preciso de ajuda'],
+      },
+    });
+    expect(
+      parseTemplate(input([body, { type: 'BUTTONS', buttons: [help] }], named)),
+    ).toMatchObject({
+      supported: true,
+      template: { paymentButton: null, quickReplies: ['Preciso de ajuda'] },
     });
   });
 
@@ -101,19 +141,29 @@ describe('parseTemplate', () => {
     expect(carousel.supported).toBe(false);
   });
 
-  it('rejects gaps, extra buttons, static or foreign URLs and footer variables', () => {
+  it('rejects gaps, other buttons, static or foreign URLs and footer variables', () => {
+    const payment = { type: 'URL', text: 'Pagar', url: `${BASE}/{{1}}` };
     const cases = [
       [{ type: 'BODY', text: 'A {{1}} e {{3}}' }],
+      [approved[0], { type: 'BUTTONS', buttons: [payment, payment] }],
       [
         approved[0],
         {
           type: 'BUTTONS',
           buttons: [
-            { type: 'URL', text: 'Pagar', url: `${BASE}/{{1}}` },
-            { type: 'QUICK_REPLY', text: 'Falar' },
+            payment,
+            { type: 'PHONE_NUMBER', text: 'Ligar', phone_number: '+5511' },
           ],
         },
       ],
+      [
+        approved[0],
+        {
+          type: 'BUTTONS',
+          buttons: [payment, { type: 'QUICK_REPLY', text: 'Falar {{1}}' }],
+        },
+      ],
+      [approved[0], { type: 'BUTTONS', buttons: [] }],
       [
         approved[0],
         {

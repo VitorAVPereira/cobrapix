@@ -72,7 +72,8 @@ export type TemplateMapping = {
    * templates, the approved names ("nome_devedor") for named ones. Never database paths.
    */
   body: Record<string, TemplateBinding>;
-  paymentButton?: { index: 0; source: 'PAYMENT_URL_SUFFIX' };
+  /** `index` is the payment button's position among the template's buttons. */
+  paymentButton?: { index: number; source: 'PAYMENT_URL_SUFFIX' };
 };
 
 export type TemplateSnapshot = {
@@ -105,7 +106,9 @@ export type ParsedTemplate = {
   /** Mapping keys in send order: "1", "2"... or the names in order of first use. */
   variables: string[];
   footer: string | null;
-  paymentButton: { index: 0; label: string; url: string } | null;
+  paymentButton: { index: number; label: string; url: string } | null;
+  /** Static quick reply buttons: sent as approved, never parameterized. */
+  quickReplies: string[];
   fingerprint: string;
 };
 

@@ -727,7 +727,8 @@ export interface TemplateReplyContext {
 export interface TemplateContent {
   body: string;
   footer: string | null;
-  button: { label: string; url: string } | null;
+  button: { label: string; url: string; index?: number } | null;
+  quickReplies?: string[];
 }
 
 export interface ConversationTemplateOption {

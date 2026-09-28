@@ -435,6 +435,24 @@ describe('Shared outbound dispatch policies', () => {
       }),
     );
   });
+  it('targets the payment button at its approved position, quick replies untouched', async () => {
+    const { service, pinTemplate, transport } = setup();
+    pinTemplate({ paymentButtonIndex: 1 });
+    await service.dispatch('intent');
+    expect(transport.sendTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        components: [
+          { type: 'body', parameters: [{ type: 'text', text: 'Ana' }] },
+          {
+            type: 'button',
+            sub_type: 'url',
+            index: '1',
+            parameters: [{ type: 'text', text: 'signed-payment-token' }],
+          },
+        ],
+      }),
+    );
+  });
   it('refuses quick replies the approved catalog does not support', async () => {
     const { service, pinTemplate, transport } = setup();
     pinTemplate({ quickReplyButtons: [1] });

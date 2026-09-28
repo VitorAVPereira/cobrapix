@@ -79,7 +79,7 @@ export function validateMapping(
   if (parsed.paymentButton) {
     if (
       !isRecord(button) ||
-      button.index !== 0 ||
+      button.index !== parsed.paymentButton.index ||
       button.source !== 'PAYMENT_URL_SUFFIX' ||
       Object.keys(button).length !== 2
     )
