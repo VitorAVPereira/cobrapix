@@ -1,0 +1,73 @@
+import type {
+  WhatsappSelectionMode,
+  WhatsappTemplatePurpose,
+} from '@prisma/client';
+import type {
+  TemplatePurpose,
+  TemplateSelection,
+  TemplateSendRequest,
+} from './template-contracts';
+
+/** Logical key of a collection send, shared by producers, holds and queue retries. */
+export function collectionLogicalKey(input: {
+  companyId: string;
+  invoiceId: string;
+  ruleStepId?: string | null;
+}): string {
+  return `collection:${input.companyId}:${input.invoiceId}:${input.ruleStepId ?? 'initial'}:WHATSAPP`;
+}
+
+/** Persisted choice of a WhatsApp rule step; anything incomplete stays unconfigured. */
+export function ruleStepSelection(step: {
+  whatsappSelectionMode: WhatsappSelectionMode | null;
+  whatsappPurpose: WhatsappTemplatePurpose | null;
+  templateId: string | null;
+}): TemplateSelection {
+  if (step.whatsappSelectionMode === 'EXPLICIT' && step.templateId)
+    return { mode: 'EXPLICIT', templateId: step.templateId };
+  if (step.whatsappSelectionMode === 'DEFAULT' && step.whatsappPurpose)
+    return { mode: 'DEFAULT', purpose: step.whatsappPurpose };
+  return { mode: 'UNCONFIGURED' };
+}
+
+/** Commercial purpose of a rule step by its cumulative day relative to the due date. */
+export function purposeForScheduleDay(day: number): TemplatePurpose {
+  if (day <= -30) return 'EMISSION';
+  if (day < 0) return 'BEFORE_DUE';
+  if (day === 0) return 'DUE_TODAY';
+  if (day <= 2) return 'FIRST_OVERDUE';
+  if (day >= 30) return 'CRITICAL_OVERDUE';
+  return 'RECURRING_OVERDUE';
+}
+
+/**
+ * Hold request of a template intent prepared before the catalog change. It carries no
+ * choice: the admin decides the template when reviewing it.
+ */
+export function legacyTemplateRequest(
+  intent: {
+    logicalKey: string | null;
+    idempotencyKey: string;
+    companyId: string;
+    invoiceId: string | null;
+    debtorId: string | null;
+  },
+  payload: { origin?: string; invoiceId?: string; ruleStepId?: string },
+): TemplateSendRequest {
+  return {
+    logicalKey: intent.logicalKey ?? intent.idempotencyKey,
+    origin:
+      payload.origin === 'ADMIN_REPLY'
+        ? 'ADMIN_REPLY'
+        : payload.invoiceId
+          ? 'COLLECTION'
+          : 'ACTIVATION',
+    context: {
+      companyId: intent.companyId,
+      ...(intent.invoiceId ? { invoiceId: intent.invoiceId } : {}),
+      ...(intent.debtorId ? { debtorId: intent.debtorId } : {}),
+    },
+    selection: { mode: 'UNCONFIGURED' },
+    ...(payload.ruleStepId ? { ruleStepId: payload.ruleStepId } : {}),
+  };
+}

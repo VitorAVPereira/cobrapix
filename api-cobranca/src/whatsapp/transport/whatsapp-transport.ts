@@ -22,19 +22,6 @@ export interface TemplateMessage {
   components?: ReadonlyArray<Record<string, unknown>>;
 }
 
-export interface TemplateDefinition {
-  name: string;
-  language: string;
-  category: string;
-  components: readonly unknown[];
-}
-
-export interface CreatedTemplate {
-  id: string;
-  status: string;
-  category?: string;
-}
-
 export interface TemplateStatus {
   id?: string;
   category?: string;
@@ -44,6 +31,8 @@ export interface TemplateStatus {
   language?: string;
   status?: string;
   rejected_reason?: string;
+  /** POSITIONAL or NAMED when the provider reports it; absent means positional. */
+  parameter_format?: string;
 }
 
 export interface TemplatePage {
@@ -61,7 +50,6 @@ export interface WhatsappTransport {
   readonly kind: WhatsappTransportKind;
   sendText(input: TextMessage): Promise<AcceptedMessage>;
   sendTemplate(input: TemplateMessage): Promise<AcceptedMessage>;
-  createTemplate(input: TemplateDefinition): Promise<CreatedTemplate>;
   listTemplates(after?: string): Promise<TemplatePage>;
   getChannelInfo(options?: {
     includeMessagingLimit?: boolean;

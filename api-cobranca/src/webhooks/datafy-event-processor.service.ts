@@ -51,6 +51,7 @@ export class DatafyEventProcessor {
             event.field,
             event.value,
             event.timestamp,
+            event.wabaId,
           )) || review;
       else review = true;
     }

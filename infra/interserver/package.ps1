@@ -43,7 +43,8 @@ try {
         'infra/interserver/backup.sh',
         'infra/interserver/HTTPS.md',
         'infra/interserver/DATAFY.md',
-        'infra/interserver/README.md'
+        'infra/interserver/README.md',
+        'docs/operations/whatsapp-template-catalog.md'
     )
     $files = @($backendFiles + $deployFiles | Sort-Object -Unique)
     if ($backendFiles.Count -lt 10) { throw 'Lista de arquivos do backend incompleta.' }

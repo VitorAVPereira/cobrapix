@@ -4,7 +4,8 @@ O WhatsApp da plataforma usa **exclusivamente o Datafy** (API compatível com a 
 API da Meta). Não há integração direta com a Meta: não existe token Graph, webhook
 `/webhooks/meta` nem seleção de transporte por ambiente. `WhatsappTransportModule`
 sempre cria `DatafyTransport`, que concentra HTTP, autenticação, destinos permitidos,
-quota e normalização das respostas; `WhatsappService` mantém as regras de template.
+quota e normalização das respostas. As regras de template ficam na política de
+templates (`src/templates`), aplicada na preparação e novamente na transmissão.
 
 | Configuração | Valor |
 | --- | --- |
@@ -53,6 +54,7 @@ onboarding Efí usam o mesmo ciclo. O envio pela inbox antiga
 | `ACCEPTED` | Provedor aceitou; entrega/leitura chegam por webhook | Não |
 | `FAILED` | Rejeitado antes de transmitir ou recusa definitiva | Não; exige nova ação |
 | `UNCERTAIN` | Pode ter sido aceito (timeout, falha local após aceitação) | Nunca; triagem em `GET /communications/admin/outbound-intents` |
+| `BLOCKED` | Retido pela política de templates, com pendência registrada | Nunca; só após revisão e confirmação do admin, como nova geração |
 
 Se o provedor aceitar depois do lease expirar, a prova de aceitação ainda é gravada
 (`WORKER_LOST_AFTER_CLAIM` → `ACCEPTED`), porque intenções incertas nunca são
@@ -61,8 +63,12 @@ até três vezes sem nova transmissão. Não existe troca automática de transpo
 intenção criada para outro transporte/número falha antes de transmitir.
 
 Antes de cada transmissão o worker confere novamente canal pausado, opt-out do
-destinatário, janela de atendimento (texto livre), template aprovado e sem revisão
-pendente, fatura ainda pendente e opt-in do devedor.
+destinatário, janela de atendimento (texto livre), fatura ainda pendente e opt-in do
+devedor. Para templates, a autorização final ocorre na mesma transação que reclama a
+intenção: o snapshot fixado na preparação (template, revisões de conteúdo e de
+variáveis, versão da política e da liberação) precisa continuar válido e os dados do
+contexto precisam produzir a mesma impressão digital. Qualquer divergência vira
+`BLOCKED` com uma pendência, sem transmitir.
 
 ### Limites aplicados
 
@@ -85,15 +91,32 @@ POST com resultado incerto não repete.
 
 ### Templates
 
-O catálogo é global. A sincronização percorre as páginas com o cursor `after` no host
-Datafy e nunca segue `paging.next`. A criação reutiliza um template já existente no
-WABA com o mesmo nome/idioma em vez de duplicá-lo. Eventos de status, qualidade,
-categoria e componentes atualizam o catálogo em ordem cronológica. Mudança de
-categoria ou de conteúdo incompatível com as variáveis posicionais locais marca
-`metaReviewRequired`; um evento `APPROVED` posterior não remove essa marca. Template
-rejeitado, pausado, desabilitado ou em revisão não é enviado. O administrador conclui a
-revisão em `POST /templates/:id/review`, que relê o provedor e só libera se o template
-aprovado bater com o local (categoria, corpo, rodapé, botões e variáveis).
+Os templates são criados e aprovados no WhatsApp Manager da Meta; a aplicação não
+cria, edita nem submete conteúdo (as rotas antigas respondem 410
+`TEMPLATE_AUTHORING_MOVED_TO_META` e o transporte não tem mais operação de criação).
+O catálogo é importado pelo Datafy, identificado por WABA + ID do provedor:
+
+- **Sincronização** (`POST /admin/whatsapp-templates/sync`, periódica a cada 15 min e
+  pedida por eventos): confere o `/me`, percorre as páginas com o cursor `after` no
+  host Datafy (nunca segue `paging.next`) sob um lease no banco, e só marca como
+  indisponível o que faltou numa varredura completa. Eventos de status, qualidade,
+  categoria e componentes atualizam o catálogo; uma mudança de conteúdo gera nova
+  revisão do provedor e exige revisar as variáveis.
+- **Variáveis**: o admin associa cada posição do corpo a uma fonte fechada (nome do
+  devedor, valor, vencimento, links...) ou a um texto fixo curto, com prévia fictícia.
+  Cada gravação é uma revisão imutável vinculada à revisão do conteúdo.
+- **Liberação**: novo template não é liberado para ninguém. O admin libera por
+  empresa e define o padrão de cada finalidade (emissão, lembretes, atrasos, avisos
+  de ativação). A empresa só vê e escolhe o que foi liberado.
+- **Bloqueio sem substituição**: se o template escolhido não está disponível, o envio
+  vira uma pendência (`WhatsappTemplatePendingSend`); nunca é trocado por outro
+  automaticamente. Corrigir liberação ou variáveis não retoma nada: o admin revisa as
+  pendências (prévia de 15 min, até 50 itens) e confirma com chave idempotente.
+  Envios `ACCEPTED`, `SENDING` ou `UNCERTAIN` nunca são retomados.
+- Recusas do provedor ligadas ao template (132000, 132001, 132005, 132007, 132012,
+  132015, 132016) também viram pendência e pedem nova sincronização.
+
+Operação e transição: [docs/operations/whatsapp-template-catalog.md](../../../../docs/operations/whatsapp-template-catalog.md).
 
 ## Referências
 

@@ -24,6 +24,7 @@ import {
   Length,
   Max,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { CollectionChannel, CollectionProfileType } from '@prisma/client';
@@ -39,6 +40,11 @@ import { GetUser } from '../auth/decorators/get-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizeWhatsAppNumber } from '../common/whatsapp-number';
 import { ToBoolean } from '../common/to-boolean';
+import { COLLECTION_PURPOSES } from '../templates/template-contracts';
+import type {
+  TemplatePurpose,
+  TemplateSelection,
+} from '../templates/template-contracts';
 
 interface AuthenticatedUser {
   companyId: string;
@@ -140,7 +146,38 @@ class UpdateRuleDto {
   daysOverdueMax?: number;
 }
 
+class WhatsappSelectionDto {
+  @IsIn(['EXPLICIT', 'DEFAULT', 'UNCONFIGURED'])
+  mode!: 'EXPLICIT' | 'DEFAULT' | 'UNCONFIGURED';
+
+  @ValidateIf((value: WhatsappSelectionDto) => value.mode === 'EXPLICIT')
+  @IsUUID()
+  templateId?: string;
+
+  @ValidateIf((value: WhatsappSelectionDto) => value.mode === 'DEFAULT')
+  @IsIn(COLLECTION_PURPOSES)
+  purpose?: TemplatePurpose;
+}
+
+/** Explicit, default or pending choice; fields of other modes are never accepted. */
+function toSelection(dto: WhatsappSelectionDto): TemplateSelection {
+  if (dto.mode === 'EXPLICIT' && dto.templateId && !dto.purpose)
+    return { mode: 'EXPLICIT', templateId: dto.templateId };
+  if (dto.mode === 'DEFAULT' && dto.purpose && !dto.templateId)
+    return { mode: 'DEFAULT', purpose: dto.purpose };
+  if (dto.mode === 'UNCONFIGURED' && !dto.purpose && !dto.templateId)
+    return { mode: 'UNCONFIGURED' };
+  throw new HttpException(
+    'Selecao de template WhatsApp invalida.',
+    HttpStatus.BAD_REQUEST,
+  );
+}
+
 class RuleStepDto {
+  @IsOptional()
+  @IsUUID()
+  id?: string;
+
   @IsInt()
   @Min(0)
   @Max(50)
@@ -151,7 +188,12 @@ class RuleStepDto {
 
   @IsOptional()
   @IsUUID('4')
-  templateId?: string;
+  emailTemplateId?: string;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => WhatsappSelectionDto)
+  whatsappSelection?: WhatsappSelectionDto;
 
   @IsInt()
   @Min(-30)
@@ -414,7 +456,12 @@ export class BillingController {
     return this.collectionProfileService.setSteps(
       user.companyId,
       profileId,
-      body.steps,
+      body.steps.map(({ whatsappSelection, ...step }) => ({
+        ...step,
+        ...(whatsappSelection
+          ? { whatsappSelection: toSelection(whatsappSelection) }
+          : {}),
+      })),
     );
   }
 

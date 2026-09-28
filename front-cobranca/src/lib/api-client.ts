@@ -23,6 +23,27 @@ import type {
   SettlementSummary,
 } from "./settlements";
 import type { EfiDraftInput, EfiOnboardingState } from "./efi-onboarding";
+import type {
+  AdminCatalogQuery,
+  AdminWhatsappTemplate,
+  CatalogPage,
+  CompanyTemplateAccess,
+  CompanyWhatsappTemplate,
+  Readiness,
+  ResumeItem,
+  ResumeResult,
+  ResumeReview,
+  SaveTemplateMappingInput,
+  SetTemplateDefaultInput,
+  SetTemplateGrantInput,
+  TemplateMapping,
+  TemplatePendingQuery,
+  TemplatePendingSend,
+  TemplatePurpose,
+  TemplateRenderResult,
+  WhatsappSyncResult,
+  WhatsappSyncState,
+} from "@/components/features/templates/types";
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
 export interface ApiError extends Error {
@@ -495,18 +516,40 @@ export interface WhatsAppUsageResponse {
   };
 }
 
+/** WhatsApp choice of a rule step; UNCONFIGURED marks a legacy step that sends nothing. */
+export type WhatsappSelection =
+  | { mode: "EXPLICIT"; templateId: string }
+  | { mode: "DEFAULT"; purpose: TemplatePurpose }
+  | { mode: "UNCONFIGURED" };
+
 export interface CollectionRuleStep {
   id: string;
   profileId: string;
   stepOrder: number;
   channel: "EMAIL" | "WHATSAPP";
-  templateId: string | null;
-  template?: { id: string; name: string } | null;
+  /** EMAIL only: null uses the default email model. */
+  emailTemplateId: string | null;
+  /** WHATSAPP only. */
+  whatsappSelection: WhatsappSelection | null;
+  /** WHATSAPP only: whether the choice can send right now, and why not. */
+  whatsappStatus: Readiness | null;
   delayDays: number;
   sendTimeStart: string | null;
   sendTimeEnd: string | null;
   isActive: boolean;
 }
+
+/** Each channel carries only its own choice; the step id keeps history on attempted steps. */
+export type RuleStepInput = {
+  id?: string;
+  stepOrder: number;
+  delayDays: number;
+  sendTimeStart?: string;
+  sendTimeEnd?: string;
+} & (
+  | { channel: "EMAIL"; emailTemplateId?: string }
+  | { channel: "WHATSAPP"; whatsappSelection: WhatsappSelection }
+);
 
 export interface CollectionRuleProfile {
   id: string;
@@ -614,7 +657,11 @@ export interface AdminConversationMessage extends ConversationMessage {
   companyId: string | null;
   invoiceId: string | null;
   debtorId: string | null;
-  company: { id: string; corporateName: string; tradeName: string | null } | null;
+  company: {
+    id: string;
+    corporateName: string;
+    tradeName: string | null;
+  } | null;
   externalMessageId: string | null;
   replyToMessageId: string | null;
   source: "LEGACY" | "LIVE" | "IMPORTED";
@@ -670,33 +717,33 @@ export interface QueuedReply {
   externalMessageId: string | null;
 }
 
-export interface MessageTemplate {
+/** Company context of a template reply: the company is mandatory. */
+export interface TemplateReplyContext {
+  companyId: string;
+  invoiceId?: string;
+  debtorId?: string;
+}
+
+export interface TemplateContent {
+  body: string;
+  footer: string | null;
+  button: { label: string; url: string } | null;
+}
+
+export interface ConversationTemplateOption {
   id: string;
   name: string;
-  slug: string;
-  content: string;
-  footerText: string | null;
-  paymentButtonEnabled: boolean;
-  paymentButtonLabel: string;
-  copyCodeButtonEnabled: boolean;
-  copyCodeSource: MessageTemplateCopyCodeSource;
-  isActive: boolean;
-  metaTemplateName: string | null;
-  metaLanguage: string;
-  category: "UTILITY" | "MARKETING" | "AUTHENTICATION";
-  metaStatus: string;
-  metaRejectedReason: string | null;
-  lastMetaSyncAt: string | null;
-  /** Provider changed content or category; not sent until the admin concludes the review. */
-  metaReviewRequired?: boolean;
-  metaQuality?: string | null;
-  metaProviderCategory?: string | null;
-  greeting?: string;
-  instructions?: string;
-  signature?: string;
-  companyId?: string;
-  createdAt: string;
-  updatedAt: string;
+  language: string;
+  content: TemplateContent;
+  usable: boolean;
+  reason: string | null;
+  field: string | null;
+  previewBody: string | null;
+}
+
+export interface ConversationTemplateOptions {
+  serviceWindow: { open: boolean; expiresAt: string | null };
+  templates: ConversationTemplateOption[];
 }
 
 export interface EmailTemplate {
@@ -717,24 +764,6 @@ export interface EmailTemplate {
   signature: string;
   createdAt: string;
   updatedAt: string;
-}
-
-export type MessageTemplateCopyCodeSource =
-  "AUTO" | "PIX_COPY_PASTE" | "BOLETO_LINE_DIGITABLE";
-
-export type MessageTemplateSlug =
-  | "cobranca-emissao"
-  | "vencimento-hoje"
-  | "pre-vencimento"
-  | "atraso-primeiro-aviso"
-  | "atraso-recorrente"
-  | "atraso-critico";
-
-export interface SaveMessageTemplateInput {
-  isActive?: boolean;
-  greeting?: string;
-  instructions?: string;
-  signature?: string;
 }
 
 export interface SaveEmailTemplateInput {
@@ -895,7 +924,12 @@ export interface AdminClient {
 }
 
 export type AdminAnalyticsPeriod =
-  "current_month" | "today" | "7d" | "30d" | "year" | "custom";
+  | "current_month"
+  | "today"
+  | "7d"
+  | "30d"
+  | "year"
+  | "custom";
 
 export interface AdminClientAnalyticsMetrics {
   totalChargedAmount: number;
@@ -1691,14 +1725,7 @@ class ApiClient {
 
   async setRuleSteps(
     profileId: string,
-    steps: Array<{
-      stepOrder: number;
-      channel: "EMAIL" | "WHATSAPP";
-      templateId?: string;
-      delayDays: number;
-      sendTimeStart?: string;
-      sendTimeEnd?: string;
-    }>,
+    steps: RuleStepInput[],
   ): Promise<CollectionRuleStep[]> {
     return this.fetch<CollectionRuleStep[]>(
       `/billing/rules/${profileId}/steps`,
@@ -1810,13 +1837,28 @@ class ApiClient {
     );
   }
 
+  /** Templates granted to the selected company, with missing values and a preview. */
+  async getConversationTemplateOptions(
+    conversationId: string,
+    context: TemplateReplyContext,
+    init?: { signal?: AbortSignal },
+  ): Promise<ConversationTemplateOptions> {
+    const query = new URLSearchParams({ companyId: context.companyId });
+    if (context.invoiceId) query.set("invoiceId", context.invoiceId);
+    if (context.debtorId) query.set("debtorId", context.debtorId);
+    return this.fetch<ConversationTemplateOptions>(
+      `/communications/admin/conversations/${encodeURIComponent(conversationId)}/template-options?${query.toString()}`,
+      init?.signal ? { signal: init.signal } : undefined,
+    );
+  }
+
+  /** Parameters are filled by the server from the admin mapping and the context. */
   async replyWithTemplate(
     conversationId: string,
     data: {
       idempotencyId: string;
       templateId: string;
-      parameters: string[];
-      context?: MessageContextInput;
+      context: TemplateReplyContext;
     },
   ): Promise<QueuedReply> {
     return this.fetch(
@@ -1883,50 +1925,155 @@ class ApiClient {
   }
 
   // Templates
-  async getTemplates(): Promise<MessageTemplate[]> {
-    return this.fetch<MessageTemplate[]>("/templates");
-  }
-
-  async createTemplate(
-    data: SaveMessageTemplateInput,
-  ): Promise<MessageTemplate> {
-    return this.fetch<MessageTemplate>("/templates", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-  }
-
-  async updateTemplate(
-    id: string,
-    data: Partial<SaveMessageTemplateInput>,
-  ): Promise<MessageTemplate> {
-    return this.fetch<MessageTemplate>(`/templates/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    });
-  }
-
-  async submitTemplateToMeta(
-    id: string,
-  ): Promise<{ template: MessageTemplate; meta: unknown }> {
-    return this.fetch<{ template: MessageTemplate; meta: unknown }>(
-      `/templates/${id}/submit-meta`,
-      { method: "POST" },
+  /** WhatsApp templates granted to the session's company and usable now (read-only). */
+  async getTemplates(
+    query: { cursor?: string; limit?: number } = {},
+  ): Promise<CatalogPage<CompanyWhatsappTemplate>> {
+    return this.fetch<CatalogPage<CompanyWhatsappTemplate>>(
+      `/templates${this.buildQueryString(query)}`,
     );
   }
 
-  /** Re-reads the provider version; released only when it matches the local template. */
-  async confirmTemplateReview(id: string): Promise<MessageTemplate> {
-    return this.fetch<MessageTemplate>(
-      `/templates/${encodeURIComponent(id)}/review`,
-      { method: "POST" },
+  /** Every page of the company catalog; grants are few, so selectors see all of them. */
+  async getAllTemplates(): Promise<CompanyWhatsappTemplate[]> {
+    const items: CompanyWhatsappTemplate[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 20; page++) {
+      const result = await this.getTemplates({ cursor, limit: 100 });
+      items.push(...result.items);
+      if (!result.nextCursor) break;
+      cursor = result.nextCursor;
+    }
+    return items;
+  }
+
+  async getTemplatePreview(id: string): Promise<TemplateRenderResult> {
+    return this.fetch<TemplateRenderResult>(
+      `/templates/${encodeURIComponent(id)}/preview`,
     );
   }
 
-  async syncTemplateMetaStatuses(): Promise<MessageTemplate[]> {
-    return this.fetch<MessageTemplate[]>("/templates/sync-meta", {
+  // Held WhatsApp sends. Companies read their own; only the platform admin resumes.
+  async getAdminTemplatePending(
+    query: TemplatePendingQuery = {},
+  ): Promise<CatalogPage<TemplatePendingSend>> {
+    return this.fetch<CatalogPage<TemplatePendingSend>>(
+      `/communications/admin/template-pending${this.buildQueryString({ ...query })}`,
+    );
+  }
+
+  async getCompanyTemplatePending(
+    query: Pick<TemplatePendingQuery, "state" | "cursor" | "limit"> = {},
+  ): Promise<CatalogPage<TemplatePendingSend>> {
+    return this.fetch<CatalogPage<TemplatePendingSend>>(
+      `/communications/template-pending${this.buildQueryString({ ...query })}`,
+    );
+  }
+
+  /** Evaluates the holds without changing anything; valid for 15 minutes. */
+  async previewTemplateResume(items: ResumeItem[]): Promise<ResumeReview> {
+    return this.fetch<ResumeReview>(
+      "/communications/admin/template-pending/reviews",
+      { method: "POST", body: JSON.stringify({ items }) },
+    );
+  }
+
+  /** Idempotent: repeating the same key returns the recorded result. */
+  async confirmTemplateResume(
+    reviewId: string,
+    idempotencyId: string,
+  ): Promise<ResumeResult> {
+    return this.fetch<ResumeResult>(
+      `/communications/admin/template-pending/reviews/${encodeURIComponent(reviewId)}/confirm`,
+      { method: "POST", body: JSON.stringify({ idempotencyId }) },
+    );
+  }
+
+  // Imported WhatsApp catalog (platform admin). Content comes from the Meta catalog and
+  // is never authored here; the admin maps variables and grants templates to companies.
+  async getAdminWhatsappTemplates(
+    query: AdminCatalogQuery = {},
+  ): Promise<CatalogPage<AdminWhatsappTemplate>> {
+    return this.fetch<CatalogPage<AdminWhatsappTemplate>>(
+      `/admin/whatsapp-templates${this.buildQueryString({
+        status: query.status,
+        supported:
+          query.supported === undefined ? undefined : String(query.supported),
+        cursor: query.cursor,
+        limit: query.limit,
+      })}`,
+    );
+  }
+
+  async getAdminWhatsappTemplate(id: string): Promise<AdminWhatsappTemplate> {
+    return this.fetch<AdminWhatsappTemplate>(
+      `/admin/whatsapp-templates/${encodeURIComponent(id)}`,
+    );
+  }
+
+  async getWhatsappTemplateSyncState(): Promise<WhatsappSyncState> {
+    return this.fetch<WhatsappSyncState>(
+      "/admin/whatsapp-templates/sync-state",
+    );
+  }
+
+  /** 409 while another sync holds the lease. */
+  async syncWhatsappTemplates(): Promise<WhatsappSyncResult> {
+    return this.fetch<WhatsappSyncResult>("/admin/whatsapp-templates/sync", {
       method: "POST",
     });
+  }
+
+  /** 409 when the provider or mapping revision moved since the admin loaded it. */
+  async saveWhatsappTemplateMapping(
+    id: string,
+    data: SaveTemplateMappingInput,
+  ): Promise<{ mappingRevision: number }> {
+    return this.fetch<{ mappingRevision: number }>(
+      `/admin/whatsapp-templates/${encodeURIComponent(id)}/mapping`,
+      { method: "PUT", body: JSON.stringify(data) },
+    );
+  }
+
+  /** Synthetic values only; nothing is sent. */
+  async previewWhatsappTemplate(
+    id: string,
+    data: { mapping: TemplateMapping },
+  ): Promise<TemplateRenderResult> {
+    return this.fetch<TemplateRenderResult>(
+      `/admin/whatsapp-templates/${encodeURIComponent(id)}/preview`,
+      { method: "POST", body: JSON.stringify(data) },
+    );
+  }
+
+  async getCompanyWhatsappTemplates(
+    companyId: string,
+  ): Promise<CompanyTemplateAccess> {
+    return this.fetch<CompanyTemplateAccess>(
+      `/admin/whatsapp-templates/companies/${encodeURIComponent(companyId)}`,
+    );
+  }
+
+  async setCompanyWhatsappTemplateGrant(
+    companyId: string,
+    templateId: string,
+    data: SetTemplateGrantInput,
+  ): Promise<{ version: number }> {
+    return this.fetch<{ version: number }>(
+      `/admin/whatsapp-templates/companies/${encodeURIComponent(companyId)}/grants/${encodeURIComponent(templateId)}`,
+      { method: "PUT", body: JSON.stringify(data) },
+    );
+  }
+
+  async setCompanyWhatsappTemplateDefault(
+    companyId: string,
+    purpose: TemplatePurpose,
+    data: SetTemplateDefaultInput,
+  ): Promise<{ version: number }> {
+    return this.fetch<{ version: number }>(
+      `/admin/whatsapp-templates/companies/${encodeURIComponent(companyId)}/defaults/${encodeURIComponent(purpose)}`,
+      { method: "PUT", body: JSON.stringify(data) },
+    );
   }
 
   async getEmailTemplates(): Promise<EmailTemplate[]> {

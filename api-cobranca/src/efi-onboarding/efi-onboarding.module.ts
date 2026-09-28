@@ -17,6 +17,7 @@ import { OnboardingWorkflow } from './onboarding-workflow';
 import { OnboardingMaintenance } from './onboarding-maintenance';
 import { OnboardingNotifications } from './onboarding-notifications';
 import { CentralOnboardingNotifications } from './central-onboarding-notifications';
+import { TemplateSendModule } from '../templates/template-send.module';
 import { OnboardingProvisioner } from './onboarding-provisioner';
 import { OnboardingWorker } from './onboarding-worker';
 import { OnboardingRetention } from './onboarding-retention';
@@ -29,6 +30,7 @@ import { OnboardingLifecycle } from './onboarding-lifecycle';
     PrismaModule,
     PaymentModule,
     WhatsappModule,
+    TemplateSendModule,
     BullModule.registerQueue({ name: 'efi-onboarding' }),
   ],
   controllers: [

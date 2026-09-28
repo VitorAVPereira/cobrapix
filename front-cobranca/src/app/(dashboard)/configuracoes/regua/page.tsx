@@ -24,9 +24,18 @@ import type { LucideIcon } from "lucide-react";
 import type {
   CollectionProfileType,
   CollectionRuleProfile,
-  MessageTemplate,
+  EmailTemplate,
+  RuleStepInput,
+  WhatsappSelection,
 } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
+import {
+  BLOCK_LABELS,
+  PURPOSE_LABELS,
+  type CompanyWhatsappTemplate,
+  type Readiness,
+  type TemplatePurpose,
+} from "@/components/features/templates/types";
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -79,10 +88,19 @@ interface NewProfileForm {
   isDefault: boolean;
 }
 
-interface StepForm {
+/** Template choice of a step: each channel only ever carries its own field. */
+interface StepChoice {
+  emailTemplateId?: string;
+  whatsappSelection?: WhatsappSelection;
+  /** Server status of the saved choice; dropped as soon as the choice changes. */
+  whatsappStatus?: Readiness | null;
+}
+
+interface StepForm extends StepChoice {
+  /** Stable ID of a saved step; keeps history when only the choice changes. */
+  id?: string;
   stepOrder: number;
   channel: "EMAIL" | "WHATSAPP";
-  templateId?: string;
   delayDays: number;
   sendTimeStart: string;
   sendTimeEnd: string;
@@ -102,9 +120,9 @@ interface TimelinePoint {
 type TimelineTone = "emission" | "before" | "due" | "after" | "critical";
 type StepChannel = StepForm["channel"];
 
-interface ScheduledStepForm {
+interface ScheduledStepForm extends StepChoice {
+  id?: string;
   channel: StepChannel;
-  templateId?: string;
   sendTimeStart: string;
   sendTimeEnd: string;
   scheduleDay: number;
@@ -165,10 +183,44 @@ function sortProfiles(
   });
 }
 
-function sortTemplates(templates: MessageTemplate[]): MessageTemplate[] {
+function sortByName<T extends { name: string }>(templates: T[]): T[] {
   return [...templates].sort((left, right) =>
     left.name.localeCompare(right.name, "pt-BR"),
   );
+}
+
+/** Same rule as the server: the commercial purpose of a day relative to the due date. */
+function purposeForScheduleDay(day: number): TemplatePurpose {
+  if (day <= EMISSION_DAY) return "EMISSION";
+  if (day < 0) return "BEFORE_DUE";
+  if (day === 0) return "DUE_TODAY";
+  if (day <= 2) return "FIRST_OVERDUE";
+  if (day >= 30) return "CRITICAL_OVERDUE";
+  return "RECURRING_OVERDUE";
+}
+
+/** Choice of a new step, or of a step whose channel just changed. */
+function choiceForChannel(channel: StepChannel, day: number): StepChoice {
+  return channel === "WHATSAPP"
+    ? {
+        whatsappSelection: {
+          mode: "DEFAULT",
+          purpose: purposeForScheduleDay(day),
+        },
+      }
+    : {};
+}
+
+/** A default choice follows the step's day; an explicit one never changes by itself. */
+function followDay<T extends StepChoice>(step: T, day: number): T {
+  if (step.whatsappSelection?.mode !== "DEFAULT") return step;
+  const purpose = purposeForScheduleDay(day);
+  if (step.whatsappSelection.purpose === purpose) return step;
+  return {
+    ...step,
+    whatsappSelection: { mode: "DEFAULT", purpose },
+    whatsappStatus: undefined,
+  };
 }
 
 function getInitialProfileId(profiles: CollectionRuleProfile[]): string | null {
@@ -238,8 +290,11 @@ function getScheduledStepForms(steps: StepForm[]): ScheduledStepForm[] {
   const scheduleDays = getStepScheduleDays(steps);
 
   return steps.map((step, index) => ({
+    id: step.id,
     channel: step.channel,
-    templateId: step.templateId,
+    emailTemplateId: step.emailTemplateId,
+    whatsappSelection: step.whatsappSelection,
+    whatsappStatus: step.whatsappStatus,
     sendTimeStart: step.sendTimeStart,
     sendTimeEnd: step.sendTimeEnd,
     scheduleDay: scheduleDays[index] ?? 0,
@@ -263,9 +318,12 @@ function buildStepFormsFromScheduledSteps(
       previousDay = step.scheduleDay;
 
       return {
+        id: step.id,
         stepOrder: index,
         channel: step.channel,
-        templateId: step.templateId,
+        emailTemplateId: step.emailTemplateId,
+        whatsappSelection: step.whatsappSelection,
+        whatsappStatus: step.whatsappStatus,
         delayDays,
         sendTimeStart: step.sendTimeStart,
         sendTimeEnd: step.sendTimeEnd,
@@ -276,6 +334,7 @@ function buildStepFormsFromScheduledSteps(
 function createEmissionStep(channel: StepChannel): ScheduledStepForm {
   return {
     channel,
+    ...choiceForChannel(channel, EMISSION_DAY),
     scheduleDay: EMISSION_DAY,
     sendTimeStart: "",
     sendTimeEnd: "",
@@ -390,10 +449,199 @@ function StepDayInput({
   );
 }
 
+function toStepInput(step: StepForm): RuleStepInput {
+  const base = {
+    ...(step.id ? { id: step.id } : {}),
+    stepOrder: step.stepOrder,
+    delayDays: step.delayDays,
+    sendTimeStart: step.sendTimeStart,
+    sendTimeEnd: step.sendTimeEnd,
+  };
+  return step.channel === "EMAIL"
+    ? {
+        ...base,
+        channel: "EMAIL",
+        ...(step.emailTemplateId
+          ? { emailTemplateId: step.emailTemplateId }
+          : {}),
+      }
+    : {
+        ...base,
+        channel: "WHATSAPP",
+        whatsappSelection: step.whatsappSelection ?? { mode: "UNCONFIGURED" },
+      };
+}
+
+/** Short name of a step's choice for the sequence preview. */
+function choiceLabel(
+  step: StepForm | undefined,
+  whatsappTemplates: CompanyWhatsappTemplate[],
+  emailTemplates: EmailTemplate[],
+): string {
+  if (!step) return "Sem mensagem selecionada";
+  if (step.channel === "EMAIL")
+    return (
+      emailTemplates.find((template) => template.id === step.emailTemplateId)
+        ?.name ?? "Modelo padrão"
+    );
+  const selection = step.whatsappSelection;
+  if (selection?.mode === "DEFAULT")
+    return `Padrão: ${PURPOSE_LABELS[selection.purpose]}`;
+  if (selection?.mode === "EXPLICIT")
+    return (
+      whatsappTemplates.find((template) => template.id === selection.templateId)
+        ?.name ?? "Template indisponível"
+    );
+  return "Sem template escolhido";
+}
+
+const UNAVAILABLE = "unavailable";
+
+/**
+ * Template choice of one step, per channel. WhatsApp offers the company's purpose
+ * default or a template granted to it; a choice that is no longer granted is shown as a
+ * pending reference, never as a selectable option.
+ */
+function StepTemplateSelect({
+  label,
+  channel,
+  day,
+  step,
+  whatsappTemplates,
+  emailTemplates,
+  templatesFailed,
+  onChange,
+}: {
+  label: string;
+  channel: StepChannel;
+  day: number;
+  step: StepChoice;
+  whatsappTemplates: CompanyWhatsappTemplate[];
+  emailTemplates: EmailTemplate[];
+  templatesFailed: boolean;
+  onChange: (choice: StepChoice) => void;
+}): ReactElement {
+  if (channel === "EMAIL")
+    return (
+      <>
+        <select
+          aria-label={label}
+          value={step.emailTemplateId ?? ""}
+          onChange={(event) =>
+            onChange({ emailTemplateId: event.target.value || undefined })
+          }
+          className="h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700"
+        >
+          <option value="">Modelo padrão</option>
+          {emailTemplates.map((template) => (
+            <option key={template.id} value={template.id}>
+              {template.name}
+            </option>
+          ))}
+        </select>
+        <span className="text-xs text-slate-500">
+          O modelo padrão prioriza &quot;Vencimento hoje&quot; ou outro modelo
+          de e-mail ativo.
+        </span>
+      </>
+    );
+
+  const selection: WhatsappSelection = step.whatsappSelection ?? {
+    mode: "UNCONFIGURED",
+  };
+  const purpose =
+    selection.mode === "DEFAULT"
+      ? selection.purpose
+      : purposeForScheduleDay(day);
+  const explicitAvailable =
+    selection.mode === "EXPLICIT" &&
+    whatsappTemplates.some((template) => template.id === selection.templateId);
+  const value =
+    selection.mode === "DEFAULT"
+      ? "default"
+      : selection.mode === "EXPLICIT"
+        ? explicitAvailable
+          ? `t:${selection.templateId}`
+          : UNAVAILABLE
+        : "";
+  const status = step.whatsappStatus;
+
+  return (
+    <>
+      <select
+        aria-label={label}
+        value={value}
+        onChange={(event) => {
+          const next = event.target.value;
+          if (next === "default")
+            onChange({
+              whatsappSelection: { mode: "DEFAULT", purpose },
+              whatsappStatus: undefined,
+            });
+          else if (next.startsWith("t:"))
+            onChange({
+              whatsappSelection: {
+                mode: "EXPLICIT",
+                templateId: next.slice(2),
+              },
+              whatsappStatus: undefined,
+            });
+        }}
+        className="h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700"
+      >
+        {selection.mode === "UNCONFIGURED" && (
+          <option value="" disabled>
+            Escolha o template
+          </option>
+        )}
+        {value === UNAVAILABLE && (
+          <option value={UNAVAILABLE} disabled>
+            Template indisponível
+          </option>
+        )}
+        <option value="default">
+          Padrão da empresa: {PURPOSE_LABELS[purpose]}
+        </option>
+        {whatsappTemplates.map((template) => (
+          <option key={template.id} value={`t:${template.id}`}>
+            {template.name}
+          </option>
+        ))}
+      </select>
+      {selection.mode === "UNCONFIGURED" ? (
+        <span role="note" className="text-xs font-medium text-amber-700">
+          Etapa sem template escolhido: os envios dela ficam pendentes até você
+          escolher o padrão da finalidade ou um template liberado.
+        </span>
+      ) : value === UNAVAILABLE && !templatesFailed ? (
+        <span role="note" className="text-xs font-medium text-amber-700">
+          O template desta etapa não está mais liberado para sua empresa. Os
+          envios ficam pendentes até você escolher outro.
+        </span>
+      ) : status && !status.ready && status.code ? (
+        <span role="note" className="text-xs font-medium text-amber-700">
+          Envios pendentes: {BLOCK_LABELS[status.code]}.
+        </span>
+      ) : (
+        <span className="text-xs text-slate-500">
+          {whatsappTemplates.length === 0 && !templatesFailed
+            ? "Nenhum template liberado para sua empresa: o padrão da finalidade é definido pela CifraMais."
+            : "O padrão da finalidade é definido pela CifraMais entre os templates liberados para sua empresa."}
+        </span>
+      )}
+    </>
+  );
+}
+
 export default function ReguaPage() {
   const apiClient = useApiClient();
   const [profiles, setProfiles] = useState<CollectionRuleProfile[]>([]);
-  const [templates, setTemplates] = useState<MessageTemplate[]>([]);
+  const [whatsappTemplates, setWhatsappTemplates] = useState<
+    CompanyWhatsappTemplate[]
+  >([]);
+  const [emailTemplates, setEmailTemplates] = useState<EmailTemplate[]>([]);
+  // A failed load is not the same as "nothing granted": never show it as empty.
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -404,9 +652,13 @@ export default function ReguaPage() {
   const [newProfile, setNewProfile] = useState<NewProfileForm>(EMPTY_PROFILE);
 
   const sortedProfiles = useMemo(() => sortProfiles(profiles), [profiles]);
-  const activeTemplates = useMemo(
-    () => sortTemplates(templates.filter((template) => template.isActive)),
-    [templates],
+  const grantedTemplates = useMemo(
+    () => sortByName(whatsappTemplates),
+    [whatsappTemplates],
+  );
+  const activeEmailTemplates = useMemo(
+    () => sortByName(emailTemplates.filter((template) => template.isActive)),
+    [emailTemplates],
   );
   const selected =
     profiles.find((profile) => profile.id === selectedId) ?? null;
@@ -517,14 +769,27 @@ export default function ReguaPage() {
       setError(null);
 
       try {
-        const [data, templateData] = await Promise.all([
+        const [data, whatsappData, emailData] = await Promise.all([
           apiClient.getRules(),
-          apiClient.getTemplates(),
+          apiClient.getAllTemplates().then(
+            (items) => ({ ok: true as const, items }),
+            (err: unknown) => ({ ok: false as const, err }),
+          ),
+          apiClient.getEmailTemplates().then(
+            (items) => ({ ok: true as const, items }),
+            (err: unknown) => ({ ok: false as const, err }),
+          ),
         ]);
         if (!active) return;
 
         setProfiles(data);
-        setTemplates(templateData);
+        setWhatsappTemplates(whatsappData.ok ? whatsappData.items : []);
+        setEmailTemplates(emailData.ok ? emailData.items : []);
+        setTemplatesError(
+          whatsappData.ok && emailData.ok
+            ? null
+            : "Não foi possível carregar os templates disponíveis. As escolhas salvas foram mantidas; recarregue a página para alterá-las.",
+        );
         setSelectedId((current) => {
           if (current && data.some((profile) => profile.id === current)) {
             return current;
@@ -550,9 +815,15 @@ export default function ReguaPage() {
     if (selected) {
       setStepForms(
         selected.steps.map((step) => ({
+          id: step.id,
           stepOrder: step.stepOrder,
           channel: step.channel,
-          templateId: step.templateId ?? undefined,
+          emailTemplateId: step.emailTemplateId ?? undefined,
+          whatsappSelection:
+            step.channel === "WHATSAPP"
+              ? (step.whatsappSelection ?? { mode: "UNCONFIGURED" })
+              : undefined,
+          whatsappStatus: step.whatsappStatus,
           delayDays: step.delayDays,
           sendTimeStart: step.sendTimeStart ?? "",
           sendTimeEnd: step.sendTimeEnd ?? "",
@@ -632,11 +903,27 @@ export default function ReguaPage() {
       }
     }
 
+    const pending = stepForms.findIndex(
+      (step) =>
+        step.channel === "WHATSAPP" &&
+        step.whatsappSelection?.mode === "UNCONFIGURED" &&
+        !step.id,
+    );
+    if (pending >= 0) {
+      setError(
+        "Escolha o padrão da finalidade ou um template liberado para os novos contatos por WhatsApp.",
+      );
+      return;
+    }
+
     setSaving(true);
     setError(null);
 
     try {
-      const steps = await apiClient.setRuleSteps(selectedId, stepForms);
+      const steps = await apiClient.setRuleSteps(
+        selectedId,
+        stepForms.map(toStepInput),
+      );
       setProfiles((prev) =>
         prev.map((profile) =>
           profile.id === selectedId ? { ...profile, steps } : profile,
@@ -678,13 +965,28 @@ export default function ReguaPage() {
     markStepsChanged();
   }
 
-  function updateStepTemplate(index: number, templateId: string): void {
+  function updateStepChoice(index: number, choice: StepChoice): void {
     setStepForms((prev) =>
       prev.map((step, stepIndex) =>
-        stepIndex === index
-          ? { ...step, templateId: templateId || undefined }
-          : step,
+        stepIndex === index ? { ...step, ...choice } : step,
       ),
+    );
+    markStepsChanged();
+  }
+
+  function updateStepChannel(index: number, channel: StepChannel): void {
+    setStepForms((prev) =>
+      prev.map((step, stepIndex) => {
+        if (stepIndex !== index || step.channel === channel) return step;
+        return {
+          ...step,
+          channel,
+          emailTemplateId: undefined,
+          whatsappSelection: undefined,
+          whatsappStatus: undefined,
+          ...choiceForChannel(channel, scheduleDays[index] ?? 0),
+        };
+      }),
     );
     markStepsChanged();
   }
@@ -710,10 +1012,10 @@ export default function ReguaPage() {
         index === 0 ? 0 : (currentScheduleDays[index - 1] ?? 0);
       const nextScheduleDay = currentScheduleDays[index + 1];
 
-      next[index] = {
-        ...currentStep,
-        delayDays: scheduleDay - previousScheduleDay,
-      };
+      next[index] = followDay(
+        { ...currentStep, delayDays: scheduleDay - previousScheduleDay },
+        scheduleDay,
+      );
 
       const followingStep = next[index + 1];
 
@@ -798,15 +1100,15 @@ export default function ReguaPage() {
     markStepsChanged();
   }
 
-  function updateEmissionTemplate(
+  function updateEmissionChoice(
     channel: StepChannel,
-    templateId: string,
+    choice: StepChoice,
   ): void {
     setStepForms((prev) =>
       buildStepFormsFromScheduledSteps(
         getScheduledStepForms(prev).map((step) =>
           step.scheduleDay === EMISSION_DAY && step.channel === channel
-            ? { ...step, templateId: templateId || undefined }
+            ? { ...step, ...choice }
             : step,
         ),
       ),
@@ -814,11 +1116,11 @@ export default function ReguaPage() {
     markStepsChanged();
   }
 
-  function getEmissionTemplateId(channel: StepChannel): string {
-    return (
-      getScheduledStepForms(stepForms).find(
-        (step) => step.scheduleDay === EMISSION_DAY && step.channel === channel,
-      )?.templateId ?? ""
+  function getEmissionStep(
+    channel: StepChannel,
+  ): ScheduledStepForm | undefined {
+    return getScheduledStepForms(stepForms).find(
+      (step) => step.scheduleDay === EMISSION_DAY && step.channel === channel,
     );
   }
 
@@ -840,6 +1142,7 @@ export default function ReguaPage() {
         ...scheduledSteps,
         {
           channel: EMPTY_STEP.channel,
+          ...choiceForChannel(EMPTY_STEP.channel, scheduleDay),
           scheduleDay,
           sendTimeStart: EMPTY_STEP.sendTimeStart,
           sendTimeEnd: EMPTY_STEP.sendTimeEnd,
@@ -881,14 +1184,14 @@ export default function ReguaPage() {
         return prev;
       }
 
-      next[index] = {
-        ...currentStep,
-        scheduleDay: targetStep.scheduleDay,
-      };
-      next[target] = {
-        ...targetStep,
-        scheduleDay: currentStep.scheduleDay,
-      };
+      next[index] = followDay(
+        { ...currentStep, scheduleDay: targetStep.scheduleDay },
+        targetStep.scheduleDay,
+      );
+      next[target] = followDay(
+        { ...targetStep, scheduleDay: currentStep.scheduleDay },
+        currentStep.scheduleDay,
+      );
 
       return buildStepFormsFromScheduledSteps(next);
     });
@@ -987,6 +1290,15 @@ export default function ReguaPage() {
             }`}
           >
             {error ?? success}
+          </div>
+        )}
+
+        {templatesError && (
+          <div
+            role="alert"
+            className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900"
+          >
+            {templatesError}
           </div>
         )}
 
@@ -1210,12 +1522,11 @@ export default function ReguaPage() {
                               </p>
                               <div className="mt-2 flex flex-wrap gap-2">
                                 {point.steps.map((timelineStep) => {
-                                  const templateId =
-                                    stepForms[timelineStep.index]?.templateId;
-                                  const templateName =
-                                    templates.find(
-                                      (template) => template.id === templateId,
-                                    )?.name ?? "Sem mensagem selecionada";
+                                  const templateName = choiceLabel(
+                                    stepForms[timelineStep.index],
+                                    grantedTemplates,
+                                    activeEmailTemplates,
+                                  );
                                   return (
                                     <span
                                       key={timelineStep.index}
@@ -1389,31 +1700,20 @@ export default function ReguaPage() {
                               Mensagem do contato inicial por{" "}
                               {channel === "EMAIL" ? "E-mail" : "WhatsApp"}
                             </span>
-                            <select
-                              aria-label={`Template do contato inicial por ${
+                            <StepTemplateSelect
+                              label={`Template do contato inicial por ${
                                 channel === "EMAIL" ? "E-mail" : "WhatsApp"
                               }`}
-                              value={getEmissionTemplateId(channel)}
-                              onChange={(event) =>
-                                updateEmissionTemplate(
-                                  channel,
-                                  event.target.value,
-                                )
+                              channel={channel}
+                              day={EMISSION_DAY}
+                              step={getEmissionStep(channel) ?? {}}
+                              whatsappTemplates={grantedTemplates}
+                              emailTemplates={activeEmailTemplates}
+                              templatesFailed={Boolean(templatesError)}
+                              onChange={(choice) =>
+                                updateEmissionChoice(channel, choice)
                               }
-                              className="h-10 min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700"
-                            >
-                              <option value="">Sem seleção</option>
-                              {activeTemplates.map((template) => (
-                                <option key={template.id} value={template.id}>
-                                  {template.name}
-                                </option>
-                              ))}
-                            </select>
-                            <span className="text-xs leading-5 text-slate-500">
-                              {channel === "WHATSAPP"
-                                ? 'Sem seleção usa "Vencimento hoje" se aprovado na Meta. Outra mensagem escolhida também precisa de aprovação.'
-                                : 'Sem seleção prioriza "Vencimento hoje" ou outro modelo ativo.'}
-                            </span>
+                            />
                           </label>
                         ))}
                     </div>
@@ -1512,9 +1812,9 @@ export default function ReguaPage() {
                                   <CalendarClock size={14} /> Dia em relação ao
                                   vencimento
                                 </span>
-                              <StepDayInput
-                                key={`${selected.id}-${index}-${scheduleDay}`}
-                                value={scheduleDay}
+                                <StepDayInput
+                                  key={`${selected.id}-${index}-${scheduleDay}`}
+                                  value={scheduleDay}
                                   onCommit={(day) =>
                                     updateStepScheduleDay(index, day)
                                   }
@@ -1535,7 +1835,7 @@ export default function ReguaPage() {
                                     type="button"
                                     aria-pressed={step.channel === "EMAIL"}
                                     onClick={() =>
-                                      updateStep(index, "channel", "EMAIL")
+                                      updateStepChannel(index, "EMAIL")
                                     }
                                     className={`inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border px-3 text-sm font-semibold ${step.channel === "EMAIL" ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-slate-200 text-slate-600 hover:bg-slate-50"}`}
                                   >
@@ -1545,7 +1845,7 @@ export default function ReguaPage() {
                                     type="button"
                                     aria-pressed={step.channel === "WHATSAPP"}
                                     onClick={() =>
-                                      updateStep(index, "channel", "WHATSAPP")
+                                      updateStepChannel(index, "WHATSAPP")
                                     }
                                     className={`inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border px-3 text-sm font-semibold ${step.channel === "WHATSAPP" ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-slate-200 text-slate-600 hover:bg-slate-50"}`}
                                   >
@@ -1557,32 +1857,18 @@ export default function ReguaPage() {
                                 <span className="text-xs font-bold text-slate-700">
                                   Mensagem que será enviada
                                 </span>
-                                <select
-                                  aria-label={`Template da etapa ${index + 1}`}
-                                  value={step.templateId ?? ""}
-                                  onChange={(event) =>
-                                    updateStepTemplate(
-                                      index,
-                                      event.target.value,
-                                    )
+                                <StepTemplateSelect
+                                  label={`Template da etapa ${index + 1}`}
+                                  channel={step.channel}
+                                  day={scheduleDay}
+                                  step={step}
+                                  whatsappTemplates={grantedTemplates}
+                                  emailTemplates={activeEmailTemplates}
+                                  templatesFailed={Boolean(templatesError)}
+                                  onChange={(choice) =>
+                                    updateStepChoice(index, choice)
                                   }
-                                  className="h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700"
-                                >
-                                  <option value="">Sem seleção</option>
-                                  {activeTemplates.map((template) => (
-                                    <option
-                                      key={template.id}
-                                      value={template.id}
-                                    >
-                                      {template.name}
-                                    </option>
-                                  ))}
-                                </select>
-                                <span className="text-xs text-slate-500">
-                                  {step.channel === "WHATSAPP"
-                                    ? 'Sem seleção usa "Vencimento hoje" se aprovado na Meta. Outra mensagem escolhida também precisa de aprovação.'
-                                    : 'Sem seleção prioriza "Vencimento hoje" ou outro modelo ativo.'}
-                                </span>
+                                />
                               </label>
                               <div className="md:col-span-2">
                                 <span className="flex items-center gap-1.5 text-xs font-bold text-slate-700">

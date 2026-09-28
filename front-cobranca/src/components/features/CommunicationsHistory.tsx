@@ -10,8 +10,8 @@ import type {
   AdminConversationSummary,
   CommunicationChannel,
   ConversationStatus,
-  MessageTemplate,
 } from "@/lib/api-client";
+import { TemplatePendingSends } from "./templates/TemplatePendingSends";
 import { CompanyConversations } from "./communications/CompanyConversations";
 import { ConversationMessages } from "./communications/ConversationMessages";
 import {
@@ -153,21 +153,11 @@ function AdminInbox(): ReactNode {
     null,
   );
   const [olderCursor, setOlderCursor] = useState<string | null>(null);
-  const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [classifying, setClassifying] =
     useState<AdminConversationMessage | null>(null);
-  const [quoting, setQuoting] = useState<AdminConversationMessage | null>(
-    null,
-  );
+  const [quoting, setQuoting] = useState<AdminConversationMessage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pagedMessages = useRef(false);
-
-  useEffect(() => {
-    api
-      .getTemplates()
-      .then(setTemplates)
-      .catch(() => setTemplates([]));
-  }, [api]);
 
   const refresh = useCallback(
     async (signal: AbortSignal): Promise<void> => {
@@ -399,7 +389,7 @@ function AdminInbox(): ReactNode {
               <p className="text-xs text-slate-600">
                 {serviceWindowOpen(selected.serviceWindowExpiresAt)
                   ? `Janela de atendimento aberta até ${formatDateTime(selected.serviceWindowExpiresAt!)}`
-                  : "Janela de atendimento fechada: somente templates aprovados."}
+                  : "Janela de atendimento fechada: somente templates aprovados e liberados para a empresa."}
               </p>
             )}
             <ConversationMessages
@@ -418,7 +408,6 @@ function AdminInbox(): ReactNode {
             <AdminConversationContext
               key={selected.id}
               conversation={selected}
-              templates={templates}
               classifying={classifying}
               quoting={quoting}
               onCancelClassify={() => setClassifying(null)}
@@ -438,7 +427,7 @@ export function CommunicationsHistory({
   admin?: boolean;
 }): ReactNode {
   const { data: session, status } = useSession();
-  const [tab, setTab] = useState<"conversations" | "outbound">(
+  const [tab, setTab] = useState<"conversations" | "outbound" | "pending">(
     "conversations",
   );
   const allowed =
@@ -471,6 +460,7 @@ export function CommunicationsHistory({
               [
                 ["conversations", "Conversas"],
                 ["outbound", "Envios"],
+                ["pending", "Pendências"],
               ] as const
             ).map(([value, label]) => (
               <button
@@ -486,8 +476,10 @@ export function CommunicationsHistory({
           </div>
           {tab === "conversations" ? (
             <CompanyConversations key={viewerKey} />
-          ) : (
+          ) : tab === "outbound" ? (
             <OutboundHistory key={viewerKey} />
+          ) : (
+            <TemplatePendingSends key={viewerKey} scope="COMPANY" />
           )}
         </>
       )}

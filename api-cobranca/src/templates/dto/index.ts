@@ -1,2 +1,2 @@
-export * from './create-template.dto';
-export * from './update-template.dto';
+export * from './template-mapping.dto';
+export * from './company-template-access.dto';

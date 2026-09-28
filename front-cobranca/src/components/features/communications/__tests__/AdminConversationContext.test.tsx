@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import type {
   AdminConversationDetail,
   AdminConversationMessage,
-  MessageTemplate,
+  ConversationTemplateOption,
 } from "@/lib/api-client";
 import {
   AdminConversationContext,
@@ -16,6 +16,7 @@ const mockApi = {
   attributeMessage: jest.fn(),
   replyToAdminConversation: jest.fn(),
   replyWithTemplate: jest.fn(),
+  getConversationTemplateOptions: jest.fn(),
 };
 jest.mock("@/lib/use-api-client", () => ({ useApiClient: () => mockApi }));
 
@@ -67,26 +68,25 @@ const conversation = (open: boolean): AdminConversationDetail => ({
   messages: [inbound, uncertain],
   nextCursor: null,
 });
-const template = (overrides: Partial<MessageTemplate> = {}): MessageTemplate =>
-  ({
-    id: "template-1",
-    name: "Lembrete",
-    content: "Olá {{nome_devedor}}, valor {{valor}}.",
-    isActive: true,
-    metaStatus: "APPROVED",
-    metaReviewRequired: false,
-    metaTemplateName: "ciframais_lembrete",
-    paymentButtonEnabled: true,
-    ...overrides,
-  }) as MessageTemplate;
+const option = (
+  overrides: Partial<ConversationTemplateOption> = {},
+): ConversationTemplateOption => ({
+  id: "template-1",
+  name: "Lembrete",
+  language: "pt_BR",
+  content: { body: "Olá {{1}}, valor {{2}}.", footer: null, button: null },
+  usable: true,
+  reason: null,
+  field: null,
+  previewBody: "Olá Pagador, valor R$ 100,00.",
+  ...overrides,
+});
 
 function Harness({
   open = true,
-  templates = [template()],
   onChanged = jest.fn().mockResolvedValue(undefined),
 }: {
   open?: boolean;
-  templates?: MessageTemplate[];
   onChanged?: () => Promise<void>;
 }): ReactNode {
   const [classifying, setClassifying] =
@@ -108,7 +108,6 @@ function Harness({
       ))}
       <AdminConversationContext
         conversation={detail}
-        templates={templates}
         classifying={classifying}
         quoting={quoting}
         onCancelClassify={() => setClassifying(null)}
@@ -140,6 +139,20 @@ beforeEach(() => {
   mockApi.attributeMessage.mockResolvedValue({ messageId: "message-in", revision: 4 });
   mockApi.replyToAdminConversation.mockResolvedValue({ id: "r", status: "pending" });
   mockApi.replyWithTemplate.mockResolvedValue({ id: "t", status: "pending" });
+  mockApi.getConversationTemplateOptions.mockResolvedValue({
+    serviceWindow: { open: false, expiresAt: null },
+    templates: [
+      option(),
+      option({
+        id: "t-missing",
+        name: "Sem cobrança",
+        usable: false,
+        reason: "VALUE_MISSING",
+        field: "invoice.dueDate",
+        previewBody: null,
+      }),
+    ],
+  });
 });
 
 describe("Admin conversation actions", () => {
@@ -214,43 +227,44 @@ describe("Admin conversation actions", () => {
     });
   });
 
-  it("offers only approved templates when the window is closed, requiring an invoice for payment buttons", async () => {
-    render(
-      <Harness
-        open={false}
-        templates={[
-          template(),
-          template({ id: "t-review", name: "Em revisão", metaReviewRequired: true }),
-          template({ id: "t-paused", name: "Pausado", metaStatus: "PAUSED" }),
-        ]}
-      />,
-    );
+  it("asks for the company first and sends only server-listed templates without parameters", async () => {
+    render(<Harness open={false} />);
     expect(screen.queryByLabelText("Resposta do atendimento central")).toBeNull();
-    const form = screen.getByRole("form", { name: "Responder com template" });
-    expect(screen.queryByRole("option", { name: "Em revisão" })).toBeNull();
-    expect(screen.queryByRole("option", { name: "Pausado" })).toBeNull();
-    fireEvent.change(form.querySelector("select")!, {
-      target: { value: "template-1" },
-    });
-    fireEvent.change(screen.getByLabelText("Parâmetro nome_devedor"), {
-      target: { value: "Ana" },
-    });
-    fireEvent.change(screen.getByLabelText("Parâmetro valor"), {
-      target: { value: "R$ 100,00" },
-    });
+    screen.getByRole("form", { name: "Responder com template" });
+    expect(screen.queryByLabelText("Template")).toBeNull();
+    expect(mockApi.getConversationTemplateOptions).not.toHaveBeenCalled();
     const send = screen.getByRole("button", { name: "Enviar template" });
     expect(send).toBeDisabled();
-    expect(screen.getByText(/selecione uma cobrança/)).toBeInTheDocument();
     await screen.findAllByRole("option", { name: /Empresa A · Pagador · Cobrança/ });
-    fireEvent.change(screen.getByLabelText("Contexto do template"), {
+    fireEvent.change(screen.getByLabelText("Empresa e cobrança do template"), {
       target: { value: "invoice:invoice-a" },
     });
+    await waitFor(() =>
+      expect(mockApi.getConversationTemplateOptions).toHaveBeenCalledWith(
+        "conversation-1",
+        { companyId: "company-a", debtorId: "debtor-a", invoiceId: "invoice-a" },
+        { signal: expect.any(AbortSignal) as AbortSignal },
+      ),
+    );
+    const select = await screen.findByLabelText("Template");
+    expect(
+      screen.getByRole("option", { name: "Sem cobrança (indisponível)" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Parâmetro/)).toBeNull();
+
+    fireEvent.change(select, { target: { value: "t-missing" } });
+    expect(screen.getByText(/Faltam dados do contexto/)).toBeInTheDocument();
+    expect(send).toBeDisabled();
+
+    fireEvent.change(select, { target: { value: "template-1" } });
+    expect(screen.getByLabelText("Prévia do template")).toHaveTextContent(
+      "Olá Pagador, valor R$ 100,00.",
+    );
     fireEvent.click(send);
     await waitFor(() =>
       expect(mockApi.replyWithTemplate).toHaveBeenCalledWith("conversation-1", {
         idempotencyId: expect.any(String) as string,
         templateId: "template-1",
-        parameters: ["Ana", "R$ 100,00"],
         context: {
           companyId: "company-a",
           debtorId: "debtor-a",
@@ -258,6 +272,36 @@ describe("Admin conversation actions", () => {
         },
       }),
     );
+  });
+
+  it("clears the chosen template when the company context changes", async () => {
+    render(<Harness open={false} />);
+    await screen.findAllByRole("option", { name: /Empresa A · Pagador · Cobrança/ });
+    const context = screen.getByLabelText("Empresa e cobrança do template");
+    fireEvent.change(context, { target: { value: "invoice:invoice-a" } });
+    fireEvent.change(await screen.findByLabelText("Template"), {
+      target: { value: "template-1" },
+    });
+    expect(screen.getByLabelText("Prévia do template")).toBeInTheDocument();
+    fireEvent.change(context, { target: { value: "" } });
+    expect(screen.queryByLabelText("Prévia do template")).toBeNull();
+    expect(screen.queryByLabelText("Template")).toBeNull();
+    expect(screen.getByRole("button", { name: "Enviar template" })).toBeDisabled();
+  });
+
+  it("says when no template is granted to the company", async () => {
+    mockApi.getConversationTemplateOptions.mockResolvedValue({
+      serviceWindow: { open: false, expiresAt: null },
+      templates: [],
+    });
+    render(<Harness open={false} />);
+    await screen.findAllByRole("option", { name: /Empresa A · Pagador · Cobrança/ });
+    fireEvent.change(screen.getByLabelText("Empresa e cobrança do template"), {
+      target: { value: "invoice:invoice-a" },
+    });
+    expect(
+      await screen.findByText("Nenhum template liberado para esta empresa."),
+    ).toBeInTheDocument();
   });
 
   it("shows an uncertain send as a warning without any resend action", () => {

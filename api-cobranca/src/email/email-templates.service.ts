@@ -201,16 +201,44 @@ export class EmailTemplatesService {
     return this.toResolved(template, preference);
   }
 
+  /**
+   * Email template of a collection rule step. `null` keeps the email default; an explicit ID
+   * must still be an active email template, never a fallback to another one.
+   */
+  async resolveForRule(
+    companyId: string,
+    templateId: string | null,
+  ): Promise<ResolvedEmailTemplate> {
+    if (!templateId) return this.findActiveOrDefault(companyId, null);
+    const template = await this.prisma.globalEmailTemplate.findUnique({
+      where: { id: templateId },
+    });
+    if (!template?.isActive)
+      throw new HttpException(
+        'Template de email da etapa indisponivel.',
+        HttpStatus.NOT_FOUND,
+      );
+    const preference = await this.prisma.companyTemplatePreference.findUnique({
+      where: {
+        companyId_channel_slug: {
+          companyId,
+          channel: 'EMAIL',
+          slug: template.slug,
+        },
+      },
+    });
+    return this.toResolved(template, preference);
+  }
+
+  /** Creates missing definitions only; ON CONFLICT DO NOTHING keeps concurrent first loads safe. */
   private async ensureGlobalCatalog(): Promise<void> {
-    await Promise.all(
-      EMAIL_TEMPLATE_DEFINITIONS.map((definition) =>
-        this.prisma.globalEmailTemplate.upsert({
-          where: { slug: definition.slug },
-          create: { ...definition, isActive: true },
-          update: {},
-        }),
-      ),
-    );
+    await this.prisma.globalEmailTemplate.createMany({
+      data: EMAIL_TEMPLATE_DEFINITIONS.map((definition) => ({
+        ...definition,
+        isActive: true,
+      })),
+      skipDuplicates: true,
+    });
   }
   private findGlobal(id: string): Promise<GlobalEmailTemplate> {
     return this.prisma.globalEmailTemplate.findUniqueOrThrow({ where: { id } });

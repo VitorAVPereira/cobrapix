@@ -25,6 +25,15 @@ commit ou histórico do shell.
 O envio de respostas é só pelo administrador da plataforma em
 `/admin/communications`; a inbox antiga não envia.
 
+> **Templates WhatsApp (releases posteriores).** Os templates não são mais criados
+> nem submetidos pela CifraMais: são criados no WhatsApp Manager, importados pelo
+> Datafy e liberados por empresa no painel admin. A publicação dessa mudança, com
+> migrations e o script de transição, segue
+> [docs/operations/whatsapp-template-catalog.md](../../docs/operations/whatsapp-template-catalog.md)
+> (incluído no pacote). As variáveis `EFI_ONBOARDING_NOTICE_TEMPLATE` e
+> `EFI_ONBOARDING_REMINDER_TEMPLATE` estão descontinuadas: os avisos de ativação
+> usam os padrões de finalidade liberados para cada empresa.
+
 ## 1. Painel Datafy (antes da publicação)
 
 1. Gere o token de API de produção (`sk_live_…`).
@@ -217,7 +226,10 @@ print(json.load(urllib.request.urlopen(request))["access_token"])')
 
    Respostas 401 nos logs para `/webhooks/datafy` indicam segredo divergente
    entre painel e `api.env`.
-3. O primeiro envio real (cobrança ou resposta do administrador) é decisão sua;
+3. Catálogo de templates: em **Catálogo de templates** (`/admin/templates`),
+   **Sincronizar catálogo** importa os templates aprovados da WABA sem liberar nenhum
+   para empresas (detalhes no runbook do catálogo).
+4. O primeiro envio real (cobrança ou resposta do administrador) é decisão sua;
    acompanhe-o em `/admin/communications`. Envios com resultado incerto aparecem como
    `UNCERTAIN` e **não** são repetidos automaticamente; confira no painel Datafy
    antes de qualquer ação manual.
