@@ -40,6 +40,7 @@ import {
   TemplateSnapshot,
 } from '../templates/template-contracts';
 import { lockLogicalKey } from '../templates/template-locks';
+import { legacyTemplateRequest } from '../templates/template-selection';
 import { requestTemplateSync } from '../templates/template-provider-state';
 
 /**
@@ -383,23 +384,10 @@ export class OutboundDispatcherService {
   private legacyRequest(
     intent: CommunicationOutboundIntent,
   ): TemplateSendRequest {
-    const input = this.payload(intent);
-    return {
-      logicalKey: intent.logicalKey ?? intent.idempotencyKey,
-      origin:
-        input.origin === 'ADMIN_REPLY'
-          ? 'ADMIN_REPLY'
-          : input.invoiceId
-            ? 'COLLECTION'
-            : 'ACTIVATION',
-      context: {
-        companyId: intent.companyId!,
-        ...(intent.invoiceId ? { invoiceId: intent.invoiceId } : {}),
-        ...(intent.debtorId ? { debtorId: intent.debtorId } : {}),
-      },
-      selection: { mode: 'UNCONFIGURED' },
-      ...(input.ruleStepId ? { ruleStepId: input.ruleStepId } : {}),
-    };
+    return legacyTemplateRequest(
+      { ...intent, companyId: intent.companyId! },
+      this.payload(intent),
+    );
   }
 
   async rejectedCollection(id: string): Promise<{

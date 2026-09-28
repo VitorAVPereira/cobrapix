@@ -380,12 +380,29 @@ export class CollectionProfileService {
       );
     }
 
+    // Steps sent back with their ID keep it (holds and logical keys refer to it); others
+    // are created and the missing ones removed.
+    const existingIds = new Set(existing.map((step) => step.id));
+    const kept = [
+      ...new Set(
+        steps.flatMap((step) =>
+          step.id && existingIds.has(step.id) ? [step.id] : [],
+        ),
+      ),
+    ];
     await this.prisma.$transaction(async (tx) => {
-      await tx.collectionRuleStep.deleteMany({ where: { profileId } });
-      if (steps.length === 0) return;
-      await tx.collectionRuleStep.createMany({
-        data: steps.map((step) => ({
-          profileId,
+      await tx.collectionRuleStep.deleteMany({
+        where: { profileId, id: { notIn: kept } },
+      });
+      // Temporary orders avoid transient (profile, order, channel) collisions on reorder.
+      for (const [index, id] of kept.entries())
+        await tx.collectionRuleStep.update({
+          where: { id },
+          data: { stepOrder: -1 - index },
+        });
+      const used = new Set<string>();
+      for (const step of steps) {
+        const data = {
           stepOrder: step.stepOrder,
           channel: step.channel,
           ...this.selectionColumns(step, existing),
@@ -393,8 +410,13 @@ export class CollectionProfileService {
           sendTimeStart: step.sendTimeStart || null,
           sendTimeEnd: step.sendTimeEnd || null,
           isActive: true,
-        })),
-      });
+        };
+        if (step.id && kept.includes(step.id) && !used.has(step.id)) {
+          used.add(step.id);
+          await tx.collectionRuleStep.update({ where: { id: step.id }, data });
+        } else
+          await tx.collectionRuleStep.create({ data: { profileId, ...data } });
+      }
     });
 
     return this.presentSteps(

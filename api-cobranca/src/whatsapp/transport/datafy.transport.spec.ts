@@ -11,12 +11,6 @@ const configValues = {
   META_BUSINESS_ACCOUNT_ID: '9876543210',
   DATAFY_API_TOKEN: 'sk_live_test_only',
 };
-const template = {
-  name: 'aviso',
-  language: 'pt_BR',
-  category: 'UTILITY',
-  components: [{ type: 'BODY', text: 'Sua fatura esta disponivel.' }],
-};
 function reply(body: unknown, status = 200, headers?: HeadersInit): Response {
   return new Response(JSON.stringify(body), { status, headers });
 }
@@ -72,24 +66,6 @@ describe('Datafy transport contract', () => {
           Authorization: 'Bearer sk_live_test_only',
           'Content-Type': 'application/json',
         },
-      }),
-    );
-  });
-
-  it('cria template no WABA configurado', async () => {
-    http.mockResolvedValue(
-      reply({ id: 'template-1', status: 'PENDING', category: 'UTILITY' }),
-    );
-    await expect(transport.createTemplate(template)).resolves.toEqual({
-      id: 'template-1',
-      status: 'PENDING',
-      category: 'UTILITY',
-    });
-    expect(http).toHaveBeenCalledWith(
-      'https://cloud.datafyapi.com.br/v1/9876543210/message_templates',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify(template),
       }),
     );
   });
@@ -278,7 +254,7 @@ describe('Datafy transport contract', () => {
       ),
     );
     try {
-      await transport.createTemplate(template);
+      await transport.listTemplates();
       throw new Error('expected rejection');
     } catch (error: unknown) {
       expect(error).toMatchObject({ providerCode: 100 });

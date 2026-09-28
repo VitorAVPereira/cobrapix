@@ -25,13 +25,19 @@
     "test": "jest",
     "test:communications:postgres": "node test/communications-postgres.cjs",
     "test:collection-rules:postgres": "node test/collection-rules-postgres.cjs",
+    "test:template-email-migration:postgres": "node test/template-email-migration-postgres.cjs",
+    "test:template-catalog:postgres": "node test/template-catalog-postgres.cjs",
+    "test:template-pending:postgres": "node test/template-pending-postgres.cjs",
+    "test:template-transition:postgres": "node test/template-transition-postgres.cjs",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "test:e2e:datafy": "node test/e2e-disposable.cjs datafy-communications.e2e-spec.ts",
+    "test:e2e:templates": "node test/e2e-disposable.cjs template-access.e2e-spec.ts template-catalog-flow.e2e-spec.ts",
     "test:e2e:smoke": "jest --config ./test/jest-e2e.json --runInBand cobrapix-flow.e2e-spec.ts",
-    "seed:production": "node dist/scripts/seed-production.js"
+    "seed:production": "node dist/scripts/seed-production.js",
+    "templates:transition": "node dist/scripts/transition-whatsapp-templates.js"
   },
   "dependencies": {
     "@nestjs/bullmq": "^11.0.4",

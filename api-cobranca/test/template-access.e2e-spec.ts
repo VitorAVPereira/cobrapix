@@ -95,7 +95,7 @@ const external = jest
       );
       return Promise.resolve(
         Response.json({
-          messages: [{ id: `wamid.e2e.${provider.sends.length}` }],
+          messages: [{ id: `wamid.access.${randomUUID()}` }],
         }),
       );
     }
@@ -174,7 +174,7 @@ describe('Template catalog access (HTTP)', () => {
     invoiceB: '',
     conversation: '',
   };
-  const PHONE = '5511976600001';
+  const PHONE = '5511976600011';
   const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
   async function login(email: string): Promise<string> {
@@ -219,7 +219,7 @@ describe('Template catalog access (HTTP)', () => {
       data: {
         companyId: a.id,
         name: 'Pagador A',
-        phoneNumber: '+5511976600001',
+        phoneNumber: '+5511976600011',
       },
     });
     ids.invoiceA = (

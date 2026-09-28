@@ -129,7 +129,27 @@ async function seedLegacy() {
     await assert.rejects(service.setSteps(company.id, profileId, [{ stepOrder: 0, channel: 'WHATSAPP', delayDays: 0, whatsappSelection: { mode: 'UNCONFIGURED' } }]), error => error.getStatus() === 400, 'new steps need a valid choice');
     await assert.rejects(service.setSteps(company.id, profileId, [{ stepOrder: 0, channel: 'EMAIL', delayDays: 0, whatsappSelection: explicit }]), error => error.getStatus() === 400);
     await assert.rejects(pool.query('UPDATE "CollectionRuleStep" SET "whatsappSelectionMode"=\'DEFAULT\', "whatsappPurpose"=NULL WHERE "id"=$1', [saved[0].id]), /whatsapp_selection_check/);
-    console.log('PASS edits accept only templates granted to the company, per channel, without cross-tenant access');
+    // Without attempts, steps sent back with their ID keep it, also when reordered or
+    // switching channel; new steps get new IDs and omitted ones are removed.
+    const reordered = await service.setSteps(company.id, profileId, [
+      { id: saved[1].id, stepOrder: 0, channel: 'EMAIL', delayDays: -1 },
+      { id: saved[0].id, stepOrder: 1, channel: 'WHATSAPP', delayDays: 1, whatsappSelection: explicit },
+    ]);
+    assert.deepEqual(reordered.map(step => step.id), [saved[1].id, saved[0].id]);
+    const switched = await service.setSteps(company.id, profileId, [
+      { id: saved[1].id, stepOrder: 0, channel: 'WHATSAPP', delayDays: -1, whatsappSelection: { mode: 'DEFAULT', purpose: 'BEFORE_DUE' } },
+      { id: saved[0].id, stepOrder: 1, channel: 'EMAIL', delayDays: 1 },
+      { stepOrder: 2, channel: 'EMAIL', delayDays: 2 },
+    ]);
+    assert.deepEqual(switched.slice(0, 2).map(step => [step.id, step.channel, step.templateId]), [[saved[1].id, 'WHATSAPP', null], [saved[0].id, 'EMAIL', null]]);
+    assert.ok(![saved[0].id, saved[1].id].includes(switched[2].id));
+    const restored = await service.setSteps(company.id, profileId, [
+      { id: saved[0].id, stepOrder: 0, channel: 'WHATSAPP', delayDays: 0, whatsappSelection: explicit },
+      { id: saved[1].id, stepOrder: 1, channel: 'EMAIL', delayDays: 2 },
+    ]);
+    assert.deepEqual(restored.map(step => step.id), [saved[0].id, saved[1].id]);
+    assert.equal(await prisma.collectionRuleStep.count({ where: { profileId } }), 2);
+    console.log('PASS edits accept only templates granted to the company, per channel, keeping step IDs, without cross-tenant access');
 
     // blocked_step_preserves_next_due_day: a held WhatsApp step counts as attempted and
     // the next step keeps its own cumulative day.

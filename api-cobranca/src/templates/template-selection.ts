@@ -2,7 +2,11 @@ import type {
   WhatsappSelectionMode,
   WhatsappTemplatePurpose,
 } from '@prisma/client';
-import type { TemplatePurpose, TemplateSelection } from './template-contracts';
+import type {
+  TemplatePurpose,
+  TemplateSelection,
+  TemplateSendRequest,
+} from './template-contracts';
 
 /** Logical key of a collection send, shared by producers, holds and queue retries. */
 export function collectionLogicalKey(input: {
@@ -34,4 +38,36 @@ export function purposeForScheduleDay(day: number): TemplatePurpose {
   if (day <= 2) return 'FIRST_OVERDUE';
   if (day >= 30) return 'CRITICAL_OVERDUE';
   return 'RECURRING_OVERDUE';
+}
+
+/**
+ * Hold request of a template intent prepared before the catalog change. It carries no
+ * choice: the admin decides the template when reviewing it.
+ */
+export function legacyTemplateRequest(
+  intent: {
+    logicalKey: string | null;
+    idempotencyKey: string;
+    companyId: string;
+    invoiceId: string | null;
+    debtorId: string | null;
+  },
+  payload: { origin?: string; invoiceId?: string; ruleStepId?: string },
+): TemplateSendRequest {
+  return {
+    logicalKey: intent.logicalKey ?? intent.idempotencyKey,
+    origin:
+      payload.origin === 'ADMIN_REPLY'
+        ? 'ADMIN_REPLY'
+        : payload.invoiceId
+          ? 'COLLECTION'
+          : 'ACTIVATION',
+    context: {
+      companyId: intent.companyId,
+      ...(intent.invoiceId ? { invoiceId: intent.invoiceId } : {}),
+      ...(intent.debtorId ? { debtorId: intent.debtorId } : {}),
+    },
+    selection: { mode: 'UNCONFIGURED' },
+    ...(payload.ruleStepId ? { ruleStepId: payload.ruleStepId } : {}),
+  };
 }

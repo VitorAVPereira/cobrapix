@@ -115,6 +115,9 @@ cd api-cobranca && npm test
 - `api-cobranca/src/financial-activation/` - Ativação financeira manual (perfil, credenciais, validação, elegibilidade)
 - `api-cobranca/src/settlements/` - Lançamentos e conciliação
 - `docs/operations/financial-activation.md` - Runbook de ativação, emissão e conciliação
+- `api-cobranca/src/templates/` - Catálogo WhatsApp importado (sync Datafy, mapeamento de variáveis, liberações/padrões por empresa, política aplicada na preparação e na transmissão)
+- `api-cobranca/src/communications/template-pending.service.ts`, `template-resume.service.ts` - Envios retidos por template e retomada revisada pelo admin
+- `docs/operations/whatsapp-template-catalog.md` - Runbook do catálogo WhatsApp e do script `templates:transition`
 
 ## Removed Files
 

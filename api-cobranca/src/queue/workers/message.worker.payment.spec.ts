@@ -11,6 +11,8 @@ import type { MessagingLimitService } from '../services/messaging-limit.service'
 import type { RateLimitService } from '../services/rate-limit.service';
 import type { SpintaxService } from '../services/spintax.service';
 import { MessageWorkerService } from './message.worker';
+import { TemplateSendPreparerService } from '../../templates/template-send-preparer.service';
+import { TemplatePendingService } from '../../communications/template-pending.service';
 
 interface InitialChargeProcessor {
   processInitialChargeJob(data: InitialChargeJob): Promise<void>;
@@ -42,6 +44,8 @@ function fixture(financiallyActive: boolean): {
     {} as EmailService,
     {} as EmailTemplatesService,
     {} as PublicPaymentLinkService,
+    {} as TemplateSendPreparerService,
+    {} as TemplatePendingService,
   );
   return {
     process: worker as unknown as InitialChargeProcessor,

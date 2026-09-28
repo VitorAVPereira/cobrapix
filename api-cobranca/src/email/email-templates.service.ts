@@ -230,16 +230,15 @@ export class EmailTemplatesService {
     return this.toResolved(template, preference);
   }
 
+  /** Creates missing definitions only; ON CONFLICT DO NOTHING keeps concurrent first loads safe. */
   private async ensureGlobalCatalog(): Promise<void> {
-    await Promise.all(
-      EMAIL_TEMPLATE_DEFINITIONS.map((definition) =>
-        this.prisma.globalEmailTemplate.upsert({
-          where: { slug: definition.slug },
-          create: { ...definition, isActive: true },
-          update: {},
-        }),
-      ),
-    );
+    await this.prisma.globalEmailTemplate.createMany({
+      data: EMAIL_TEMPLATE_DEFINITIONS.map((definition) => ({
+        ...definition,
+        isActive: true,
+      })),
+      skipDuplicates: true,
+    });
   }
   private findGlobal(id: string): Promise<GlobalEmailTemplate> {
     return this.prisma.globalEmailTemplate.findUniqueOrThrow({ where: { id } });

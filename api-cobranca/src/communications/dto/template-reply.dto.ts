@@ -1,10 +1,5 @@
 import { Type } from 'class-transformer';
-import {
-  IsDefined,
-  IsOptional,
-  IsUUID,
-  ValidateNested,
-} from 'class-validator';
+import { IsDefined, IsOptional, IsUUID, ValidateNested } from 'class-validator';
 
 /** Templates always have a company; invoice and debtor are validated against the chat. */
 export class TemplateReplyContextDto {

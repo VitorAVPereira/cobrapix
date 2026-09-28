@@ -3,8 +3,6 @@ import { DatafyRateLimitService } from './datafy-rate-limit.service';
 import type {
   AcceptedMessage,
   ChannelInfo,
-  CreatedTemplate,
-  TemplateDefinition,
   TemplateMessage,
   TextMessage,
   TemplatePage,
@@ -96,27 +94,6 @@ export class DatafyTransport implements WhatsappTransport {
       messageId: first.id,
       status:
         typeof first.message_status === 'string' ? first.message_status : null,
-    };
-  }
-
-  async createTemplate(input: TemplateDefinition): Promise<CreatedTemplate> {
-    const payload = await this.json(
-      this.apiPath(`/${this.id('META_BUSINESS_ACCOUNT_ID')}/message_templates`),
-      'POST',
-      input,
-    );
-    if (
-      !isRecord(payload) ||
-      typeof payload.id !== 'string' ||
-      typeof payload.status !== 'string'
-    )
-      throw invalidResponse(true);
-    return {
-      id: payload.id,
-      status: payload.status,
-      ...(typeof payload.category === 'string'
-        ? { category: payload.category }
-        : {}),
     };
   }
 
