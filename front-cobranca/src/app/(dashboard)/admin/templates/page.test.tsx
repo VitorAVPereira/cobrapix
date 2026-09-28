@@ -1,31 +1,111 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import Page from "./page";
-const mockSubmit=jest.fn();const mockSync=jest.fn();const mockFinancial=jest.fn();
-const mockApi={getTemplates:jest.fn(),getEmailTemplates:jest.fn(),submitTemplateToMeta:mockSubmit,syncTemplateMetaStatuses:mockSync,financialAdmin:mockFinancial,confirmTemplateReview:jest.fn()};
-let mockRole="PLATFORM_ADMIN";
-jest.mock("@/lib/use-api-client",()=>({useApiClient:()=>mockApi}));
-jest.mock("next-auth/react",()=>({useSession:()=>({data:{user:{role:mockRole}}})}));
-beforeEach(()=>{jest.clearAllMocks();mockRole="PLATFORM_ADMIN";mockApi.getTemplates.mockResolvedValue([{id:"wa-1",name:"Aviso",content:"Cobrança via CifraMais",metaStatus:"DRAFT"}]);mockApi.getEmailTemplates.mockResolvedValue([{id:"email-1",name:"Lembrete",subject:"Vencimento",content:"Sua cobrança"}]);});
-it("submits WhatsApp approval and publishes email through their admin operations",async()=>{
- render(<Page/>);
- fireEvent.click(await screen.findByRole("button",{name:"Solicitar aprovação de Aviso"}));
- await waitFor(()=>expect(mockSubmit).toHaveBeenCalledWith("wa-1"));
- await waitFor(()=>expect(screen.getByRole("button",{name:"Publicar Lembrete"})).toBeEnabled());
- fireEvent.click(screen.getByRole("button",{name:"Publicar Lembrete"}));
- await waitFor(()=>expect(mockFinancial).toHaveBeenCalledWith("/email/templates/email-1/publish","POST"));
+
+const mockApi = {
+  getEmailTemplates: jest.fn(),
+  financialAdmin: jest.fn(),
+  getAdminWhatsappTemplates: jest.fn(),
+  getAdminWhatsappTemplate: jest.fn(),
+  getWhatsappTemplateSyncState: jest.fn(),
+  syncWhatsappTemplates: jest.fn(),
+  previewWhatsappTemplate: jest.fn(),
+  saveWhatsappTemplateMapping: jest.fn(),
+  getAdminClientAnalytics: jest.fn(),
+};
+let mockRole = "PLATFORM_ADMIN";
+jest.mock("@/lib/use-api-client", () => ({ useApiClient: () => mockApi }));
+jest.mock("next-auth/react", () => ({
+  useSession: () => ({ data: { user: { role: mockRole } } }),
+}));
+
+const imported = {
+  id: "wa-1",
+  name: "aviso_cobranca",
+  language: "pt_BR",
+  category: "UTILITY",
+  status: "APPROVED",
+  quality: null,
+  rejectedReason: null,
+  supported: true,
+  supportReason: null,
+  reviewRequired: true,
+  archivedAt: null,
+  providerRevision: 2,
+  mappingRevision: 0,
+  policyVersion: 1,
+  readiness: { ready: false, code: "REVIEW_REQUIRED" },
+  positions: [1],
+  content: { body: "Olá {{1}}", footer: null, button: null },
+  mapping: null,
+  grantedCompanies: 0,
+  lastSyncAt: null,
+};
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  mockRole = "PLATFORM_ADMIN";
+  mockApi.getAdminWhatsappTemplates.mockResolvedValue({
+    items: [imported],
+    nextCursor: null,
+  });
+  mockApi.getAdminWhatsappTemplate.mockResolvedValue(imported);
+  mockApi.getWhatsappTemplateSyncState.mockResolvedValue({
+    providerAccountId: "waba",
+    lastCompletedAt: null,
+    lastStartedAt: null,
+    lastErrorCode: null,
+    lastErrorAt: null,
+    running: false,
+    pendingRequest: false,
+  });
+  mockApi.getEmailTemplates.mockResolvedValue([
+    { id: "email-1", name: "Lembrete", subject: "Vencimento", content: "Sua cobrança" },
+  ]);
 });
-it("explains a pending review and concludes it only through the provider check",async()=>{
- mockApi.getTemplates.mockResolvedValue([{id:"wa-2",name:"Lembrete WA",content:"Olá",metaStatus:"APPROVED",metaReviewRequired:true,metaProviderCategory:"MARKETING",category:"UTILITY",metaQuality:"RED"}]);
- mockApi.confirmTemplateReview.mockRejectedValueOnce(new Error("A categoria no provedor (MARKETING) difere da categoria local (UTILITY)."));
- render(<Page/>);
- expect(await screen.findByRole("note")).toHaveTextContent(/categoria atual: MARKETING/);
- expect(screen.getByText(/Qualidade baixa/)).toBeInTheDocument();
- fireEvent.click(screen.getByRole("button",{name:"Concluir revisão de Lembrete WA"}));
- await waitFor(()=>expect(mockApi.confirmTemplateReview).toHaveBeenCalledWith("wa-2"));
- expect(await screen.findByRole("alert")).toHaveTextContent(/difere da categoria local/);
+
+it("administers the imported catalog without any authoring towards Meta", async () => {
+  render(<Page />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Configurar variáveis de aviso_cobranca" }),
+  );
+  expect(await screen.findByText("Variáveis de aviso_cobranca")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Enviar para Meta" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Solicitar aprovação/ })).toBeNull();
+  expect(screen.getByRole("heading", { name: "Disponibilidade por empresa" })).toBeVisible();
 });
-it("does not load or expose global controls to a company admin",()=>{
- mockRole="COMPANY_ADMIN";render(<Page/>);
- expect(mockApi.getTemplates).not.toHaveBeenCalled();
- expect(screen.getByText(/Acesso restrito/)).toBeInTheDocument();
+
+it("refreshes the catalog after a mapping is saved and explains a conflict", async () => {
+  mockApi.saveWhatsappTemplateMapping
+    .mockRejectedValueOnce(Object.assign(new Error("Conflict"), { status: 409 }))
+    .mockResolvedValueOnce({ mappingRevision: 1 });
+  render(<Page />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Configurar variáveis de aviso_cobranca" }),
+  );
+  fireEvent.change(await screen.findByLabelText("Variável {{1}}"), {
+    target: { value: "DEBTOR_NAME" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Salvar variáveis" }));
+  expect(await screen.findByText("A configuração mudou. Atualize a prévia.")).toBeVisible();
+  fireEvent.change(screen.getByLabelText("Variável {{1}}"), {
+    target: { value: "DEBTOR_NAME" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Salvar variáveis" }));
+  await waitFor(() => expect(mockApi.getAdminWhatsappTemplates).toHaveBeenCalledTimes(2));
+});
+
+it("keeps publishing email templates", async () => {
+  render(<Page />);
+  fireEvent.click(await screen.findByRole("button", { name: "Publicar Lembrete" }));
+  await waitFor(() =>
+    expect(mockApi.financialAdmin).toHaveBeenCalledWith("/email/templates/email-1/publish", "POST"),
+  );
+});
+
+it("does not load or expose global controls to a company admin", () => {
+  mockRole = "COMPANY_ADMIN";
+  render(<Page />);
+  expect(mockApi.getAdminWhatsappTemplates).not.toHaveBeenCalled();
+  expect(mockApi.getEmailTemplates).not.toHaveBeenCalled();
+  expect(screen.getByText(/Acesso restrito/)).toBeInTheDocument();
 });

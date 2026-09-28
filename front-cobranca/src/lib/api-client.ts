@@ -23,6 +23,20 @@ import type {
   SettlementSummary,
 } from "./settlements";
 import type { EfiDraftInput, EfiOnboardingState } from "./efi-onboarding";
+import type {
+  AdminCatalogQuery,
+  AdminWhatsappTemplate,
+  CatalogPage,
+  CompanyTemplateAccess,
+  SaveTemplateMappingInput,
+  SetTemplateDefaultInput,
+  SetTemplateGrantInput,
+  TemplateMapping,
+  TemplatePurpose,
+  TemplateRenderResult,
+  WhatsappSyncResult,
+  WhatsappSyncState,
+} from "@/components/features/templates/types";
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
 export interface ApiError extends Error {
@@ -1931,15 +1945,6 @@ class ApiClient {
     return this.fetch<MessageTemplate[]>("/templates");
   }
 
-  async createTemplate(
-    data: SaveMessageTemplateInput,
-  ): Promise<MessageTemplate> {
-    return this.fetch<MessageTemplate>("/templates", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-  }
-
   async updateTemplate(
     id: string,
     data: Partial<SaveMessageTemplateInput>,
@@ -1950,27 +1955,89 @@ class ApiClient {
     });
   }
 
-  async submitTemplateToMeta(
-    id: string,
-  ): Promise<{ template: MessageTemplate; meta: unknown }> {
-    return this.fetch<{ template: MessageTemplate; meta: unknown }>(
-      `/templates/${id}/submit-meta`,
-      { method: "POST" },
+  // Imported WhatsApp catalog (platform admin). Content comes from the Meta catalog and
+  // is never authored here; the admin maps variables and grants templates to companies.
+  async getAdminWhatsappTemplates(
+    query: AdminCatalogQuery = {},
+  ): Promise<CatalogPage<AdminWhatsappTemplate>> {
+    return this.fetch<CatalogPage<AdminWhatsappTemplate>>(
+      `/admin/whatsapp-templates${this.buildQueryString({
+        status: query.status,
+        supported:
+          query.supported === undefined ? undefined : String(query.supported),
+        cursor: query.cursor,
+        limit: query.limit,
+      })}`,
     );
   }
 
-  /** Re-reads the provider version; released only when it matches the local template. */
-  async confirmTemplateReview(id: string): Promise<MessageTemplate> {
-    return this.fetch<MessageTemplate>(
-      `/templates/${encodeURIComponent(id)}/review`,
-      { method: "POST" },
+  async getAdminWhatsappTemplate(id: string): Promise<AdminWhatsappTemplate> {
+    return this.fetch<AdminWhatsappTemplate>(
+      `/admin/whatsapp-templates/${encodeURIComponent(id)}`,
     );
   }
 
-  async syncTemplateMetaStatuses(): Promise<MessageTemplate[]> {
-    return this.fetch<MessageTemplate[]>("/templates/sync-meta", {
+  async getWhatsappTemplateSyncState(): Promise<WhatsappSyncState> {
+    return this.fetch<WhatsappSyncState>("/admin/whatsapp-templates/sync-state");
+  }
+
+  /** 409 while another sync holds the lease. */
+  async syncWhatsappTemplates(): Promise<WhatsappSyncResult> {
+    return this.fetch<WhatsappSyncResult>("/admin/whatsapp-templates/sync", {
       method: "POST",
     });
+  }
+
+  /** 409 when the provider or mapping revision moved since the admin loaded it. */
+  async saveWhatsappTemplateMapping(
+    id: string,
+    data: SaveTemplateMappingInput,
+  ): Promise<{ mappingRevision: number }> {
+    return this.fetch<{ mappingRevision: number }>(
+      `/admin/whatsapp-templates/${encodeURIComponent(id)}/mapping`,
+      { method: "PUT", body: JSON.stringify(data) },
+    );
+  }
+
+  /** Synthetic values only; nothing is sent. */
+  async previewWhatsappTemplate(
+    id: string,
+    data: { mapping: TemplateMapping },
+  ): Promise<TemplateRenderResult> {
+    return this.fetch<TemplateRenderResult>(
+      `/admin/whatsapp-templates/${encodeURIComponent(id)}/preview`,
+      { method: "POST", body: JSON.stringify(data) },
+    );
+  }
+
+  async getCompanyWhatsappTemplates(
+    companyId: string,
+  ): Promise<CompanyTemplateAccess> {
+    return this.fetch<CompanyTemplateAccess>(
+      `/admin/whatsapp-templates/companies/${encodeURIComponent(companyId)}`,
+    );
+  }
+
+  async setCompanyWhatsappTemplateGrant(
+    companyId: string,
+    templateId: string,
+    data: SetTemplateGrantInput,
+  ): Promise<{ version: number }> {
+    return this.fetch<{ version: number }>(
+      `/admin/whatsapp-templates/companies/${encodeURIComponent(companyId)}/grants/${encodeURIComponent(templateId)}`,
+      { method: "PUT", body: JSON.stringify(data) },
+    );
+  }
+
+  async setCompanyWhatsappTemplateDefault(
+    companyId: string,
+    purpose: TemplatePurpose,
+    data: SetTemplateDefaultInput,
+  ): Promise<{ version: number }> {
+    return this.fetch<{ version: number }>(
+      `/admin/whatsapp-templates/companies/${encodeURIComponent(companyId)}/defaults/${encodeURIComponent(purpose)}`,
+      { method: "PUT", body: JSON.stringify(data) },
+    );
   }
 
   async getEmailTemplates(): Promise<EmailTemplate[]> {
