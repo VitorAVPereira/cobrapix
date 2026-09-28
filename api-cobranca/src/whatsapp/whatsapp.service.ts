@@ -75,32 +75,11 @@ export class WhatsappService {
     );
   }
 
-  enqueueAdminTemplate(
-    phoneNumber: string,
-    template: {
-      name: string;
-      language: string;
-      content: string;
-      parameters: string[];
-      paymentButton: boolean;
-    },
-    idempotencyId: string,
-    options: AdminReplyOptions = {},
+  /** Queues a template reply already prepared under the company template policy. */
+  enqueuePreparedTemplate(
+    intentId: string,
   ): Promise<{ id: string; status: string; externalMessageId: string | null }> {
-    return this.dispatcher.enqueue(
-      {
-        ...this.adminContext(options),
-        phoneNumber,
-        content: template.content,
-        messageType: 'template',
-        origin: 'ADMIN_REPLY',
-        templateName: template.name,
-        languageCode: template.language,
-        bodyParameters: template.parameters,
-        ...(template.paymentButton ? { paymentButtonFromInvoice: true } : {}),
-      },
-      'admin-template:' + idempotencyId,
-    );
+    return this.dispatcher.enqueuePrepared(intentId);
   }
 
   private adminContext(options: AdminReplyOptions): {

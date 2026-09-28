@@ -227,6 +227,30 @@ export class OutboundDispatcherService {
     idempotencyKey: string,
   ): Promise<{ id: string; status: string; externalMessageId: string | null }> {
     const intent = await this.prepare(input, idempotencyKey);
+    return this.enqueueReserved(intent);
+  }
+
+  /** Queues an intent reserved by the template preparer; recovery covers a lost enqueue. */
+  async enqueuePrepared(
+    intentId: string,
+  ): Promise<{ id: string; status: string; externalMessageId: string | null }> {
+    const intent =
+      await this.prisma.communicationOutboundIntent.findUniqueOrThrow({
+        where: { id: intentId },
+        select: { id: true, messageId: true, state: true },
+      });
+    return this.enqueueReserved(intent);
+  }
+
+  private async enqueueReserved(intent: {
+    id: string;
+    messageId: string;
+    state: string;
+  }): Promise<{
+    id: string;
+    status: string;
+    externalMessageId: string | null;
+  }> {
     if (intent.state === 'PENDING') {
       try {
         await Promise.race([

@@ -7,6 +7,9 @@ import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { ResendMailerService } from '../common/resend-mailer.service';
 import { ConfigModule } from '@nestjs/config';
 import { OutboundIntentModule } from './outbound-intent.module';
+import { TemplateSendModule } from '../templates/template-send.module';
+import { TemplateRenderingModule } from '../templates/template-rendering.module';
+import { TemplatesModule } from '../templates/templates.module';
 import { CommunicationsTenantService } from './communications-tenant.service';
 import { WhatsappTransportModule } from '../whatsapp/transport/whatsapp-transport.module';
 import { CommunicationMediaService } from './communication-media.service';
@@ -19,6 +22,9 @@ import { CommunicationsMediaController } from './communications-media.controller
     WhatsappTransportModule,
     ConfigModule,
     OutboundIntentModule,
+    TemplateSendModule,
+    TemplateRenderingModule,
+    TemplatesModule,
   ],
   controllers: [CommunicationsController, CommunicationsMediaController],
   providers: [

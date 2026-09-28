@@ -19,6 +19,9 @@ import { PrismaModule } from '../src/prisma/prisma.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { BullInfrastructureModule } from '../src/queue/bull-infrastructure.module';
 import { TemplatesModule } from '../src/templates/templates.module';
+import { messageRecipient } from '../src/communications/message-context';
+import { PaymentCryptoService } from '../src/payment/payment-crypto.service';
+import { OutboundDispatcherService } from '../src/whatsapp/outbound-dispatcher.service';
 
 jest.setTimeout(180_000);
 
@@ -70,7 +73,10 @@ const catalog = [
     ],
   },
 ];
-const provider = { posts: [] as string[] };
+const provider = {
+  posts: [] as string[],
+  sends: [] as Array<Record<string, unknown>>,
+};
 const external = jest
   .spyOn(globalThis, 'fetch')
   .mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -83,6 +89,16 @@ const external = jest
     );
     if (url.origin !== 'https://cloud.datafyapi.com.br')
       return Promise.reject(new Error(`Unexpected external call: ${url.href}`));
+    if (init?.method === 'POST' && url.pathname === `/v1/${CHANNEL}/messages`) {
+      provider.sends.push(
+        JSON.parse(init.body as string) as Record<string, unknown>,
+      );
+      return Promise.resolve(
+        Response.json({
+          messages: [{ id: `wamid.e2e.${provider.sends.length}` }],
+        }),
+      );
+    }
     if (init?.method === 'POST') {
       provider.posts.push(url.pathname);
       return Promise.reject(new Error('No provider write expected'));
@@ -155,7 +171,10 @@ describe('Template catalog access (HTTP)', () => {
     templateOnlyA: '',
     unsupported: '',
     invoiceA: '',
+    invoiceB: '',
+    conversation: '',
   };
+  const PHONE = '5511976600001';
   const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
   async function login(email: string): Promise<string> {
@@ -211,6 +230,34 @@ describe('Template catalog access (HTTP)', () => {
           originalAmount: 150,
           dueDate: new Date(),
           status: 'PENDING',
+        },
+      })
+    ).id;
+    // Company B charges the same person: one shared chat, two company contexts.
+    const debtorB = await prisma.debtor.create({
+      data: { companyId: b.id, name: 'Pagador B', phoneNumber: `+${PHONE}` },
+    });
+    ids.invoiceB = (
+      await prisma.invoice.create({
+        data: {
+          companyId: b.id,
+          debtorId: debtorB.id,
+          originalAmount: 99,
+          dueDate: new Date(),
+          status: 'PENDING',
+        },
+      })
+    ).id;
+    const crypto = app.get(PaymentCryptoService, { strict: false });
+    ids.conversation = (
+      await prisma.communicationConversation.create({
+        data: {
+          channel: 'WHATSAPP',
+          recipientType: 'PHONE',
+          recipientHash: messageRecipient({ type: 'PHONE', value: PHONE }).hash,
+          recipientEncrypted: crypto.encrypt(PHONE),
+          serviceWindowExpiresAt: new Date(Date.now() - 1000),
+          retentionExpiresAt: new Date(Date.now() + 365 * 86_400_000),
         },
       })
     ).id;
@@ -453,6 +500,133 @@ describe('Template catalog access (HTTP)', () => {
       ).status,
     ).toBe(410);
     expect(provider.posts).toEqual([]);
+  });
+
+  it('inbox: options follow the selected company; templates never take client parameters', async () => {
+    const options = (companyId: string, invoiceId?: string) =>
+      request(http)
+        .get(
+          `/communications/admin/conversations/${ids.conversation}/template-options?companyId=${companyId}${invoiceId ? `&invoiceId=${invoiceId}` : ''}`,
+        )
+        .set(auth(tokens.admin));
+    const optionsForB = (await options(ids.b)).body as {
+      templates: Array<{ id: string }>;
+      serviceWindow: { open: boolean };
+    };
+    expect(optionsForB.serviceWindow.open).toBe(false);
+    expect(optionsForB.templates.some((t) => t.id === ids.templateOnlyA)).toBe(
+      false,
+    );
+    const optionsForA = (await options(ids.a)).body as {
+      templates: Array<{ id: string; usable: boolean; reason: string | null }>;
+    };
+    // Invoice values are needed: the option is listed but not usable without the invoice.
+    expect(optionsForA.templates).toEqual([
+      expect.objectContaining({
+        id: ids.templateOnlyA,
+        usable: false,
+        reason: 'VALUE_MISSING',
+      }),
+    ]);
+    const withInvoice = (await options(ids.a, ids.invoiceA)).body as {
+      templates: Array<{ usable: boolean; previewBody: string }>;
+    };
+    expect(withInvoice.templates[0]).toMatchObject({
+      usable: true,
+      previewBody: 'Olá Pagador A, sua cobrança de R$ 150,00 está disponível.',
+    });
+    // A's context with B's invoice is refused.
+    expect((await options(ids.a, ids.invoiceB)).status).toBe(400);
+
+    const reply = (body: Record<string, unknown>) =>
+      request(http)
+        .post(
+          `/communications/admin/conversations/${ids.conversation}/template-replies`,
+        )
+        .set(auth(tokens.admin))
+        .send(body);
+    const base = {
+      idempotencyId: randomUUID(),
+      templateId: ids.templateOnlyA,
+      context: { companyId: ids.a, invoiceId: ids.invoiceA },
+    };
+    const replyWithClientParameters = await reply({
+      ...base,
+      parameters: ['Outro nome', 'R$ 1,00'],
+    });
+    expect(replyWithClientParameters.status).toBe(400);
+    const replyWithoutCompany = await reply({
+      idempotencyId: randomUUID(),
+      templateId: ids.templateOnlyA,
+    });
+    expect(replyWithoutCompany.status).toBe(400);
+    const replyForB = await reply({
+      ...base,
+      idempotencyId: randomUUID(),
+      context: { companyId: ids.b, invoiceId: ids.invoiceB },
+    });
+    expect(replyForB.status).toBe(422);
+    expect(provider.sends).toHaveLength(0);
+
+    // Outside the window a granted template is sent once; the window stays closed.
+    const queued = await reply(base);
+    expect(queued.status).toBe(201);
+    // The application's own BullMQ worker transmits it.
+    for (let i = 0; i < 200; i++) {
+      const intent = await prisma.communicationOutboundIntent.findFirstOrThrow({
+        where: { messageId: (queued.body as { id: string }).id },
+      });
+      if (intent.state === 'ACCEPTED') break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const templateReplyAfterWindow = { providerCalls: provider.sends.length };
+    expect(templateReplyAfterWindow.providerCalls).toBe(1);
+    expect(provider.sends[0]).toMatchObject({ type: 'template', to: PHONE });
+    const again = await reply(base);
+    expect((again.body as { id: string }).id).toBe(
+      (queued.body as { id: string }).id,
+    );
+    const conversation =
+      await prisma.communicationConversation.findUniqueOrThrow({
+        where: { id: ids.conversation },
+      });
+    expect(conversation.serviceWindowExpiresAt!.getTime()).toBeLessThan(
+      Date.now(),
+    );
+  });
+
+  it('inbox: free text needs the window, also when it closes while queued', async () => {
+    const sendsBefore = provider.sends.length;
+    const closed = await request(http)
+      .post(`/communications/admin/conversations/${ids.conversation}/replies`)
+      .set(auth(tokens.admin))
+      .send({ idempotencyId: randomUUID(), content: 'Olá' });
+    expect(closed.status).toBe(422);
+    await prisma.communicationConversation.update({
+      where: { id: ids.conversation },
+      data: { serviceWindowExpiresAt: new Date(Date.now() + 60_000) },
+    });
+    // Reserved while open and still waiting in the queue when the window closes.
+    const dispatcher = app.get(OutboundDispatcherService, { strict: false });
+    const reservation = await dispatcher.prepare(
+      {
+        companyId: null,
+        phoneNumber: PHONE,
+        content: 'Olá',
+        messageType: 'text',
+        origin: 'ADMIN_REPLY',
+      },
+      `admin-reply:${randomUUID()}`,
+    );
+    await prisma.communicationConversation.update({
+      where: { id: ids.conversation },
+      data: { serviceWindowExpiresAt: new Date(Date.now() - 1000) },
+    });
+    await expect(dispatcher.dispatch(reservation.id)).rejects.toThrow(/janela/);
+    const freeTextAfterWindow = {
+      providerCalls: provider.sends.length - sendsBefore,
+    };
+    expect(freeTextAfterWindow.providerCalls).toBe(0);
   });
 
   it('holds are listed per company; resuming stays with the platform admin', async () => {

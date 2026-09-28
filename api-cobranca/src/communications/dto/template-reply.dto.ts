@@ -1,16 +1,29 @@
 import { Type } from 'class-transformer';
 import {
-  ArrayMaxSize,
-  IsArray,
-  IsNotEmpty,
+  IsDefined,
   IsOptional,
-  IsString,
   IsUUID,
-  MaxLength,
   ValidateNested,
 } from 'class-validator';
-import { MessageContextDto } from './message-context.dto';
 
+/** Templates always have a company; invoice and debtor are validated against the chat. */
+export class TemplateReplyContextDto {
+  @IsUUID()
+  companyId!: string;
+
+  @IsOptional()
+  @IsUUID()
+  invoiceId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  debtorId?: string;
+}
+
+/**
+ * Parameters are never accepted from the browser: the server fills them from the
+ * admin mapping and the selected context.
+ */
 export class TemplateReplyDto {
   @IsUUID()
   idempotencyId!: string;
@@ -18,17 +31,10 @@ export class TemplateReplyDto {
   @IsUUID()
   templateId!: string;
 
-  /** Positional values, in the order the variables appear in the approved template. */
-  @IsArray()
-  @ArrayMaxSize(20)
-  @IsString({ each: true })
-  @IsNotEmpty({ each: true })
-  @MaxLength(1024, { each: true })
-  parameters!: string[];
-
-  /** Required when the template has a payment button: the link is built for this invoice. */
-  @IsOptional()
+  @IsDefined()
   @ValidateNested()
-  @Type(() => MessageContextDto)
-  context?: MessageContextDto;
+  @Type(() => TemplateReplyContextDto)
+  context!: TemplateReplyContextDto;
 }
+
+export class TemplateOptionsQueryDto extends TemplateReplyContextDto {}

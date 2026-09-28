@@ -35,6 +35,11 @@ import { DATAFY_WEBHOOK_QUEUE } from '../src/queue/datafy-webhook.queue';
 import { MessageQueueService } from '../src/queue/message.queue';
 import { DatafyWebhookWorker } from '../src/queue/workers/datafy-webhook.worker';
 import { TemplatesModule } from '../src/templates/templates.module';
+import { TemplateSendModule } from '../src/templates/template-send.module';
+import { TemplateSendPreparerService } from '../src/templates/template-send-preparer.service';
+import { TemplateMappingService } from '../src/templates/template-mapping.service';
+import { CompanyTemplateAccessService } from '../src/templates/company-template-access.service';
+import { templateFingerprint } from '../src/templates/template-components';
 import { DatafyWebhookService } from '../src/webhooks/datafy-webhook.service';
 import { datafyBodyParser } from '../src/webhooks/datafy-body-parser';
 import { WebhooksModule } from '../src/webhooks/webhooks.module';
@@ -156,6 +161,7 @@ async function createApp(): Promise<INestApplication> {
       WebhooksModule,
       PaymentModule,
       TemplatesModule,
+      TemplateSendModule,
       EmailModule,
       AdminModule,
       EfiOnboardingModule,
@@ -273,6 +279,7 @@ describe('Datafy communications, two companies, one phone (e2e)', () => {
     invoiceA: '',
     invoiceB: '',
     conversation: '',
+    template: '',
   };
   const tokens = { admin: '', a: '', b: '' };
   const wamid = { collectionA: '', collectionB: '' };
@@ -320,18 +327,20 @@ describe('Datafy communications, two companies, one phone (e2e)', () => {
     invoiceId: string,
     debtorId: string,
   ): Promise<string> {
-    await app.get(MessageQueueService, { strict: false }).addSendMessageJob({
-      invoiceId,
-      companyId,
-      debtorId,
-      phoneNumber: `+${PHONE}`,
-      senderKey: CHANNEL,
-      templateName: 'ciframais_e2e_aviso',
-      templateLanguage: 'pt_BR',
-      templateParameters: ['Pagador'],
-      message: 'Cobranca E2E',
-      debtorName: 'Pagador',
-    });
+    // Collections go through the company template policy: granted, mapped, pinned.
+    const prepared = await app
+      .get(TemplateSendPreparerService, { strict: false })
+      .prepare({
+        logicalKey: `collection:${companyId}:${invoiceId}:initial:WHATSAPP`,
+        origin: 'COLLECTION',
+        context: { companyId, invoiceId, debtorId },
+        selection: { mode: 'EXPLICIT', templateId: ids.template },
+      });
+    if (prepared.status !== 'QUEUED')
+      throw new Error(`collection held: ${prepared.code}`);
+    await app
+      .get(MessageQueueService, { strict: false })
+      .addOutboundIntentJob(prepared.intentId);
     return (
       await accepted(`collection:${companyId}:${invoiceId}:initial:WHATSAPP`)
     ).externalMessageId;
@@ -391,19 +400,50 @@ describe('Datafy communications, two companies, one phone (e2e)', () => {
       ids[`debtor${key}`] = debtor.id;
       ids[`invoice${key}`] = invoice.id;
     }
-    await prisma.globalMessageTemplate.create({
+    // An approved template imported from the WABA, mapped by the admin and granted to A and B.
+    const body = 'Olá {{1}}, há uma cobrança pendente via CifraMais.';
+    const components = [{ type: 'BODY', text: body }];
+    const template = await prisma.globalMessageTemplate.create({
       data: {
-        name: 'Aviso E2E',
-        slug: `e2e-aviso-${suffix}`,
-        content:
-          'Olá {{nome_devedor}}, há uma cobrança pendente via CifraMais.',
-        paymentButtonEnabled: false,
+        name: 'ciframais_e2e_aviso',
+        slug: `meta-${WABA}-9990001`,
+        content: body,
+        origin: 'META_IMPORTED',
+        providerAccountId: WABA,
+        metaTemplateId: '9990001',
         metaTemplateName: 'ciframais_e2e_aviso',
         metaLanguage: 'pt_BR',
         metaStatus: 'APPROVED',
-        category: 'UTILITY',
+        metaProviderCategory: 'UTILITY',
+        metaComponents: components,
+        parameterFormat: 'POSITIONAL',
+        providerRevision: 1,
+        policyVersion: 1,
+        providerFingerprint: templateFingerprint({
+          components,
+          parameterFormat: 'POSITIONAL',
+          language: 'pt_BR',
+          category: 'UTILITY',
+        }),
       },
     });
+    ids.template = template.id;
+    const admin = await prisma.user.findFirstOrThrow({
+      where: { email: `admin-${suffix}@e2e.test` },
+    });
+    await app
+      .get(TemplateMappingService, { strict: false })
+      .save(
+        template.id,
+        1,
+        0,
+        { body: { '1': { kind: 'SOURCE', source: 'DEBTOR_NAME' } } },
+        admin.id,
+      );
+    for (const companyId of [a.id, b.id])
+      await app
+        .get(CompanyTemplateAccessService, { strict: false })
+        .setGrant(companyId, template.id, true, 0, admin.id);
     tokens.admin = await login(`admin-${suffix}@e2e.test`);
     tokens.a = await login(`a-${suffix}@e2e.test`);
     tokens.b = await login(`b-${suffix}@e2e.test`);
