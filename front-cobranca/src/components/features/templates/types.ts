@@ -129,7 +129,10 @@ export interface AdminWhatsappTemplate {
   mappingRevision: number;
   policyVersion: number;
   readiness: Readiness;
-  positions: number[];
+  /** POSITIONAL ({{1}}) or NAMED ({{nome_devedor}}), as approved in the Meta. */
+  parameterFormat: string;
+  /** Variables the admin maps: "1", "2"... or the approved names. */
+  variables: string[];
   content: TemplateContentView;
   mapping: TemplateMapping | null;
   grantedCompanies: number;

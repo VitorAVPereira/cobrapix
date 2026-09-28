@@ -26,7 +26,8 @@ function template(overrides: Partial<AdminWhatsappTemplate> = {}): AdminWhatsapp
     mappingRevision: 0,
     policyVersion: 1,
     readiness: { ready: false, code: "REVIEW_REQUIRED" },
-    positions: [1, 2],
+    parameterFormat: "POSITIONAL",
+    variables: ["1", "2"],
     content: {
       body: "Olá {{1}}, sua cobrança vence em {{2}}.",
       footer: "CifraMais",
@@ -157,9 +158,54 @@ describe("TemplateMappingEditor", () => {
     );
   });
 
+  it("maps a named template by variable name", async () => {
+    mockApi.getAdminWhatsappTemplate.mockResolvedValue(
+      template({
+        parameterFormat: "NAMED",
+        variables: ["nome_devedor", "metodo_pagamento"],
+        content: {
+          body: "Olá, {{nome_devedor}}. Forma de pagamento: {{metodo_pagamento}}",
+          footer: null,
+          button: null,
+        },
+      }),
+    );
+    mockApi.saveWhatsappTemplateMapping.mockResolvedValue({
+      mappingRevision: 1,
+    });
+    renderEditor();
+    expect(await screen.findByText(/variáveis com nome/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Variável {{nome_devedor}}"), {
+      target: { value: "DEBTOR_NAME" },
+    });
+    fireEvent.change(screen.getByLabelText("Variável {{metodo_pagamento}}"), {
+      target: { value: "LITERAL" },
+    });
+    fireEvent.change(
+      screen.getByLabelText("Texto fixo da variável {{metodo_pagamento}}"),
+      { target: { value: "Boleto" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Salvar variáveis" }));
+    await waitFor(() =>
+      expect(mockApi.saveWhatsappTemplateMapping).toHaveBeenCalledWith(
+        "tpl-1",
+        {
+          expectedProviderRevision: 3,
+          expectedMappingRevision: 0,
+          mapping: {
+            body: {
+              nome_devedor: { kind: "SOURCE", source: "DEBTOR_NAME" },
+              metodo_pagamento: { kind: "LITERAL", value: "Boleto" },
+            },
+          },
+        },
+      ),
+    );
+  });
+
   it("offers no mapping for an unsupported format", async () => {
     mockApi.getAdminWhatsappTemplate.mockResolvedValue(
-      template({ supported: false, supportReason: "HEADER_MEDIA", positions: [] }),
+      template({ supported: false, supportReason: "HEADER_MEDIA", variables: [] }),
     );
     renderEditor();
     expect(await screen.findByText("Formato não suportado")).toBeVisible();

@@ -102,8 +102,11 @@ O catálogo é importado pelo Datafy, identificado por WABA + ID do provedor:
   indisponível o que faltou numa varredura completa. Eventos de status, qualidade,
   categoria e componentes atualizam o catálogo; uma mudança de conteúdo gera nova
   revisão do provedor e exige revisar as variáveis.
-- **Variáveis**: o admin associa cada posição do corpo a uma fonte fechada (nome do
+- **Variáveis**: o admin associa cada variável do corpo a uma fonte fechada (nome do
   devedor, valor, vencimento, links...) ou a um texto fixo curto, com prévia fictícia.
+  Templates posicionais (`{{1}}`, `{{2}}`) e nomeados (`{{nome_devedor}}`, conforme o
+  `parameter_format` aprovado) são aceitos; nos nomeados cada parâmetro é enviado com
+  `parameter_name`. Outros formatos aparecem como não suportados.
   Cada gravação é uma revisão imutável vinculada à revisão do conteúdo.
 - **Liberação**: novo template não é liberado para ninguém. O admin libera por
   empresa e define o padrão de cada finalidade (emissão, lembretes, atrasos, avisos
