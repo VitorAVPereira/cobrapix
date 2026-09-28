@@ -9,6 +9,10 @@ import { CommunicationTokenService } from './communication-token.service';
 import { TemplatePolicyModule } from '../templates/template-policy.module';
 import { TemplatePendingService } from './template-pending.service';
 import { TemplateResumeService } from './template-resume.service';
+import {
+  AdminTemplatePendingController,
+  CompanyTemplatePendingController,
+} from './template-pending.controller';
 import { TemplateRenderingModule } from '../templates/template-rendering.module';
 
 @Module({
@@ -18,7 +22,11 @@ import { TemplateRenderingModule } from '../templates/template-rendering.module'
     TemplatePolicyModule,
     TemplateRenderingModule,
   ],
-  controllers: [OutboundIntentController],
+  controllers: [
+    OutboundIntentController,
+    AdminTemplatePendingController,
+    CompanyTemplatePendingController,
+  ],
   providers: [
     OutboundIntentService,
     CommunicationAttributionService,

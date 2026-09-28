@@ -1,7 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TemplatesController } from './templates.controller';
-import { TemplatesService } from './templates.service';
+import { AdminTemplatesController } from './admin-templates.controller';
+import { TemplateCatalogQueryService } from './template-catalog-query.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
 import { WhatsappTransportModule } from '../whatsapp/transport/whatsapp-transport.module';
@@ -19,16 +20,16 @@ import { CompanyTemplateAccessService } from './company-template-access.service'
     TemplateRenderingModule,
     TemplatePolicyModule,
   ],
-  controllers: [TemplatesController],
+  controllers: [TemplatesController, AdminTemplatesController],
   providers: [
-    TemplatesService,
+    TemplateCatalogQueryService,
     TemplateCatalogSyncService,
     TemplateMappingService,
     CompanyTemplateAccessService,
     PlatformAdminGuard,
   ],
   exports: [
-    TemplatesService,
+    TemplateCatalogQueryService,
     TemplateCatalogSyncService,
     TemplateMappingService,
     CompanyTemplateAccessService,

@@ -163,6 +163,110 @@ export class TemplatePendingService {
     return updated;
   }
 
+  /**
+   * Holds listing. The admin scope may filter any company; the company scope is always the
+   * session's company and never reveals templates or other companies.
+   */
+  async list(
+    scope: { kind: 'ADMIN' } | { kind: 'COMPANY'; companyId: string },
+    query: {
+      companyId?: string;
+      templateId?: string;
+      code?: string;
+      state?: 'BLOCKED' | 'RESUMED' | 'CLOSED';
+      cursor?: string;
+      limit?: number;
+    },
+  ): Promise<{ items: unknown[]; nextCursor: string | null }> {
+    const limit = query.limit ?? 25;
+    const where: Prisma.WhatsappTemplatePendingSendWhereInput = {
+      state: query.state ?? 'BLOCKED',
+      ...(scope.kind === 'COMPANY'
+        ? { companyId: scope.companyId }
+        : {
+            ...(query.companyId ? { companyId: query.companyId } : {}),
+            ...(query.templateId ? { templateId: query.templateId } : {}),
+          }),
+      ...(query.code ? { code: query.code } : {}),
+    };
+    const rows = await this.prisma.whatsappTemplatePendingSend.findMany({
+      where,
+      orderBy: [{ blockedAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+      ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
+      include: {
+        company: { select: { corporateName: true, tradeName: true } },
+      },
+    });
+    const page = rows.slice(0, limit);
+    const templateNames =
+      scope.kind === 'ADMIN'
+        ? new Map(
+            (
+              await this.prisma.globalMessageTemplate.findMany({
+                where: {
+                  id: {
+                    in: page.flatMap((row) =>
+                      row.templateId ? [row.templateId] : [],
+                    ),
+                  },
+                },
+                select: { id: true, metaTemplateName: true, name: true },
+              })
+            ).map((row) => [row.id, row.metaTemplateName ?? row.name]),
+          )
+        : null;
+    return {
+      items: page.map((row) => ({
+        id: row.id,
+        origin: row.origin,
+        invoiceId: row.invoiceId,
+        code: row.code,
+        state: row.state,
+        version: row.version,
+        occurrences: row.occurrences,
+        blockedAt: row.blockedAt,
+        resolvedAt: row.resolvedAt,
+        closedReason: row.closedReason,
+        ...(templateNames
+          ? {
+              companyId: row.companyId,
+              companyName: row.company.tradeName ?? row.company.corporateName,
+              templateId: row.templateId,
+              templateName: row.templateId
+                ? (templateNames.get(row.templateId) ?? null)
+                : null,
+              ruleStepId: row.ruleStepId,
+            }
+          : {}),
+      })),
+      nextCursor: rows.length > limit ? (page.at(-1)?.id ?? null) : null,
+    };
+  }
+
+  /** Blocked holds grouped by company, template and reason, for the admin overview. */
+  async summary(): Promise<
+    Array<{
+      companyId: string;
+      templateId: string | null;
+      code: string;
+      count: number;
+    }>
+  > {
+    const groups = await this.prisma.whatsappTemplatePendingSend.groupBy({
+      by: ['companyId', 'templateId', 'code'],
+      where: { state: 'BLOCKED' },
+      _count: { _all: true },
+      orderBy: [{ companyId: 'asc' }, { code: 'asc' }],
+    });
+    return groups.map((group) => ({
+      companyId: group.companyId,
+      templateId: group.templateId,
+      code: group.code,
+      count: group._count._all,
+    }));
+  }
+
   findByLogicalKey(tx: Tx, logicalKey: string): Promise<PendingRef | null> {
     return tx.whatsappTemplatePendingSend.findUnique({
       where: { logicalKey },
