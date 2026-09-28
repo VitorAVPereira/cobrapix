@@ -274,7 +274,7 @@ export class TemplateCatalogSyncService {
       language,
       status: status.toUpperCase(),
       category: (text(raw.category, 32) ?? 'UNKNOWN').toUpperCase(),
-      components: raw.components ?? null,
+      components: raw.components ?? [],
       parameterFormat: text(raw.parameter_format, 32),
       quality: text(raw.quality_score, 32),
       rejectedReason:
@@ -346,7 +346,7 @@ export class TemplateCatalogSyncService {
         metaProviderCategory: item.category,
         metaQuality: item.quality,
         metaRejectedReason: item.rejectedReason,
-        metaComponents: (item.components ?? []) as Prisma.InputJsonValue,
+        metaComponents: item.components as Prisma.InputJsonValue,
         parameterFormat: item.parameterFormat,
         providerFingerprint: facts.fingerprint,
         supportReason: facts.supportReason,

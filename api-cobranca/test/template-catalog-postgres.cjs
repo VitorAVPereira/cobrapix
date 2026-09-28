@@ -174,6 +174,32 @@ section('catalog sync imports, reconciles and follows events', async ({ prisma }
   assert.equal((await prisma.whatsappTemplateSyncState.findUnique({ where: { providerAccountId: WABA_A } })).syncRequestedAt, null);
 });
 
+const { TemplateMappingService } = require('../src/templates/template-mapping.service.ts');
+
+const FULL_MAPPING = {
+  body: { '1': { kind: 'SOURCE', source: 'DEBTOR_NAME' }, '2': { kind: 'SOURCE', source: 'AMOUNT' }, '3': { kind: 'SOURCE', source: 'DUE_DATE' } },
+  paymentButton: { index: 0, source: 'PAYMENT_URL_SUFFIX' },
+};
+
+section('concurrent mapping edits: one wins, the other gets 409', async ({ prisma }) => {
+  const mappings = new TemplateMappingService(prisma, config);
+  const template = await prisma.globalMessageTemplate.findUnique({ where: { providerAccountId_metaTemplateId: { providerAccountId: WABA_A, metaTemplateId: '700004' } } });
+  assert.equal(template.mappingRevision, 0);
+  const results = await Promise.allSettled([1, 2].map(() => mappings.save(template.id, template.providerRevision, 0, FULL_MAPPING, randomUUID())));
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(results.find(result => result.status === 'rejected').reason.getStatus(), 409);
+  const saved = await prisma.globalMessageTemplate.findUnique({ where: { id: template.id } });
+  assert.equal(saved.mappingRevision, 1);
+  assert.equal(saved.metaReviewRequired, false);
+  assert.ok(saved.policyVersion > template.policyVersion);
+  assert.equal(await prisma.whatsappTemplateMappingRevision.count({ where: { templateId: template.id } }), 1);
+  assert.equal(await prisma.whatsappTemplateAudit.count({ where: { templateId: template.id, action: 'MAPPING_SAVED' } }), 1);
+  // A stale screen (old revision) is refused even though the provider did not change.
+  await assert.rejects(mappings.save(template.id, template.providerRevision, 0, FULL_MAPPING, randomUUID()), error => error.getStatus() === 409);
+  const preview = await mappings.preview(template.id, FULL_MAPPING);
+  assert.equal(preview.ok, true);
+});
+
 module.exports = { section, imported, company, WABA_A, WABA_B };
 
 if (require.main === module) {

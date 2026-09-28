@@ -158,3 +158,22 @@ export function parseTemplate(input: TemplateComponentsInput): ParseResult {
 export function paymentPageBaseUrl(frontendUrl: string | undefined): string {
   return `${(frontendUrl || 'http://localhost:3000').replace(/\/+$/, '')}/pagar`;
 }
+
+/** Re-parses a stored catalog row exactly as the sync classified it. */
+export function parseStoredTemplate(
+  row: {
+    metaComponents: unknown;
+    parameterFormat: string | null;
+    metaLanguage: string;
+    metaProviderCategory: string | null;
+  },
+  frontendUrl: string | undefined,
+): ParseResult {
+  return parseTemplate({
+    components: row.metaComponents,
+    parameterFormat: row.parameterFormat,
+    language: row.metaLanguage,
+    category: row.metaProviderCategory ?? 'UNKNOWN',
+    paymentBaseUrl: paymentPageBaseUrl(frontendUrl),
+  });
+}

@@ -1,0 +1,189 @@
+import { isRecord } from '../whatsapp/transport/whatsapp-transport.error';
+import {
+  ParsedTemplate,
+  RenderResult,
+  RenderValues,
+  TEMPLATE_LITERAL_MAX_LENGTH,
+  TEMPLATE_MAX_BODY_PARAMETERS,
+  TEMPLATE_PARAMETER_MAX_LENGTH,
+  TEMPLATE_SOURCES,
+  TemplateMapping,
+  TemplateSource,
+} from './template-contracts';
+
+export type MappingCheck =
+  | { ok: true }
+  | { ok: false; field: string; reason: string };
+
+/** The provider refuses line breaks, tabs and long runs of spaces in parameters. */
+function acceptedParameter(value: string): boolean {
+  return (
+    value.trim().length > 0 &&
+    value.length <= TEMPLATE_PARAMETER_MAX_LENGTH &&
+    !/[\r\n\t]/.test(value) &&
+    !/ {5,}/.test(value)
+  );
+}
+
+/**
+ * Admin mapping of one parsed revision: every position bound exactly once to a closed
+ * source or a bounded literal, and the payment button bound iff the template has one.
+ * No expressions, database paths or URLs are accepted.
+ */
+export function validateMapping(
+  parsed: ParsedTemplate,
+  mapping: unknown,
+): MappingCheck {
+  const fail = (field: string, reason: string): MappingCheck => ({
+    ok: false,
+    field,
+    reason,
+  });
+  if (!isRecord(mapping) || !isRecord(mapping.body))
+    return fail('body', 'Mapa inválido.');
+  if (parsed.positions.length > TEMPLATE_MAX_BODY_PARAMETERS)
+    return fail('body', 'Quantidade de variáveis acima do suportado.');
+  const allowedKeys = new Set(['body', 'paymentButton']);
+  const extra = Object.keys(mapping).find((key) => !allowedKeys.has(key));
+  if (extra) return fail(extra, 'Campo não suportado.');
+  const positions = new Set(parsed.positions.map(String));
+  for (const key of Object.keys(mapping.body))
+    if (!positions.has(key))
+      return fail(`body.${key}`, 'Posição inexistente no template.');
+  for (const position of parsed.positions) {
+    const field = `body.${position}`;
+    const binding = mapping.body[String(position)];
+    if (!isRecord(binding)) return fail(field, 'Variável sem fonte.');
+    if (binding.kind === 'SOURCE') {
+      if (
+        Object.keys(binding).length !== 2 ||
+        !(TEMPLATE_SOURCES as readonly unknown[]).includes(binding.source)
+      )
+        return fail(field, 'Fonte fora da lista permitida.');
+    } else if (binding.kind === 'LITERAL') {
+      const value = binding.value;
+      if (
+        Object.keys(binding).length !== 2 ||
+        typeof value !== 'string' ||
+        value.length > TEMPLATE_LITERAL_MAX_LENGTH ||
+        !acceptedParameter(value) ||
+        /\{\{|\}\}|https?:\/\/|www\./i.test(value)
+      )
+        return fail(
+          field,
+          'Texto fixo deve ser curto, sem variáveis, links ou quebras de linha.',
+        );
+    } else return fail(field, 'Tipo de vínculo não suportado.');
+  }
+  const button = mapping.paymentButton;
+  if (parsed.paymentButton) {
+    if (
+      !isRecord(button) ||
+      button.index !== 0 ||
+      button.source !== 'PAYMENT_URL_SUFFIX' ||
+      Object.keys(button).length !== 2
+    )
+      return fail('paymentButton', 'Botão exige o link desta cobrança.');
+  } else if (button !== undefined)
+    return fail('paymentButton', 'O template aprovado não tem botão.');
+  return { ok: true };
+}
+
+/** Sources a mapping reads; the context loader fetches only these. */
+export function mappingSources(mapping: TemplateMapping): TemplateSource[] {
+  return [
+    ...new Set(
+      Object.values(mapping.body).flatMap((binding) =>
+        binding.kind === 'SOURCE' ? [binding.source] : [],
+      ),
+    ),
+  ];
+}
+
+/**
+ * Parameters of the approved revision from server-resolved values. Missing or refused
+ * values fail the whole render: nothing is sent empty, undefined or partially.
+ */
+export function renderTemplate(
+  parsed: ParsedTemplate,
+  mapping: TemplateMapping,
+  values: RenderValues,
+  paymentUrl?: string,
+): RenderResult {
+  const check = validateMapping(parsed, mapping);
+  if (!check.ok) return { ok: false, code: 'UNSUPPORTED', field: check.field };
+  const byPosition = new Map<number, string>();
+  for (const position of parsed.positions) {
+    const binding = mapping.body[String(position)]!;
+    const field =
+      binding.kind === 'SOURCE' ? binding.source : `body.${position}`;
+    const value =
+      binding.kind === 'SOURCE' ? values[binding.source] : binding.value;
+    if (value === undefined || !value.trim())
+      return { ok: false, code: 'VALUE_MISSING', field };
+    if (!acceptedParameter(value))
+      return { ok: false, code: 'UNSUPPORTED', field };
+    byPosition.set(position, value);
+  }
+  let paymentButtonSuffix: string | undefined;
+  if (parsed.paymentButton) {
+    if (!paymentUrl)
+      return { ok: false, code: 'VALUE_MISSING', field: 'PAYMENT_URL' };
+    const prefix = parsed.paymentButton.url.slice(0, -'{{1}}'.length);
+    const suffix = paymentUrl.startsWith(prefix)
+      ? paymentUrl.slice(prefix.length)
+      : '';
+    // The approved base plus one opaque path segment for this invoice; nothing else.
+    if (!/^[A-Za-z0-9._~-]{1,1024}$/.test(suffix))
+      return { ok: false, code: 'UNSUPPORTED', field: 'PAYMENT_URL' };
+    paymentButtonSuffix = suffix;
+  }
+  const body = parsed.body.replace(
+    /\{\{(\d+)\}\}/g,
+    (_match: string, position: string) => byPosition.get(Number(position))!,
+  );
+  return {
+    ok: true,
+    body,
+    bodyParameters: parsed.positions.map(
+      (position) => byPosition.get(position)!,
+    ),
+    ...(paymentButtonSuffix ? { paymentButtonSuffix } : {}),
+  };
+}
+
+/** Due dates are stored at 12:00 UTC of the civil day; never shift the day by time zone. */
+export function formatCivilDate(date: Date): string {
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  return `${day}/${month}/${date.getUTCFullYear()}`;
+}
+
+export function formatAmount(value: number): string {
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
+    .format(value)
+    .replace(/\s/g, ' ');
+}
+
+/** Synthetic values of the admin preview; never real customer data. */
+export function syntheticValues(paymentBaseUrl: string): {
+  values: Required<RenderValues>;
+  paymentUrl: string;
+} {
+  const paymentUrl = `${paymentBaseUrl}/exemplo-token`;
+  return {
+    paymentUrl,
+    values: {
+      DEBTOR_NAME: 'Maria Exemplo',
+      COMPANY_NAME: 'Empresa Exemplo',
+      AMOUNT: formatAmount(150),
+      DUE_DATE: '05/10/2026',
+      PAYMENT_LINK: paymentUrl,
+      PIX_COPY_PASTE: '00020101021226860014br.gov.bcb.pix2564exemplo',
+      BOLETO_LINE: '34191.79001 01043.510047 91020.150008 1 98760000015050',
+      BOLETO_LINK: 'https://boleto.exemplo/cobranca',
+      BOLETO_PDF: 'https://boleto.exemplo/cobranca.pdf',
+      REPRESENTATIVE_NAME: 'Ana Representante',
+    },
+  };
+}
