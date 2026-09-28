@@ -13,6 +13,11 @@ const { templateFingerprint } = require('../../src/templates/template-components
 const { TemplateMappingService } = require('../../src/templates/template-mapping.service.ts');
 const { TemplatePolicyService } = require('../../src/templates/template-policy.service.ts');
 const { CompanyTemplateAccessService } = require('../../src/templates/company-template-access.service.ts');
+const { TemplateContextService } = require('../../src/templates/template-context.service.ts');
+const { PublicPaymentLinkService } = require('../../src/payment/payment-link.service.ts');
+const { TemplatePendingService } = require('../../src/communications/template-pending.service.ts');
+const { CommunicationTokenService } = require('../../src/communications/communication-token.service.ts');
+const { OutboundDispatcherService } = require('../../src/whatsapp/outbound-dispatcher.service.ts');
 
 const FRONTEND = 'https://app.ciframais.test';
 const WABA = '333333333333333';
@@ -31,8 +36,12 @@ let phoneSeq = 0;
 
 function services(prisma) {
   const policy = new TemplatePolicyService(config);
+  const paymentLinks = new PublicPaymentLinkService(config, prisma);
   return {
     policy,
+    paymentLinks,
+    context: new TemplateContextService(prisma, crypto, paymentLinks),
+    pending: new TemplatePendingService(prisma, policy),
     mappings: new TemplateMappingService(prisma, config),
     access: new CompanyTemplateAccessService(prisma, policy),
     intents: new OutboundIntentService(prisma, crypto, new CommunicationAttributionService(prisma)),
@@ -86,8 +95,10 @@ async function templateIntent(prisma, { fixture, template, logicalKey = `collect
     context: { companyId: fixture.company.id, debtorId: fixture.debtor.id, invoiceId: fixture.invoice.id },
     selection: { mode: 'EXPLICIT', templateId: template.id },
   };
+  const { context } = services(prisma);
   const decision = await prisma.$transaction(tx => policy.resolve(tx, fixture.company.id, request.selection));
   if (!decision.allowed) throw new Error(`fixture template not allowed: ${decision.code}`);
+  const loaded = await context.load(request.context, request.origin, decision.template.mapping);
   const conversation = await conversationFor(prisma, fixture.phone);
   const reservation = await intents.reserve({
     idempotencyKey: generation ? `${logicalKey}#g${generation}` : logicalKey,
@@ -96,10 +107,23 @@ async function templateIntent(prisma, { fixture, template, logicalKey = `collect
     context: request.context, content: 'Olá Devedor, sua cobrança de R$ 150,00 está disponível.', messageType: 'template',
     payload: { companyId: fixture.company.id, invoiceId: fixture.invoice.id, debtorId: fixture.debtor.id, phoneNumber: fixture.phone, messageType: 'template', templateName: template.metaTemplateName, languageCode: 'pt_BR', bodyParameters: ['Devedor', 'R$ 150,00'], paymentButtonFromInvoice: true },
     retentionExpiresAt: new Date(Date.now() + 365 * 86_400_000),
-    template: { logicalKey, generation, snapshot: decision.template.snapshot, contextFingerprint: 'a'.repeat(64), context: { logicalKey, request } },
+    template: { logicalKey, generation, snapshot: decision.template.snapshot, contextFingerprint: loaded.contextFingerprint, context: { logicalKey, request } },
   });
   if (state) await prisma.communicationOutboundIntent.update({ where: { id: reservation.id }, data: { state, transmission: state === 'ACCEPTED' ? 'ACCEPTED' : state === 'UNCERTAIN' ? 'UNCERTAIN' : 'NOT_SENT', ...(state === 'ACCEPTED' ? { externalMessageId: `wamid.${randomUUID()}` } : {}) } });
   return { id: reservation.id, request, snapshot: decision.template.snapshot };
 }
 
-module.exports = { config, crypto, settings, services, tenant, readyTemplate, grant, templateIntent, conversationFor, MAPPING, FRONTEND, WABA };
+/** Real dispatcher over the disposable database; transport, queue and quotas are fakes. */
+function dispatcher(prisma, behavior) {
+  const { policy, pending, context, paymentLinks, intents } = services(prisma);
+  const transport = { kind: 'DATAFY', calls: [],
+    async sendText(input) { transport.calls.push(input); return { accepted: true, messageId: `wamid.${randomUUID()}`, status: 'accepted' }; },
+    async sendTemplate(input) { transport.calls.push(input); return behavior ? behavior(input) : { accepted: true, messageId: `wamid.${randomUUID()}`, status: 'accepted' }; } };
+  const rates = { checkRateLimit: async () => ({ allowed: true }) };
+  const messaging = { reserveDispatchQuota: async () => undefined };
+  const service = new OutboundDispatcherService(prisma, config, crypto, intents, transport, { addOutboundIntentJob: async () => undefined }, rates, messaging, new CommunicationTokenService(config), paymentLinks, policy, pending, context);
+  return { service, transport, intents, pending, policy };
+}
+
+module.exports = {
+  dispatcher, config, crypto, settings, services, tenant, readyTemplate, grant, templateIntent, conversationFor, MAPPING, FRONTEND, WABA };

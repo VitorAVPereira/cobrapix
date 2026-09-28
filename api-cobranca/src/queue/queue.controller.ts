@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   Controller,
   Get,
   HttpException,
@@ -10,18 +11,35 @@ import {
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue, Job } from 'bullmq';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { MessageQueueService, WhatsAppQueueJob } from './message.queue';
+import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
+import { PrismaService } from '../prisma/prisma.service';
+import {
+  MessageQueueService,
+  SendMessageJob,
+  WhatsAppQueueJob,
+} from './message.queue';
 
+/** Logical key of a collection send, shared by producers, holds and retries. */
+export function collectionLogicalKey(input: {
+  companyId: string;
+  invoiceId: string;
+  ruleStepId?: string | null;
+}): string {
+  return `collection:${input.companyId}:${input.invoiceId}:${input.ruleStepId ?? 'initial'}:WHATSAPP`;
+}
+
+/** Global queue controls are platform-admin only; a retry never skips a template review. */
 @Controller('queue')
+@UseGuards(JwtAuthGuard, PlatformAdminGuard)
 export class QueueController {
   constructor(
     @InjectQueue('whatsapp-messages')
     private readonly whatsappQueue: Queue<WhatsAppQueueJob>,
     private readonly messageQueue: MessageQueueService,
+    private readonly prisma: PrismaService,
   ) {}
 
   @Get('stats')
-  @UseGuards(JwtAuthGuard)
   async getStats() {
     const stats = await this.messageQueue.getQueueStats();
 
@@ -47,9 +65,11 @@ export class QueueController {
   }
 
   @Post('retry/:jobId')
-  @UseGuards(JwtAuthGuard)
   async retryJob(@Param('jobId') jobId: string) {
-    const job = await Job.fromId(this.whatsappQueue, jobId);
+    const job: Job<WhatsAppQueueJob> | undefined = await Job.fromId(
+      this.whatsappQueue,
+      jobId,
+    );
     if (!job) {
       throw new HttpException('Job nao encontrado', HttpStatus.NOT_FOUND);
     }
@@ -62,7 +82,39 @@ export class QueueController {
       );
     }
 
+    await this.assertRetryable(job);
     await job.retry();
     return { success: true, jobId };
+  }
+
+  /** The persisted state decides: held, accepted, uncertain or in-flight work is not retried. */
+  private async assertRetryable(job: Job<WhatsAppQueueJob>): Promise<void> {
+    const refuse = (code: string) =>
+      new ConflictException({
+        code,
+        message:
+          'Envio retido ou ja processado. Revise a pendencia no painel de templates.',
+      });
+    if (job.name === 'outbound-intent' && 'intentId' in job.data) {
+      const intent = await this.prisma.communicationOutboundIntent.findUnique({
+        where: { id: job.data.intentId },
+        select: { state: true },
+      });
+      if (intent?.state !== 'PENDING')
+        throw refuse(
+          intent?.state === 'BLOCKED'
+            ? 'OUTBOUND_BLOCKED'
+            : 'OUTBOUND_NOT_RETRYABLE',
+        );
+      return;
+    }
+    if (job.name === 'send-message') {
+      const data = job.data as SendMessageJob;
+      const hold = await this.prisma.whatsappTemplatePendingSend.findUnique({
+        where: { logicalKey: collectionLogicalKey(data) },
+        select: { state: true },
+      });
+      if (hold && hold.state !== 'CLOSED') throw refuse('OUTBOUND_BLOCKED');
+    }
   }
 }

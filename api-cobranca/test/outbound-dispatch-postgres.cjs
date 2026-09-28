@@ -15,6 +15,8 @@ const { DatafyRateLimitService } = require('../src/whatsapp/transport/datafy-rat
 const { WhatsappTransportError } = require('../src/whatsapp/transport/whatsapp-transport.error.ts');
 const { DatafyWebhookService } = require('../src/webhooks/datafy-webhook.service.ts');
 const { CommunicationTokenService } = require('../src/communications/communication-token.service.ts');
+const { TemplatePolicyService } = require('../src/templates/template-policy.service.ts');
+const { TemplatePendingService } = require('../src/communications/template-pending.service.ts');
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -62,8 +64,12 @@ module.exports = async ({ prisma, crypto, companyA, companyB }) => {
       const messaging = new MessagingLimitService(config, prisma, fake);
       owned.push(rates, messaging);
       const intents = new OutboundIntentService(prisma, crypto, new CommunicationAttributionService(prisma));
+      // Text-only harness: template authorization is exercised by template-pending-postgres.cjs.
+      const policy = new TemplatePolicyService(config);
+      const pending = new TemplatePendingService(prisma, policy);
+      const templateContext = { load: async () => { throw new Error('templates are not exercised by this harness'); } };
       const tokens = new CommunicationTokenService(new ConfigService({ JWT_SECRET: 'synthetic-harness-jwt-secret-with-32-plus-chars' }));
-      const dispatcher = new OutboundDispatcherService(prisma, config, crypto, intents, fake, { addOutboundIntentJob: async () => undefined }, rates, messaging, tokens, { createInvoicePaymentPage: () => ({ token: 'synthetic', url: '' }) });
+      const dispatcher = new OutboundDispatcherService(prisma, config, crypto, intents, fake, { addOutboundIntentJob: async () => undefined }, rates, messaging, tokens, { createInvoicePaymentPage: () => ({ token: 'synthetic', url: '' }) }, policy, pending, templateContext);
       return { dispatcher, intents, fake };
     };
     const text = (phone, extra = {}) => ({ companyId: null, phoneNumber: phone, content: 'Resposta sintetica', messageType: 'text', ...extra });

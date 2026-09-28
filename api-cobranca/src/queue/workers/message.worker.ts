@@ -14,6 +14,7 @@ import {
 } from '@prisma/client';
 import { Worker, Job } from 'bullmq';
 import { WhatsappTransportError } from '../../whatsapp/transport/whatsapp-transport.error';
+import { TemplatePolicyError } from '../../templates/template-contracts';
 import { normalizeWhatsAppNumberForTransport } from '../../common/whatsapp-number';
 import { PaymentService } from '../../payment/payment.service';
 import { PublicPaymentLinkService } from '../../payment/payment-link.service';
@@ -33,6 +34,18 @@ import {
 } from '../message.queue';
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
+
+/** Template policy refusal or an intent already held for review. */
+export function isTemplateHold(error: unknown): boolean {
+  if (error instanceof TemplatePolicyError) return true;
+  if (!(error instanceof ConflictException)) return false;
+  const response = error.getResponse();
+  return (
+    typeof response === 'object' &&
+    response !== null &&
+    (response as { code?: unknown }).code === 'OUTBOUND_BLOCKED'
+  );
+}
 
 interface PaymentMessageData {
   billingType: BillingMethod;
@@ -184,6 +197,8 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       try {
         await this.whatsappService.dispatchIntent(job.data.intentId);
       } catch (error) {
+        // A template hold is durable and waits for admin review: no retry, no failure record.
+        if (isTemplateHold(error)) return;
         if (!this.isDeferredDispatch(error))
           await this.recordRejectedIntent(job.data.intentId, error);
         throw error;
@@ -263,6 +278,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
 
       this.logger.log(`Mensagem da fatura ${invoiceId} enviada com sucesso`);
     } catch (error) {
+      if (isTemplateHold(error)) return;
       if (this.isDeferredDispatch(error)) throw error;
       const errorMessage =
         error instanceof Error ? error.message : 'Erro desconhecido';

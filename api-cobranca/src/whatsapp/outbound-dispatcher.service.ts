@@ -27,13 +27,48 @@ import {
   interactiveTokenHash,
 } from '../communications/communication-token.service';
 import { reevaluateReplies } from '../communications/reply-attribution';
-import { templateVariableNames } from '../templates/template-provider-state';
+import {
+  StoredTemplateContext,
+  TemplatePendingService,
+} from '../communications/template-pending.service';
+import { TemplatePolicyService } from '../templates/template-policy.service';
+import { TemplateContextService } from '../templates/template-context.service';
+import {
+  TemplateBlockCode,
+  TemplatePolicyError,
+  TemplateSendRequest,
+  TemplateSnapshot,
+} from '../templates/template-contracts';
+import { lockLogicalKey } from '../templates/template-locks';
+import { requestTemplateSync } from '../templates/template-provider-state';
+
+/**
+ * Cloud API refusals that mean the approved template (or its parameters) no longer
+ * matches what the provider holds. Classified by code, never by message text.
+ */
+const PROVIDER_TEMPLATE_CODES: Record<number, TemplateBlockCode> = {
+  132000: 'REVIEW_REQUIRED',
+  132001: 'NOT_APPROVED',
+  132005: 'REVIEW_REQUIRED',
+  132007: 'REVIEW_REQUIRED',
+  132012: 'REVIEW_REQUIRED',
+  132015: 'NOT_APPROVED',
+  132016: 'NOT_APPROVED',
+};
+
+export function providerTemplateBlock(
+  error: unknown,
+): TemplateBlockCode | null {
+  return error instanceof WhatsappTransportError &&
+    error.outcome !== 'UNCERTAIN' &&
+    error.providerCode !== undefined
+    ? (PROVIDER_TEMPLATE_CODES[error.providerCode] ?? null)
+    : null;
+}
 
 export interface DispatchPolicy {
   /** Invoice must still be pending and the debtor opted in, rechecked before transmission. */
   checksCollectionEligibility: boolean;
-  /** A company may disable a template for its own collections. */
-  honorsCompanyTemplatePreference: boolean;
   /** Consumes the company's commercial daily quota and MessagingUsage. */
   consumesCompanyQuota: boolean;
   /** Acceptance and rejection are recorded on the collection (log/attempt). */
@@ -47,7 +82,6 @@ export function dispatchPolicy(input: DispatchInput): DispatchPolicy {
     !platformReply && Boolean(input.companyId && input.invoiceId);
   return {
     checksCollectionEligibility: collection,
-    honorsCompanyTemplatePreference: !platformReply,
     consumesCompanyQuota: !platformReply,
     recordsCollection: collection,
   };
@@ -112,6 +146,9 @@ export class OutboundDispatcherService {
     private readonly messaging: MessagingLimitService,
     private readonly tokens: CommunicationTokenService,
     private readonly paymentLinks: PublicPaymentLinkService,
+    private readonly policy: TemplatePolicyService,
+    private readonly pending: TemplatePendingService,
+    private readonly templateContext: TemplateContextService,
   ) {}
 
   async prepare(
@@ -208,12 +245,137 @@ export class OutboundDispatcherService {
   }
 
   async dispatch(id: string): Promise<AcceptedMessage> {
-    return this.intents.execute(
-      id,
-      (intent) => this.validate(intent, this.payload(intent)),
-      (intent) => this.transmit(intent, this.payload(intent)),
-      (tx, intent, result) => this.recordAcceptance(tx, intent, result),
+    try {
+      return await this.intents.execute(
+        id,
+        (intent) => this.validate(intent, this.payload(intent)),
+        (intent) => this.transmit(intent, this.payload(intent)),
+        (tx, intent, result) => this.recordAcceptance(tx, intent, result),
+        (tx, intent) => this.authorize(tx, intent),
+      );
+    } catch (error: unknown) {
+      // A template refusal becomes a durable hold, never a generic failure or a retry.
+      const code =
+        error instanceof TemplatePolicyError
+          ? error.code
+          : providerTemplateBlock(error);
+      if (!code) throw error;
+      await this.hold(id, code, !(error instanceof TemplatePolicyError));
+      throw error instanceof TemplatePolicyError
+        ? error
+        : new TemplatePolicyError(code);
+    }
+  }
+
+  /**
+   * Final template authorization inside the claim transaction: pinned snapshot still valid
+   * (same template, revisions, policy and grant versions), no hold for this communication
+   * and the same recipient, links and values used at preparation.
+   */
+  private async authorize(
+    tx: Prisma.TransactionClient,
+    intent: CommunicationOutboundIntent,
+  ): Promise<void> {
+    const input = this.payload(intent);
+    if (input.messageType !== 'template') return;
+    const stored = intent.templateContext as unknown as StoredTemplateContext;
+    if (
+      !intent.templateSnapshot ||
+      !intent.logicalKey ||
+      !intent.companyId ||
+      !stored?.request
+    )
+      throw new TemplatePolicyError('LEGACY_PAYLOAD');
+    if (input.quickReplyButtons?.length)
+      throw new TemplatePolicyError('UNSUPPORTED');
+    const ready = await this.policy.assertPinned(
+      tx,
+      intent.companyId,
+      intent.templateSnapshot as unknown as TemplateSnapshot,
     );
+    await lockLogicalKey(tx, intent.logicalKey);
+    const hold = await this.pending.findByLogicalKey(tx, intent.logicalKey);
+    if (
+      hold?.state === 'BLOCKED' ||
+      (hold?.state === 'RESUMED' && hold.currentIntentId !== intent.id) ||
+      hold?.state === 'CLOSED'
+    )
+      throw new TemplatePolicyError('VERSION_CHANGED');
+    let fingerprint: string;
+    try {
+      fingerprint = (
+        await this.templateContext.load(
+          stored.request.context,
+          stored.request.origin,
+          ready.mapping,
+          tx,
+        )
+      ).contextFingerprint;
+    } catch {
+      throw new TemplatePolicyError('CONTEXT_CHANGED');
+    }
+    if (fingerprint !== intent.templateContextFingerprint)
+      throw new TemplatePolicyError('CONTEXT_CHANGED');
+  }
+
+  /** Persists the hold for a refused template intent; legacy intents without a tenant fail. */
+  private async hold(
+    id: string,
+    code: TemplateBlockCode,
+    providerRefused: boolean,
+  ): Promise<void> {
+    const intent = await this.prisma.communicationOutboundIntent.findUnique({
+      where: { id },
+    });
+    if (!intent) return;
+    const stored = intent.templateContext as unknown as StoredTemplateContext;
+    const request =
+      stored?.request ??
+      (intent.companyId ? this.legacyRequest(intent) : undefined);
+    await this.prisma.$transaction(async (tx) => {
+      if (!request) {
+        await tx.communicationOutboundIntent.updateMany({
+          where: { id, state: 'PENDING' },
+          data: { state: 'FAILED', lastErrorCode: 'LEGACY_PAYLOAD' },
+        });
+        return;
+      }
+      const waba = this.config.get<string>('META_BUSINESS_ACCOUNT_ID');
+      if (providerRefused && waba) await requestTemplateSync(tx, waba);
+      await this.pending.block(tx, {
+        request,
+        code,
+        intentId: id,
+        ...(intent.templateSnapshot
+          ? {
+              snapshot: intent.templateSnapshot as unknown as TemplateSnapshot,
+            }
+          : {}),
+      });
+    });
+  }
+
+  /** Intents prepared before the catalog change carry no selection: they need a review. */
+  private legacyRequest(
+    intent: CommunicationOutboundIntent,
+  ): TemplateSendRequest {
+    const input = this.payload(intent);
+    return {
+      logicalKey: intent.logicalKey ?? intent.idempotencyKey,
+      origin:
+        input.origin === 'ADMIN_REPLY'
+          ? 'ADMIN_REPLY'
+          : input.invoiceId
+            ? 'COLLECTION'
+            : 'ACTIVATION',
+      context: {
+        companyId: intent.companyId!,
+        ...(intent.invoiceId ? { invoiceId: intent.invoiceId } : {}),
+        ...(intent.debtorId ? { debtorId: intent.debtorId } : {}),
+      },
+      selection: { mode: 'UNCONFIGURED' },
+      ...(input.ruleStepId ? { ruleStepId: input.ruleStepId } : {}),
+    };
   }
 
   async rejectedCollection(id: string): Promise<{
@@ -299,7 +461,7 @@ export class OutboundDispatcherService {
           undefined,
           'SERVICE_WINDOW_CLOSED',
         );
-    } else await this.validateTemplate(input);
+    }
     const policy = dispatchPolicy(input);
     if (
       policy.checksCollectionEligibility &&
@@ -352,68 +514,6 @@ export class OutboundDispatcherService {
       undefined,
       Math.max(1, Math.ceil((resetAt - Date.now()) / 1000)),
     );
-  }
-
-  private async validateTemplate(input: DispatchInput): Promise<void> {
-    const template = await this.prisma.globalMessageTemplate.findFirst({
-      where: {
-        metaTemplateName: input.templateName,
-        metaLanguage: input.languageCode,
-      },
-    });
-    if (
-      !template ||
-      !template.isActive ||
-      template.metaStatus !== 'APPROVED' ||
-      template.metaReviewRequired
-    )
-      throw new WhatsappTransportError(
-        'Template indisponivel. Sincronize e revise o catalogo administrativo.',
-        'REJECTED',
-        'NOT_SENT',
-        undefined,
-        undefined,
-        undefined,
-        'TEMPLATE_UNAVAILABLE',
-      );
-    const count = templateVariableNames(template.content).length;
-    const paymentButton =
-      Boolean(input.buttonUrlSuffix) ||
-      (Boolean(input.paymentButtonFromInvoice) &&
-        Boolean(input.companyId && input.invoiceId));
-    if (
-      input.bodyParameters?.length !== count ||
-      input.bodyParameters.some((value) => !value.trim()) ||
-      paymentButton !== template.paymentButtonEnabled ||
-      !quickRepliesDeclared(template.metaComponents, input.quickReplyButtons)
-    )
-      throw new WhatsappTransportError(
-        'Parametros incompativeis com o template aprovado.',
-        'REJECTED',
-        'NOT_SENT',
-        undefined,
-        undefined,
-        undefined,
-        'TEMPLATE_PARAMETERS_INVALID',
-      );
-    if (
-      input.companyId &&
-      dispatchPolicy(input).honorsCompanyTemplatePreference
-    ) {
-      const preference = await this.prisma.companyTemplatePreference.findUnique(
-        {
-          where: {
-            companyId_channel_slug: {
-              companyId: input.companyId,
-              channel: 'WHATSAPP',
-              slug: template.slug,
-            },
-          },
-        },
-      );
-      if (preference?.isActive === false)
-        throw new Error('COMPANY_TEMPLATE_DISABLED');
-    }
   }
 
   private async transmit(
@@ -547,6 +647,8 @@ export class OutboundDispatcherService {
     if (this.recovering) return;
     this.recovering = true;
     try {
+      // Holds appear before the scheduled time; the claim check stays the guarantee.
+      await this.pending.reconcileInvalidSnapshots(100);
       for (const intent of await this.intents.recover())
         await this.queue.addOutboundIntentJob(intent.id, intent.attempts);
     } catch {

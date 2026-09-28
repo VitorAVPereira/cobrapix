@@ -263,10 +263,25 @@ export class OutboundIntentService {
       intent: CommunicationOutboundIntent,
       result: AcceptedMessage,
     ) => Promise<void>,
+    /**
+     * Final authorization, run in the same transaction that claims the intent. A change
+     * committed before it (revocation, lost approval) blocks the send; nothing external
+     * happens while this transaction is open.
+     */
+    authorize?: (
+      tx: Prisma.TransactionClient,
+      intent: CommunicationOutboundIntent,
+    ) => Promise<void>,
   ): Promise<AcceptedMessage> {
     const intent =
       await this.prisma.communicationOutboundIntent.findUniqueOrThrow({
         where: { id },
+      });
+    if (intent.state === 'BLOCKED')
+      throw new ConflictException({
+        code: 'OUTBOUND_BLOCKED',
+        message:
+          'Envio retido para revisao administrativa do template. Nao sera reenviado automaticamente.',
       });
     if (intent.state === 'ACCEPTED' && intent.externalMessageId)
       return {
@@ -289,17 +304,23 @@ export class OutboundIntentService {
         undefined,
         Math.ceil((intent.nextAttemptAt.getTime() - Date.now()) / 1000),
       );
+    if (intent.templateSnapshot && !authorize)
+      throw new Error('TEMPLATE_AUTHORIZATION_REQUIRED');
     const leaseToken = randomUUID();
-    const claim = await this.prisma.communicationOutboundIntent.updateMany({
-      where: { id, state: 'PENDING', nextAttemptAt: { lte: new Date() } },
-      data: {
-        state: 'SENDING',
-        leaseToken,
-        leaseExpiresAt: new Date(Date.now() + 60_000),
-        attempts: { increment: 1 },
-      },
+    const claimed = await this.prisma.$transaction(async (tx) => {
+      if (authorize) await authorize(tx, intent);
+      const claim = await tx.communicationOutboundIntent.updateMany({
+        where: { id, state: 'PENDING', nextAttemptAt: { lte: new Date() } },
+        data: {
+          state: 'SENDING',
+          leaseToken,
+          leaseExpiresAt: new Date(Date.now() + 60_000),
+          attempts: { increment: 1 },
+        },
+      });
+      return claim.count;
     });
-    if (!claim.count) throw new ConflictException('Envio em andamento.');
+    if (!claimed) throw new ConflictException('Envio em andamento.');
     let transmitting = false;
     try {
       if (intent.retentionExpiresAt <= new Date())

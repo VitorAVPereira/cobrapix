@@ -155,7 +155,7 @@ describe('TemplatePolicyService', () => {
         ...oldSnapshot,
         grantVersion: 3,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ name: 'cobranca' });
     await expect(
       policy.assertPinned(client, 'companyB', oldSnapshot),
     ).rejects.toBeInstanceOf(TemplatePolicyError);

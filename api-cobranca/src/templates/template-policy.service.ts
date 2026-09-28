@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { parseStoredTemplate } from './template-components';
 import {
+  ReadyTemplate,
   TemplateBlockCode,
   TemplateDecision,
   TemplateMapping,
@@ -73,7 +74,7 @@ export class TemplatePolicyService {
     tx: Tx,
     companyId: string,
     snapshot: TemplateSnapshot,
-  ): Promise<void> {
+  ): Promise<ReadyTemplate> {
     await lockTemplates(tx, [snapshot.templateId], 'SHARE');
     await lockGrants(tx, companyId, [snapshot.templateId], 'SHARE');
     const decision = await this.evaluate(tx, companyId, snapshot.templateId);
@@ -86,6 +87,7 @@ export class TemplatePolicyService {
       current.grantVersion !== snapshot.grantVersion
     )
       throw new TemplatePolicyError('VERSION_CHANGED');
+    return decision.template;
   }
 
   async evaluate(

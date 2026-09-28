@@ -100,6 +100,121 @@ section('reconciliation holds invalid snapshots in pages without stalling on val
   assert.equal((await prisma.communicationOutboundIntent.findUnique({ where: { id: invalid.id } })).state, 'BLOCKED');
 });
 
+const { WhatsappTransportError } = require('../src/whatsapp/transport/whatsapp-transport.error.ts');
+
+/** Waits until some backend is blocked on a row lock: a barrier, not an arbitrary sleep. */
+async function waitForLockWaiter(pool) {
+  for (let i = 0; i < 200; i++) {
+    const { rows } = await pool.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock'");
+    if (rows[0].n > 0) return;
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  throw new Error('dispatch never waited on the revocation lock');
+}
+
+section('final authorization: revocation committed before the claim blocks the send', async ({ prisma, pool }) => {
+  const fixture = await fx.tenant(prisma, 'Revoke');
+  const template = await fx.readyTemplate(prisma);
+  await fx.grant(prisma, fixture.company.id, template.id);
+  const prepared = await fx.templateIntent(prisma, { fixture, template });
+  const { service, transport } = fx.dispatcher(prisma);
+  const revoker = await pool.connect();
+  try {
+    await revoker.query('BEGIN');
+    await revoker.query('UPDATE "CompanyWhatsappTemplateGrant" SET "enabled" = false, "version" = "version" + 1 WHERE "companyId" = $1 AND "templateId" = $2', [fixture.company.id, template.id]);
+    const dispatching = service.dispatch(prepared.id).then(() => 'sent', error => error);
+    await waitForLockWaiter(pool);
+    await revoker.query('COMMIT');
+    const outcome = await dispatching;
+    assert.equal(outcome.code, 'NOT_GRANTED');
+  } finally {
+    revoker.release();
+  }
+  assert.equal(transport.calls.length, 0, 'no Datafy call after a committed revocation');
+  assert.equal(await intentState(prisma, prepared.id), 'BLOCKED');
+  const hold = await prisma.whatsappTemplatePendingSend.findUnique({ where: { logicalKey: prepared.request.logicalKey } });
+  assert.equal(hold.code, 'NOT_GRANTED');
+  // A job retried later finds the hold: still no transmission.
+  await assert.rejects(service.dispatch(prepared.id), error => error.getResponse?.().code === 'OUTBOUND_BLOCKED');
+  assert.equal(transport.calls.length, 0);
+});
+
+section('final authorization: re-grant never releases an old snapshot', async ({ prisma }) => {
+  const fixture = await fx.tenant(prisma, 'Regrant');
+  const template = await fx.readyTemplate(prisma);
+  await fx.grant(prisma, fixture.company.id, template.id);
+  const oldIntent = await fx.templateIntent(prisma, { fixture, template });
+  await fx.grant(prisma, fixture.company.id, template.id, false);
+  await fx.grant(prisma, fixture.company.id, template.id, true);
+  const { service, transport } = fx.dispatcher(prisma);
+  await assert.rejects(service.dispatch(oldIntent.id), error => error.code === 'VERSION_CHANGED');
+  assert.equal(transport.calls.length, 0);
+  assert.equal(await intentState(prisma, oldIntent.id), 'BLOCKED');
+  // A fresh preparation under the new grant version is allowed and sent once.
+  const fresh = await fx.templateIntent(prisma, { fixture, template });
+  await service.dispatch(fresh.id);
+  assert.equal(transport.calls.length, 1);
+  assert.equal(transport.calls[0].components.at(-1).sub_type, 'url', 'payment button built at transmission');
+  assert.equal(await intentState(prisma, fresh.id), 'ACCEPTED');
+});
+
+section('final authorization: amount or phone changed since preparation holds the send', async ({ prisma }) => {
+  const fixture = await fx.tenant(prisma, 'Context');
+  const template = await fx.readyTemplate(prisma);
+  await fx.grant(prisma, fixture.company.id, template.id);
+  const { service, transport } = fx.dispatcher(prisma);
+  const amount = await fx.templateIntent(prisma, { fixture, template });
+  await prisma.invoice.update({ where: { id: fixture.invoice.id }, data: { originalAmount: 151 } });
+  await assert.rejects(service.dispatch(amount.id), error => error.code === 'CONTEXT_CHANGED');
+  await prisma.invoice.update({ where: { id: fixture.invoice.id }, data: { originalAmount: 150 } });
+  const phone = await fx.templateIntent(prisma, { fixture, template });
+  await prisma.debtor.update({ where: { id: fixture.debtor.id }, data: { phoneNumber: '5511912345678' } });
+  await assert.rejects(service.dispatch(phone.id), error => error.code === 'CONTEXT_CHANGED');
+  assert.equal(transport.calls.length, 0);
+  assert.equal((await prisma.whatsappTemplatePendingSend.findUnique({ where: { logicalKey: phone.request.logicalKey } })).code, 'CONTEXT_CHANGED');
+});
+
+section('final authorization: uncertain or late-accepted results are never retried', async ({ prisma }) => {
+  const fixture = await fx.tenant(prisma, 'Uncertain');
+  const template = await fx.readyTemplate(prisma);
+  await fx.grant(prisma, fixture.company.id, template.id);
+  const prepared = await fx.templateIntent(prisma, { fixture, template });
+  const { service, transport } = fx.dispatcher(prisma, () => { throw new WhatsappTransportError('timeout', 'UNCERTAIN', 'UNCERTAIN'); });
+  await assert.rejects(service.dispatch(prepared.id), error => error.kind === 'UNCERTAIN');
+  const row = await prisma.communicationOutboundIntent.findUnique({ where: { id: prepared.id } });
+  assert.equal(row.state, 'UNCERTAIN');
+  assert.equal(row.transmission, 'UNCERTAIN');
+  await assert.rejects(service.dispatch(prepared.id));
+  assert.equal(transport.calls.length, 1, 'one call, never a second one');
+  assert.equal(await prisma.whatsappTemplatePendingSend.count({ where: { logicalKey: prepared.request.logicalKey } }), 0, 'uncertain results never become a resumable hold');
+  // A hold attempt on it later leaves it untouched.
+  await prisma.$transaction(tx => fx.services(prisma).pending.block(tx, { request: prepared.request, code: 'VERSION_CHANGED', intentId: prepared.id }));
+  assert.equal(await intentState(prisma, prepared.id), 'UNCERTAIN');
+});
+
+section('final authorization: legacy template payloads are held, never sent', async ({ prisma }) => {
+  const fixture = await fx.tenant(prisma, 'Legacy');
+  const conversation = await fx.conversationFor(prisma, fixture.phone);
+  const { service, transport, intents } = fx.dispatcher(prisma);
+  const legacy = await intents.reserve({
+    idempotencyKey: `collection:${fixture.company.id}:${fixture.invoice.id}:initial:WHATSAPP`, conversationId: conversation.id, transport: 'DATAFY', transportChannelId: '222',
+    recipient: { type: 'PHONE', value: fixture.phone }, context: { companyId: fixture.company.id, invoiceId: fixture.invoice.id, debtorId: fixture.debtor.id },
+    content: 'Template: cobrapix_vencimento_hoje', messageType: 'template',
+    payload: { companyId: fixture.company.id, invoiceId: fixture.invoice.id, debtorId: fixture.debtor.id, phoneNumber: fixture.phone, messageType: 'template', templateName: 'cobrapix_vencimento_hoje', languageCode: 'pt_BR', bodyParameters: ['x'] },
+    retentionExpiresAt: new Date(Date.now() + 86_400_000),
+  });
+  await assert.rejects(service.dispatch(legacy.id), error => error.code === 'LEGACY_PAYLOAD');
+  assert.equal(transport.calls.length, 0);
+  assert.equal(await intentState(prisma, legacy.id), 'BLOCKED');
+  const hold = await prisma.whatsappTemplatePendingSend.findUnique({ where: { logicalKey: `collection:${fixture.company.id}:${fixture.invoice.id}:initial:WHATSAPP` } });
+  assert.equal(hold.code, 'LEGACY_PAYLOAD');
+  assert.deepEqual(hold.request.selection, { mode: 'UNCONFIGURED' });
+});
+
+function intentState(prisma, id) {
+  return prisma.communicationOutboundIntent.findUnique({ where: { id }, select: { state: true } }).then(row => row.state);
+}
+
 module.exports = { section, pendingRequest };
 
 if (require.main === module) {

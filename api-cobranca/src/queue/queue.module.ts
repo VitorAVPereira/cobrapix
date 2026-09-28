@@ -13,6 +13,7 @@ import { EmailModule } from '../email/email.module';
 import { BullInfrastructureModule } from './bull-infrastructure.module';
 import { WhatsappTransportModule } from '../whatsapp/transport/whatsapp-transport.module';
 import { ConfigService } from '@nestjs/config';
+import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
 import {
   DATAFY_WEBHOOK_QUEUE,
   DatafyWebhookQueue,
@@ -56,6 +57,7 @@ import {
     SpintaxService,
     RateLimitService,
     MessagingLimitService,
+    PlatformAdminGuard,
   ],
   exports: [
     DatafyWebhookQueue,
