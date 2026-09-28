@@ -21,6 +21,7 @@ export type RenderedSend = {
   recipient: string;
   body: string;
   bodyParameters: string[];
+  bodyParameterNames?: string[];
 };
 
 export type RenderOutcome =
@@ -69,6 +70,9 @@ export async function renderSend(
     recipient,
     body: rendered.body,
     bodyParameters: rendered.bodyParameters,
+    ...(rendered.bodyParameterNames
+      ? { bodyParameterNames: rendered.bodyParameterNames }
+      : {}),
   };
 }
 
@@ -143,6 +147,9 @@ export async function reserveTemplateIntent(
     templateName: template.name,
     languageCode: template.language,
     bodyParameters: rendered.bodyParameters,
+    ...(rendered.bodyParameterNames
+      ? { bodyParameterNames: rendered.bodyParameterNames }
+      : {}),
     ...(template.parsed.paymentButton
       ? { paymentButtonFromInvoice: true }
       : {}),

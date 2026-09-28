@@ -287,7 +287,8 @@ describe('Template catalog access (HTTP)', () => {
     expect(supported).toMatchObject({
       supported: true,
       grantedCompanies: 0,
-      positions: [1, 2],
+      parameterFormat: 'POSITIONAL',
+      variables: ['1', '2'],
     });
     expect(unsupported).toMatchObject({ supported: false });
     expect(String(unsupported.supportReason)).toMatch(/HEADER/);

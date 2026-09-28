@@ -64,6 +64,21 @@ export const CATALOG = [
       },
     ],
   },
+  // Same shape as templates written with names in the WhatsApp Manager.
+  {
+    id: '777002',
+    name: 'emissao_nomeada',
+    language: 'pt_BR',
+    status: 'APPROVED',
+    category: 'UTILITY',
+    parameter_format: 'NAMED',
+    components: [
+      {
+        type: 'BODY',
+        text: 'Olá, {{nome_devedor}}. Sua cobrança da empresa {{nome_empresa}}, no valor de {{valor}}, vence em {{data_vencimento}}.\n\nForma de pagamento: {{metodo_pagamento}}',
+      },
+    ],
+  },
 ];
 
 export function assertDisposable(spec: string): void {

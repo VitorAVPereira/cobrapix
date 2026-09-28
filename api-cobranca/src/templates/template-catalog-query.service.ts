@@ -52,7 +52,9 @@ export interface AdminTemplateView {
   mappingRevision: number;
   policyVersion: number;
   readiness: { ready: boolean; code: TemplateBlockCode | null };
-  positions: number[];
+  parameterFormat: string;
+  /** Variables the admin maps: "1", "2"... or the approved names. */
+  variables: string[];
   content: TemplateContentView;
   mapping: TemplateMapping | null;
   grantedCompanies: number;
@@ -373,7 +375,8 @@ export class TemplateCatalogQueryService {
       readiness: readiness.ready
         ? { ready: true, code: null }
         : { ready: false, code: readiness.code },
-      positions: parsed.supported ? parsed.template.positions : [],
+      parameterFormat: (row.parameterFormat ?? 'POSITIONAL').toUpperCase(),
+      variables: parsed.supported ? parsed.template.variables : [],
       content: parsed.supported
         ? {
             body: parsed.template.body,
