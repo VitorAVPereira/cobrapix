@@ -92,7 +92,7 @@ async function seedLegacy() {
 
     prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
     // No provider clients or queues: seeding the catalog only constructs a name.
-    const templates = new TemplatesService(prisma, { buildMetaTemplateName: slug => `fixture_${slug}` });
+    const templates = new TemplatesService(prisma);
     const emailTemplates = new EmailTemplatesService(prisma, {}, { get: () => undefined });
     const service = new CollectionProfileService(prisma, templates, emailTemplates);
     const company = await prisma.company.create({ data: { corporateName: 'Fresh tenant', email: 'fresh@example.test', phoneNumber: '5511888888888', document: '98765432000190' } });

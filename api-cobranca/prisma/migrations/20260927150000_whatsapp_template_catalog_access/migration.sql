@@ -13,6 +13,7 @@ ADD COLUMN     "policyVersion" INTEGER NOT NULL DEFAULT 0,
 ADD COLUMN     "providerAccountId" TEXT,
 ADD COLUMN     "providerFingerprint" VARCHAR(64),
 ADD COLUMN     "providerRevision" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "stateVersion" INTEGER NOT NULL DEFAULT 0,
 ADD COLUMN     "supportReason" TEXT;
 
 -- CreateTable

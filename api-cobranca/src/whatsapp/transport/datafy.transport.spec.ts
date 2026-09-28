@@ -140,8 +140,37 @@ describe('Datafy transport contract', () => {
     expect(JSON.stringify(page)).not.toContain('attacker');
     await transport.listTemplates(page.after);
     expect(http.mock.calls[1]?.[0]).toBe(
-      'https://cloud.datafyapi.com.br/v1/9876543210/message_templates?fields=id,name,language,status,rejected_reason,category,components,quality_score&limit=100&after=abc%2B123',
+      'https://cloud.datafyapi.com.br/v1/9876543210/message_templates?fields=id,name,language,status,rejected_reason,category,components,quality_score,parameter_format&limit=100&after=abc%2B123',
     );
+  });
+
+  it('devolve os metadados usados pelo importador do catalogo', async () => {
+    http.mockResolvedValueOnce(
+      reply({
+        data: [
+          {
+            id: '1234567',
+            name: 'cobranca',
+            language: 'pt_BR',
+            status: 'APPROVED',
+            category: 'UTILITY',
+            parameter_format: 'POSITIONAL',
+            quality_score: { score: 'GREEN' },
+            components: [{ type: 'BODY', text: 'Ola {{1}}' }],
+          },
+        ],
+      }),
+    );
+    await expect(transport.listTemplates()).resolves.toEqual({
+      data: [
+        expect.objectContaining({
+          id: '1234567',
+          parameter_format: 'POSITIONAL',
+          quality_score: 'GREEN',
+          components: [{ type: 'BODY', text: 'Ola {{1}}' }],
+        }),
+      ],
+    });
   });
 
   it.each(['../../me', 'https://attacker.example', '1?access_token=oops'])(

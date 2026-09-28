@@ -2,10 +2,12 @@ import { parseTemplate, templateFingerprint } from './template-components';
 
 const BASE = 'https://app.ciframais.test/pagar';
 
+const BODY_TEXT =
+  'Olá {{1}}, sua cobrança de {{2}} está disponível. Obrigado, {{1}}!';
 const approved = [
   {
     type: 'BODY',
-    text: 'Olá {{1}}, sua cobrança de {{2}} está disponível. Obrigado, {{1}}!',
+    text: BODY_TEXT,
     example: { body_text: [['Maria', 'R$ 10,00']] },
   },
   { type: 'FOOTER', text: 'CifraMais' },
@@ -130,7 +132,7 @@ describe('parseTemplate', () => {
           buttons: [{ url: `${BASE}/{{1}}`, text: 'Pagar', type: 'URL' }],
           type: 'BUTTONS',
         },
-        { text: approved[0].text, type: 'BODY' },
+        { text: BODY_TEXT, type: 'BODY' },
         { text: 'CifraMais', type: 'FOOTER' },
       ]),
     );

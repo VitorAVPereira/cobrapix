@@ -44,6 +44,8 @@ export interface TemplateStatus {
   language?: string;
   status?: string;
   rejected_reason?: string;
+  /** POSITIONAL or NAMED when the provider reports it; absent means positional. */
+  parameter_format?: string;
 }
 
 export interface TemplatePage {

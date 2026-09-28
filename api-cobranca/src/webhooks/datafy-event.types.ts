@@ -36,6 +36,8 @@ export interface DatafyReviewEvent {
   field?: string;
   value?: Record<string, unknown>;
   timestamp?: Date;
+  /** Verified WABA of the entry; templates are only resolved inside it. */
+  wabaId?: string;
 }
 export type DatafyEvent =
   | DatafyMessageEvent
@@ -242,6 +244,7 @@ export function normalizeDatafyEvents(
           field,
           value,
           timestamp: eventTime(entry.time, now) ?? new Date(now),
+          wabaId: identity.wabaId,
         });
       else if (field === 'history') events.push({ kind: 'HISTORY' });
       else if (field === 'smb_app_state_sync' || field === 'user_id_update')

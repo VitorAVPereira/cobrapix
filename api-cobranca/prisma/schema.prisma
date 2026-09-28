@@ -1310,6 +1310,8 @@ model GlobalMessageTemplate {
   mappingRevision       Int                               @default(0)
   /// Null when the format is supported; otherwise the blocking component.
   supportReason         String?                           @db.Text
+  /// Increments on every sync, event or mapping write; a scan applies only over the version it captured.
+  stateVersion          Int                               @default(0)
   archivedAt            DateTime?
   preferences           CompanyTemplatePreference[]
   ruleSteps             CollectionRuleStep[]

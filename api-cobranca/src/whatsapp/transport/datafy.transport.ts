@@ -125,7 +125,7 @@ export class DatafyTransport implements WhatsappTransport {
       after === undefined ? '' : `&after=${encodeURIComponent(after)}`;
     const payload = await this.json(
       this.apiPath(
-        `/${this.id('META_BUSINESS_ACCOUNT_ID')}/message_templates?fields=id,name,language,status,rejected_reason,category,components,quality_score&limit=100${cursor}`,
+        `/${this.id('META_BUSINESS_ACCOUNT_ID')}/message_templates?fields=id,name,language,status,rejected_reason,category,components,quality_score,parameter_format&limit=100${cursor}`,
       ),
     );
     if (!isRecord(payload) || !Array.isArray(payload.data))
@@ -152,6 +152,10 @@ export class DatafyTransport implements WhatsappTransport {
         rejected_reason:
           typeof item.rejected_reason === 'string'
             ? item.rejected_reason
+            : undefined,
+        parameter_format:
+          typeof item.parameter_format === 'string'
+            ? item.parameter_format
             : undefined,
       });
     }

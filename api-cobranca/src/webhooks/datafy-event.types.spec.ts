@@ -64,6 +64,8 @@ describe('Normalizacao Datafy', () => {
       replyToExternalMessageId: 'wamid.parent',
       source: 'LIVE',
     });
+    // Template events carry the verified WABA so lookups never cross accounts.
+    expect(result[3]).toMatchObject({ kind: 'TEMPLATE', wabaId: '111' });
   });
   it('recusa WABA/número estranhos mesmo depois de um evento valido', () => {
     expect(() =>

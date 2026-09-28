@@ -57,6 +57,123 @@ section('catalog identity, uniqueness and foreign keys', async ({ prisma, pool }
   await assert.rejects(prisma.whatsappTemplateSyncState.create({ data: { providerAccountId: WABA_A } }), error => error.code === 'P2002');
 });
 
+const { TemplateCatalogSyncService } = require('../src/templates/template-catalog-sync.service.ts');
+const { applyTemplateEvent } = require('../src/templates/template-provider-state.ts');
+
+const FRONTEND = 'https://app.ciframais.test';
+const settings = { FRONTEND_URL: FRONTEND, META_BUSINESS_ACCOUNT_ID: WABA_A, DATAFY_API_TOKEN: 'sk_test' };
+const config = { get: key => settings[key] };
+
+function providerTemplate(id, overrides = {}) {
+  return {
+    id, name: `cobranca_${id}`, language: 'pt_BR', status: 'APPROVED', category: 'UTILITY', parameter_format: 'POSITIONAL',
+    components: [
+      { type: 'BODY', text: 'Olá {{1}}, sua cobrança de {{2}} vence em {{3}}.' },
+      { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Pagar', url: `${FRONTEND}/pagar/{{1}}` }] },
+    ],
+    ...overrides,
+  };
+}
+
+/** Datafy stand-in: numbered cursor pages; an Error entry fails that page. */
+function fakeTransport(pages, { onPage } = {}) {
+  return {
+    kind: 'DATAFY',
+    getChannelInfo: async () => ({ phoneNumberId: '1', businessAccountId: WABA_A }),
+    listTemplates: async after => {
+      const index = after ? Number(after) : 0;
+      if (onPage) await onPage(index);
+      const page = pages[index];
+      if (page instanceof Error) throw page;
+      return { data: page, ...(index + 1 < pages.length ? { after: String(index + 1) } : {}) };
+    },
+  };
+}
+
+section('catalog sync imports, reconciles and follows events', async ({ prisma }) => {
+  const byProviderId = id => prisma.globalMessageTemplate.findUnique({ where: { providerAccountId_metaTemplateId: { providerAccountId: WABA_A, metaTemplateId: id } } });
+  const sync = (pages, options) => new TemplateCatalogSyncService(prisma, config, fakeTransport(pages, options)).sync('MANUAL');
+
+  // imports_unknown_approved_without_grant
+  const first = await sync([[providerTemplate('700001'), providerTemplate('700002', { status: 'REJECTED' }), { name: 'sem_id', language: 'pt_BR', status: 'APPROVED' }]]);
+  assert.equal(first.imported, 1);
+  assert.equal(first.incomplete, 1, 'an item without provider ID is reported, never imported');
+  assert.equal(first.completed, true);
+  const imported = await byProviderId('700001');
+  assert.equal(imported.origin, 'META_IMPORTED');
+  assert.equal(imported.supportReason, null);
+  assert.equal(imported.providerRevision, 1);
+  assert.equal(imported.mappingRevision, 0);
+  assert.equal(await byProviderId('700002'), null, 'a template never approved is not imported');
+  assert.equal(await prisma.companyWhatsappTemplateGrant.count({ where: { templateId: imported.id } }), 0);
+  assert.equal(await prisma.companyWhatsappTemplateDefault.count({ where: { templateId: imported.id } }), 0);
+
+  // Repeated and concurrent syncs never duplicate the local template.
+  const concurrent = await Promise.allSettled([1, 2, 3].map(() => sync([[providerTemplate('700001'), providerTemplate('700003', { components: [{ type: 'HEADER', format: 'IMAGE' }, { type: 'BODY', text: 'Imagem {{1}}' }] })]])));
+  assert.ok(concurrent.some(result => result.status === 'fulfilled'));
+  assert.ok(concurrent.every(result => result.status === 'fulfilled' || result.reason.getStatus() === 409), 'a sync in progress answers 409');
+  assert.equal(await prisma.globalMessageTemplate.count({ where: { metaTemplateId: '700001' } }), 1);
+  const unsupported = await byProviderId('700003');
+  assert.match(unsupported.supportReason, /HEADER/, 'approved but unsupported templates stay visible with the reason');
+
+  // partial_scan_never_removes
+  const partial = await sync([[providerTemplate('700004')], new Error('TIMEOUT')]);
+  assert.equal(partial.completed, false);
+  assert.equal(partial.unavailable, 0);
+  const afterFailedSecondPage = await byProviderId('700001');
+  assert.equal(afterFailedSecondPage.archivedAt, null);
+  assert.equal(afterFailedSecondPage.metaStatus, 'APPROVED');
+  const state = await prisma.whatsappTemplateSyncState.findUnique({ where: { providerAccountId: WABA_A } });
+  assert.equal(state.leaseToken, null, 'a failed scan releases the lease');
+  assert.ok(state.lastErrorCode);
+
+  // late_poll_cannot_restore_after_rejection
+  await prisma.globalMessageTemplate.update({ where: { id: imported.id }, data: { mappingRevision: 1 } });
+  const late = await sync([[providerTemplate('700001'), providerTemplate('700003'), providerTemplate('700004')]], {
+    onPage: () => prisma.$transaction(tx => applyTemplateEvent(tx, 'message_template_status_update', { event: 'REJECTED', message_template_id: '700001' }, new Date(), WABA_A)),
+  });
+  assert.ok(late.conflicts >= 1);
+  const afterConcurrentWebhook = await byProviderId('700001');
+  assert.equal(afterConcurrentWebhook.metaStatus, 'REJECTED');
+  assert.ok((await prisma.whatsappTemplateSyncState.findUnique({ where: { providerAccountId: WABA_A } })).syncRequestedAt, 'conflict schedules a re-read');
+
+  // Content change needs a new review; a later APPROVED event does not conclude it.
+  const changed = providerTemplate('700001', { components: [{ type: 'BODY', text: 'Texto novo {{1}}.' }] });
+  await sync([[changed, providerTemplate('700003'), providerTemplate('700004')]]);
+  const revised = await byProviderId('700001');
+  assert.equal(revised.providerRevision, 2);
+  assert.equal(revised.metaReviewRequired, true);
+  assert.ok(revised.policyVersion > afterConcurrentWebhook.policyVersion);
+  await prisma.$transaction(tx => applyTemplateEvent(tx, 'message_template_status_update', { event: 'APPROVED', message_template_id: '700001' }, new Date(Date.now() + 1000), WABA_A));
+  const afterApprovedEvent = await byProviderId('700001');
+  assert.equal(afterApprovedEvent.metaStatus, 'APPROVED');
+  assert.equal(afterApprovedEvent.metaReviewRequired, true);
+
+  // Another WABA never touches this template, even with the same provider ID.
+  await prisma.$transaction(tx => applyTemplateEvent(tx, 'message_template_status_update', { event: 'DISABLED', message_template_id: '700001' }, new Date(Date.now() + 2000), WABA_B));
+  assert.equal((await byProviderId('700001')).metaStatus, 'APPROVED');
+
+  // deleted_template_is_unavailable: only a complete scan concludes absence.
+  const complete = await sync([[changed, providerTemplate('700004')]]);
+  assert.equal(complete.unavailable, 1);
+  const deleted = await byProviderId('700003');
+  assert.ok(deleted.archivedAt);
+  assert.equal(deleted.metaStatus, 'DELETED');
+  assert.ok(await prisma.whatsappTemplateAudit.count({ where: { templateId: deleted.id, action: 'PROVIDER_ABSENT' } }));
+
+  // unknown_event_requests_sync: nothing sendable is created from a partial payload.
+  await prisma.whatsappTemplateSyncState.update({ where: { providerAccountId: WABA_A }, data: { syncRequestedAt: null } });
+  const review = await prisma.$transaction(tx => applyTemplateEvent(tx, 'message_template_status_update', { event: 'APPROVED', message_template_id: '799999', message_template_name: 'novo', message_template_language: 'pt_BR' }, new Date(), WABA_A));
+  assert.equal(review, false);
+  assert.equal(await byProviderId('799999'), null);
+  assert.ok((await prisma.whatsappTemplateSyncState.findUnique({ where: { providerAccountId: WABA_A } })).syncRequestedAt);
+  // The durable request is served by the 10s timer and cleared after a complete scan.
+  const service = new TemplateCatalogSyncService(prisma, config, fakeTransport([[changed, providerTemplate('700004'), providerTemplate('799999')]]));
+  await service.requested();
+  assert.ok(await byProviderId('799999'));
+  assert.equal((await prisma.whatsappTemplateSyncState.findUnique({ where: { providerAccountId: WABA_A } })).syncRequestedAt, null);
+});
+
 module.exports = { section, imported, company, WABA_A, WABA_B };
 
 if (require.main === module) {
