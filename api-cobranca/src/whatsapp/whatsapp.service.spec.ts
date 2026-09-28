@@ -1,10 +1,13 @@
 import { OutboundDispatcherService } from './outbound-dispatcher.service';
-import { WhatsappTransportError } from './transport/whatsapp-transport.error';
 const dispatch = {
-  attemptKey: jest.fn((series: string) => Promise.resolve(`${series}#1`)),
-  send: jest
+  dispatch: jest
     .fn()
     .mockResolvedValue({ messageId: 'wamid.datafy', status: 'accepted' }),
+  enqueue: jest.fn().mockResolvedValue({
+    id: 'message-1',
+    status: 'pending',
+    externalMessageId: null,
+  }),
 };
 import { DatafyRateLimitService } from './transport/datafy-rate-limit.service';
 const testQuota = {
@@ -79,94 +82,30 @@ function createService(
 describe('WhatsappService transporte selecionado', () => {
   afterEach(() => jest.restoreAllMocks());
 
-  it('nao transmite texto nem template para destinatario com opt-out pendente', async () => {
-    const prisma = createPrismaMock();
-    prisma.communicationRecipientSuppression.findUnique.mockResolvedValue({
-      id: 'blocked',
-    });
-    const service = createService(prisma);
+  it('dispatches prepared intents only through the persistent dispatcher', async () => {
+    const service = createService(createPrismaMock());
     const http = jest.spyOn(globalThis, 'fetch');
-    await expect(
-      service.sendTemplateMessage({
-        companyId: 'company-1',
-        phoneNumber: '5511999999999',
-        templateName: 'notice',
-        languageCode: 'pt_BR',
-        bodyParameters: [],
-        idempotencyKey: 'suppressed-1',
-      }),
-    ).rejects.toThrow('Destinatario pausado');
+    await expect(service.dispatchIntent('intent-1')).resolves.toEqual({
+      messageId: 'wamid.datafy',
+      status: 'accepted',
+    });
+    expect(dispatch.dispatch).toHaveBeenCalledWith('intent-1');
     expect(http).not.toHaveBeenCalled();
-    expect(dispatch.send).not.toHaveBeenCalled();
   });
 
-  it('encaminha o envio Datafy ao dispatcher persistente sem exigir token Meta', async () => {
-    const service = createService(createPrismaMock(), {
-      DATAFY_API_TOKEN: 'synthetic',
+  it('queues free-text admin replies with their validated context', async () => {
+    const service = createService(createPrismaMock());
+    await service.enqueueAdminReply('5511999999999', 'Olá', 'reply-1', {
+      context: { companyId: 'company-1', invoiceId: 'invoice-1' },
     });
-    await expect(
-      service.sendTemplateMessage({
+    expect(dispatch.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
         companyId: 'company-1',
-        phoneNumber: '5511999999999',
-        templateName: 'notice',
-        languageCode: 'pt_BR',
-        bodyParameters: ['Ana'],
-        idempotencyKey: 'request-1',
+        invoiceId: 'invoice-1',
+        messageType: 'text',
+        origin: 'ADMIN_REPLY',
       }),
-    ).resolves.toEqual({ messageId: 'wamid.datafy', status: 'accepted' });
-    expect(dispatch.send).toHaveBeenCalledWith(
-      {
-        companyId: 'company-1',
-        phoneNumber: '5511999999999',
-        templateName: 'notice',
-        languageCode: 'pt_BR',
-        bodyParameters: ['Ana'],
-        content: 'Template: notice',
-        messageType: 'template',
-      },
-      'request-1',
+      'admin-reply:reply-1',
     );
-  });
-});
-
-describe('WhatsappService sendTemplateMessage', () => {
-  it('uses the next attempt key of a series without leaking the flag into the payload', async () => {
-    const service = createService(createPrismaMock());
-    await service.sendTemplateMessage({
-      companyId: 'company-1',
-      phoneNumber: '5511999999999',
-      templateName: 'notice',
-      languageCode: 'pt_BR',
-      bodyParameters: ['Ana'],
-      idempotencyKey: 'efi-onboarding-notice:company-1:2026-09-24',
-      attemptSeries: true,
-    });
-    expect(dispatch.attemptKey).toHaveBeenCalledWith(
-      'efi-onboarding-notice:company-1:2026-09-24',
-    );
-    expect(dispatch.send).toHaveBeenLastCalledWith(
-      expect.not.objectContaining({ attemptSeries: true }),
-      'efi-onboarding-notice:company-1:2026-09-24#1',
-    );
-  });
-
-  it('preserva esperas e resultados incertos do dispatcher', async () => {
-    const service = createService(createPrismaMock());
-    for (const error of [
-      new WhatsappTransportError('aguarde', 'RATE_LIMIT', 'NOT_SENT'),
-      new WhatsappTransportError('incerto', 'UNCERTAIN', 'UNCERTAIN'),
-    ]) {
-      dispatch.send.mockRejectedValueOnce(error);
-      await expect(
-        service.sendTemplateMessage({
-          companyId: 'company-1',
-          phoneNumber: '5511999999999',
-          templateName: 'notice',
-          languageCode: 'pt_BR',
-          bodyParameters: [],
-          idempotencyKey: 'collection-1',
-        }),
-      ).rejects.toBe(error);
-    }
   });
 });

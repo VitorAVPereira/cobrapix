@@ -18,6 +18,7 @@ const { PublicPaymentLinkService } = require('../../src/payment/payment-link.ser
 const { TemplatePendingService } = require('../../src/communications/template-pending.service.ts');
 const { CommunicationTokenService } = require('../../src/communications/communication-token.service.ts');
 const { OutboundDispatcherService } = require('../../src/whatsapp/outbound-dispatcher.service.ts');
+const { TemplateSendPreparerService } = require('../../src/templates/template-send-preparer.service.ts');
 
 const FRONTEND = 'https://app.ciframais.test';
 const WABA = '333333333333333';
@@ -113,6 +114,11 @@ async function templateIntent(prisma, { fixture, template, logicalKey = `collect
   return { id: reservation.id, request, snapshot: decision.template.snapshot };
 }
 
+function preparer(prisma) {
+  const { intents, pending, policy, context } = services(prisma);
+  return new TemplateSendPreparerService(prisma, config, crypto, intents, pending, policy, context);
+}
+
 /** Real dispatcher over the disposable database; transport, queue and quotas are fakes. */
 function dispatcher(prisma, behavior) {
   const { policy, pending, context, paymentLinks, intents } = services(prisma);
@@ -126,4 +132,5 @@ function dispatcher(prisma, behavior) {
 }
 
 module.exports = {
+  preparer,
   dispatcher, config, crypto, settings, services, tenant, readyTemplate, grant, templateIntent, conversationFor, MAPPING, FRONTEND, WABA };

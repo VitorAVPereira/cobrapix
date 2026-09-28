@@ -13,20 +13,12 @@ import { Queue, Job } from 'bullmq';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
 import { PrismaService } from '../prisma/prisma.service';
+import { collectionLogicalKey } from '../templates/template-selection';
 import {
   MessageQueueService,
   SendMessageJob,
   WhatsAppQueueJob,
 } from './message.queue';
-
-/** Logical key of a collection send, shared by producers, holds and retries. */
-export function collectionLogicalKey(input: {
-  companyId: string;
-  invoiceId: string;
-  ruleStepId?: string | null;
-}): string {
-  return `collection:${input.companyId}:${input.invoiceId}:${input.ruleStepId ?? 'initial'}:WHATSAPP`;
-}
 
 /** Global queue controls are platform-admin only; a retry never skips a template review. */
 @Controller('queue')

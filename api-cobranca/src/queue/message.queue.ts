@@ -29,6 +29,8 @@ export interface InitialChargeJob {
   companyId: string;
   source: 'MANUAL' | 'CSV' | 'RECURRING' | 'SELECTED';
   channels?: CollectionChannel[];
+  /** Manual re-send request: each one is its own WhatsApp communication. */
+  requestId?: string;
 }
 
 export interface OutboundIntentJob {
@@ -96,7 +98,7 @@ export class MessageQueueService {
     const requestedAt = Date.now();
     const bulkJobs = jobs.map((job, index) => ({
       name: 'initial-charge',
-      data: job,
+      data: { ...job, requestId: String(requestedAt) },
       opts: {
         delay: this.buildSafeDelay(index),
         ...this.buildJobOptions(

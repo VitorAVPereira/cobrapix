@@ -3,6 +3,9 @@ import { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { ResendMailerService } from '../common/resend-mailer.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { TemplateSendPreparerService } from '../templates/template-send-preparer.service';
+import type { TemplatePurpose } from '../templates/template-contracts';
 import { OnboardingNotifications } from './onboarding-notifications';
 
 @Injectable()
@@ -11,45 +14,59 @@ export class CentralOnboardingNotifications extends OnboardingNotifications {
     private readonly config: ConfigService,
     private readonly whatsapp: WhatsappService,
     private readonly mailer: ResendMailerService,
+    private readonly prisma: PrismaService,
+    private readonly templateSender: TemplateSendPreparerService,
   ) {
     super();
   }
-  async sendNotice(
-    companyId: string,
-    phone: string,
-    representative: string,
-    companyName: string,
-  ): Promise<string> {
-    const response = await this.whatsapp.sendTemplateMessage({
+  /** Name and company come from the validated activation, not from these arguments. */
+  async sendNotice(companyId: string, phone: string): Promise<string> {
+    // Workflow retries reuse the day's pending/accepted/uncertain intent, so nothing is sent twice;
+    // a definitively rejected attempt frees the next generation of the same notice.
+    return this.send(
       companyId,
-      phoneNumber: phone,
-      templateName: this.required('EFI_ONBOARDING_NOTICE_TEMPLATE'),
-      languageCode: this.config.get<string>('META_DEFAULT_LANGUAGE') ?? 'pt_BR',
-      bodyParameters: [representative, companyName],
-      content: 'Aviso de ativação financeira via CifraMais',
-      // Workflow retries reuse the day's pending/accepted/uncertain intent, so nothing is sent twice;
-      // a definitively rejected attempt frees the next key of the series.
-      attemptSeries: true,
-      idempotencyKey: `efi-onboarding-notice:${companyId}:${this.day()}:${createHash('sha256').update(phone).digest('hex').slice(0, 16)}`,
-    });
-    return response.messageId;
+      'ACTIVATION_NOTICE',
+      `efi-onboarding-notice:${companyId}:${this.day()}:${createHash('sha256').update(phone).digest('hex').slice(0, 16)}`,
+    );
   }
-  async sendReminder(
-    companyId: string,
-    phone: string,
-    companyName: string,
-  ): Promise<string> {
-    const response = await this.whatsapp.sendTemplateMessage({
+  async sendReminder(companyId: string): Promise<string> {
+    // The 24h and 72h reminders fall on different days.
+    return this.send(
       companyId,
-      phoneNumber: phone,
-      templateName: this.required('EFI_ONBOARDING_REMINDER_TEMPLATE'),
-      languageCode: this.config.get<string>('META_DEFAULT_LANGUAGE') ?? 'pt_BR',
-      bodyParameters: [companyName],
-      content: 'Lembrete de ativação financeira via CifraMais',
-      // The 24h and 72h reminders fall on different days.
-      attemptSeries: true,
-      idempotencyKey: `efi-onboarding-reminder:${companyId}:${this.day()}`,
+      'ACTIVATION_REMINDER',
+      `efi-onboarding-reminder:${companyId}:${this.day()}`,
+    );
+  }
+  /**
+   * Activation notices use their own purpose defaults and the validated activation data
+   * (representative name and phone); a collection default is never reused for them.
+   */
+  private async send(
+    companyId: string,
+    purpose: TemplatePurpose,
+    logicalKey: string,
+  ): Promise<string> {
+    const activation = await this.prisma.efiOnboarding.findUnique({
+      where: { companyId },
+      select: { id: true },
     });
+    if (!activation)
+      throw new ServiceUnavailableException('Canal central indisponível.');
+    const prepared = await this.templateSender.prepare(
+      {
+        logicalKey,
+        origin: 'ACTIVATION',
+        context: { companyId, activationId: activation.id },
+        selection: { mode: 'DEFAULT', purpose },
+      },
+      { renewAfterRejection: true },
+    );
+    if (prepared.status === 'BLOCKED')
+      throw new ServiceUnavailableException({
+        code: 'TEMPLATE_HELD',
+        message: 'Aviso retido até a revisão do template pelo administrador.',
+      });
+    const response = await this.whatsapp.dispatchIntent(prepared.intentId);
     return response.messageId;
   }
   async alert(companyId: string, code: string): Promise<void> {

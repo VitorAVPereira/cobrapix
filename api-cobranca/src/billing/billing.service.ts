@@ -15,14 +15,15 @@ import {
 import { PaymentFeeService } from '../payment-fees/payment-fee.service';
 import { PaymentService } from '../payment/payment.service';
 import { PublicPaymentLinkService } from '../payment/payment-link.service';
-import { MessageQueueService, SendMessageJob } from '../queue/message.queue';
+import { MessageQueueService } from '../queue/message.queue';
 import { SpintaxService } from '../queue/services/spintax.service';
-import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { CollectionRuleEngine } from './collection-rule-engine';
 import { EmailQueueService } from '../email/email.queue';
 import { EmailService } from '../email/email.service';
 import { EmailTemplatesService } from '../email/email-templates.service';
-import { TemplatesService } from '../templates/templates.service';
+import { TemplateSendPreparerService } from '../templates/template-send-preparer.service';
+import type { TemplateSelection } from '../templates/template-contracts';
+import { collectionLogicalKey } from '../templates/template-selection';
 
 const DEFAULT_COLLECTION_REMINDER_DAYS = [0];
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -165,8 +166,7 @@ export class BillingService {
     private emailQueue: EmailQueueService,
     private emailService: EmailService,
     private emailTemplatesService: EmailTemplatesService,
-    private templatesService: TemplatesService,
-    private whatsappService?: WhatsappService,
+    private templateSender: TemplateSendPreparerService,
     private paymentLinkService?: PublicPaymentLinkService,
     private fees?: PaymentFeeService,
   ) {}
@@ -627,7 +627,7 @@ export class BillingService {
         invoice: ScheduledInvoice;
         ruleStepId: string;
         channel: CollectionChannel;
-        templateId: string | null;
+        whatsappSelection: TemplateSelection;
         emailTemplateId: string | null;
         delayDays: number;
       }
@@ -646,7 +646,7 @@ export class BillingService {
           invoice: invoice as never,
           ruleStepId: nextStep.ruleStepId,
           channel: nextStep.channel,
-          templateId: nextStep.templateId,
+          whatsappSelection: nextStep.whatsappSelection,
           emailTemplateId: nextStep.emailTemplateId,
           delayDays: nextStep.delayDays,
         });
@@ -683,7 +683,12 @@ export class BillingService {
         }
       }
 
-      const whatsAppJobs: SendMessageJob[] = [];
+      const whatsAppIntents: Array<{
+        intentId: string;
+        companyId: string;
+        invoiceId: string;
+        debtorName: string;
+      }> = [];
       const emailJobs: Array<{
         companyId: string;
         invoiceId: string;
@@ -700,7 +705,7 @@ export class BillingService {
         invoice,
         ruleStepId,
         channel,
-        templateId,
+        whatsappSelection,
         emailTemplateId,
       } of resolved) {
         const paymentData = paymentResults.get(invoice.id);
@@ -710,23 +715,16 @@ export class BillingService {
         }
 
         if (channel === 'WHATSAPP') {
-          const template = await this.resolveTemplate(
-            company.id,
-            templateId,
-            true,
-          );
-          if (!template) {
-            await this.createCollectionLog(
+          if (!invoice.debtor.whatsappOptIn) {
+            await this.recordSkippedWhatsapp(
               company.id,
               invoice.id,
-              'WHATSAPP_TEMPLATE_NOT_APPROVED',
-              'Nenhum template Meta aprovado disponivel para esta etapa da regua.',
-              'SKIPPED',
+              ruleStepId,
+              invoice.debtor.name,
             );
             skippedCount++;
             continue;
           }
-
           const attemptCreated = await this.createQueuedAttempt(
             company.id,
             invoice.id,
@@ -737,56 +735,38 @@ export class BillingService {
             skippedCount++;
             continue;
           }
-
-          let phone = invoice.debtor.phoneNumber;
-          if (!phone.startsWith('55')) {
-            phone = `55${phone}`;
-          }
-
-          const replacements = this.buildTemplateReplacements({
-            debtorName: invoice.debtor.name,
-            originalAmount: Number(invoice.originalAmount),
-            dueDate: invoice.dueDate,
-            companyName: company.tradeName ?? company.corporateName,
-            paymentData,
-          });
-          replacements.saudacao = template.greeting;
-          replacements.instrucoes = template.instructions;
-          replacements.assinatura = template.signature;
-          const templateParameters = this.whatsappService
-            ?.buildTemplateParameters
-            ? this.whatsappService.buildTemplateParameters(
-                template.content,
-                replacements,
-              )
-            : this.buildTemplateParameters(template.content, replacements);
-          const templateName =
-            template.metaTemplateName ??
-            this.whatsappService?.buildMetaTemplateName(template.slug) ??
-            template.slug;
-          const message = this.buildMessageFromTemplate(template.content, {
-            debtorName: invoice.debtor.name,
-            originalAmount: Number(invoice.originalAmount),
-            dueDate: invoice.dueDate,
-            companyName: company.tradeName ?? company.corporateName,
-            paymentData,
-          });
-
-          whatsAppJobs.push({
-            invoiceId: invoice.id,
-            companyId: company.id,
-            debtorId: invoice.debtor.id,
-            phoneNumber: phone,
-            senderKey: company.whatsappInstanceId ?? 'unknown',
-            templateName,
-            templateLanguage: template.metaLanguage,
-            templateParameters,
-            buttonUrlSuffix: template.paymentButtonEnabled
-              ? paymentData.paymentPageToken || undefined
-              : undefined,
-            message,
-            debtorName: invoice.debtor.name,
+          // The step's own choice (explicit or purpose default); never another template.
+          const prepared = await this.templateSender.prepare({
+            logicalKey: collectionLogicalKey({
+              companyId: company.id,
+              invoiceId: invoice.id,
+              ruleStepId,
+            }),
+            origin: 'COLLECTION',
+            context: {
+              companyId: company.id,
+              invoiceId: invoice.id,
+              debtorId: invoice.debtor.id,
+            },
+            selection: whatsappSelection,
             ruleStepId,
+          });
+          if (prepared.status === 'BLOCKED') {
+            await this.createCollectionLog(
+              company.id,
+              invoice.id,
+              'WHATSAPP_TEMPLATE_HELD',
+              `Mensagem WhatsApp retida para revisao administrativa do template${prepared.code ? ` (${prepared.code})` : ''}.`,
+              'SKIPPED',
+            );
+            skippedCount++;
+            continue;
+          }
+          whatsAppIntents.push({
+            intentId: prepared.intentId,
+            companyId: company.id,
+            invoiceId: invoice.id,
+            debtorName: invoice.debtor.name,
           });
         } else if (channel === 'EMAIL') {
           const debtorEmail = invoice.debtor.email as string | undefined;
@@ -866,18 +846,27 @@ export class BillingService {
         }
       }
 
-      if (whatsAppJobs.length > 0) {
-        await this.messageQueue.addBulkSendMessageJobs(whatsAppJobs);
-        await this.logQueuedMessages(whatsAppJobs);
+      for (const queued of whatsAppIntents) {
+        // Persisted first: a lost enqueue is picked up by intent recovery.
+        await this.messageQueue
+          .addOutboundIntentJob(queued.intentId)
+          .catch(() => undefined);
+        await this.createCollectionLog(
+          queued.companyId,
+          queued.invoiceId,
+          'WHATSAPP_QUEUED',
+          `Mensagem de cobranca enfileirada para ${queued.debtorName}.`,
+          'QUEUED',
+        );
       }
 
       if (emailJobs.length > 0) {
         await this.emailQueue.addBulk(emailJobs);
       }
 
-      const totalQueued = whatsAppJobs.length + emailJobs.length;
+      const totalQueued = whatsAppIntents.length + emailJobs.length;
       this.logger.log(
-        `Empresa ${company.corporateName}: ${totalQueued} mensagens enfileiradas (${whatsAppJobs.length} WhatsApp + ${emailJobs.length} email), ${skippedCount} puladas`,
+        `Empresa ${company.corporateName}: ${totalQueued} mensagens enfileiradas (${whatsAppIntents.length} WhatsApp + ${emailJobs.length} email), ${skippedCount} puladas`,
       );
 
       return { queued: totalQueued, skipped: skippedCount };
@@ -888,49 +877,6 @@ export class BillingService {
       );
       return { queued: 0, skipped: 0 };
     }
-  }
-
-  private async resolveTemplate(
-    companyId: string,
-    templateId: string | null,
-    requireApprovedMeta: boolean,
-  ): Promise<{
-    id: string;
-    slug: string;
-    content: string;
-    metaTemplateName: string | null;
-    metaLanguage: string;
-    paymentButtonEnabled: boolean;
-    greeting: string;
-    instructions: string;
-    signature: string;
-  } | null> {
-    let slug: string | null = null;
-    if (templateId) {
-      const selected = await this.prisma.globalMessageTemplate.findFirst({
-        where: { id: templateId, isActive: true },
-        select: { slug: true },
-      });
-      if (!selected) return null;
-      slug = selected.slug;
-    }
-    const targetSlug = slug ?? 'vencimento-hoje';
-    if (requireApprovedMeta) {
-      const template = await this.templatesService.resolveApproved(
-        companyId,
-        targetSlug,
-      );
-      return template?.isActive ? template : null;
-    }
-    const catalog = await this.templatesService.findAll(companyId);
-    return (
-      catalog.find(
-        (template) => template.slug === targetSlug && template.isActive,
-      ) ??
-      (templateId
-        ? null
-        : (catalog.find((template) => template.isActive) ?? null))
-    );
   }
 
   private async ensureInvoicePayment(
@@ -1160,18 +1106,34 @@ export class BillingService {
     return labels[billingType];
   }
 
-  private async logQueuedMessages(jobs: SendMessageJob[]): Promise<void> {
-    await Promise.all(
-      jobs.map((job) =>
-        this.createCollectionLog(
-          job.companyId,
-          job.invoiceId,
-          'WHATSAPP_QUEUED',
-          `Mensagem de cobranca enfileirada para ${job.debtorName} (${job.phoneNumber}).`,
-          'QUEUED',
-        ),
-      ),
+  /** Without opt-in the step is recorded as attempted and failed, as before. */
+  private async recordSkippedWhatsapp(
+    companyId: string,
+    invoiceId: string,
+    ruleStepId: string,
+    debtorName: string,
+  ): Promise<void> {
+    await this.createCollectionLog(
+      companyId,
+      invoiceId,
+      'WHATSAPP_OPT_IN_REQUIRED',
+      `Envio oficial bloqueado para ${debtorName}: opt-in WhatsApp ausente.`,
+      'SKIPPED',
     );
+    await this.prisma.collectionAttempt
+      .create({
+        data: {
+          companyId,
+          invoiceId,
+          ruleStepId,
+          channel: 'WHATSAPP',
+          status: 'FAILED',
+          errorDetails: 'Opt-in WhatsApp ausente.',
+        },
+      })
+      .catch((error: unknown) => {
+        if (!this.isUniqueConstraintError(error)) throw error;
+      });
   }
 
   private async createQueuedAttempt(
@@ -1554,21 +1516,6 @@ export class BillingService {
     return Math.round((left.getTime() - right.getTime()) / DAY_IN_MS);
   }
 
-  private buildMessageFromTemplate(
-    templateContent: string,
-    params: {
-      debtorName: string;
-      originalAmount: number;
-      dueDate: Date;
-      companyName: string;
-      paymentData: PaymentMessageData;
-    },
-  ): string {
-    const message = this.buildTemplateText(templateContent, params);
-
-    return this.ensurePaymentInstruction(message, params.paymentData);
-  }
-
   private buildTemplateText(
     templateContent: string,
     params: {
@@ -1642,51 +1589,6 @@ export class BillingService {
       instrucoes: 'Use o botão abaixo para acessar o pagamento seguro.',
       assinatura: `Equipe ${params.companyName}`,
     };
-  }
-
-  private buildTemplateParameters(
-    templateContent: string,
-    replacements: Record<string, string>,
-  ): string[] {
-    return Array.from(
-      templateContent.matchAll(/\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g),
-    )
-      .map((match) => match[1])
-      .filter((variableName): variableName is string => Boolean(variableName))
-      .map((variableName) => replacements[variableName] ?? '');
-  }
-
-  private buildMetaTemplateName(slug: string): string {
-    return `cobrapix_${slug}`
-      .toLowerCase()
-      .replace(/[^a-z0-9_]+/g, '_')
-      .replace(/^_+|_+$/g, '');
-  }
-
-  private ensurePaymentInstruction(
-    message: string,
-    paymentData: PaymentMessageData,
-  ): string {
-    const paymentValues = [
-      paymentData.paymentLink,
-      paymentData.pixCopiaECola,
-      paymentData.boletoLinhaDigitavel,
-      paymentData.boletoLink,
-      paymentData.boletoPdf,
-    ].filter((value) => value !== '');
-
-    if (paymentValues.some((value) => message.includes(value))) {
-      return message;
-    }
-
-    return [
-      message,
-      '',
-      `Forma de pagamento: ${paymentData.billingTypeLabel}`,
-      `Acesse/pague por aqui: ${paymentData.paymentLink}`,
-    ]
-      .filter((line) => line !== '')
-      .join('\n');
   }
 
   private removeEmptyVariableLines(

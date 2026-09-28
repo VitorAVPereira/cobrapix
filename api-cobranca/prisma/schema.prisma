@@ -1412,6 +1412,12 @@ enum WhatsappTemplateOrigin {
   META_IMPORTED
 }
 
+enum WhatsappSelectionMode {
+  EXPLICIT
+  DEFAULT
+  UNCONFIGURED
+}
+
 enum WhatsappTemplatePurpose {
   EMISSION
   BEFORE_DUE
@@ -1595,24 +1601,27 @@ model CollectionProfile {
 }
 
 model CollectionRuleStep {
-  id              String                 @id @default(uuid())
-  profileId       String
-  profile         CollectionProfile      @relation(fields: [profileId], references: [id], onDelete: Cascade)
-  stepOrder       Int
-  channel         CollectionChannel
+  id                    String                   @id @default(uuid())
+  profileId             String
+  profile               CollectionProfile        @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  stepOrder             Int
+  channel               CollectionChannel
   /// WhatsApp only; a CHECK keeps each channel on its own catalog.
-  templateId      String?
-  template        GlobalMessageTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  templateId            String?
+  template              GlobalMessageTemplate?   @relation(fields: [templateId], references: [id], onDelete: SetNull)
   /// EMAIL only; null keeps the email default.
-  emailTemplateId String?
-  emailTemplate   GlobalEmailTemplate?   @relation(fields: [emailTemplateId], references: [id], onDelete: Restrict)
-  delayDays       Int                    @default(0)
-  sendTimeStart   String?
-  sendTimeEnd     String?
-  isActive        Boolean                @default(true)
-  attempts        CollectionAttempt[]
-  createdAt       DateTime               @default(now())
-  updatedAt       DateTime               @updatedAt
+  emailTemplateId       String?
+  emailTemplate         GlobalEmailTemplate?     @relation(fields: [emailTemplateId], references: [id], onDelete: Restrict)
+  /// WhatsApp only: explicit template, the company's purpose default, or pending configuration.
+  whatsappSelectionMode WhatsappSelectionMode?
+  whatsappPurpose       WhatsappTemplatePurpose?
+  delayDays             Int                      @default(0)
+  sendTimeStart         String?
+  sendTimeEnd           String?
+  isActive              Boolean                  @default(true)
+  attempts              CollectionAttempt[]
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
 
   @@unique([profileId, stepOrder, channel])
   @@index([profileId, stepOrder])

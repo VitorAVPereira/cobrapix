@@ -15,7 +15,9 @@ import {
 import { Worker, Job } from 'bullmq';
 import { WhatsappTransportError } from '../../whatsapp/transport/whatsapp-transport.error';
 import { TemplatePolicyError } from '../../templates/template-contracts';
-import { normalizeWhatsAppNumberForTransport } from '../../common/whatsapp-number';
+import { TemplateSendPreparerService } from '../../templates/template-send-preparer.service';
+import { TemplatePendingService } from '../../communications/template-pending.service';
+import { collectionLogicalKey } from '../../templates/template-selection';
 import { PaymentService } from '../../payment/payment.service';
 import { PublicPaymentLinkService } from '../../payment/payment-link.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -32,8 +34,6 @@ import {
   SendMessageJob,
   WhatsAppQueueJob,
 } from '../message.queue';
-
-const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
 /** Template policy refusal or an intent already held for review. */
 export function isTemplateHold(error: unknown): boolean {
@@ -108,18 +108,6 @@ interface InitialChargePaymentInvoice {
   boletoPdf: string | null;
 }
 
-interface MessageTemplateRecord {
-  slug: string;
-  content: string;
-  metaTemplateName: string | null;
-  metaLanguage: string;
-  metaStatus: string;
-  paymentButtonEnabled: boolean;
-  greeting: string;
-  instructions: string;
-  signature: string;
-}
-
 @Injectable()
 export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MessageWorkerService.name);
@@ -138,6 +126,8 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     private emailService: EmailService,
     private emailTemplatesService: EmailTemplatesService,
     private paymentLinkService: PublicPaymentLinkService,
+    private templateSender: TemplateSendPreparerService,
+    private templatePending: TemplatePendingService,
   ) {}
 
   onModuleInit() {
@@ -221,95 +211,46 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     await this.processSendMessageJob(job.data);
   }
 
+  /**
+   * Jobs queued before the imported catalog carry a template name and parameters. They
+   * never gain an implicit authorization: the communication is held for admin review.
+   */
   private async processSendMessageJob(data: SendMessageJob): Promise<void> {
-    const {
-      invoiceId,
-      companyId,
-      debtorId,
-      phoneNumber,
-      templateName,
-      templateLanguage,
-      templateParameters,
-      debtorName,
-    } = data;
-
-    this.logger.log(`Processando mensagem da fatura ${invoiceId}`);
-
-    const shouldSkip = await this.shouldSkipInvoiceNotPending(
-      companyId,
-      invoiceId,
-      'WHATSAPP',
-    );
-    if (shouldSkip) {
-      return;
-    }
-
-    const hasOptIn = await this.ensureDebtorOptIn(
-      companyId,
-      debtorId,
-      invoiceId,
-      debtorName,
-    );
-    if (!hasOptIn) {
-      await this.recordCollectionAttemptFailed(
-        companyId,
-        invoiceId,
-        data.ruleStepId,
-        'WHATSAPP',
-        'Opt-in WhatsApp ausente.',
-      );
-      return;
-    }
-
-    try {
-      await this.whatsappService.sendTemplateMessage({
-        companyId,
-        phoneNumber,
-        templateName,
-        languageCode: templateLanguage,
-        bodyParameters: templateParameters,
-        buttonUrlSuffix: data.buttonUrlSuffix,
-        invoiceId,
-        debtorId,
-        content: `Template: ${templateName}`,
-        idempotencyKey: `collection:${companyId}:${invoiceId}:${data.ruleStepId ?? 'initial'}:WHATSAPP`,
-        ruleStepId: data.ruleStepId,
-      });
-
-      this.logger.log(`Mensagem da fatura ${invoiceId} enviada com sucesso`);
-    } catch (error) {
-      if (isTemplateHold(error)) return;
-      if (this.isDeferredDispatch(error)) throw error;
-      const errorMessage =
-        error instanceof Error ? error.message : 'Erro desconhecido';
-
-      await this.prisma.collectionLog.create({
-        data: {
-          companyId,
-          invoiceId,
-          actionType: 'WHATSAPP_SENT',
-          description: `Falha no envio da fatura ${invoiceId}: ${errorMessage}`,
-          status: 'FAILED',
+    const logicalKey = collectionLogicalKey(data);
+    const existing = await this.prisma.communicationOutboundIntent.findFirst({
+      where: { OR: [{ logicalKey }, { idempotencyKey: logicalKey }] },
+      select: { id: true },
+    });
+    // An intent already exists: its own lifecycle (and the dispatcher's check) decides.
+    if (existing) return;
+    await this.prisma.$transaction((tx) =>
+      this.templatePending.block(tx, {
+        request: {
+          logicalKey,
+          origin: 'COLLECTION',
+          context: {
+            companyId: data.companyId,
+            invoiceId: data.invoiceId,
+            debtorId: data.debtorId,
+          },
+          selection: { mode: 'UNCONFIGURED' },
+          ...(data.ruleStepId ? { ruleStepId: data.ruleStepId } : {}),
         },
-      });
-
-      await this.recordCollectionAttemptFailed(
-        companyId,
-        invoiceId,
-        data.ruleStepId,
-        'WHATSAPP',
-        errorMessage,
-      );
-
-      await this.tryEmailFallback(data, errorMessage);
-
-      this.logger.error(`Erro ao enviar mensagem da fatura ${invoiceId}`);
-      throw error;
-    }
+        code: 'LEGACY_PAYLOAD',
+      }),
+    );
+    await this.createCollectionLog(
+      data.companyId,
+      data.invoiceId,
+      'WHATSAPP_TEMPLATE_HELD',
+      'Mensagem WhatsApp preparada antes da troca de catalogo retida para revisao administrativa.',
+      'SKIPPED',
+    );
   }
 
+  /** Technical WhatsApp failures of a rule step; template holds never reach this path. */
   private async tryEmailFallback(
-    data: SendMessageJob,
+    data: { companyId: string; invoiceId: string; ruleStepId?: string },
     errorMessage: string,
   ): Promise<void> {
     try {
@@ -322,10 +263,12 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      const debtor = await this.prisma.debtor.findFirst({
-        where: { id: data.debtorId, companyId: data.companyId },
-        select: { email: true },
-      });
+      const debtor = (
+        await this.prisma.invoice.findFirst({
+          where: { id: data.invoiceId, companyId: data.companyId },
+          select: { debtor: { select: { id: true, name: true, email: true } } },
+        })
+      )?.debtor;
 
       if (!debtor?.email) {
         this.logger.debug(
@@ -396,8 +339,8 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       await this.emailQueue.addJob({
         companyId: data.companyId,
         invoiceId: data.invoiceId,
-        debtorId: data.debtorId,
-        debtorName: data.debtorName,
+        debtorId: debtor.id,
+        debtorName: debtor.name,
         email: debtor.email,
         subject: `[${invoice.company.tradeName ?? invoice.company.corporateName}] Cobranca pendente`,
         html,
@@ -519,6 +462,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       'WHATSAPP',
       errorMessage,
     );
+    await this.tryEmailFallback(collection, errorMessage);
   }
 
   private async recordCollectionAttemptFailed(
@@ -608,13 +552,6 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       billingType,
     );
 
-    const replacements = this.buildTemplateReplacements({
-      debtorName: invoice.debtor.name,
-      originalAmount: Number(invoice.originalAmount),
-      dueDate: invoice.dueDate,
-      companyName: invoice.company.tradeName ?? invoice.company.corporateName,
-      paymentData,
-    });
     let queuedCount = 0;
 
     if (channels.includes('WHATSAPP')) {
@@ -630,65 +567,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
           'PENDING',
         );
       } else {
-        const template = await this.findMessageTemplate(invoice);
-        if (!template) {
-          await this.createCollectionLog(
-            invoice.companyId,
-            invoice.id,
-            'INITIAL_CHARGE_SKIPPED',
-            'Nenhum template Meta aprovado para enviar a primeira cobranca.',
-            'SKIPPED',
-          );
-        } else {
-          replacements.saudacao = template.greeting;
-          replacements.instrucoes = template.instructions;
-          replacements.assinatura = template.signature;
-          const phoneNumber = this.normalizePhone(invoice.debtor.phoneNumber);
-          const templateParameters =
-            this.whatsappService.buildTemplateParameters(
-              template.content,
-              replacements,
-            );
-          const templateName =
-            template.metaTemplateName ??
-            this.whatsappService.buildMetaTemplateName(template.slug);
-          const message = this.buildMessageFromTemplate(template.content, {
-            debtorName: invoice.debtor.name,
-            originalAmount: Number(invoice.originalAmount),
-            dueDate: invoice.dueDate,
-            companyName:
-              invoice.company.tradeName ?? invoice.company.corporateName,
-            paymentData,
-          });
-
-          await this.messageQueue.addSendMessageJob({
-            invoiceId: invoice.id,
-            companyId: invoice.companyId,
-            debtorId: invoice.debtor.id,
-            phoneNumber,
-            senderKey: this.configService.getOrThrow<string>(
-              'META_PHONE_NUMBER_ID',
-            ),
-            templateName,
-            templateLanguage: template.metaLanguage,
-            templateParameters,
-            buttonUrlSuffix: template.paymentButtonEnabled
-              ? paymentData.paymentPageToken
-              : undefined,
-            message,
-            debtorName: invoice.debtor.name,
-          });
-
-          queuedCount++;
-
-          await this.createCollectionLog(
-            invoice.companyId,
-            invoice.id,
-            'WHATSAPP_QUEUED',
-            `Primeira mensagem de cobranca enfileirada para a fatura ${invoice.id}.`,
-            'QUEUED',
-          );
-        }
+        if (await this.prepareInitialWhatsapp(data, invoice)) queuedCount++;
       }
     }
 
@@ -776,6 +655,65 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     if (queuedCount === 0) {
       this.logger.warn(`Nenhum canal enfileirado para a fatura ${invoice.id}.`);
     }
+  }
+
+  /**
+   * First charge on WhatsApp: the company's EMISSION default, never another template.
+   * A manual re-send of selected invoices is its own communication.
+   */
+  private async prepareInitialWhatsapp(
+    data: InitialChargeJob,
+    invoice: InitialChargeInvoice,
+  ): Promise<boolean> {
+    if (!invoice.debtor.whatsappOptIn) {
+      await this.createCollectionLog(
+        invoice.companyId,
+        invoice.id,
+        'WHATSAPP_OPT_IN_REQUIRED',
+        `Envio oficial bloqueado para ${invoice.debtor.name}: opt-in WhatsApp ausente.`,
+        'SKIPPED',
+      );
+      return false;
+    }
+    const prepared = await this.templateSender.prepare({
+      logicalKey: collectionLogicalKey({
+        companyId: invoice.companyId,
+        invoiceId: invoice.id,
+        ruleStepId:
+          data.source === 'SELECTED' && data.requestId
+            ? `selected-${data.requestId}`
+            : null,
+      }),
+      origin: 'COLLECTION',
+      context: {
+        companyId: invoice.companyId,
+        invoiceId: invoice.id,
+        debtorId: invoice.debtor.id,
+      },
+      selection: { mode: 'DEFAULT', purpose: 'EMISSION' },
+    });
+    if (prepared.status === 'BLOCKED') {
+      await this.createCollectionLog(
+        invoice.companyId,
+        invoice.id,
+        'INITIAL_CHARGE_SKIPPED',
+        `Primeira mensagem WhatsApp retida para revisao administrativa do template${prepared.code ? ` (${prepared.code})` : ''}.`,
+        'SKIPPED',
+      );
+      return false;
+    }
+    // Persisted first: a lost enqueue is picked up by intent recovery.
+    await this.messageQueue
+      .addOutboundIntentJob(prepared.intentId)
+      .catch(() => undefined);
+    await this.createCollectionLog(
+      invoice.companyId,
+      invoice.id,
+      'WHATSAPP_QUEUED',
+      `Primeira mensagem de cobranca enfileirada para a fatura ${invoice.id}.`,
+      'QUEUED',
+    );
+    return true;
   }
 
   private async loadInitialChargeInvoice(
@@ -913,100 +851,6 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async findMessageTemplate(
-    invoice: InitialChargeInvoice,
-  ): Promise<MessageTemplateRecord | null> {
-    const daysFromDueDate = this.getDaysBetween(
-      this.startOfDay(new Date()),
-      this.startOfDay(invoice.dueDate),
-    );
-    const targetSlug = this.getTemplateSlugForOffset(daysFromDueDate);
-    const candidateSlugs = Array.from(
-      new Set([targetSlug, 'vencimento-hoje', 'cobranca-emissao']),
-    );
-    const templates = await this.prisma.globalMessageTemplate.findMany({
-      where: {
-        slug: { in: candidateSlugs },
-        isActive: true,
-        metaStatus: 'APPROVED',
-      },
-      select: {
-        slug: true,
-        content: true,
-        metaTemplateName: true,
-        metaLanguage: true,
-        metaStatus: true,
-        paymentButtonEnabled: true,
-      },
-    });
-    const preferences = await this.prisma.companyTemplatePreference.findMany({
-      where: {
-        companyId: invoice.companyId,
-        channel: 'WHATSAPP',
-        slug: { in: candidateSlugs },
-      },
-    });
-    const preferenceBySlug = new Map(
-      preferences.map((preference) => [preference.slug, preference]),
-    );
-    const templatesBySlug = new Map<string, MessageTemplateRecord>(
-      templates
-        .filter(
-          (template) => preferenceBySlug.get(template.slug)?.isActive !== false,
-        )
-        .map((template): [string, MessageTemplateRecord] => {
-          const preference = preferenceBySlug.get(template.slug);
-          return [
-            template.slug,
-            {
-              ...template,
-              greeting: preference?.greeting ?? 'Olá',
-              instructions:
-                preference?.instructions ??
-                'Use o botão abaixo para acessar o pagamento seguro.',
-              signature:
-                preference?.signature ??
-                `Equipe ${invoice.company.tradeName ?? invoice.company.corporateName}`,
-            },
-          ];
-        }),
-    );
-
-    return (
-      templatesBySlug.get(targetSlug) ??
-      templatesBySlug.get('vencimento-hoje') ??
-      templatesBySlug.get('cobranca-emissao') ??
-      templatesBySlug.values().next().value ??
-      null
-    );
-  }
-
-  private async ensureDebtorOptIn(
-    companyId: string,
-    debtorId: string,
-    invoiceId: string,
-    debtorName: string,
-  ): Promise<boolean> {
-    const debtor = await this.prisma.debtor.findFirst({
-      where: { id: debtorId, companyId },
-      select: { whatsappOptIn: true },
-    });
-
-    if (debtor?.whatsappOptIn === true) {
-      return true;
-    }
-
-    await this.createCollectionLog(
-      companyId,
-      invoiceId,
-      'WHATSAPP_OPT_IN_REQUIRED',
-      `Envio oficial bloqueado para ${debtorName}: opt-in WhatsApp ausente.`,
-      'SKIPPED',
-    );
-
-    return false;
-  }
-
   private resolveInvoiceBillingType(
     invoice: InitialChargeInvoice,
   ): BillingMethod {
@@ -1105,22 +949,6 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     };
 
     return labels[billingType];
-  }
-
-  private buildMessageFromTemplate(
-    templateContent: string,
-    params: {
-      debtorName: string;
-      originalAmount: number;
-      dueDate: Date;
-      companyName: string;
-      paymentData: PaymentMessageData;
-    },
-  ): string {
-    return this.ensurePaymentInstruction(
-      this.buildTemplateText(templateContent, params),
-      params.paymentData,
-    );
   }
 
   private buildTemplateText(
@@ -1245,10 +1073,6 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     return variables.some((variable) => replacements[variable] === '');
   }
 
-  private normalizePhone(phoneNumber: string): string {
-    return normalizeWhatsAppNumberForTransport(phoneNumber);
-  }
-
   private normalizeInitialChargeChannels(
     channels: CollectionChannel[] | undefined,
   ): CollectionChannel[] {
@@ -1262,32 +1086,6 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     );
 
     return normalized.length > 0 ? normalized : ['WHATSAPP'];
-  }
-
-  private getTemplateSlugForOffset(offset: number): string {
-    if (offset < 0) {
-      return 'pre-vencimento';
-    }
-
-    if (offset === 0) {
-      return 'vencimento-hoje';
-    }
-
-    if (offset <= 2) {
-      return 'atraso-primeiro-aviso';
-    }
-
-    return 'atraso-recorrente';
-  }
-
-  private startOfDay(date: Date): Date {
-    const start = new Date(date);
-    start.setHours(0, 0, 0, 0);
-    return start;
-  }
-
-  private getDaysBetween(left: Date, right: Date): number {
-    return Math.round((left.getTime() - right.getTime()) / DAY_IN_MS);
   }
 
   private async createCollectionLog(

@@ -211,6 +211,81 @@ section('final authorization: legacy template payloads are held, never sent', as
   assert.deepEqual(hold.request.selection, { mode: 'UNCONFIGURED' });
 });
 
+section('preparation: one intent per communication, defaults resolved in the company, holds otherwise', async ({ prisma }) => {
+  const fixture = await fx.tenant(prisma, 'Prepare');
+  const template = await fx.readyTemplate(prisma);
+  const other = await fx.readyTemplate(prisma);
+  const sender = fx.preparer(prisma);
+  const request = (step = randomUUID()) => ({
+    logicalKey: `collection:${fixture.company.id}:${fixture.invoice.id}:${step}:WHATSAPP`, origin: 'COLLECTION',
+    context: { companyId: fixture.company.id, invoiceId: fixture.invoice.id, debtorId: fixture.debtor.id },
+    selection: { mode: 'DEFAULT', purpose: 'DUE_TODAY' },
+  });
+  const invoiceBefore = await prisma.invoice.findUnique({ where: { id: fixture.invoice.id } });
+  const missing = await sender.prepare(request());
+  assert.equal(missing.status, 'BLOCKED');
+  assert.equal(missing.code, 'DEFAULT_MISSING');
+  assert.deepEqual(await prisma.invoice.findUnique({ where: { id: fixture.invoice.id } }), invoiceBefore, 'the charge itself is untouched');
+
+  const { access } = fx.services(prisma);
+  await fx.grant(prisma, fixture.company.id, template.id);
+  await fx.grant(prisma, fixture.company.id, other.id);
+  await access.setDefault(fixture.company.id, 'DUE_TODAY', template.id, 0, randomUUID());
+  const first = request();
+  const results = await Promise.all([1, 2, 3].map(() => sender.prepare(first)));
+  assert.equal(new Set(results.map(result => result.intentId)).size, 1, 'repeated producers return the same intent');
+  const intent = await prisma.communicationOutboundIntent.findUnique({ where: { id: results[0].intentId } });
+  assert.equal(intent.logicalKey, first.logicalKey);
+  assert.equal(intent.templateSnapshot.templateId, template.id);
+  assert.match(intent.templateContextFingerprint, /^[0-9a-f]{64}$/);
+  assert.equal(JSON.stringify(intent.templateContext).includes(fixture.phone), false, 'stored context has identifiers only');
+
+  // A later default applies to new preparations; the prepared message keeps its template.
+  await access.setDefault(fixture.company.id, 'DUE_TODAY', other.id, 1, randomUUID());
+  assert.equal((await sender.prepare(first)).intentId, intent.id);
+  const second = await sender.prepare(request());
+  assert.equal((await prisma.communicationOutboundIntent.findUnique({ where: { id: second.intentId } })).templateSnapshot.templateId, other.id);
+
+  // The prepared intent is sent once through the real final authorization.
+  const { service, transport } = fx.dispatcher(prisma);
+  await service.dispatch(intent.id);
+  assert.equal(transport.calls.length, 1);
+  assert.equal(transport.calls[0].name, template.metaTemplateName);
+  assert.deepEqual(transport.calls[0].components[0].parameters.map(parameter => parameter.text), ['Devedor Prepare', 'R$ 150,00']);
+});
+
+section('preparation: activation notices use their own default and renew only after a definitive rejection', async ({ prisma, pool }) => {
+  const fixture = await fx.tenant(prisma, 'Activation');
+  const activation = await prisma.efiOnboarding.create({ data: { companyId: fixture.company.id, representativeNameEncrypted: fx.crypto.encrypt('Ana Representante'), representativePhoneEncrypted: fx.crypto.encrypt('+55 11 97777-6666'), sensitiveDataExpiresAt: new Date(Date.now() + 86_400_000) } });
+  const template = await prisma.globalMessageTemplate.update({ where: { id: (await fx.readyTemplate(prisma)).id }, data: {} });
+  const { access, mappings } = fx.services(prisma);
+  // Activation mapping: representative and company name, no invoice data.
+  const withoutButton = [{ type: 'BODY', text: 'Olá {{1}}, a ativação de {{2}} está pendente.' }];
+  const { templateFingerprint } = require('../src/templates/template-components.ts');
+  await prisma.globalMessageTemplate.update({ where: { id: template.id }, data: { metaComponents: withoutButton, providerRevision: 2, providerFingerprint: templateFingerprint({ components: withoutButton, parameterFormat: 'POSITIONAL', language: 'pt_BR', category: 'UTILITY' }) } });
+  await mappings.save(template.id, 2, 1, { body: { '1': { kind: 'SOURCE', source: 'REPRESENTATIVE_NAME' }, '2': { kind: 'SOURCE', source: 'COMPANY_NAME' } } }, randomUUID());
+  await fx.grant(prisma, fixture.company.id, template.id);
+  const sender = fx.preparer(prisma);
+  const request = { logicalKey: `efi-onboarding-notice:${fixture.company.id}:day`, origin: 'ACTIVATION', context: { companyId: fixture.company.id, activationId: activation.id }, selection: { mode: 'DEFAULT', purpose: 'ACTIVATION_NOTICE' } };
+  // A collection default is never reused for activation notices.
+  await access.setDefault(fixture.company.id, 'EMISSION', template.id, 0, randomUUID());
+  assert.equal((await sender.prepare(request, { renewAfterRejection: true })).code, 'DEFAULT_MISSING');
+  await pool.query('DELETE FROM "WhatsappTemplatePendingSend" WHERE "logicalKey" = $1', [request.logicalKey]);
+  await access.setDefault(fixture.company.id, 'ACTIVATION_NOTICE', template.id, 0, randomUUID());
+  const queued = await sender.prepare(request, { renewAfterRejection: true });
+  assert.equal(queued.status, 'QUEUED');
+  const payload = JSON.parse(fx.crypto.decrypt((await prisma.communicationOutboundIntent.findUnique({ where: { id: queued.intentId } })).payloadEncrypted));
+  assert.deepEqual(payload.bodyParameters, ['Ana Representante', 'Activation']);
+  assert.equal(payload.phoneNumber, '5511977776666', 'recipient is the validated representative');
+  assert.equal((await sender.prepare(request, { renewAfterRejection: true })).intentId, queued.intentId, 'pending intent is reused');
+  await prisma.communicationOutboundIntent.update({ where: { id: queued.intentId }, data: { state: 'FAILED', transmission: 'NOT_SENT' } });
+  const renewed = await sender.prepare(request, { renewAfterRejection: true });
+  assert.notEqual(renewed.intentId, queued.intentId);
+  assert.equal((await prisma.communicationOutboundIntent.findUnique({ where: { id: renewed.intentId } })).generation, 1);
+  await prisma.communicationOutboundIntent.update({ where: { id: renewed.intentId }, data: { state: 'UNCERTAIN', transmission: 'UNCERTAIN' } });
+  assert.equal((await sender.prepare(request, { renewAfterRejection: true })).intentId, renewed.intentId, 'an uncertain result is never renewed');
+});
+
 function intentState(prisma, id) {
   return prisma.communicationOutboundIntent.findUnique({ where: { id }, select: { state: true } }).then(row => row.state);
 }

@@ -121,6 +121,8 @@ async function migrateCollectionProfiles() {
             profileId: profile.id,
             stepOrder: i,
             channel: 'WHATSAPP',
+            // No WhatsApp template is seeded or granted; the admin configures it.
+            whatsappSelectionMode: 'UNCONFIGURED',
             delayDays: i === 0 ? reminderDay : reminderDay - previousReminderDay,
             isActive: true,
           },

@@ -8,7 +8,8 @@ import { PaymentModule } from '../payment/payment.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { EmailModule } from '../email/email.module';
 import { PrismaModule } from '../prisma/prisma.module';
-import { TemplatesModule } from '../templates/templates.module';
+import { TemplateSendModule } from '../templates/template-send.module';
+import { TemplatePolicyModule } from '../templates/template-policy.module';
 
 @Module({
   imports: [
@@ -17,7 +18,8 @@ import { TemplatesModule } from '../templates/templates.module';
     PaymentModule,
     WhatsappModule,
     EmailModule,
-    TemplatesModule,
+    TemplateSendModule,
+    TemplatePolicyModule,
   ],
   controllers: [BillingController],
   providers: [BillingService, CollectionProfileService, CollectionRuleEngine],

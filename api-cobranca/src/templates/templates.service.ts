@@ -2,7 +2,6 @@ import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import type { GlobalMessageTemplate } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateTemplateDto } from './dto';
-import { TEMPLATE_DEFINITIONS } from './template-catalog';
 
 export type MessageTemplateView = GlobalMessageTemplate & {
   greeting: string;
@@ -20,7 +19,6 @@ export class TemplatesService {
   constructor(private readonly prisma: PrismaService) {}
 
   async findAll(companyId: string): Promise<MessageTemplateView[]> {
-    await this.ensureGlobalCatalog();
     const [templates, preferences] = await Promise.all([
       this.prisma.globalMessageTemplate.findMany({
         where: { isActive: true, origin: 'LEGACY_INTERNAL' },
@@ -36,12 +34,6 @@ export class TemplatesService {
     return templates.map((template) =>
       this.toView(template, bySlug.get(template.slug)),
     );
-  }
-
-  async ensureDefaultTemplates(
-    companyId: string,
-  ): Promise<MessageTemplateView[]> {
-    return this.findAll(companyId);
   }
 
   async findOne(companyId: string, id: string): Promise<MessageTemplateView> {
@@ -105,43 +97,6 @@ export class TemplatesService {
       },
     });
     return this.findOne(companyId, id);
-  }
-
-  async resolveApproved(
-    companyId: string,
-    slug: string,
-  ): Promise<MessageTemplateView | null> {
-    await this.ensureGlobalCatalog();
-    const template = await this.prisma.globalMessageTemplate.findFirst({
-      where: {
-        slug,
-        origin: 'LEGACY_INTERNAL',
-        isActive: true,
-        metaStatus: 'APPROVED',
-        metaReviewRequired: false,
-      },
-    });
-    return template ? this.findOne(companyId, template.id) : null;
-  }
-
-  private async ensureGlobalCatalog(): Promise<void> {
-    await this.prisma.globalMessageTemplate.createMany({
-      data: TEMPLATE_DEFINITIONS.map((definition) => ({
-        name: definition.name,
-        slug: definition.slug,
-        content: definition.defaultContent,
-        footerText: definition.footerText,
-        paymentButtonEnabled: definition.paymentButtonEnabled,
-        paymentButtonLabel: definition.paymentButtonLabel,
-        copyCodeButtonEnabled: definition.copyCodeButtonEnabled,
-        copyCodeSource: definition.copyCodeSource,
-        metaTemplateName: `cobrapix_${definition.slug.replace(/-/g, '_')}`,
-        metaLanguage: 'pt_BR',
-        category: 'UTILITY',
-        metaStatus: 'LOCAL',
-      })),
-      skipDuplicates: true,
-    });
   }
 
   private assertSafePersonalization(dto: UpdateTemplateDto): void {

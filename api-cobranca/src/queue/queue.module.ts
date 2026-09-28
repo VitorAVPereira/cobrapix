@@ -14,6 +14,8 @@ import { BullInfrastructureModule } from './bull-infrastructure.module';
 import { WhatsappTransportModule } from '../whatsapp/transport/whatsapp-transport.module';
 import { ConfigService } from '@nestjs/config';
 import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
+import { TemplateSendModule } from '../templates/template-send.module';
+import { OutboundIntentModule } from '../communications/outbound-intent.module';
 import {
   DATAFY_WEBHOOK_QUEUE,
   DatafyWebhookQueue,
@@ -48,6 +50,8 @@ import {
     PaymentModule,
     forwardRef(() => WhatsappModule),
     EmailModule,
+    TemplateSendModule,
+    OutboundIntentModule,
   ],
   controllers: [QueueController],
   providers: [

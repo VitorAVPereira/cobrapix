@@ -96,6 +96,8 @@ export const envSchema = z
     EFI_OPENING_CLIENT_SECRET: z.string().min(1).optional(),
     EFI_OPENING_CERT_PATH: z.string().min(1).optional(),
     EFI_OPENING_CERT_PASSWORD: z.string().optional(),
+    // Deprecated: activation notices use the ACTIVATION_* purpose defaults of the catalog.
+    // Still accepted so existing env files validate; never used to choose a template.
     EFI_ONBOARDING_NOTICE_TEMPLATE: z.string().optional(),
     EFI_ONBOARDING_REMINDER_TEMPLATE: z.string().optional(),
     EFI_ONBOARDING_AUTHORIZATION_VERSION: z.string().default('draft-v1'),

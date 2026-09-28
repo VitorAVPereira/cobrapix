@@ -1,36 +1,14 @@
-import { assertChannelAvailable } from '../communications/channel-availability';
-import { assertRecipientNotSuppressed } from '../communications/recipient-suppression';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OutboundDispatcherService } from './outbound-dispatcher.service';
 import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { templateVariableNames } from '../templates/template-provider-state';
 import { WHATSAPP_TRANSPORT } from './transport/whatsapp-transport';
 import type {
   ChannelInfo,
   WhatsappTransport,
   WhatsappTransportKind,
 } from './transport/whatsapp-transport';
-
-interface SendTemplateMessageInput {
-  idempotencyKey: string;
-  /**
-   * Treat idempotencyKey as a series: after a definitive rejection (never transmitted)
-   * the next call gets a new attempt key instead of the rejected intent.
-   */
-  attemptSeries?: boolean;
-  ruleStepId?: string;
-  companyId: string;
-  phoneNumber: string;
-  templateName: string;
-  languageCode: string;
-  bodyParameters: string[];
-  buttonUrlSuffix?: string | null;
-  invoiceId?: string;
-  debtorId?: string;
-  content?: string;
-}
 
 /** Idempotency key of a platform text reply; also used to recognize a retry. */
 export function adminReplyKey(idempotencyId: string): string {
@@ -73,24 +51,6 @@ export class WhatsappService {
       checkedAt: new Date().toISOString(),
       webhookSupported: true,
     };
-  }
-
-  async sendTemplateMessage(
-    input: SendTemplateMessageInput,
-  ): Promise<{ messageId: string; status: string | null }> {
-    await assertChannelAvailable(this.prisma, 'META');
-    await assertRecipientNotSuppressed(this.prisma, input.phoneNumber);
-    const { idempotencyKey, attemptSeries, ...payload } = input;
-    return this.dispatcher.send(
-      {
-        ...payload,
-        content: input.content ?? 'Template: ' + input.templateName,
-        messageType: 'template',
-      },
-      attemptSeries
-        ? await this.dispatcher.attemptKey(idempotencyKey)
-        : idempotencyKey,
-    );
   }
 
   /** Context is validated against the recipient before the intent is persisted. */
@@ -171,27 +131,5 @@ export class WhatsappService {
     ruleStepId?: string;
   } | null> {
     return this.dispatcher.rejectedCollection(id);
-  }
-
-  buildTemplateParameters(
-    templateContent: string,
-    replacements: Record<string, string>,
-  ): string[] {
-    const variableNames = this.extractTemplateVariableNames(templateContent);
-
-    return variableNames.map(
-      (variableName) => replacements[variableName] ?? '',
-    );
-  }
-
-  buildMetaTemplateName(slug: string): string {
-    return `cobrapix_${slug}`
-      .toLowerCase()
-      .replace(/[^a-z0-9_]+/g, '_')
-      .replace(/^_+|_+$/g, '');
-  }
-
-  private extractTemplateVariableNames(templateContent: string): string[] {
-    return templateVariableNames(templateContent);
   }
 }
