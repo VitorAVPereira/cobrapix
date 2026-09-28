@@ -1315,6 +1315,7 @@ model GlobalEmailTemplate {
   lastResendSyncAt  DateTime?
   resendError       String?                     @db.Text
   preferences       CompanyTemplatePreference[]
+  ruleSteps         CollectionRuleStep[]
   createdAt         DateTime                    @default(now())
   updatedAt         DateTime                    @updatedAt
 
@@ -1394,8 +1395,12 @@ model CollectionRuleStep {
   profile       CollectionProfile      @relation(fields: [profileId], references: [id], onDelete: Cascade)
   stepOrder     Int
   channel       CollectionChannel
-  templateId    String?
-  template      GlobalMessageTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  /// WhatsApp only; a CHECK keeps each channel on its own catalog.
+  templateId      String?
+  template        GlobalMessageTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  /// EMAIL only; null keeps the email default.
+  emailTemplateId String?
+  emailTemplate   GlobalEmailTemplate?   @relation(fields: [emailTemplateId], references: [id], onDelete: Restrict)
   delayDays     Int                    @default(0)
   sendTimeStart String?
   sendTimeEnd   String?
@@ -1406,6 +1411,7 @@ model CollectionRuleStep {
 
   @@unique([profileId, stepOrder, channel])
   @@index([profileId, stepOrder])
+  @@index([emailTemplateId])
 }
 
 model CollectionAttempt {

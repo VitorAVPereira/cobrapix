@@ -153,6 +153,10 @@ class RuleStepDto {
   @IsUUID('4')
   templateId?: string;
 
+  @IsOptional()
+  @IsUUID('4')
+  emailTemplateId?: string;
+
   @IsInt()
   @Min(-30)
   @Max(365)

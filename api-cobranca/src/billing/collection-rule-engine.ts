@@ -16,6 +16,7 @@ interface IncomingInvoice {
         stepOrder: number;
         channel: CollectionChannel;
         templateId: string | null;
+        emailTemplateId?: string | null;
         delayDays: number;
         sendTimeStart: string | null;
         sendTimeEnd: string | null;
@@ -29,6 +30,7 @@ interface ResolvedStep {
   ruleStepId: string;
   channel: CollectionChannel;
   templateId: string | null;
+  emailTemplateId: string | null;
   delayDays: number;
 }
 
@@ -92,6 +94,7 @@ export class CollectionRuleEngine {
         ruleStepId: step.id,
         channel: step.channel,
         templateId: step.templateId,
+        emailTemplateId: step.emailTemplateId ?? null,
         delayDays: cumulativeDelayDays,
       };
     }

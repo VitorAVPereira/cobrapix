@@ -11,6 +11,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TemplatesService } from '../templates/templates.service';
+import { EmailTemplatesService } from '../email/email-templates.service';
 
 interface CreateProfileInput {
   name: string;
@@ -24,6 +25,7 @@ interface CreateStepInput {
   stepOrder: number;
   channel: CollectionChannel;
   templateId?: string;
+  emailTemplateId?: string;
   delayDays: number;
   sendTimeStart?: string;
   sendTimeEnd?: string;
@@ -41,6 +43,11 @@ type DefaultTemplateSlug =
   | 'atraso-primeiro-aviso'
   | 'atraso-recorrente'
   | 'atraso-critico';
+
+type DefaultTemplateIds = Record<
+  CollectionChannel,
+  ReadonlyMap<string, string>
+>;
 
 interface StandardProfile {
   name: string;
@@ -162,6 +169,7 @@ export class CollectionProfileService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly templatesService: TemplatesService,
+    private readonly emailTemplatesService: EmailTemplatesService,
   ) {}
 
   async listProfiles(companyId: string) {
@@ -316,7 +324,10 @@ export class CollectionProfileService {
         profileId,
         stepOrder: step.stepOrder,
         channel: step.channel,
-        templateId: step.templateId || null,
+        templateId:
+          step.channel === 'WHATSAPP' ? step.templateId || null : null,
+        emailTemplateId:
+          step.channel === 'EMAIL' ? step.emailTemplateId || null : null,
         delayDays: step.delayDays,
         sendTimeStart: step.sendTimeStart || null,
         sendTimeEnd: step.sendTimeEnd || null,
@@ -439,9 +450,16 @@ export class CollectionProfileService {
   private async ensureStandardProfiles(companyId: string): Promise<void> {
     const defaultTemplates =
       await this.templatesService.ensureDefaultTemplates(companyId);
-    const defaultTemplateIds = new Map(
-      defaultTemplates.map((template) => [template.slug, template.id]),
-    );
+    const defaultTemplateIds: DefaultTemplateIds = {
+      WHATSAPP: new Map(
+        defaultTemplates.map((template) => [template.slug, template.id]),
+      ),
+      EMAIL: new Map(
+        (await this.emailTemplatesService.ensureDefaultTemplates(companyId))
+          .filter((template) => template.id)
+          .map((template) => [template.slug, template.id as string]),
+      ),
+    };
     const profiles = await this.prisma.collectionProfile.findMany({
       where: { companyId },
       include: { steps: { select: { id: true } } },
@@ -552,7 +570,7 @@ export class CollectionProfileService {
     profile: ExistingProfile,
     standardProfile: StandardProfile,
     hasDefault: boolean,
-    defaultTemplateIds: ReadonlyMap<string, string>,
+    defaultTemplateIds: DefaultTemplateIds,
   ): Promise<ExistingProfile> {
     const shouldReplaceExistingSteps = this.isLegacyDefaultProfile(profile);
     const shouldUseStandardName =
@@ -622,7 +640,7 @@ export class CollectionProfileService {
     profile: ExistingProfile,
     standardSteps: readonly StandardProfileStep[],
     shouldReplaceExistingSteps: boolean,
-    defaultTemplateIds: ReadonlyMap<string, string>,
+    defaultTemplateIds: DefaultTemplateIds,
   ): Promise<void> {
     if (profile.steps.length > 0 && !shouldReplaceExistingSteps) {
       return;
@@ -657,12 +675,13 @@ export class CollectionProfileService {
 
   private buildStandardStepRows(
     steps: readonly StandardProfileStep[],
-    defaultTemplateIds?: ReadonlyMap<string, string>,
+    defaultTemplateIds?: DefaultTemplateIds,
   ): Array<{
     stepOrder: number;
     channel: CollectionChannel;
     delayDays: number;
     templateId?: string;
+    emailTemplateId?: string;
     isActive: boolean;
   }> {
     let previousDay = 0;
@@ -670,7 +689,7 @@ export class CollectionProfileService {
     return steps.map((step, index) => {
       const delayDays = index === 0 ? step.day : step.day - previousDay;
       previousDay = step.day;
-      const templateId = defaultTemplateIds?.get(
+      const selected = defaultTemplateIds?.[step.channel].get(
         this.getTemplateSlugForScheduleDay(step.day),
       );
 
@@ -678,7 +697,11 @@ export class CollectionProfileService {
         stepOrder: index,
         channel: step.channel,
         delayDays,
-        ...(templateId ? { templateId } : {}),
+        ...(selected
+          ? step.channel === 'EMAIL'
+            ? { emailTemplateId: selected }
+            : { templateId: selected }
+          : {}),
         isActive: true,
       };
     });
@@ -746,30 +769,60 @@ export class CollectionProfileService {
       seen.add(key);
     }
 
-    const templateIds = Array.from(
-      new Set(
-        steps
-          .map((step) => step.templateId)
-          .filter((templateId): templateId is string => Boolean(templateId)),
-      ),
-    );
-
-    if (templateIds.length === 0) {
-      return;
-    }
-
-    const templates = await this.templatesService.findAll(companyId);
-    const activeTemplateIds = new Set(
-      templates
-        .filter((template) => template.isActive)
-        .map((template) => template.id),
-    );
-
-    if (templateIds.some((templateId) => !activeTemplateIds.has(templateId))) {
+    // Each channel references only its own catalog.
+    if (
+      steps.some(
+        (step) =>
+          (step.channel === 'EMAIL' && step.templateId) ||
+          (step.channel === 'WHATSAPP' && step.emailTemplateId),
+      )
+    ) {
       throw new BadRequestException(
-        'Um ou mais templates nao estao disponiveis para esta empresa.',
+        'O template informado nao corresponde ao canal da etapa.',
       );
     }
+
+    const templateIds = this.selected(steps, 'templateId');
+    if (templateIds.length > 0) {
+      const templates = await this.templatesService.findAll(companyId);
+      const activeTemplateIds = new Set(
+        templates
+          .filter((template) => template.isActive)
+          .map((template) => template.id),
+      );
+      if (templateIds.some((id) => !activeTemplateIds.has(id))) {
+        throw new BadRequestException(
+          'Um ou mais templates nao estao disponiveis para esta empresa.',
+        );
+      }
+    }
+
+    const emailTemplateIds = this.selected(steps, 'emailTemplateId');
+    if (emailTemplateIds.length > 0) {
+      const available = new Set(
+        (await this.emailTemplatesService.findAll(companyId))
+          .filter((template) => template.id && template.isActive)
+          .map((template) => template.id),
+      );
+      if (emailTemplateIds.some((id) => !available.has(id))) {
+        throw new BadRequestException(
+          'Um ou mais templates de email nao estao disponiveis para esta empresa.',
+        );
+      }
+    }
+  }
+
+  private selected(
+    steps: CreateStepInput[],
+    field: 'templateId' | 'emailTemplateId',
+  ): string[] {
+    return Array.from(
+      new Set(
+        steps
+          .map((step) => step[field])
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
   }
 
   private isTime(value: string): boolean {

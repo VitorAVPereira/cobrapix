@@ -12,6 +12,7 @@ const root = path.resolve(__dirname, '..');
 require('ts-node').register({ transpileOnly: true, project: path.join(root, 'tsconfig.json') });
 const { TemplatesService } = require('../src/templates/templates.service.ts');
 const { CollectionProfileService } = require('../src/billing/collection-profile.service.ts');
+const { EmailTemplatesService } = require('../src/email/email-templates.service.ts');
 const runId = randomBytes(8).toString('hex');
 const name = `ciframais-rules-test-${runId}`;
 const password = randomBytes(24).toString('hex');
@@ -92,7 +93,8 @@ async function seedLegacy() {
     prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
     // No provider clients or queues: seeding the catalog only constructs a name.
     const templates = new TemplatesService(prisma, { buildMetaTemplateName: slug => `fixture_${slug}` });
-    const service = new CollectionProfileService(prisma, templates);
+    const emailTemplates = new EmailTemplatesService(prisma, {}, { get: () => undefined });
+    const service = new CollectionProfileService(prisma, templates, emailTemplates);
     const company = await prisma.company.create({ data: { corporateName: 'Fresh tenant', email: 'fresh@example.test', phoneNumber: '5511888888888', document: '98765432000190' } });
     const concurrentReads = await Promise.all(Array.from({ length: 3 }, () => service.listProfiles(company.id)));
     const profiles = concurrentReads[0];
@@ -103,7 +105,10 @@ async function seedLegacy() {
     const catalog = await templates.findAll(company.id);
     assert.equal(catalog.find(template => template.id === legacy.globalId).content, 'Shared text', 'catalog initialization preserves existing content');
     const catalogIds = new Set(catalog.map(template => template.id));
-    assert.ok(profiles.every(profile => profile.companyId === company.id && profile.steps.every(step => catalogIds.has(step.templateId))));
+    const emailIds = new Set((await emailTemplates.findAll(company.id)).map(template => template.id));
+    assert.ok(profiles.every(profile => profile.companyId === company.id && profile.steps.every(step => step.channel === 'WHATSAPP'
+      ? catalogIds.has(step.templateId) && step.emailTemplateId === null
+      : emailIds.has(step.emailTemplateId) && step.templateId === null)), 'each channel references its own catalog');
     assert.equal(await prisma.messageTemplate.count({ where: { companyId: company.id } }), 0);
     assert.deepEqual((await service.listProfiles(company.id)).map(profile => profile.id), profiles.map(profile => profile.id));
     console.log('PASS concurrent GET /billing/rules service calls persist and reload four default profiles using global templates');

@@ -2,6 +2,7 @@ import { CollectionChannel, CollectionProfileType } from '@prisma/client';
 import { CollectionProfileService } from './collection-profile.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TemplatesService } from '../templates/templates.service';
+import { EmailTemplatesService } from '../email/email-templates.service';
 
 const DEFAULT_TEMPLATES = [
   { id: 'template-emissao', slug: 'cobranca-emissao' },
@@ -27,6 +28,7 @@ interface CreatedProfileArgs {
         channel: CollectionChannel;
         delayDays: number;
         templateId?: string;
+        emailTemplateId?: string;
         isActive: boolean;
       }>;
     };
@@ -57,9 +59,21 @@ function createService() {
   const templatesService = {
     ensureDefaultTemplates: jest.fn().mockResolvedValue(DEFAULT_TEMPLATES),
   } as unknown as TemplatesService;
+  const emailTemplatesService = {
+    ensureDefaultTemplates: jest.fn().mockResolvedValue(
+      DEFAULT_TEMPLATES.map((template) => ({
+        ...template,
+        id: template.id.replace('template-', 'email-'),
+      })),
+    ),
+  } as unknown as EmailTemplatesService;
 
   return {
-    service: new CollectionProfileService(prisma, templatesService),
+    service: new CollectionProfileService(
+      prisma,
+      templatesService,
+      emailTemplatesService,
+    ),
     prisma: prisma as unknown as {
       collectionProfile: {
         create: jest.Mock;
@@ -83,7 +97,7 @@ function getScheduleDays(
 }
 
 describe('CollectionProfileService defaults', () => {
-  it('garante templates padrao e aplica templateId conforme o dia da regua', async () => {
+  it('garante templates padrao por canal conforme o dia da regua', async () => {
     const { service, prisma, templatesService } = createService();
 
     await service.listProfiles('company-1');
@@ -101,15 +115,34 @@ describe('CollectionProfileService defaults', () => {
     expect(firstCreate).toBeDefined();
     const steps = firstCreate?.data.steps.create ?? [];
     const days = getScheduleDays(steps);
-    const templatesByDay = new Map(
-      days.map((day, index) => [day, steps[index]?.templateId]),
-    );
+    const selectedByDay = (channel: CollectionChannel) =>
+      new Map(
+        days
+          .map((day, index) => [day, steps[index]] as const)
+          .filter(([, step]) => step?.channel === channel)
+          .map(([day, step]) => [
+            day,
+            channel === 'EMAIL' ? step?.emailTemplateId : step?.templateId,
+          ]),
+      );
+    const email = selectedByDay('EMAIL');
+    const whatsapp = selectedByDay('WHATSAPP');
 
-    expect(templatesByDay.get(-30)).toBe('template-emissao');
-    expect(templatesByDay.get(-2)).toBe('template-pre');
-    expect(templatesByDay.get(0)).toBe('template-vencimento');
-    expect(templatesByDay.get(2)).toBe('template-primeiro-atraso');
-    expect(templatesByDay.get(10)).toBe('template-recorrente');
-    expect(templatesByDay.get(30)).toBe('template-critico');
+    expect(email.get(-30)).toBe('email-emissao');
+    expect(email.get(-2)).toBe('email-pre');
+    expect(email.get(0)).toBe('email-vencimento');
+    expect(email.get(2)).toBe('email-primeiro-atraso');
+    expect(email.get(30)).toBe('email-critico');
+    expect(whatsapp.get(0)).toBe('template-vencimento');
+    expect(whatsapp.get(10)).toBe('template-recorrente');
+    expect(whatsapp.get(20)).toBe('template-recorrente');
+    // Each channel only references its own catalog.
+    expect(
+      steps.every((step) =>
+        step.channel === 'EMAIL'
+          ? step.templateId === undefined
+          : step.emailTemplateId === undefined,
+      ),
+    ).toBe(true);
   });
 });

@@ -628,6 +628,7 @@ export class BillingService {
         ruleStepId: string;
         channel: CollectionChannel;
         templateId: string | null;
+        emailTemplateId: string | null;
         delayDays: number;
       }
 
@@ -646,6 +647,7 @@ export class BillingService {
           ruleStepId: nextStep.ruleStepId,
           channel: nextStep.channel,
           templateId: nextStep.templateId,
+          emailTemplateId: nextStep.emailTemplateId,
           delayDays: nextStep.delayDays,
         });
       }
@@ -694,7 +696,13 @@ export class BillingService {
       }> = [];
       let skippedCount = skippedPre;
 
-      for (const { invoice, ruleStepId, channel, templateId } of resolved) {
+      for (const {
+        invoice,
+        ruleStepId,
+        channel,
+        templateId,
+        emailTemplateId,
+      } of resolved) {
         const paymentData = paymentResults.get(invoice.id);
         if (!paymentData) {
           skippedCount++;
@@ -787,20 +795,14 @@ export class BillingService {
             continue;
           }
 
-          const template = await this.resolveTemplate(
-            company.id,
-            templateId,
-            false,
-          );
-          if (templateId && !template) {
+          // An unavailable explicit email template skips the step; it never falls back.
+          const emailTemplate = await this.emailTemplatesService
+            .resolveForRule(company.id, emailTemplateId)
+            .catch(() => null);
+          if (!emailTemplate) {
             skippedCount++;
             continue;
           }
-          const emailTemplate =
-            await this.emailTemplatesService.findActiveOrDefault(
-              company.id,
-              template?.slug ?? null,
-            );
           const renderParams = {
             debtorName: invoice.debtor.name,
             originalAmount: Number(invoice.originalAmount),

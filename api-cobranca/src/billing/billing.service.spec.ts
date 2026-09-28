@@ -157,19 +157,21 @@ function createService(input: {
     buildCollectionEmailHtml: jest.fn().mockReturnValue('<html></html>'),
   } as unknown as EmailService;
 
+  const resolvedEmail = {
+    id: 'email-template-1',
+    slug: 'vencimento-hoje',
+    name: 'Vencimento hoje',
+    subject: '{{nome_empresa}}: cobranca de {{valor}}',
+    content:
+      'Ola {{nome_devedor}}, acesse {{payment_link}} ate {{data_vencimento}}.',
+    isActive: true,
+    greeting: 'Olá',
+    instructions: 'Acesse o pagamento seguro.',
+    signature: 'Equipe Empresa Teste',
+  };
   const emailTemplatesService = {
-    findActiveOrDefault: jest.fn().mockResolvedValue({
-      id: 'email-template-1',
-      slug: 'vencimento-hoje',
-      name: 'Vencimento hoje',
-      subject: '{{nome_empresa}}: cobranca de {{valor}}',
-      content:
-        'Ola {{nome_devedor}}, acesse {{payment_link}} ate {{data_vencimento}}.',
-      isActive: true,
-      greeting: 'Olá',
-      instructions: 'Acesse o pagamento seguro.',
-      signature: 'Equipe Empresa Teste',
-    }),
+    findActiveOrDefault: jest.fn().mockResolvedValue(resolvedEmail),
+    resolveForRule: jest.fn().mockResolvedValue(resolvedEmail),
   } as unknown as EmailTemplatesService;
   const approvedTemplate = {
     id: 'global-template-1',
@@ -236,6 +238,7 @@ function createService(input: {
     },
     emailTemplatesService: emailTemplatesService as unknown as {
       findActiveOrDefault: jest.Mock;
+      resolveForRule: jest.Mock;
     },
     createPayment,
   };
@@ -283,7 +286,8 @@ describe('BillingService', () => {
       fixture.ruleEngine.getNextStep.mockResolvedValue({
         ruleStepId: 'step-1',
         channel,
-        templateId: selected.id,
+        templateId: channel === 'WHATSAPP' ? selected.id : null,
+        emailTemplateId: channel === 'EMAIL' ? 'email-pre-vencimento' : null,
         delayDays: -2,
       });
       fixture.prisma.globalMessageTemplate.findFirst.mockResolvedValue({
@@ -306,8 +310,8 @@ describe('BillingService', () => {
         );
       } else {
         expect(
-          fixture.emailTemplatesService.findActiveOrDefault,
-        ).toHaveBeenCalledWith('company-1', selected.slug);
+          fixture.emailTemplatesService.resolveForRule,
+        ).toHaveBeenCalledWith('company-1', 'email-pre-vencimento');
       }
     },
   );
@@ -325,10 +329,14 @@ describe('BillingService', () => {
       fixture.ruleEngine.getNextStep.mockResolvedValue({
         ruleStepId: 'step-1',
         channel,
-        templateId: 'global-unavailable',
+        templateId: channel === 'WHATSAPP' ? 'global-unavailable' : null,
+        emailTemplateId: channel === 'EMAIL' ? 'email-unavailable' : null,
         delayDays: 0,
       });
       fixture.prisma.globalMessageTemplate.findFirst.mockResolvedValue(null);
+      fixture.emailTemplatesService.resolveForRule.mockRejectedValue(
+        new Error('unavailable'),
+      );
 
       expect(await fixture.service.executeBilling('company-1')).toEqual({
         queued: 0,
@@ -645,16 +653,17 @@ describe('BillingService', () => {
     ruleEngine.getNextStep.mockResolvedValue({
       ruleStepId: 'step-1',
       channel: 'EMAIL',
-      templateId: 'template-1',
+      templateId: null,
+      emailTemplateId: null,
       delayDays: 0,
     });
 
     const result = await service.executeBilling('company-1');
 
     expect(result).toEqual({ queued: 1, skipped: 0 });
-    expect(emailTemplatesService.findActiveOrDefault).toHaveBeenCalledWith(
+    expect(emailTemplatesService.resolveForRule).toHaveBeenCalledWith(
       'company-1',
-      'vencimento-hoje',
+      null,
     );
     expect(emailService.buildCollectionEmailHtml).toHaveBeenCalledWith(
       expect.objectContaining({
