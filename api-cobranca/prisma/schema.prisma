@@ -159,6 +159,21 @@ enum CommunicationIntentState {
   ACCEPTED
   FAILED
   UNCERTAIN
+  /// Held by template policy; never picked by automatic recovery.
+  BLOCKED
+}
+
+/// What is known about the provider call of an intent.
+enum CommunicationTransmissionOutcome {
+  NOT_SENT
+  ACCEPTED
+  UNCERTAIN
+}
+
+enum WhatsappTemplatePendingState {
+  BLOCKED
+  RESUMED
+  CLOSED
 }
 
 enum CommunicationActorType {
@@ -269,6 +284,7 @@ enum CollectionAttemptStatus {
   DELIVERED
   OPENED
   CLICKED
+  BLOCKED
 }
 
 enum ConversationStatus {
@@ -378,6 +394,7 @@ model Company {
   financialValidations     FinancialValidationAttempt[]
   whatsappTemplateGrants   CompanyWhatsappTemplateGrant[]
   whatsappTemplateDefaults CompanyWhatsappTemplateDefault[]
+  whatsappTemplatePending  WhatsappTemplatePendingSend[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -519,13 +536,14 @@ model Invoice {
   complementsInvoice             Invoice?              @relation("InvoiceComplement", fields: [complementsInvoiceId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
   complementInvoices             Invoice[]             @relation("InvoiceComplement")
 
-  collectionLogs        CollectionLog[]
-  collectionAttempts    CollectionAttempt[]
-  emailEvents           EmailEvent[]
-  paymentNotifications  PaymentNotification[]
-  paymentCharges        PaymentCharge[]
-  communicationMessages CommunicationMessage[]
-  communicationIntents  CommunicationOutboundIntent[]
+  collectionLogs          CollectionLog[]
+  collectionAttempts      CollectionAttempt[]
+  emailEvents             EmailEvent[]
+  paymentNotifications    PaymentNotification[]
+  paymentCharges          PaymentCharge[]
+  communicationMessages   CommunicationMessage[]
+  communicationIntents    CommunicationOutboundIntent[]
+  whatsappTemplatePending WhatsappTemplatePendingSend[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1011,39 +1029,102 @@ model CommunicationMessageStatusEvent {
 }
 
 model CommunicationOutboundIntent {
-  id                 String                     @id @default(uuid())
-  idempotencyKey     String                     @unique @db.VarChar(200)
-  messageId          String                     @unique
-  message            CommunicationMessage       @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  companyId          String?
-  company            Company?                   @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  invoiceId          String?
-  invoice            Invoice?                   @relation(fields: [invoiceId, companyId], references: [id, companyId], onDelete: Restrict)
-  debtorId           String?
-  debtor             Debtor?                    @relation(fields: [debtorId, companyId], references: [id, companyId], onDelete: Restrict)
-  transport          CommunicationTransport
-  transportChannelId String
-  recipientType      CommunicationRecipientType
-  recipientHash      String                     @db.VarChar(64)
-  recipientEncrypted String                     @db.Text
-  requestHash        String                     @db.VarChar(64)
-  payloadEncrypted   String?                    @db.Text
-  state              CommunicationIntentState   @default(PENDING)
-  externalMessageId  String?                    @unique
-  attempts           Int                        @default(0)
-  nextAttemptAt      DateTime                   @default(now())
-  leaseToken         String?
-  leaseExpiresAt     DateTime?
-  quotaReservedAt    DateTime?
-  lastErrorCode      String?                    @db.VarChar(64)
-  retentionExpiresAt DateTime
-  createdAt          DateTime                   @default(now())
-  updatedAt          DateTime                   @updatedAt
+  id                         String                           @id @default(uuid())
+  idempotencyKey             String                           @unique @db.VarChar(200)
+  messageId                  String                           @unique
+  message                    CommunicationMessage             @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  companyId                  String?
+  company                    Company?                         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  invoiceId                  String?
+  invoice                    Invoice?                         @relation(fields: [invoiceId, companyId], references: [id, companyId], onDelete: Restrict)
+  debtorId                   String?
+  debtor                     Debtor?                          @relation(fields: [debtorId, companyId], references: [id, companyId], onDelete: Restrict)
+  transport                  CommunicationTransport
+  transportChannelId         String
+  recipientType              CommunicationRecipientType
+  recipientHash              String                           @db.VarChar(64)
+  recipientEncrypted         String                           @db.Text
+  requestHash                String                           @db.VarChar(64)
+  payloadEncrypted           String?                          @db.Text
+  state                      CommunicationIntentState         @default(PENDING)
+  externalMessageId          String?                          @unique
+  attempts                   Int                              @default(0)
+  nextAttemptAt              DateTime                         @default(now())
+  leaseToken                 String?
+  leaseExpiresAt             DateTime?
+  quotaReservedAt            DateTime?
+  lastErrorCode              String?                          @db.VarChar(64)
+  retentionExpiresAt         DateTime
+  createdAt                  DateTime                         @default(now())
+  updatedAt                  DateTime                         @updatedAt
+  /// Logical communication this attempt belongs to; generations of one key never overlap.
+  logicalKey                 String?                          @db.VarChar(200)
+  generation                 Int                              @default(0)
+  transmission               CommunicationTransmissionOutcome @default(NOT_SENT)
+  /// Template, revisions and grant version resolved at preparation.
+  templateSnapshot           Json?
+  templateContextFingerprint String?                          @db.VarChar(64)
+  /// Identifiers needed to revalidate (origin, context, selection); never rendered values.
+  templateContext            Json?
+  resumeReviewId             String?
+  resumeReview               WhatsappTemplateResumeReview?    @relation(fields: [resumeReviewId], references: [id], onDelete: Restrict)
+  pendingSends               WhatsappTemplatePendingSend[]
 
+  @@unique([logicalKey, generation])
   @@index([companyId, createdAt, id])
   @@index([state, createdAt])
   @@index([state, nextAttemptAt])
   @@index([retentionExpiresAt])
+}
+
+/// One persistent hold per logical communication blocked by template policy.
+model WhatsappTemplatePendingSend {
+  id              String                       @id @default(uuid())
+  logicalKey      String                       @unique @db.VarChar(200)
+  companyId       String
+  company         Company                      @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  origin          String                       @db.VarChar(32)
+  invoiceId       String?
+  invoice         Invoice?                     @relation(fields: [invoiceId, companyId], references: [id, companyId], onDelete: Restrict)
+  debtorId        String?
+  ruleStepId      String?
+  templateId      String?
+  /// Identifiers only (origin, context, selection, rule step); never body or phone.
+  request         Json
+  code            String                       @db.VarChar(32)
+  snapshot        Json?
+  state           WhatsappTemplatePendingState @default(BLOCKED)
+  version         Int                          @default(1)
+  occurrences     Int                          @default(1)
+  currentIntentId String?
+  currentIntent   CommunicationOutboundIntent? @relation(fields: [currentIntentId], references: [id], onDelete: SetNull)
+  blockedAt       DateTime                     @default(now())
+  lastEvaluatedAt DateTime                     @default(now())
+  resolvedAt      DateTime?
+  closedReason    String?                      @db.VarChar(64)
+  createdAt       DateTime                     @default(now())
+  updatedAt       DateTime                     @updatedAt
+
+  @@index([state, companyId, blockedAt])
+  @@index([companyId, state, blockedAt])
+  @@index([templateId, code])
+}
+
+/// Admin review of held sends: a 15-minute preview and at most one confirmation.
+model WhatsappTemplateResumeReview {
+  id                String                        @id @default(uuid())
+  actorUserId       String
+  expiresAt         DateTime
+  /// Versions and fingerprints evaluated per item; no text or recipient in clear.
+  items             Json
+  confirmationKey   String?                       @unique @db.VarChar(64)
+  confirmedAt       DateTime?
+  confirmedByUserId String?
+  result            Json?
+  intents           CommunicationOutboundIntent[]
+  createdAt         DateTime                      @default(now())
+
+  @@index([actorUserId, createdAt])
 }
 
 model CommunicationAttributionAudit {

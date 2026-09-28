@@ -34,6 +34,15 @@ export interface ReserveOutboundIntentInput {
   retentionExpiresAt: Date;
   /** Provider ID of the quoted message; covered by the request hash through the payload. */
   replyToExternalMessageId?: string | null;
+  /** Template sends: logical communication, generation and the pinned policy snapshot. */
+  template?: {
+    logicalKey: string;
+    generation: number;
+    snapshot: unknown;
+    contextFingerprint: string;
+    context: unknown;
+    resumeReviewId?: string | null;
+  };
 }
 
 const reservationSelect = {
@@ -60,6 +69,160 @@ export class OutboundIntentService {
   async reserve(
     input: ReserveOutboundIntentInput,
   ): Promise<OutboundReservation> {
+    const hash: { value?: string } = {};
+    try {
+      return await this.prisma.$transaction(
+        async (tx) =>
+          (await this.reserveInTransaction(tx, input, hash)).reservation,
+      );
+    } catch (error: unknown) {
+      const requestHash = hash.value;
+      if (
+        !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+        error.code !== 'P2002' ||
+        !requestHash
+      )
+        throw error;
+      // The losing transaction has rolled back its message. Read only after that rollback.
+      const winner = await this.prisma.communicationOutboundIntent.findUnique({
+        where: { idempotencyKey: input.idempotencyKey },
+        select: reservationSelect,
+      });
+      if (!winner) throw error;
+      return this.existingReservation(winner, requestHash);
+    }
+  }
+
+  /**
+   * Reservation body in the caller's transaction, so a resume authorization and its
+   * successor intent commit together. Returns the request hash for conflict handling.
+   */
+  async reserveInTransaction(
+    tx: Prisma.TransactionClient,
+    input: ReserveOutboundIntentInput,
+    hash: { value?: string } = {},
+  ): Promise<{ reservation: OutboundReservation; requestHash: string }> {
+    this.assertReservable(input);
+    const recipient = messageRecipient(input.recipient);
+    const payload = canonicalPayload(input.payload);
+    const conversation = await tx.communicationConversation.findUnique({
+      where: { id: input.conversationId },
+    });
+    if (
+      !conversation ||
+      conversation.channel !== 'WHATSAPP' ||
+      conversation.recipientHash !== recipient.hash ||
+      (conversation.recipientType &&
+        conversation.recipientType !== recipient.type)
+    ) {
+      throw new BadRequestException('Destinatario nao corresponde a conversa');
+    }
+    if (
+      conversation.recipientAnonymizedAt ||
+      conversation.retentionExpiresAt <= new Date()
+    ) {
+      throw new ConflictException('Conversa fora do periodo de retencao');
+    }
+    const context = await this.attribution.validateContext(
+      tx,
+      input.context,
+      recipient,
+    );
+    const requestHash = createHash('sha256')
+      .update(
+        canonicalPayload({
+          conversationId: conversation.id,
+          transport: input.transport,
+          transportChannelId: input.transportChannelId,
+          recipientType: recipient.type,
+          recipientHash: recipient.hash,
+          context,
+          content: input.content,
+          messageType: input.messageType,
+          payload: JSON.parse(payload) as unknown,
+          ...(input.template
+            ? {
+                template: {
+                  logicalKey: input.template.logicalKey,
+                  generation: input.template.generation,
+                  snapshot: input.template.snapshot,
+                  contextFingerprint: input.template.contextFingerprint,
+                },
+              }
+            : {}),
+        }),
+      )
+      .digest('hex');
+    // Known before the insert, so a caller losing a unique race can read the winner.
+    hash.value = requestHash;
+    const previous = await tx.communicationOutboundIntent.findUnique({
+      where: { idempotencyKey: input.idempotencyKey },
+      select: reservationSelect,
+    });
+    if (previous)
+      return {
+        reservation: this.existingReservation(previous, requestHash),
+        requestHash,
+      };
+    const retentionExpiresAt = new Date(
+      Math.min(
+        input.retentionExpiresAt.getTime(),
+        conversation.retentionExpiresAt.getTime(),
+      ),
+    );
+    const message = await tx.communicationMessage.create({
+      data: {
+        conversationId: conversation.id,
+        ...context,
+        direction: 'OUTBOUND',
+        status: 'pending',
+        content: input.content,
+        source: 'LIVE',
+        transportChannelId: input.transportChannelId,
+        recipientType: recipient.type,
+        messageType: input.messageType,
+        replyToExternalMessageId: input.replyToExternalMessageId ?? null,
+        attributionMethod: context.companyId
+          ? 'OUTBOUND_CONTEXT'
+          : 'UNASSIGNED',
+        retentionExpiresAt,
+      },
+      select: { id: true },
+    });
+    const created = await tx.communicationOutboundIntent.create({
+      data: {
+        idempotencyKey: input.idempotencyKey,
+        messageId: message.id,
+        ...context,
+        transport: input.transport,
+        transportChannelId: input.transportChannelId,
+        recipientType: recipient.type,
+        recipientHash: recipient.hash,
+        recipientEncrypted: this.crypto.encrypt(recipient.value),
+        requestHash,
+        payloadEncrypted: this.crypto.encrypt(payload),
+        retentionExpiresAt,
+        ...(input.template
+          ? {
+              logicalKey: input.template.logicalKey,
+              generation: input.template.generation,
+              templateSnapshot: input.template
+                .snapshot as Prisma.InputJsonValue,
+              templateContextFingerprint: input.template.contextFingerprint,
+              templateContext: input.template.context as Prisma.InputJsonValue,
+              resumeReviewId: input.template.resumeReviewId ?? null,
+            }
+          : {}),
+      },
+      select: reservationSelect,
+    });
+    return {
+      reservation: this.existingReservation(created, requestHash),
+      requestHash,
+    };
+  }
+
+  private assertReservable(input: ReserveOutboundIntentInput): void {
     if (
       typeof input.idempotencyKey !== 'string' ||
       !input.idempotencyKey.trim() ||
@@ -80,114 +243,15 @@ export class OutboundIntentService {
     ) {
       throw new BadRequestException('Retencao de envio invalida');
     }
-    const recipient = messageRecipient(input.recipient);
-    const payload = canonicalPayload(input.payload);
-    let requestHash: string | undefined;
-    try {
-      return await this.prisma.$transaction(async (tx) => {
-        const conversation = await tx.communicationConversation.findUnique({
-          where: { id: input.conversationId },
-        });
-        if (
-          !conversation ||
-          conversation.channel !== 'WHATSAPP' ||
-          conversation.recipientHash !== recipient.hash ||
-          (conversation.recipientType &&
-            conversation.recipientType !== recipient.type)
-        ) {
-          throw new BadRequestException(
-            'Destinatario nao corresponde a conversa',
-          );
-        }
-        if (
-          conversation.recipientAnonymizedAt ||
-          conversation.retentionExpiresAt <= new Date()
-        ) {
-          throw new ConflictException('Conversa fora do periodo de retencao');
-        }
-        const context = await this.attribution.validateContext(
-          tx,
-          input.context,
-          recipient,
-        );
-        requestHash = createHash('sha256')
-          .update(
-            canonicalPayload({
-              conversationId: conversation.id,
-              transport: input.transport,
-              transportChannelId: input.transportChannelId,
-              recipientType: recipient.type,
-              recipientHash: recipient.hash,
-              context,
-              content: input.content,
-              messageType: input.messageType,
-              payload: JSON.parse(payload) as unknown,
-            }),
-          )
-          .digest('hex');
-        const previous = await tx.communicationOutboundIntent.findUnique({
-          where: { idempotencyKey: input.idempotencyKey },
-          select: reservationSelect,
-        });
-        if (previous) return this.existingReservation(previous, requestHash);
-        const retentionExpiresAt = new Date(
-          Math.min(
-            input.retentionExpiresAt.getTime(),
-            conversation.retentionExpiresAt.getTime(),
-          ),
-        );
-        const message = await tx.communicationMessage.create({
-          data: {
-            conversationId: conversation.id,
-            ...context,
-            direction: 'OUTBOUND',
-            status: 'pending',
-            content: input.content,
-            source: 'LIVE',
-            transportChannelId: input.transportChannelId,
-            recipientType: recipient.type,
-            messageType: input.messageType,
-            replyToExternalMessageId: input.replyToExternalMessageId ?? null,
-            attributionMethod: context.companyId
-              ? 'OUTBOUND_CONTEXT'
-              : 'UNASSIGNED',
-            retentionExpiresAt,
-          },
-          select: { id: true },
-        });
-        const created = await tx.communicationOutboundIntent.create({
-          data: {
-            idempotencyKey: input.idempotencyKey,
-            messageId: message.id,
-            ...context,
-            transport: input.transport,
-            transportChannelId: input.transportChannelId,
-            recipientType: recipient.type,
-            recipientHash: recipient.hash,
-            recipientEncrypted: this.crypto.encrypt(recipient.value),
-            requestHash,
-            payloadEncrypted: this.crypto.encrypt(payload),
-            retentionExpiresAt,
-          },
-          select: reservationSelect,
-        });
-        return this.existingReservation(created, requestHash);
-      });
-    } catch (error: unknown) {
-      if (
-        !(error instanceof Prisma.PrismaClientKnownRequestError) ||
-        error.code !== 'P2002' ||
-        !requestHash
-      )
-        throw error;
-      // The losing transaction has rolled back its message. Read only after that rollback.
-      const winner = await this.prisma.communicationOutboundIntent.findUnique({
-        where: { idempotencyKey: input.idempotencyKey },
-        select: reservationSelect,
-      });
-      if (!winner) throw error;
-      return this.existingReservation(winner, requestHash);
-    }
+    if (
+      input.template &&
+      (!input.template.logicalKey ||
+        input.template.logicalKey.length > 200 ||
+        !Number.isInteger(input.template.generation) ||
+        input.template.generation < 0 ||
+        !/^[0-9a-f]{64}$/.test(input.template.contextFingerprint))
+    )
+      throw new BadRequestException('Intencao de template invalida');
   }
 
   async execute(
@@ -263,6 +327,7 @@ export class OutboundIntentService {
               },
               data: {
                 state: 'ACCEPTED',
+                transmission: 'ACCEPTED',
                 externalMessageId: result.messageId,
                 leaseToken: null,
                 leaseExpiresAt: null,
@@ -326,6 +391,7 @@ export class OutboundIntentService {
             where: { id, state: 'SENDING', leaseToken },
             data: {
               state,
+              transmission: uncertain ? 'UNCERTAIN' : 'NOT_SENT',
               lastErrorCode: uncertain
                 ? 'DELIVERY_UNCERTAIN'
                 : retry
@@ -378,6 +444,7 @@ export class OutboundIntentService {
           },
           data: {
             state: 'UNCERTAIN',
+            transmission: 'UNCERTAIN',
             lastErrorCode: 'WORKER_LOST_AFTER_CLAIM',
             leaseToken: null,
             leaseExpiresAt: null,
