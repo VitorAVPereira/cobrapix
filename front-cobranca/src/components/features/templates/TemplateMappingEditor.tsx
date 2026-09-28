@@ -98,7 +98,12 @@ export function TemplateMappingEditor({
       ),
     ),
     ...(template.content.button
-      ? { paymentButton: { index: 0, source: "PAYMENT_URL_SUFFIX" } }
+      ? {
+          paymentButton: {
+            index: template.content.button.index ?? 0,
+            source: "PAYMENT_URL_SUFFIX",
+          },
+        }
       : {}),
   });
 
@@ -260,6 +265,12 @@ export function TemplateMappingEditor({
               pagamento da cobrança enviada.
             </p>
           )}
+          {template.content.quickReplies?.length ? (
+            <p className="text-sm text-slate-600">
+              Respostas rápidas enviadas como aprovadas:{" "}
+              {template.content.quickReplies.join(", ")}.
+            </p>
+          ) : null}
           {preview && (
             <div aria-label="Prévia fictícia" className="rounded-lg border p-3">
               {preview.ok ? (

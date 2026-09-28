@@ -107,6 +107,9 @@ O catálogo é importado pelo Datafy, identificado por WABA + ID do provedor:
   Templates posicionais (`{{1}}`, `{{2}}`) e nomeados (`{{nome_devedor}}`, conforme o
   `parameter_format` aprovado) são aceitos; nos nomeados cada parâmetro é enviado com
   `parameter_name`. Outros formatos aparecem como não suportados.
+- **Botões**: no máximo um botão de URL, que precisa apontar para o link de pagamento
+  (`<FRONTEND_URL>/pagar/{{1}}`), em qualquer posição, e respostas rápidas estáticas,
+  enviadas como aprovadas. Telefone, copiar código e outros tipos não são suportados.
   Cada gravação é uma revisão imutável vinculada à revisão do conteúdo.
 - **Liberação**: novo template não é liberado para ninguém. O admin libera por
   empresa e define o padrão de cada finalidade (emissão, lembretes, atrasos, avisos

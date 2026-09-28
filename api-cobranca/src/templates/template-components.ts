@@ -65,8 +65,8 @@ function unsupported(reason: string): ParseResult {
 
 /**
  * Strict reader of the formats this version sends: BODY with positional ({{1}}) or named
- * ({{nome}}) variables as the provider declares, optional text FOOTER and optionally one
- * dynamic URL button pointing at the payment page. Anything else is reported with the
+ * ({{nome}}) variables as the provider declares, optional text FOOTER, at most one
+ * dynamic URL button pointing at the payment page and static quick reply buttons. Anything else is reported with the
  * blocking component; nothing is rewritten to look compatible.
  */
 export function parseTemplate(input: TemplateComponentsInput): ParseResult {
@@ -135,21 +135,35 @@ export function parseTemplate(input: TemplateComponentsInput): ParseResult {
     variables = positions.map(String);
   }
 
-  let paymentButton: { index: 0; label: string; url: string } | null = null;
+  let paymentButton: { index: number; label: string; url: string } | null =
+    null;
+  const quickReplies: string[] = [];
   if (buttons !== null) {
-    if (buttons.length !== 1)
-      return unsupported('Apenas um botão de pagamento é suportado.');
-    const button = buttons[0];
-    if (!isRecord(button) || String(button.type).toUpperCase() !== 'URL')
-      return unsupported('Apenas botão do tipo URL é suportado.');
-    if (typeof button.text !== 'string' || typeof button.url !== 'string')
-      return unsupported('Botão URL sem texto ou URL.');
-    const expected = `${input.paymentBaseUrl.replace(/\/+$/, '')}/{{1}}`;
-    if (button.url !== expected)
-      return unsupported(
-        `Botão URL deve apontar para ${expected}; URL aprovada diverge do link de pagamento.`,
-      );
-    paymentButton = { index: 0, label: button.text, url: button.url };
+    if (!buttons.length) return unsupported('BUTTONS sem botões.');
+    for (const [index, button] of buttons.entries()) {
+      if (!isRecord(button) || typeof button.text !== 'string')
+        return unsupported('Botão sem tipo ou texto.');
+      const type = String(button.type).toUpperCase();
+      if (type === 'QUICK_REPLY') {
+        if (/\{\{[^{}]*\}\}/.test(button.text))
+          return unsupported('Resposta rápida com variáveis não é suportada.');
+        quickReplies.push(button.text);
+      } else if (type === 'URL') {
+        if (paymentButton)
+          return unsupported('Apenas um botão de URL (pagamento) é suportado.');
+        if (typeof button.url !== 'string')
+          return unsupported('Botão URL sem URL.');
+        const expected = `${input.paymentBaseUrl.replace(/\/+$/, '')}/{{1}}`;
+        if (button.url !== expected)
+          return unsupported(
+            `Botão URL deve apontar para ${expected}; URL aprovada diverge do link de pagamento.`,
+          );
+        paymentButton = { index, label: button.text, url: button.url };
+      } else
+        return unsupported(
+          `Botão do tipo ${type} não é suportado; use o link de pagamento e respostas rápidas.`,
+        );
+    }
   }
 
   return {
@@ -160,6 +174,7 @@ export function parseTemplate(input: TemplateComponentsInput): ParseResult {
       variables,
       footer,
       paymentButton,
+      quickReplies,
       fingerprint: templateFingerprint(input),
     },
   };

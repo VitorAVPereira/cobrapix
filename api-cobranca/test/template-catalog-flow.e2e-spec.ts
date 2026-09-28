@@ -348,6 +348,10 @@ describe('Template catalog flow with two companies (HTTP)', () => {
         'data_vencimento',
         'metodo_pagamento',
       ],
+      content: {
+        button: { label: 'Link do pagamento', index: 0 },
+        quickReplies: ['Preciso de ajuda'],
+      },
     });
     const mapping = {
       body: {
@@ -357,6 +361,7 @@ describe('Template catalog flow with two companies (HTTP)', () => {
         data_vencimento: { kind: 'SOURCE', source: 'DUE_DATE' },
         metodo_pagamento: { kind: 'LITERAL', value: 'Boleto' },
       },
+      paymentButton: { index: 0, source: 'PAYMENT_URL_SUFFIX' },
     };
     // Positional keys are refused for a named template.
     const wrong = await request(http)
@@ -439,6 +444,13 @@ describe('Template catalog flow with two companies (HTTP)', () => {
                 text: 'Boleto',
               },
             ],
+          },
+          // Quick reply "Preciso de ajuda" is sent as approved, without parameters.
+          {
+            type: 'button',
+            sub_type: 'url',
+            index: '0',
+            parameters: [{ type: 'text', text: expect.any(String) as string }],
           },
         ],
       },
