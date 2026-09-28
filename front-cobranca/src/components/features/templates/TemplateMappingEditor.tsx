@@ -73,7 +73,10 @@ export function TemplateMappingEditor({
 
   if (!template)
     return (
-      <section aria-label="Configurar variáveis" className="rounded-xl border p-5">
+      <section
+        aria-label="Configurar variáveis"
+        className="rounded-xl border p-5"
+      >
         {error ? (
           <p role="alert" className="text-red-800">
             {error}
@@ -90,8 +93,8 @@ export function TemplateMappingEditor({
   });
   const mapping = (): TemplateMapping => ({
     body: Object.fromEntries(
-      Object.entries(body).filter(
-        (entry): entry is [string, TemplateBinding] => Boolean(entry[1]),
+      Object.entries(body).filter((entry): entry is [string, TemplateBinding] =>
+        Boolean(entry[1]),
       ),
     ),
     ...(template.content.button
@@ -99,7 +102,10 @@ export function TemplateMappingEditor({
       : {}),
   });
 
-  function change(position: number, binding: TemplateBinding | undefined): void {
+  function change(
+    position: number,
+    binding: TemplateBinding | undefined,
+  ): void {
     // Any edit makes the displayed preview stale.
     setPreview(null);
     setNotice(null);
@@ -212,7 +218,10 @@ export function TemplateMappingEditor({
                           ? undefined
                           : next === LITERAL
                             ? { kind: "LITERAL", value: "" }
-                            : { kind: "SOURCE", source: next as TemplateSource },
+                            : {
+                                kind: "SOURCE",
+                                source: next as TemplateSource,
+                              },
                       );
                     }}
                   >

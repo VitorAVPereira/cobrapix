@@ -10,33 +10,29 @@ import userEvent from "@testing-library/user-event";
 import type {
   CollectionRuleProfile,
   CollectionRuleStep,
-  MessageTemplate,
+  EmailTemplate,
+  RuleStepInput,
 } from "@/lib/api-client";
+import type { CompanyWhatsappTemplate } from "@/components/features/templates/types";
 import ReguaPage from "../page";
 
 const mockGetRules = jest.fn() as jest.MockedFunction<
   () => Promise<CollectionRuleProfile[]>
 >;
 const mockGetTemplates = jest.fn() as jest.MockedFunction<
-  () => Promise<MessageTemplate[]>
+  () => Promise<CompanyWhatsappTemplate[]>
+>;
+const mockGetEmailTemplates = jest.fn() as jest.MockedFunction<
+  () => Promise<EmailTemplate[]>
 >;
 const mockSetRuleSteps = jest.fn() as jest.MockedFunction<
-  (
-    profileId: string,
-    steps: Array<{
-      stepOrder: number;
-      channel: "EMAIL" | "WHATSAPP";
-      templateId?: string;
-      delayDays: number;
-      sendTimeStart?: string;
-      sendTimeEnd?: string;
-    }>,
-  ) => Promise<CollectionRuleStep[]>
+  (profileId: string, steps: RuleStepInput[]) => Promise<CollectionRuleStep[]>
 >;
 
 const mockApiClient = {
   getRules: mockGetRules,
-  getTemplates: mockGetTemplates,
+  getAllTemplates: mockGetTemplates,
+  getEmailTemplates: mockGetEmailTemplates,
   setRuleSteps: mockSetRuleSteps,
   createRule: jest.fn(),
   deleteRule: jest.fn(),
@@ -49,29 +45,56 @@ jest.mock("@/lib/use-api-client", () => ({
 
 function createTemplateFixture(
   id: string,
-  slug: string,
   name: string,
-): MessageTemplate {
+): CompanyWhatsappTemplate {
   return {
     id,
     name,
-    slug,
-    content: "Conteudo",
-    footerText: null,
-    paymentButtonEnabled: true,
-    paymentButtonLabel: "Abrir pagamento",
-    copyCodeButtonEnabled: false,
-    copyCodeSource: "AUTO",
-    isActive: true,
-    metaTemplateName: null,
-    metaLanguage: "pt_BR",
+    language: "pt_BR",
     category: "UTILITY",
-    metaStatus: "LOCAL",
-    metaRejectedReason: null,
-    lastMetaSyncAt: null,
-    companyId: "company-1",
+    content: { body: "Conteudo", footer: null, button: null },
+    defaultFor: [],
+  };
+}
+
+function createEmailFixture(id: string, name: string): EmailTemplate {
+  return {
+    id,
+    name,
+    slug: id,
+    subject: name,
+    content: "Conteudo",
+    isActive: true,
+    resendTemplateId: null,
+    resendAlias: null,
+    resendStatus: "published",
+    resendPublishedAt: null,
+    lastResendSyncAt: null,
+    resendError: null,
+    greeting: "",
+    instructions: "",
+    signature: "",
     createdAt: "2026-05-20T00:00:00.000Z",
     updatedAt: "2026-05-20T00:00:00.000Z",
+  };
+}
+
+function whatsappStep(
+  overrides: Partial<CollectionRuleStep>,
+): CollectionRuleStep {
+  return {
+    id: "step",
+    profileId: "profile-1",
+    stepOrder: 0,
+    channel: "WHATSAPP",
+    emailTemplateId: null,
+    whatsappSelection: { mode: "DEFAULT", purpose: "EMISSION" },
+    whatsappStatus: { ready: true, code: null },
+    delayDays: 0,
+    sendTimeStart: null,
+    sendTimeEnd: null,
+    isActive: true,
+    ...overrides,
   };
 }
 
@@ -86,28 +109,20 @@ function createProfileFixture(): CollectionRuleProfile {
     daysOverdueMin: null,
     daysOverdueMax: null,
     steps: [
-      {
+      whatsappStep({
         id: "step-emission",
-        profileId: "profile-1",
         stepOrder: 0,
-        channel: "WHATSAPP",
-        templateId: "template-emissao",
         delayDays: -30,
-        sendTimeStart: null,
-        sendTimeEnd: null,
-        isActive: true,
-      },
-      {
+      }),
+      whatsappStep({
         id: "step-due",
-        profileId: "profile-1",
         stepOrder: 1,
-        channel: "WHATSAPP",
-        templateId: "template-vencimento",
         delayDays: 30,
-        sendTimeStart: null,
-        sendTimeEnd: null,
-        isActive: true,
-      },
+        whatsappSelection: {
+          mode: "EXPLICIT",
+          templateId: "template-vencimento",
+        },
+      }),
     ],
     _count: { debtors: 0 },
     createdAt: "2026-05-20T00:00:00.000Z",
@@ -119,29 +134,21 @@ describe("ReguaPage", () => {
   beforeEach(() => {
     mockGetRules.mockReset();
     mockGetTemplates.mockReset();
+    mockGetEmailTemplates.mockReset();
     mockSetRuleSteps.mockReset();
     mockGetRules.mockResolvedValue([createProfileFixture()]);
     mockGetTemplates.mockResolvedValue([
-      createTemplateFixture(
-        "template-emissao",
-        "cobranca-emissao",
-        "Cobranca na emissao",
-      ),
-      createTemplateFixture(
-        "template-vencimento",
-        "vencimento-hoje",
-        "Vencimento hoje",
-      ),
-      createTemplateFixture(
-        "template-atraso",
-        "atraso-recorrente",
-        "Atraso recorrente",
-      ),
+      createTemplateFixture("template-emissao", "Cobranca na emissao"),
+      createTemplateFixture("template-vencimento", "Vencimento hoje"),
+      createTemplateFixture("template-atraso", "Atraso recorrente"),
+    ]);
+    mockGetEmailTemplates.mockResolvedValue([
+      createEmailFixture("email-lembrete", "Lembrete por e-mail"),
     ]);
     mockSetRuleSteps.mockResolvedValue(createProfileFixture().steps);
   });
 
-  it("carrega templates e permite escolher template por etapa", async () => {
+  it("oferece o padrão da finalidade ou um template liberado por etapa", async () => {
     const user = userEvent.setup();
 
     render(<ReguaPage />);
@@ -152,24 +159,155 @@ describe("ReguaPage", () => {
     expect(mockGetTemplates).toHaveBeenCalledTimes(1);
     expect(
       await screen.findByLabelText("Template do contato inicial por WhatsApp"),
-    ).toHaveValue("template-emissao");
+    ).toHaveValue("default");
+    const stepSelect = screen.getByLabelText("Template da etapa 2");
+    expect(stepSelect).toHaveValue("t:template-vencimento");
+    expect(
+      within(stepSelect)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual([
+      "Padrão da empresa: No dia do vencimento",
+      "Atraso recorrente",
+      "Cobranca na emissao",
+      "Vencimento hoje",
+    ]);
 
-    await user.selectOptions(
-      screen.getByLabelText("Template da etapa 2"),
-      "template-atraso",
-    );
+    await user.selectOptions(stepSelect, "t:template-atraso");
     await user.click(screen.getByRole("button", { name: /salvar/i }));
 
     await waitFor(() => expect(mockSetRuleSteps).toHaveBeenCalledTimes(1));
-    expect(mockSetRuleSteps).toHaveBeenCalledWith(
-      "profile-1",
+    const saved = mockSetRuleSteps.mock.calls[0]![1];
+    expect(saved[0]).toMatchObject({
+      id: "step-emission",
+      channel: "WHATSAPP",
+      whatsappSelection: { mode: "DEFAULT", purpose: "EMISSION" },
+    });
+    expect(saved[1]).toMatchObject({
+      id: "step-due",
+      stepOrder: 1,
+      channel: "WHATSAPP",
+      whatsappSelection: { mode: "EXPLICIT", templateId: "template-atraso" },
+    });
+    expect(saved[1]).not.toHaveProperty("emailTemplateId");
+  });
+
+  it("usa o catálogo de e-mail em etapas de e-mail", async () => {
+    const user = userEvent.setup();
+    render(<ReguaPage />);
+
+    await screen.findByLabelText("Template da etapa 2");
+    await user.click(screen.getAllByRole("button", { name: /E-mail/ }).at(-1)!);
+    const stepSelect = screen.getByLabelText("Template da etapa 2");
+    expect(
+      within(stepSelect)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["Modelo padrão", "Lembrete por e-mail"]);
+    await user.selectOptions(stepSelect, "email-lembrete");
+    await user.click(screen.getByRole("button", { name: /salvar/i }));
+
+    await waitFor(() => expect(mockSetRuleSteps).toHaveBeenCalledTimes(1));
+    const savedEmailStep = mockSetRuleSteps.mock.calls[0]![1][1];
+    expect(savedEmailStep).toMatchObject({
+      channel: "EMAIL",
+      emailTemplateId: "email-lembrete",
+    });
+    expect(savedEmailStep).not.toHaveProperty("whatsappSelection");
+  });
+
+  it("acompanha a finalidade do padrão quando o dia muda", async () => {
+    const user = userEvent.setup();
+    mockGetRules.mockResolvedValue([
+      {
+        ...createProfileFixture(),
+        steps: [
+          whatsappStep({
+            id: "step-due",
+            whatsappSelection: { mode: "DEFAULT", purpose: "DUE_TODAY" },
+          }),
+        ],
+      },
+    ]);
+    render(<ReguaPage />);
+
+    const dayInput = await screen.findByRole("spinbutton", {
+      name: "Dia do contato 1",
+    });
+    await user.clear(dayInput);
+    await user.type(dayInput, "-3");
+    await user.tab();
+    await user.click(
+      screen.getByRole("button", { name: /salvar alterações/i }),
+    );
+
+    await waitFor(() => expect(mockSetRuleSteps).toHaveBeenCalledTimes(1));
+    const savedWhatsappStep = mockSetRuleSteps.mock.calls[0]![1][0];
+    expect(savedWhatsappStep).toMatchObject({
+      channel: "WHATSAPP",
+      whatsappSelection: { mode: "DEFAULT", purpose: "BEFORE_DUE" },
+    });
+  });
+
+  it("mostra a etapa com template revogado como pendência, sem oferecê-lo", async () => {
+    mockGetRules.mockResolvedValue([
+      {
+        ...createProfileFixture(),
+        steps: [
+          whatsappStep({
+            id: "step-revoked",
+            whatsappSelection: {
+              mode: "EXPLICIT",
+              templateId: "template-revogado",
+            },
+            whatsappStatus: { ready: false, code: "NOT_GRANTED" },
+          }),
+          whatsappStep({
+            id: "step-missing",
+            stepOrder: 1,
+            delayDays: 3,
+            whatsappSelection: {
+              mode: "DEFAULT",
+              purpose: "RECURRING_OVERDUE",
+            },
+            whatsappStatus: { ready: false, code: "DEFAULT_MISSING" },
+          }),
+        ],
+      },
+    ]);
+    render(<ReguaPage />);
+
+    const revoked = await screen.findByLabelText("Template da etapa 1");
+    expect(revoked).toHaveValue("unavailable");
+    expect(
+      within(revoked).getByRole("option", { name: "Template indisponível" }),
+    ).toBeDisabled();
+    expect(
+      within(revoked).queryByRole("option", { name: /revogado/ }),
+    ).toBeNull();
+    const notes = screen.getAllByRole("note").map((note) => note.textContent);
+    expect(notes).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          stepOrder: 1,
-          templateId: "template-atraso",
-        }),
+        expect.stringMatching(/não está mais liberado/),
+        "Envios pendentes: Sem template padrão para a finalidade.",
       ]),
     );
+  });
+
+  it("não confunde falha ao carregar templates com nenhum template liberado", async () => {
+    mockGetTemplates.mockRejectedValue(new Error("Falha de rede"));
+    render(<ReguaPage />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Não foi possível carregar os templates disponíveis",
+    );
+    expect(screen.queryByText(/Nenhum template liberado/)).toBeNull();
+    expect(await screen.findByLabelText("Template da etapa 2")).toHaveValue(
+      "unavailable",
+    );
+    expect(
+      screen.queryByText(/não está mais liberado para sua empresa/),
+    ).toBeNull();
   });
 
   it("explica a referência dos dias e mostra uma prévia da sequência", async () => {
@@ -205,11 +343,11 @@ describe("ReguaPage", () => {
       const emissionTemplate = await screen.findByLabelText(
         "Template do contato inicial por WhatsApp",
       );
-      await user.selectOptions(emissionTemplate, "template-atraso");
+      await user.selectOptions(emissionTemplate, "t:template-atraso");
       await user.click(screen.getByRole("button", { name: /Bom Pagador/i }));
 
       expect(confirmSpy).toHaveBeenCalledTimes(1);
-      expect(emissionTemplate).toHaveValue("template-atraso");
+      expect(emissionTemplate).toHaveValue("t:template-atraso");
 
       confirmSpy.mockReturnValue(true);
       await user.click(screen.getByRole("button", { name: /Bom Pagador/i }));
@@ -284,7 +422,7 @@ describe("ReguaPage", () => {
       const template = await screen.findByLabelText(
         "Template do contato inicial por WhatsApp",
       );
-      await user.selectOptions(template, "template-atraso");
+      await user.selectOptions(template, "t:template-atraso");
 
       expect(
         fireEvent.click(screen.getByRole("link", { name: "Ir para clientes" })),

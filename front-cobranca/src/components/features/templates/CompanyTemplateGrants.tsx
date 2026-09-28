@@ -33,9 +33,9 @@ export function CompanyTemplateGrants(): ReactNode {
   const [access, setAccess] = useState<CompanyTemplateAccess | null>(null);
   const [catalog, setCatalog] = useState<AdminWhatsappTemplate[]>([]);
   const [catalogCursor, setCatalogCursor] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<Partial<Record<TemplatePurpose, string>>>(
-    {},
-  );
+  const [drafts, setDrafts] = useState<
+    Partial<Record<TemplatePurpose, string>>
+  >({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -80,7 +80,9 @@ export function CompanyTemplateGrants(): ReactNode {
         cursor,
         limit: 25,
       });
-      setCatalog((current) => (cursor ? [...current, ...page.items] : page.items));
+      setCatalog((current) =>
+        cursor ? [...current, ...page.items] : page.items,
+      );
       setCatalogCursor(page.nextCursor);
     },
     [api],
@@ -134,7 +136,10 @@ export function CompanyTemplateGrants(): ReactNode {
       .filter((grant) => grant.available.ready)
       .map((grant) => ({ id: grant.templateId, name: grant.templateName }));
     // The current default stays visible even if it became unavailable.
-    if (row.templateId && !options.some((option) => option.id === row.templateId))
+    if (
+      row.templateId &&
+      !options.some((option) => option.id === row.templateId)
+    )
       options.push({
         id: row.templateId,
         name: `${row.templateName ?? row.templateId} (indisponível)`,
@@ -177,7 +182,9 @@ export function CompanyTemplateGrants(): ReactNode {
       {companies && (
         <div className="space-y-2">
           {companies.length === 0 && (
-            <p className="text-sm text-slate-500">Nenhuma empresa encontrada.</p>
+            <p className="text-sm text-slate-500">
+              Nenhuma empresa encontrada.
+            </p>
           )}
           <ul className="flex flex-wrap gap-2">
             {companies.map((row) => (
@@ -399,13 +406,15 @@ export function CompanyTemplateGrants(): ReactNode {
                   >
                     Salvar
                   </button>
-                  {row.templateId && !row.available.ready && row.available.code && (
-                    <p className="w-full text-xs text-amber-800">
-                      O padrão atual está indisponível:{" "}
-                      {BLOCK_LABELS[row.available.code]}. Envios dessa
-                      finalidade ficarão pendentes.
-                    </p>
-                  )}
+                  {row.templateId &&
+                    !row.available.ready &&
+                    row.available.code && (
+                      <p className="w-full text-xs text-amber-800">
+                        O padrão atual está indisponível:{" "}
+                        {BLOCK_LABELS[row.available.code]}. Envios dessa
+                        finalidade ficarão pendentes.
+                      </p>
+                    )}
                 </div>
               );
             })}

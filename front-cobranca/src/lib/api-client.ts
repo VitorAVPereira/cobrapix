@@ -28,6 +28,8 @@ import type {
   AdminWhatsappTemplate,
   CatalogPage,
   CompanyTemplateAccess,
+  CompanyWhatsappTemplate,
+  Readiness,
   SaveTemplateMappingInput,
   SetTemplateDefaultInput,
   SetTemplateGrantInput,
@@ -509,18 +511,40 @@ export interface WhatsAppUsageResponse {
   };
 }
 
+/** WhatsApp choice of a rule step; UNCONFIGURED marks a legacy step that sends nothing. */
+export type WhatsappSelection =
+  | { mode: "EXPLICIT"; templateId: string }
+  | { mode: "DEFAULT"; purpose: TemplatePurpose }
+  | { mode: "UNCONFIGURED" };
+
 export interface CollectionRuleStep {
   id: string;
   profileId: string;
   stepOrder: number;
   channel: "EMAIL" | "WHATSAPP";
-  templateId: string | null;
-  template?: { id: string; name: string } | null;
+  /** EMAIL only: null uses the default email model. */
+  emailTemplateId: string | null;
+  /** WHATSAPP only. */
+  whatsappSelection: WhatsappSelection | null;
+  /** WHATSAPP only: whether the choice can send right now, and why not. */
+  whatsappStatus: Readiness | null;
   delayDays: number;
   sendTimeStart: string | null;
   sendTimeEnd: string | null;
   isActive: boolean;
 }
+
+/** Each channel carries only its own choice; the step id keeps history on attempted steps. */
+export type RuleStepInput = {
+  id?: string;
+  stepOrder: number;
+  delayDays: number;
+  sendTimeStart?: string;
+  sendTimeEnd?: string;
+} & (
+  | { channel: "EMAIL"; emailTemplateId?: string }
+  | { channel: "WHATSAPP"; whatsappSelection: WhatsappSelection }
+);
 
 export interface CollectionRuleProfile {
   id: string;
@@ -713,35 +737,6 @@ export interface ConversationTemplateOptions {
   templates: ConversationTemplateOption[];
 }
 
-export interface MessageTemplate {
-  id: string;
-  name: string;
-  slug: string;
-  content: string;
-  footerText: string | null;
-  paymentButtonEnabled: boolean;
-  paymentButtonLabel: string;
-  copyCodeButtonEnabled: boolean;
-  copyCodeSource: MessageTemplateCopyCodeSource;
-  isActive: boolean;
-  metaTemplateName: string | null;
-  metaLanguage: string;
-  category: "UTILITY" | "MARKETING" | "AUTHENTICATION";
-  metaStatus: string;
-  metaRejectedReason: string | null;
-  lastMetaSyncAt: string | null;
-  /** Provider changed content or category; not sent until the admin concludes the review. */
-  metaReviewRequired?: boolean;
-  metaQuality?: string | null;
-  metaProviderCategory?: string | null;
-  greeting?: string;
-  instructions?: string;
-  signature?: string;
-  companyId?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface EmailTemplate {
   id: string;
   name: string;
@@ -760,24 +755,6 @@ export interface EmailTemplate {
   signature: string;
   createdAt: string;
   updatedAt: string;
-}
-
-export type MessageTemplateCopyCodeSource =
-  "AUTO" | "PIX_COPY_PASTE" | "BOLETO_LINE_DIGITABLE";
-
-export type MessageTemplateSlug =
-  | "cobranca-emissao"
-  | "vencimento-hoje"
-  | "pre-vencimento"
-  | "atraso-primeiro-aviso"
-  | "atraso-recorrente"
-  | "atraso-critico";
-
-export interface SaveMessageTemplateInput {
-  isActive?: boolean;
-  greeting?: string;
-  instructions?: string;
-  signature?: string;
 }
 
 export interface SaveEmailTemplateInput {
@@ -1734,14 +1711,7 @@ class ApiClient {
 
   async setRuleSteps(
     profileId: string,
-    steps: Array<{
-      stepOrder: number;
-      channel: "EMAIL" | "WHATSAPP";
-      templateId?: string;
-      delayDays: number;
-      sendTimeStart?: string;
-      sendTimeEnd?: string;
-    }>,
+    steps: RuleStepInput[],
   ): Promise<CollectionRuleStep[]> {
     return this.fetch<CollectionRuleStep[]>(
       `/billing/rules/${profileId}/steps`,
@@ -1941,18 +1911,32 @@ class ApiClient {
   }
 
   // Templates
-  async getTemplates(): Promise<MessageTemplate[]> {
-    return this.fetch<MessageTemplate[]>("/templates");
+  /** WhatsApp templates granted to the session's company and usable now (read-only). */
+  async getTemplates(
+    query: { cursor?: string; limit?: number } = {},
+  ): Promise<CatalogPage<CompanyWhatsappTemplate>> {
+    return this.fetch<CatalogPage<CompanyWhatsappTemplate>>(
+      `/templates${this.buildQueryString(query)}`,
+    );
   }
 
-  async updateTemplate(
-    id: string,
-    data: Partial<SaveMessageTemplateInput>,
-  ): Promise<MessageTemplate> {
-    return this.fetch<MessageTemplate>(`/templates/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    });
+  /** Every page of the company catalog; grants are few, so selectors see all of them. */
+  async getAllTemplates(): Promise<CompanyWhatsappTemplate[]> {
+    const items: CompanyWhatsappTemplate[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 20; page++) {
+      const result = await this.getTemplates({ cursor, limit: 100 });
+      items.push(...result.items);
+      if (!result.nextCursor) break;
+      cursor = result.nextCursor;
+    }
+    return items;
+  }
+
+  async getTemplatePreview(id: string): Promise<TemplateRenderResult> {
+    return this.fetch<TemplateRenderResult>(
+      `/templates/${encodeURIComponent(id)}/preview`,
+    );
   }
 
   // Imported WhatsApp catalog (platform admin). Content comes from the Meta catalog and
