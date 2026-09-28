@@ -4,10 +4,12 @@ import { CommunicationsHistory } from "../CommunicationsHistory";
 const mockApi = {
   listAdminConversations: jest.fn(),
   getAdminConversation: jest.fn(),
-  getTemplates: jest.fn(),
   getConversationContextOptions: jest.fn(),
   replyToAdminConversation: jest.fn(),
   updateAdminConversationStatus: jest.fn(),
+  listConversations: jest.fn(),
+  getCompanyTemplatePending: jest.fn(),
+  getAdminTemplatePending: jest.fn(),
 };
 jest.mock("@/lib/use-api-client", () => ({
   useApiClient: () => mockApi,
@@ -55,7 +57,6 @@ beforeEach(() => {
     total: 1,
   });
   mockApi.getAdminConversation.mockResolvedValue(detail);
-  mockApi.getTemplates.mockResolvedValue([]);
   mockApi.getConversationContextOptions.mockResolvedValue({ options: [] });
   mockApi.replyToAdminConversation.mockResolvedValue({ status: "pending" });
 });
@@ -98,5 +99,36 @@ describe("CommunicationsHistory admin replies", () => {
     render(<CommunicationsHistory admin />);
     expect(screen.getByText("Acesso restrito.")).toBeInTheDocument();
     expect(mockApi.listAdminConversations).not.toHaveBeenCalled();
+  });
+});
+
+describe("CommunicationsHistory company view", () => {
+  it("shows the company's held sends without resume controls", async () => {
+    mockRole = "COMPANY_ADMIN";
+    mockApi.listConversations.mockResolvedValue({ items: [], nextCursor: null });
+    mockApi.getCompanyTemplatePending.mockResolvedValue({
+      items: [
+        {
+          id: "p-1",
+          origin: "COLLECTION",
+          invoiceId: "invoice-a",
+          code: "NOT_GRANTED",
+          state: "BLOCKED",
+          version: 1,
+          occurrences: 1,
+          blockedAt: "2026-09-27T10:00:00.000Z",
+          resolvedAt: null,
+          closedReason: null,
+        },
+      ],
+      nextCursor: null,
+    });
+    render(<CommunicationsHistory />);
+    fireEvent.click(screen.getByRole("tab", { name: "Pendências" }));
+    expect(await screen.findByText("Não liberado para a empresa")).toBeInTheDocument();
+    expect(mockApi.getAdminTemplatePending).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: "Autorizar retomada" }),
+    ).not.toBeInTheDocument();
   });
 });

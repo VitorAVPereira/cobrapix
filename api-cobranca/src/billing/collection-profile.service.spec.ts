@@ -1,9 +1,10 @@
 import { CollectionChannel, CollectionProfileType } from '@prisma/client';
 import { CollectionProfileService } from './collection-profile.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { TemplatesService } from '../templates/templates.service';
+import { TemplatePolicyService } from '../templates/template-policy.service';
+import { EmailTemplatesService } from '../email/email-templates.service';
 
-const DEFAULT_TEMPLATES = [
+const EMAIL_KINDS = [
   { id: 'template-emissao', slug: 'cobranca-emissao' },
   { id: 'template-pre', slug: 'pre-vencimento' },
   { id: 'template-vencimento', slug: 'vencimento-hoje' },
@@ -27,6 +28,9 @@ interface CreatedProfileArgs {
         channel: CollectionChannel;
         delayDays: number;
         templateId?: string;
+        emailTemplateId?: string;
+        whatsappSelectionMode?: string;
+        whatsappPurpose?: string;
         isActive: boolean;
       }>;
     };
@@ -54,18 +58,28 @@ function createService() {
       ),
     },
   } as unknown as PrismaService;
-  const templatesService = {
-    ensureDefaultTemplates: jest.fn().mockResolvedValue(DEFAULT_TEMPLATES),
-  } as unknown as TemplatesService;
+  const policy = { resolve: jest.fn() } as unknown as TemplatePolicyService;
+  const emailTemplatesService = {
+    ensureDefaultTemplates: jest.fn().mockResolvedValue(
+      EMAIL_KINDS.map((template) => ({
+        ...template,
+        id: template.id.replace('template-', 'email-'),
+      })),
+    ),
+  } as unknown as EmailTemplatesService;
 
   return {
-    service: new CollectionProfileService(prisma, templatesService),
+    service: new CollectionProfileService(
+      prisma,
+      policy,
+      emailTemplatesService,
+    ),
     prisma: prisma as unknown as {
       collectionProfile: {
         create: jest.Mock;
       };
     },
-    templatesService: templatesService as unknown as {
+    emailTemplatesService: emailTemplatesService as unknown as {
       ensureDefaultTemplates: jest.Mock;
     },
   };
@@ -83,12 +97,12 @@ function getScheduleDays(
 }
 
 describe('CollectionProfileService defaults', () => {
-  it('garante templates padrao e aplica templateId conforme o dia da regua', async () => {
-    const { service, prisma, templatesService } = createService();
+  it('garante templates padrao por canal conforme o dia da regua', async () => {
+    const { service, prisma, emailTemplatesService } = createService();
 
     await service.listProfiles('company-1');
 
-    expect(templatesService.ensureDefaultTemplates).toHaveBeenCalledWith(
+    expect(emailTemplatesService.ensureDefaultTemplates).toHaveBeenCalledWith(
       'company-1',
     );
 
@@ -101,15 +115,37 @@ describe('CollectionProfileService defaults', () => {
     expect(firstCreate).toBeDefined();
     const steps = firstCreate?.data.steps.create ?? [];
     const days = getScheduleDays(steps);
-    const templatesByDay = new Map(
-      days.map((day, index) => [day, steps[index]?.templateId]),
-    );
+    const selectedByDay = (channel: CollectionChannel) =>
+      new Map(
+        days
+          .map((day, index) => [day, steps[index]] as const)
+          .filter(([, step]) => step?.channel === channel)
+          .map(([day, step]) => [
+            day,
+            channel === 'EMAIL' ? step?.emailTemplateId : step?.whatsappPurpose,
+          ]),
+      );
+    const email = selectedByDay('EMAIL');
+    const whatsapp = selectedByDay('WHATSAPP');
 
-    expect(templatesByDay.get(-30)).toBe('template-emissao');
-    expect(templatesByDay.get(-2)).toBe('template-pre');
-    expect(templatesByDay.get(0)).toBe('template-vencimento');
-    expect(templatesByDay.get(2)).toBe('template-primeiro-atraso');
-    expect(templatesByDay.get(10)).toBe('template-recorrente');
-    expect(templatesByDay.get(30)).toBe('template-critico');
+    expect(email.get(-30)).toBe('email-emissao');
+    expect(email.get(-2)).toBe('email-pre');
+    expect(email.get(0)).toBe('email-vencimento');
+    expect(email.get(2)).toBe('email-primeiro-atraso');
+    expect(email.get(30)).toBe('email-critico');
+    // WhatsApp steps follow the company's purpose default; no template is picked.
+    expect(whatsapp.get(0)).toBe('DUE_TODAY');
+    expect(whatsapp.get(4)).toBe('RECURRING_OVERDUE');
+    expect(whatsapp.get(20)).toBe('RECURRING_OVERDUE');
+    expect(
+      steps.every((step) =>
+        step.channel === 'EMAIL'
+          ? step.templateId === undefined &&
+            step.whatsappSelectionMode === undefined
+          : step.templateId === undefined &&
+            step.emailTemplateId === undefined &&
+            step.whatsappSelectionMode === 'DEFAULT',
+      ),
+    ).toBe(true);
   });
 });

@@ -29,6 +29,8 @@ export interface InitialChargeJob {
   companyId: string;
   source: 'MANUAL' | 'CSV' | 'RECURRING' | 'SELECTED';
   channels?: CollectionChannel[];
+  /** Manual re-send request: each one is its own WhatsApp communication. */
+  requestId?: string;
 }
 
 export interface OutboundIntentJob {
@@ -46,13 +48,6 @@ export class MessageQueueService {
     private readonly whatsappQueue: Queue<WhatsAppQueueJob>,
   ) {}
 
-  async addSendMessageJob(job: SendMessageJob): Promise<void> {
-    await this.whatsappQueue.add('send-message', job, {
-      delay: this.buildSafeDelay(0),
-      ...this.buildJobOptions(this.buildSendMessageJobId(job)),
-    });
-  }
-
   async addOutboundIntentJob(intentId: string, attempt = 0): Promise<void> {
     await this.whatsappQueue.add(
       'outbound-intent',
@@ -62,19 +57,6 @@ export class MessageQueueService {
         removeOnComplete: true,
       },
     );
-  }
-
-  async addBulkSendMessageJobs(jobs: SendMessageJob[]): Promise<void> {
-    const bulkJobs = jobs.map((job, index) => ({
-      name: 'send-message' as const,
-      data: job,
-      opts: {
-        delay: this.buildSafeDelay(index),
-        ...this.buildJobOptions(this.buildSendMessageJobId(job)),
-      },
-    }));
-
-    await this.whatsappQueue.addBulk(bulkJobs);
   }
 
   async addInitialChargeJobs(jobs: InitialChargeJob[]): Promise<void> {
@@ -96,7 +78,7 @@ export class MessageQueueService {
     const requestedAt = Date.now();
     const bulkJobs = jobs.map((job, index) => ({
       name: 'initial-charge',
-      data: job,
+      data: { ...job, requestId: String(requestedAt) },
       opts: {
         delay: this.buildSafeDelay(index),
         ...this.buildJobOptions(
@@ -127,12 +109,6 @@ export class MessageQueueService {
     const jitter = this.randomBetween(0, SAFE_BULK_JITTER_MS);
 
     return baseDelay + index * SAFE_BULK_INTERVAL_MS + jitter;
-  }
-
-  private buildSendMessageJobId(job: SendMessageJob): string {
-    const stepKey = job.ruleStepId ?? 'initial';
-
-    return `send-message:${job.companyId}:${job.invoiceId}:${stepKey}:WHATSAPP`;
   }
 
   private buildJobOptions(jobId: string): {

@@ -11,6 +11,10 @@ import type { WhatsappService } from '../whatsapp/whatsapp.service';
 import { CommunicationsService } from './communications.service';
 import type { CommunicationAttributionService } from './communication-attribution.service';
 import type { CommunicationTokenService } from './communication-token.service';
+import type { TemplateSendPreparerService } from '../templates/template-send-preparer.service';
+import type { TemplatePolicyService } from '../templates/template-policy.service';
+import type { TemplateContextService } from '../templates/template-context.service';
+import type { TemplateCatalogQueryService } from '../templates/template-catalog-query.service';
 
 function setup(channel: 'WHATSAPP' | 'EMAIL' = 'WHATSAPP') {
   const prisma = {
@@ -26,7 +30,7 @@ function setup(channel: 'WHATSAPP' | 'EMAIL' = 'WHATSAPP') {
       update: jest.fn().mockResolvedValue({}),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
-    globalMessageTemplate: { findUnique: jest.fn() },
+    $queryRaw: jest.fn().mockResolvedValue([]),
     communicationOutboundIntent: {
       findUnique: jest.fn().mockResolvedValue(null),
     },
@@ -37,6 +41,8 @@ function setup(channel: 'WHATSAPP' | 'EMAIL' = 'WHATSAPP') {
         id: 'conversation-1',
         channel,
         recipientEncrypted: 'ciphertext',
+        recipientType: 'PHONE',
+        recipientHash: 'hash',
         serviceWindowExpiresAt: new Date(Date.now() + 60_000),
       }),
       update: jest.fn().mockResolvedValue({}),
@@ -50,7 +56,7 @@ function setup(channel: 'WHATSAPP' | 'EMAIL' = 'WHATSAPP') {
       ),
   };
   const whatsapp = {
-    enqueueAdminTemplate: jest.fn().mockResolvedValue({
+    enqueuePreparedTemplate: jest.fn().mockResolvedValue({
       id: 'message-2',
       status: 'pending',
       externalMessageId: null,
@@ -65,6 +71,12 @@ function setup(channel: 'WHATSAPP' | 'EMAIL' = 'WHATSAPP') {
       .mockResolvedValue({ messageId: 'wamid-1', status: 'sent' }),
   };
   const resend = { sendEmail: jest.fn().mockResolvedValue({ id: 'email-1' }) };
+  const sender = {
+    prepare: jest
+      .fn()
+      .mockResolvedValue({ status: 'QUEUED', intentId: 'intent-2' }),
+  };
+  const attribution = { validateContext: jest.fn().mockResolvedValue({}) };
   const service = new CommunicationsService(
     prisma as unknown as PrismaService,
     crypto as unknown as PaymentCryptoService,
@@ -76,10 +88,14 @@ function setup(channel: 'WHATSAPP' | 'EMAIL' = 'WHATSAPP') {
       RESEND_REPLY_TO: 'central@example.com',
       META_PHONE_NUMBER_ID: '123',
     }),
-    {} as CommunicationAttributionService,
+    attribution as unknown as CommunicationAttributionService,
     {} as CommunicationTokenService,
+    sender as unknown as TemplateSendPreparerService,
+    {} as TemplatePolicyService,
+    {} as TemplateContextService,
+    {} as TemplateCatalogQueryService,
   );
-  return { service, prisma, whatsapp, resend };
+  return { service, prisma, whatsapp, resend, sender, attribution };
 }
 
 describe('CommunicationsService', () => {
@@ -271,59 +287,54 @@ describe('CommunicationsService', () => {
   });
 
   describe('template replies', () => {
-    const template = {
-      id: 'template-1',
-      isActive: true,
-      metaStatus: 'APPROVED',
-      metaReviewRequired: false,
-      metaTemplateName: 'cobranca_aviso',
-      metaLanguage: 'pt_BR',
-      content: 'Ola {{nome_devedor}}, valor {{valor}}.',
-      paymentButtonEnabled: true,
-    };
     const request = {
       idempotencyId: 'request-4',
       templateId: '7d7f3a55-7a55-4f3c-9c8e-5b4bd1f2c004',
-      parameters: ['Ana', 'R$ 10,00'],
       context: {
         companyId: '7d7f3a55-7a55-4f3c-9c8e-5b4bd1f2c001',
         invoiceId: '7d7f3a55-7a55-4f3c-9c8e-5b4bd1f2c002',
       },
     };
 
-    it('queues an approved template with the payment button built from the invoice', async () => {
-      const { service, prisma, whatsapp } = setup();
-      prisma.globalMessageTemplate.findUnique.mockResolvedValue(template);
+    it('prepares the granted template for the selected company, filled by the server', async () => {
+      const { service, prisma, whatsapp, sender, attribution } = setup();
+      prisma.communicationMessage.findFirst.mockResolvedValue({ id: 'm' });
       await service.replyWithTemplate('conversation-1', request);
-      expect(whatsapp.enqueueAdminTemplate).toHaveBeenCalledWith(
-        '5511999999999',
-        {
-          name: 'cobranca_aviso',
-          language: 'pt_BR',
-          content: 'Ola Ana, valor R$ 10,00.',
-          parameters: ['Ana', 'R$ 10,00'],
-          paymentButton: true,
-        },
-        'request-4',
-        { context: request.context },
+      expect(attribution.validateContext).toHaveBeenCalledWith(
+        prisma,
+        request.context,
+        { hash: 'hash', type: 'PHONE' },
       );
+      expect(sender.prepare).toHaveBeenCalledWith({
+        logicalKey: 'admin-template:request-4',
+        origin: 'ADMIN_REPLY',
+        context: request.context,
+        selection: { mode: 'EXPLICIT', templateId: request.templateId },
+        conversationId: 'conversation-1',
+      });
+      expect(whatsapp.enqueuePreparedTemplate).toHaveBeenCalledWith('intent-2');
     });
 
-    it.each([
-      [{ ...template, metaReviewRequired: true }, request],
-      [{ ...template, metaStatus: 'PAUSED' }, request],
-      [template, { ...request, parameters: ['Ana'] }],
-      [template, { ...request, context: undefined }],
-    ])(
-      'rejects unavailable templates, wrong parameters or missing invoice',
-      async (stored, body) => {
-        const { service, prisma, whatsapp } = setup();
-        prisma.globalMessageTemplate.findUnique.mockResolvedValue(stored);
-        await expect(
-          service.replyWithTemplate('conversation-1', body),
-        ).rejects.toBeInstanceOf(HttpException);
-        expect(whatsapp.enqueueAdminTemplate).not.toHaveBeenCalled();
-      },
-    );
+    it('never infers or accepts a company unrelated to the conversation', async () => {
+      const { service, sender } = setup();
+      await expect(
+        service.replyWithTemplate('conversation-1', request),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(sender.prepare).not.toHaveBeenCalled();
+    });
+
+    it('answers a held preparation without queuing anything', async () => {
+      const { service, prisma, whatsapp, sender } = setup();
+      prisma.communicationMessage.findFirst.mockResolvedValue({ id: 'm' });
+      sender.prepare.mockResolvedValue({
+        status: 'BLOCKED',
+        pendingId: 'p',
+        code: null,
+      });
+      await expect(
+        service.replyWithTemplate('conversation-1', request),
+      ).rejects.toBeInstanceOf(HttpException);
+      expect(whatsapp.enqueuePreparedTemplate).not.toHaveBeenCalled();
+    });
   });
 });

@@ -14,6 +14,8 @@ import type { MessagingLimitService } from '../services/messaging-limit.service'
 import type { RateLimitService } from '../services/rate-limit.service';
 import type { SpintaxService } from '../services/spintax.service';
 import { MessageWorkerService } from './message.worker';
+import { TemplateSendPreparerService } from '../../templates/template-send-preparer.service';
+import { TemplatePendingService } from '../../communications/template-pending.service';
 
 function setup(error: unknown) {
   const prisma = {
@@ -45,6 +47,8 @@ function setup(error: unknown) {
     {} as EmailService,
     {} as EmailTemplatesService,
     {} as PublicPaymentLinkService,
+    {} as TemplateSendPreparerService,
+    {} as TemplatePendingService,
   );
   const job = {
     name: 'outbound-intent',

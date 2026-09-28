@@ -6,20 +6,42 @@ import { CommunicationAttributionService } from './communication-attribution.ser
 import { OutboundIntentController } from './outbound-intent.controller';
 import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
 import { CommunicationTokenService } from './communication-token.service';
+import { TemplatePolicyModule } from '../templates/template-policy.module';
+import { TemplatePendingService } from './template-pending.service';
+import { TemplateResumeService } from './template-resume.service';
+import {
+  AdminTemplatePendingController,
+  CompanyTemplatePendingController,
+} from './template-pending.controller';
+import { TemplateRenderingModule } from '../templates/template-rendering.module';
 
 @Module({
-  imports: [PrismaModule, PaymentModule],
-  controllers: [OutboundIntentController],
+  imports: [
+    PrismaModule,
+    PaymentModule,
+    TemplatePolicyModule,
+    TemplateRenderingModule,
+  ],
+  controllers: [
+    OutboundIntentController,
+    AdminTemplatePendingController,
+    CompanyTemplatePendingController,
+  ],
   providers: [
     OutboundIntentService,
     CommunicationAttributionService,
     CommunicationTokenService,
+    TemplatePendingService,
+    TemplateResumeService,
     PlatformAdminGuard,
   ],
   exports: [
     OutboundIntentService,
     CommunicationAttributionService,
     CommunicationTokenService,
+    TemplatePendingService,
+    TemplateResumeService,
+    TemplatePolicyModule,
   ],
 })
 export class OutboundIntentModule {}

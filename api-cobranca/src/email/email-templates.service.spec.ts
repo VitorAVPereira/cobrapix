@@ -31,7 +31,7 @@ function setup(): {
 } {
   const prisma = {
     globalEmailTemplate: {
-      upsert: jest.fn().mockResolvedValue(template),
+      createMany: jest.fn().mockResolvedValue({ count: 0 }),
       findMany: jest.fn().mockResolvedValue([template]),
       findFirst: jest.fn().mockResolvedValue(template),
       findUnique: jest.fn().mockResolvedValue(template),

@@ -1,4 +1,5 @@
 import type { ConfigService } from '@nestjs/config';
+import type { Job } from 'bullmq';
 import type { EmailQueueService } from '../../email/email.queue';
 import type { EmailTemplatesService } from '../../email/email-templates.service';
 import type { EmailService } from '../../email/email.service';
@@ -6,290 +7,174 @@ import type { PublicPaymentLinkService } from '../../payment/payment-link.servic
 import type { PaymentService } from '../../payment/payment.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { WhatsappService } from '../../whatsapp/whatsapp.service';
-import type { MessageQueueService } from '../message.queue';
-import type { SendMessageJob } from '../message.queue';
+import type {
+  InitialChargeJob,
+  MessageQueueService,
+  SendMessageJob,
+  WhatsAppQueueJob,
+} from '../message.queue';
 import type { MessagingLimitService } from '../services/messaging-limit.service';
 import type { RateLimitService } from '../services/rate-limit.service';
 import type { SpintaxService } from '../services/spintax.service';
+import type { TemplateSendPreparerService } from '../../templates/template-send-preparer.service';
+import type { TemplatePendingService } from '../../communications/template-pending.service';
+import { TemplatePolicyError } from '../../templates/template-contracts';
 import { MessageWorkerService } from './message.worker';
 
-interface TemplateRecord {
-  slug: string;
-  content: string;
-  metaTemplateName: string | null;
-  metaLanguage: string;
-  metaStatus: string;
-  paymentButtonEnabled: boolean;
-}
-
-interface FindManyTemplatesArgs {
-  where: {
-    slug: { in: string[] };
-    metaStatus: string;
-  };
-}
-
-interface FindFirstInvoiceStatusArgs {
-  where: {
-    id: string;
-    companyId: string;
-  };
-  select: {
-    status: true;
-  };
-}
-
-interface InvoiceStatusRecord {
-  status: 'PENDING' | 'PAID' | 'CANCELED';
-}
-
-interface CollectionLogCreateArgs {
-  data: {
-    companyId: string;
-    invoiceId: string;
-    actionType: string;
-    description: string;
-    status: string;
-  };
-}
-
-interface FindFirstDebtorOptInArgs {
-  where: {
-    id: string;
-    companyId: string;
-  };
-  select: {
-    whatsappOptIn: true;
-  };
-}
-
-interface PrismaMock {
-  globalMessageTemplate: {
-    findMany: jest.Mock<Promise<TemplateRecord[]>, [FindManyTemplatesArgs]>;
-  };
-  companyTemplatePreference: {
-    findMany: jest.Mock<Promise<never[]>, [unknown]>;
-  };
-  invoice: {
-    findFirst: jest.Mock<
-      Promise<InvoiceStatusRecord | null>,
-      [FindFirstInvoiceStatusArgs]
-    >;
-  };
-  collectionLog: {
-    create: jest.Mock<Promise<unknown>, [CollectionLogCreateArgs]>;
-  };
-  debtor: {
-    findFirst: jest.Mock<
-      Promise<{ whatsappOptIn: boolean } | null>,
-      [FindFirstDebtorOptInArgs]
-    >;
-  };
-}
-
-interface TemplateSelector {
-  findMessageTemplate(invoice: {
-    companyId: string;
-    dueDate: Date;
-    company: { corporateName: string; tradeName: string | null };
-  }): Promise<TemplateRecord | null>;
-}
-
-interface SendMessageJobProcessor {
+interface WorkerInternals {
   processSendMessageJob(data: SendMessageJob): Promise<void>;
+  processJob(job: Job<WhatsAppQueueJob>): Promise<void>;
+  prepareInitialWhatsapp(
+    data: InitialChargeJob,
+    invoice: unknown,
+  ): Promise<boolean>;
 }
 
-function createPrismaMock(templates: TemplateRecord[]): PrismaMock {
-  return {
-    globalMessageTemplate: {
-      findMany: jest.fn((args: FindManyTemplatesArgs) =>
-        Promise.resolve(
-          templates.filter(
-            (template) =>
-              args.where.slug.in.includes(template.slug) &&
-              template.metaStatus === args.where.metaStatus,
-          ),
-        ),
-      ),
+const legacyJob: SendMessageJob = {
+  invoiceId: 'invoice-1',
+  companyId: 'company-1',
+  debtorId: 'debtor-1',
+  phoneNumber: '5511999999999',
+  senderKey: 'phone-number-id',
+  templateName: 'cobrapix_cobranca_emissao',
+  templateLanguage: 'pt_BR',
+  templateParameters: ['Cliente'],
+  debtorName: 'Cliente Teste',
+  ruleStepId: 'step-1',
+};
+
+function setup() {
+  const prisma = {
+    communicationOutboundIntent: {
+      findFirst: jest.fn().mockResolvedValue(null),
     },
-    companyTemplatePreference: {
-      findMany: jest.fn(() => Promise.resolve([])),
-    },
-    invoice: {
-      findFirst: jest.fn(() => Promise.resolve({ status: 'PENDING' })),
-    },
-    collectionLog: {
-      create: jest.fn(() => Promise.resolve({})),
-    },
-    debtor: {
-      findFirst: jest.fn(() => Promise.resolve({ whatsappOptIn: true })),
-    },
+    collectionLog: { create: jest.fn().mockResolvedValue({}) },
+    $transaction: jest.fn((run: (tx: unknown) => unknown) => run({})),
   };
-}
-
-function createWorker(
-  prisma: PrismaMock,
-): TemplateSelector & SendMessageJobProcessor {
-  const service = new MessageWorkerService(
+  const whatsapp = {
+    dispatchIntent: jest.fn(),
+    rejectedCollection: jest.fn(),
+  };
+  const queue = {
+    addOutboundIntentJob: jest.fn().mockResolvedValue(undefined),
+  };
+  const emailQueue = { addJob: jest.fn() };
+  const sender = {
+    prepare: jest
+      .fn()
+      .mockResolvedValue({ status: 'QUEUED', intentId: 'intent-1' }),
+  };
+  const pending = { block: jest.fn().mockResolvedValue({ id: 'pending-1' }) };
+  const worker = new MessageWorkerService(
     {} as ConfigService,
     prisma as unknown as PrismaService,
     {} as RateLimitService,
     {} as MessagingLimitService,
     {} as PaymentService,
     {} as SpintaxService,
-    {} as MessageQueueService,
-    {} as WhatsappService,
-    {} as EmailQueueService,
+    queue as unknown as MessageQueueService,
+    whatsapp as unknown as WhatsappService,
+    emailQueue as unknown as EmailQueueService,
     {} as EmailService,
     {} as EmailTemplatesService,
     {} as PublicPaymentLinkService,
-  );
-
-  return service as unknown as TemplateSelector & SendMessageJobProcessor;
+    sender as unknown as TemplateSendPreparerService,
+    pending as unknown as TemplatePendingService,
+  ) as unknown as WorkerInternals;
+  return { worker, prisma, whatsapp, queue, emailQueue, sender, pending };
 }
 
-describe('MessageWorkerService template selection', () => {
-  beforeEach(() => {
-    jest.useFakeTimers();
-    jest.setSystemTime(new Date('2026-05-25T12:00:00.000Z'));
+const invoice = {
+  id: 'invoice-1',
+  companyId: 'company-1',
+  debtor: { id: 'debtor-1', name: 'Maria', whatsappOptIn: true },
+};
+
+describe('MessageWorkerService template sends', () => {
+  it('holds a legacy send-message job instead of sending its old parameters', async () => {
+    const { worker, pending, whatsapp } = setup();
+    await worker.processSendMessageJob(legacyJob);
+    expect(pending.block).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        code: 'LEGACY_PAYLOAD',
+        request: expect.objectContaining({
+          logicalKey: 'collection:company-1:invoice-1:step-1:WHATSAPP',
+          selection: { mode: 'UNCONFIGURED' },
+          ruleStepId: 'step-1',
+        }) as unknown,
+      }),
+    );
+    expect(whatsapp.dispatchIntent).not.toHaveBeenCalled();
   });
 
-  afterEach(() => {
-    jest.useRealTimers();
-  });
-
-  it('usa cobranca-emissao como fallback quando o template da data nao esta aprovado', async () => {
-    const templates: TemplateRecord[] = [
-      {
-        slug: 'vencimento-hoje',
-        content: 'Template local de vencimento hoje',
-        metaTemplateName: 'cobrapix_vencimento_hoje',
-        metaLanguage: 'pt_BR',
-        metaStatus: 'LOCAL',
-        paymentButtonEnabled: true,
-      },
-      {
-        slug: 'cobranca-emissao',
-        content: 'Template aprovado de cobranca na emissao',
-        metaTemplateName: 'cobrapix_cobranca_emissao',
-        metaLanguage: 'pt_BR',
-        metaStatus: 'APPROVED',
-        paymentButtonEnabled: true,
-      },
-    ];
-    const prisma = createPrismaMock(templates);
-    const worker = createWorker(prisma);
-
-    const template = await worker.findMessageTemplate({
-      companyId: 'company-1',
-      dueDate: new Date('2026-05-25T12:00:00.000Z'),
-      company: { corporateName: 'Empresa Teste', tradeName: 'Loja Teste' },
+  it('leaves an existing intent of the same communication to its own lifecycle', async () => {
+    const { worker, pending, prisma } = setup();
+    prisma.communicationOutboundIntent.findFirst.mockResolvedValue({
+      id: 'intent-legacy',
     });
-
-    expect(template?.slug).toBe('cobranca-emissao');
-    expect(
-      prisma.globalMessageTemplate.findMany.mock.calls[0]?.[0],
-    ).toMatchObject({
-      where: {
-        slug: { in: ['vencimento-hoje', 'cobranca-emissao'] },
-        metaStatus: 'APPROVED',
-      },
-    });
+    await worker.processSendMessageJob(legacyJob);
+    expect(pending.block).not.toHaveBeenCalled();
   });
 
-  it('ignora envio WhatsApp quando a fatura nao esta mais pendente', async () => {
-    const prisma = createPrismaMock([]);
-    prisma.invoice.findFirst.mockResolvedValueOnce({ status: 'CANCELED' });
-    const whatsappService = {
-      sendTemplateMessage: jest.fn(() =>
-        Promise.resolve({
-          messageId: 'meta-message-1',
-          status: 'sent',
-        }),
+  it('initial_charge_requires_emission_default', async () => {
+    const { worker, sender, queue } = setup();
+    sender.prepare.mockResolvedValue({
+      status: 'BLOCKED',
+      pendingId: 'pending-1',
+      code: 'DEFAULT_MISSING',
+    });
+    await expect(
+      worker.prepareInitialWhatsapp(
+        { invoiceId: 'invoice-1', companyId: 'company-1', source: 'MANUAL' },
+        invoice,
       ),
-    };
-    const messagingLimitService = {
-      canSend: jest.fn(() =>
-        Promise.resolve({
-          allowed: true,
-          usage: 0,
-          limit: 100,
-          resetAt: Date.now() + 60_000,
-        }),
-      ),
-      trackSend: jest.fn(() => Promise.resolve(undefined)),
-      recordInteraction: jest.fn(() => Promise.resolve(undefined)),
-    };
-    const rateLimitService = {
-      checkRateLimit: jest.fn(() =>
-        Promise.resolve({
-          allowed: true,
-          resetAt: Date.now() + 60_000,
-        }),
-      ),
-    };
-    const service = new MessageWorkerService(
-      {} as ConfigService,
-      prisma as unknown as PrismaService,
-      rateLimitService as unknown as RateLimitService,
-      messagingLimitService as unknown as MessagingLimitService,
-      {} as PaymentService,
-      {} as SpintaxService,
-      {} as MessageQueueService,
-      whatsappService as unknown as WhatsappService,
-      {} as EmailQueueService,
-      {} as EmailService,
-      {} as EmailTemplatesService,
-      {} as PublicPaymentLinkService,
-    ) as unknown as SendMessageJobProcessor;
-
-    const job: SendMessageJob = {
-      invoiceId: 'invoice-1',
-      companyId: 'company-1',
-      debtorId: 'debtor-1',
-      phoneNumber: '5511999999999',
-      senderKey: 'phone-number-id',
-      templateName: 'cobrapix_cobranca_emissao',
-      templateLanguage: 'pt_BR',
-      templateParameters: ['Cliente'],
-      debtorName: 'Cliente Teste',
-    };
-
-    await service.processSendMessageJob(job);
-
-    expect(whatsappService.sendTemplateMessage).not.toHaveBeenCalled();
-    expect(prisma.collectionLog.create.mock.calls[0]?.[0]).toMatchObject({
-      data: {
+    ).resolves.toBe(false);
+    expect(sender.prepare).toHaveBeenCalledWith({
+      logicalKey: 'collection:company-1:invoice-1:initial:WHATSAPP',
+      origin: 'COLLECTION',
+      context: {
         companyId: 'company-1',
         invoiceId: 'invoice-1',
-        actionType: 'MESSAGE_SKIPPED_INVOICE_NOT_PENDING',
-        status: 'SKIPPED',
+        debtorId: 'debtor-1',
       },
+      selection: { mode: 'DEFAULT', purpose: 'EMISSION' },
     });
-    expect(
-      prisma.collectionLog.create.mock.calls[0]?.[0].data.description,
-    ).toContain('WHATSAPP');
+    expect(queue.addOutboundIntentJob).not.toHaveBeenCalled();
   });
 
-  it('nao falha o job quando o log de skip da fatura cancelada falha', async () => {
-    const prisma = createPrismaMock([]);
-    prisma.invoice.findFirst.mockResolvedValueOnce({ status: 'CANCELED' });
-    prisma.collectionLog.create.mockRejectedValueOnce(
-      new Error('database unavailable'),
+  it('a manual re-send of selected invoices is its own communication', async () => {
+    const { worker, sender, queue } = setup();
+    await worker.prepareInitialWhatsapp(
+      {
+        invoiceId: 'invoice-1',
+        companyId: 'company-1',
+        source: 'SELECTED',
+        requestId: '1700000000000',
+      },
+      invoice,
     );
-    const worker = createWorker(prisma);
-    const job: SendMessageJob = {
-      invoiceId: 'invoice-1',
-      companyId: 'company-1',
-      debtorId: 'debtor-1',
-      phoneNumber: '5511999999999',
-      senderKey: 'phone-number-id',
-      templateName: 'cobrapix_cobranca_emissao',
-      templateLanguage: 'pt_BR',
-      templateParameters: ['Cliente'],
-      debtorName: 'Cliente Teste',
-    };
+    expect(sender.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({
+        logicalKey:
+          'collection:company-1:invoice-1:selected-1700000000000:WHATSAPP',
+      }),
+    );
+    expect(queue.addOutboundIntentJob).toHaveBeenCalledWith('intent-1');
+  });
 
-    await expect(worker.processSendMessageJob(job)).resolves.toBeUndefined();
+  it('completes a held outbound job without failure record, retry or email fallback', async () => {
+    const { worker, whatsapp, emailQueue } = setup();
+    whatsapp.dispatchIntent.mockRejectedValue(
+      new TemplatePolicyError('NOT_GRANTED'),
+    );
+    await expect(
+      worker.processJob({
+        name: 'outbound-intent',
+        data: { intentId: 'intent-1' },
+      } as Job<WhatsAppQueueJob>),
+    ).resolves.toBeUndefined();
+    expect(whatsapp.rejectedCollection).not.toHaveBeenCalled();
+    expect(emailQueue.addJob).not.toHaveBeenCalled();
   });
 });

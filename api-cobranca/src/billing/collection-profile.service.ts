@@ -7,10 +7,21 @@ import {
 import {
   CollectionChannel,
   CollectionProfileType,
+  CollectionRuleStep,
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { TemplatesService } from '../templates/templates.service';
+import { EmailTemplatesService } from '../email/email-templates.service';
+import { TemplatePolicyService } from '../templates/template-policy.service';
+import {
+  COLLECTION_PURPOSES,
+  TemplateBlockCode,
+  TemplateSelection,
+} from '../templates/template-contracts';
+import {
+  purposeForScheduleDay,
+  ruleStepSelection,
+} from '../templates/template-selection';
 
 interface CreateProfileInput {
   name: string;
@@ -21,13 +32,22 @@ interface CreateProfileInput {
 }
 
 interface CreateStepInput {
+  /** Stable ID of an existing step; required to change the choice of an attempted step. */
+  id?: string;
   stepOrder: number;
   channel: CollectionChannel;
-  templateId?: string;
+  emailTemplateId?: string;
+  whatsappSelection?: TemplateSelection;
   delayDays: number;
   sendTimeStart?: string;
   sendTimeEnd?: string;
 }
+
+/** Step as returned to the company: selection per channel and whether it is usable now. */
+export type PresentedStep = CollectionRuleStep & {
+  whatsappSelection: TemplateSelection | null;
+  whatsappStatus: { ready: boolean; code: TemplateBlockCode | null } | null;
+};
 
 interface StandardProfileStep {
   day: number;
@@ -41,6 +61,9 @@ type DefaultTemplateSlug =
   | 'atraso-primeiro-aviso'
   | 'atraso-recorrente'
   | 'atraso-critico';
+
+/** Email defaults by slug; WhatsApp steps use the company's purpose defaults instead. */
+type DefaultTemplateIds = { EMAIL: ReadonlyMap<string, string> };
 
 interface StandardProfile {
   name: string;
@@ -161,7 +184,8 @@ export class CollectionProfileService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly templatesService: TemplatesService,
+    private readonly policy: TemplatePolicyService,
+    private readonly emailTemplatesService: EmailTemplatesService,
   ) {}
 
   async listProfiles(companyId: string) {
@@ -176,19 +200,70 @@ export class CollectionProfileService {
       orderBy: [{ name: 'asc' }],
     });
 
-    return profiles.sort((a, b) => {
+    const sorted = profiles.sort((a, b) => {
       const order =
         PROFILE_TYPE_ORDER[a.profileType] - PROFILE_TYPE_ORDER[b.profileType];
       if (order !== 0) return order;
       return a.name.localeCompare(b.name, 'pt-BR');
     });
+    const presented = [];
+    for (const profile of sorted)
+      presented.push({
+        ...profile,
+        steps: await this.presentSteps(companyId, profile.steps),
+      });
+    return presented;
   }
 
   async getProfile(companyId: string, profileId: string) {
-    return this.prisma.collectionProfile.findFirst({
+    const profile = await this.prisma.collectionProfile.findFirst({
       where: { id: profileId, companyId },
       include: { steps: { orderBy: { stepOrder: 'asc' } } },
     });
+    return profile
+      ? { ...profile, steps: await this.presentSteps(companyId, profile.steps) }
+      : null;
+  }
+
+  /**
+   * A WhatsApp step whose choice is missing, revoked or unusable stays visible with its
+   * pending status; order, delays and history are never changed to hide it.
+   */
+  private async presentSteps(
+    companyId: string,
+    steps: CollectionRuleStep[],
+  ): Promise<PresentedStep[]> {
+    const decisions = new Map<
+      string,
+      { ready: boolean; code: TemplateBlockCode | null }
+    >();
+    const result: PresentedStep[] = [];
+    for (const step of steps) {
+      if (step.channel !== 'WHATSAPP') {
+        result.push({ ...step, whatsappSelection: null, whatsappStatus: null });
+        continue;
+      }
+      const selection = ruleStepSelection(step);
+      const key = JSON.stringify(selection);
+      if (!decisions.has(key)) {
+        const decision = await this.prisma.$transaction((tx) =>
+          this.policy.resolve(tx, companyId, selection),
+        );
+        decisions.set(
+          key,
+          decision.allowed
+            ? { ready: true, code: null }
+            : { ready: false, code: decision.code },
+        );
+      }
+      // An unavailable explicit template is not exposed to the company beyond its status.
+      result.push({
+        ...step,
+        whatsappSelection: selection,
+        whatsappStatus: decisions.get(key)!,
+      });
+    }
+    return result;
   }
 
   async createProfile(companyId: string, input: CreateProfileInput) {
@@ -286,48 +361,146 @@ export class CollectionProfileService {
       throw new NotFoundException('Perfil nao encontrado.');
     }
 
-    await this.validateSteps(companyId, steps);
-
-    const attemptedStepIds = await this.prisma.collectionRuleStep.findMany({
-      where: {
-        profileId,
-        attempts: { some: {} },
-      },
-      select: { id: true },
-      take: 1,
+    const existing = await this.prisma.collectionRuleStep.findMany({
+      where: { profileId },
+      include: { _count: { select: { attempts: true } } },
+      orderBy: { stepOrder: 'asc' },
     });
+    await this.validateSteps(companyId, steps, existing);
 
-    if (attemptedStepIds.length > 0) {
-      throw new BadRequestException(
-        'Este perfil ja possui tentativas registradas. Crie um novo perfil para alterar a regua sem perder historico.',
+    if (existing.some((step) => step._count.attempts > 0)) {
+      // Attempted steps keep ID, order, delays and history; only the template choice moves.
+      await this.updateSelectionsInPlace(steps, existing);
+      return this.presentSteps(
+        companyId,
+        await this.prisma.collectionRuleStep.findMany({
+          where: { profileId },
+          orderBy: { stepOrder: 'asc' },
+        }),
       );
     }
 
-    await this.prisma.collectionRuleStep.deleteMany({
-      where: { profileId },
+    // Steps sent back with their ID keep it (holds and logical keys refer to it); others
+    // are created and the missing ones removed.
+    const existingIds = new Set(existing.map((step) => step.id));
+    const kept = [
+      ...new Set(
+        steps.flatMap((step) =>
+          step.id && existingIds.has(step.id) ? [step.id] : [],
+        ),
+      ),
+    ];
+    await this.prisma.$transaction(async (tx) => {
+      await tx.collectionRuleStep.deleteMany({
+        where: { profileId, id: { notIn: kept } },
+      });
+      // Temporary orders avoid transient (profile, order, channel) collisions on reorder.
+      for (const [index, id] of kept.entries())
+        await tx.collectionRuleStep.update({
+          where: { id },
+          data: { stepOrder: -1 - index },
+        });
+      const used = new Set<string>();
+      for (const step of steps) {
+        const data = {
+          stepOrder: step.stepOrder,
+          channel: step.channel,
+          ...this.selectionColumns(step, existing),
+          delayDays: step.delayDays,
+          sendTimeStart: step.sendTimeStart || null,
+          sendTimeEnd: step.sendTimeEnd || null,
+          isActive: true,
+        };
+        if (step.id && kept.includes(step.id) && !used.has(step.id)) {
+          used.add(step.id);
+          await tx.collectionRuleStep.update({ where: { id: step.id }, data });
+        } else
+          await tx.collectionRuleStep.create({ data: { profileId, ...data } });
+      }
     });
 
-    if (steps.length === 0) {
-      return [];
-    }
+    return this.presentSteps(
+      companyId,
+      await this.prisma.collectionRuleStep.findMany({
+        where: { profileId },
+        orderBy: { stepOrder: 'asc' },
+      }),
+    );
+  }
 
-    await this.prisma.collectionRuleStep.createMany({
-      data: steps.map((step) => ({
-        profileId,
-        stepOrder: step.stepOrder,
-        channel: step.channel,
-        templateId: step.templateId || null,
-        delayDays: step.delayDays,
-        sendTimeStart: step.sendTimeStart || null,
-        sendTimeEnd: step.sendTimeEnd || null,
-        isActive: true,
-      })),
+  private async updateSelectionsInPlace(
+    steps: CreateStepInput[],
+    existing: CollectionRuleStep[],
+  ): Promise<void> {
+    const byId = new Map(existing.map((step) => [step.id, step]));
+    const unchangedSchedule =
+      steps.length === existing.length &&
+      new Set(steps.map((step) => step.id)).size === steps.length &&
+      steps.every((step) => {
+        const current = step.id ? byId.get(step.id) : undefined;
+        return (
+          current &&
+          current.stepOrder === step.stepOrder &&
+          current.channel === step.channel &&
+          current.delayDays === step.delayDays &&
+          (current.sendTimeStart ?? null) === (step.sendTimeStart || null) &&
+          (current.sendTimeEnd ?? null) === (step.sendTimeEnd || null)
+        );
+      });
+    if (!unchangedSchedule)
+      throw new BadRequestException(
+        'Este perfil ja possui tentativas registradas. Apenas a escolha do template das etapas existentes pode ser alterada; crie um novo perfil para mudar a regua.',
+      );
+    await this.prisma.$transaction(async (tx) => {
+      for (const step of steps)
+        await tx.collectionRuleStep.update({
+          where: { id: step.id },
+          data: this.selectionColumns(step, existing),
+        });
     });
+  }
 
-    return this.prisma.collectionRuleStep.findMany({
-      where: { profileId },
-      orderBy: { stepOrder: 'asc' },
-    });
+  /** Columns of each channel; the other channel's columns are always empty. */
+  private selectionColumns(
+    step: CreateStepInput,
+    existing: CollectionRuleStep[],
+  ): Pick<
+    Prisma.CollectionRuleStepCreateManyInput,
+    | 'templateId'
+    | 'emailTemplateId'
+    | 'whatsappSelectionMode'
+    | 'whatsappPurpose'
+  > {
+    if (step.channel === 'EMAIL')
+      return {
+        templateId: null,
+        emailTemplateId: step.emailTemplateId || null,
+        whatsappSelectionMode: null,
+        whatsappPurpose: null,
+      };
+    const selection = step.whatsappSelection ?? { mode: 'UNCONFIGURED' };
+    if (selection.mode === 'EXPLICIT')
+      return {
+        templateId: selection.templateId,
+        emailTemplateId: null,
+        whatsappSelectionMode: 'EXPLICIT',
+        whatsappPurpose: null,
+      };
+    if (selection.mode === 'DEFAULT')
+      return {
+        templateId: null,
+        emailTemplateId: null,
+        whatsappSelectionMode: 'DEFAULT',
+        whatsappPurpose: selection.purpose,
+      };
+    // A legacy step saved without a new choice keeps its references for history.
+    const previous = existing.find((item) => item.id === step.id);
+    return {
+      templateId: previous?.templateId ?? null,
+      emailTemplateId: null,
+      whatsappSelectionMode: 'UNCONFIGURED',
+      whatsappPurpose: previous?.whatsappPurpose ?? null,
+    };
   }
 
   async classifyDebtors(companyId: string) {
@@ -437,11 +610,13 @@ export class CollectionProfileService {
   }
 
   private async ensureStandardProfiles(companyId: string): Promise<void> {
-    const defaultTemplates =
-      await this.templatesService.ensureDefaultTemplates(companyId);
-    const defaultTemplateIds = new Map(
-      defaultTemplates.map((template) => [template.slug, template.id]),
-    );
+    const defaultTemplateIds: DefaultTemplateIds = {
+      EMAIL: new Map(
+        (await this.emailTemplatesService.ensureDefaultTemplates(companyId))
+          .filter((template) => template.id)
+          .map((template) => [template.slug, template.id as string]),
+      ),
+    };
     const profiles = await this.prisma.collectionProfile.findMany({
       where: { companyId },
       include: { steps: { select: { id: true } } },
@@ -552,7 +727,7 @@ export class CollectionProfileService {
     profile: ExistingProfile,
     standardProfile: StandardProfile,
     hasDefault: boolean,
-    defaultTemplateIds: ReadonlyMap<string, string>,
+    defaultTemplateIds: DefaultTemplateIds,
   ): Promise<ExistingProfile> {
     const shouldReplaceExistingSteps = this.isLegacyDefaultProfile(profile);
     const shouldUseStandardName =
@@ -622,7 +797,7 @@ export class CollectionProfileService {
     profile: ExistingProfile,
     standardSteps: readonly StandardProfileStep[],
     shouldReplaceExistingSteps: boolean,
-    defaultTemplateIds: ReadonlyMap<string, string>,
+    defaultTemplateIds: DefaultTemplateIds,
   ): Promise<void> {
     if (profile.steps.length > 0 && !shouldReplaceExistingSteps) {
       return;
@@ -657,12 +832,14 @@ export class CollectionProfileService {
 
   private buildStandardStepRows(
     steps: readonly StandardProfileStep[],
-    defaultTemplateIds?: ReadonlyMap<string, string>,
+    defaultTemplateIds?: DefaultTemplateIds,
   ): Array<{
     stepOrder: number;
     channel: CollectionChannel;
     delayDays: number;
-    templateId?: string;
+    emailTemplateId?: string;
+    whatsappSelectionMode?: 'DEFAULT';
+    whatsappPurpose?: ReturnType<typeof purposeForScheduleDay>;
     isActive: boolean;
   }> {
     let previousDay = 0;
@@ -670,15 +847,25 @@ export class CollectionProfileService {
     return steps.map((step, index) => {
       const delayDays = index === 0 ? step.day : step.day - previousDay;
       previousDay = step.day;
-      const templateId = defaultTemplateIds?.get(
-        this.getTemplateSlugForScheduleDay(step.day),
-      );
+      const emailTemplateId =
+        step.channel === 'EMAIL'
+          ? defaultTemplateIds?.EMAIL.get(
+              this.getTemplateSlugForScheduleDay(step.day),
+            )
+          : undefined;
 
       return {
         stepOrder: index,
         channel: step.channel,
         delayDays,
-        ...(templateId ? { templateId } : {}),
+        ...(emailTemplateId ? { emailTemplateId } : {}),
+        // WhatsApp steps follow the purpose default; nothing is granted or picked here.
+        ...(step.channel === 'WHATSAPP'
+          ? {
+              whatsappSelectionMode: 'DEFAULT' as const,
+              whatsappPurpose: purposeForScheduleDay(step.day),
+            }
+          : {}),
         isActive: true,
       };
     });
@@ -719,6 +906,7 @@ export class CollectionProfileService {
   private async validateSteps(
     companyId: string,
     steps: CreateStepInput[],
+    existing: CollectionRuleStep[],
   ): Promise<void> {
     const seen = new Set<string>();
 
@@ -746,30 +934,72 @@ export class CollectionProfileService {
       seen.add(key);
     }
 
-    const templateIds = Array.from(
-      new Set(
-        steps
-          .map((step) => step.templateId)
-          .filter((templateId): templateId is string => Boolean(templateId)),
-      ),
-    );
-
-    if (templateIds.length === 0) {
-      return;
-    }
-
-    const templates = await this.templatesService.findAll(companyId);
-    const activeTemplateIds = new Set(
-      templates
-        .filter((template) => template.isActive)
-        .map((template) => template.id),
-    );
-
-    if (templateIds.some((templateId) => !activeTemplateIds.has(templateId))) {
+    // Each channel references only its own catalog.
+    if (
+      steps.some(
+        (step) =>
+          (step.channel === 'EMAIL' && step.whatsappSelection) ||
+          (step.channel === 'WHATSAPP' && step.emailTemplateId),
+      )
+    ) {
       throw new BadRequestException(
-        'Um ou mais templates nao estao disponiveis para esta empresa.',
+        'O template informado nao corresponde ao canal da etapa.',
       );
     }
+
+    for (const step of steps.filter((item) => item.channel === 'WHATSAPP')) {
+      const selection = step.whatsappSelection;
+      if (!selection)
+        throw new BadRequestException(
+          'Etapas WhatsApp exigem o padrao da finalidade ou um template liberado.',
+        );
+      if (selection.mode === 'UNCONFIGURED') {
+        // Only an existing pending step may be kept as is; new steps need a valid choice.
+        const previous = existing.find((item) => item.id === step.id);
+        if (previous?.whatsappSelectionMode !== 'UNCONFIGURED')
+          throw new BadRequestException(
+            'Escolha o padrao da finalidade ou um template liberado para a etapa WhatsApp.',
+          );
+      } else if (selection.mode === 'DEFAULT') {
+        if (!COLLECTION_PURPOSES.includes(selection.purpose))
+          throw new BadRequestException('Finalidade invalida para a regua.');
+      } else {
+        const decision = await this.prisma.$transaction((tx) =>
+          this.policy.resolve(tx, companyId, selection),
+        );
+        if (!decision.allowed)
+          throw new BadRequestException(
+            'Um ou mais templates nao estao disponiveis para esta empresa.',
+          );
+      }
+    }
+
+    const emailTemplateIds = this.selected(steps, 'emailTemplateId');
+    if (emailTemplateIds.length > 0) {
+      const available = new Set(
+        (await this.emailTemplatesService.findAll(companyId))
+          .filter((template) => template.id && template.isActive)
+          .map((template) => template.id),
+      );
+      if (emailTemplateIds.some((id) => !available.has(id))) {
+        throw new BadRequestException(
+          'Um ou mais templates de email nao estao disponiveis para esta empresa.',
+        );
+      }
+    }
+  }
+
+  private selected(
+    steps: CreateStepInput[],
+    field: 'emailTemplateId',
+  ): string[] {
+    return Array.from(
+      new Set(
+        steps
+          .map((step) => step[field])
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
   }
 
   private isTime(value: string): boolean {

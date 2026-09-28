@@ -17,13 +17,18 @@ export class OutboundIntentController {
   @Get()
   async list(@Query() query: IntentQuery): Promise<unknown> {
     const rows = await this.prisma.communicationOutboundIntent.findMany({
-      where: { state: { in: ['UNCERTAIN', 'FAILED', 'PENDING', 'SENDING'] } },
+      where: {
+        state: { in: ['UNCERTAIN', 'FAILED', 'PENDING', 'SENDING', 'BLOCKED'] },
+      },
       select: {
         id: true,
         messageId: true,
         companyId: true,
         invoiceId: true,
         state: true,
+        transmission: true,
+        logicalKey: true,
+        generation: true,
         lastErrorCode: true,
         attempts: true,
         nextAttemptAt: true,

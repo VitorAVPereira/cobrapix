@@ -3,8 +3,6 @@ import { DatafyRateLimitService } from './datafy-rate-limit.service';
 import type {
   AcceptedMessage,
   ChannelInfo,
-  CreatedTemplate,
-  TemplateDefinition,
   TemplateMessage,
   TextMessage,
   TemplatePage,
@@ -99,33 +97,12 @@ export class DatafyTransport implements WhatsappTransport {
     };
   }
 
-  async createTemplate(input: TemplateDefinition): Promise<CreatedTemplate> {
-    const payload = await this.json(
-      this.apiPath(`/${this.id('META_BUSINESS_ACCOUNT_ID')}/message_templates`),
-      'POST',
-      input,
-    );
-    if (
-      !isRecord(payload) ||
-      typeof payload.id !== 'string' ||
-      typeof payload.status !== 'string'
-    )
-      throw invalidResponse(true);
-    return {
-      id: payload.id,
-      status: payload.status,
-      ...(typeof payload.category === 'string'
-        ? { category: payload.category }
-        : {}),
-    };
-  }
-
   async listTemplates(after?: string): Promise<TemplatePage> {
     const cursor =
       after === undefined ? '' : `&after=${encodeURIComponent(after)}`;
     const payload = await this.json(
       this.apiPath(
-        `/${this.id('META_BUSINESS_ACCOUNT_ID')}/message_templates?fields=id,name,language,status,rejected_reason,category,components,quality_score&limit=100${cursor}`,
+        `/${this.id('META_BUSINESS_ACCOUNT_ID')}/message_templates?fields=id,name,language,status,rejected_reason,category,components,quality_score,parameter_format&limit=100${cursor}`,
       ),
     );
     if (!isRecord(payload) || !Array.isArray(payload.data))
@@ -152,6 +129,10 @@ export class DatafyTransport implements WhatsappTransport {
         rejected_reason:
           typeof item.rejected_reason === 'string'
             ? item.rejected_reason
+            : undefined,
+        parameter_format:
+          typeof item.parameter_format === 'string'
+            ? item.parameter_format
             : undefined,
       });
     }

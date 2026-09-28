@@ -20,7 +20,10 @@ import { CommunicationsQueryDto } from './dto/communications-query.dto';
 import { IsEnum } from 'class-validator';
 import { ReplyConversationDto } from './dto/reply-conversation.dto';
 import { AttributeMessageDto } from './dto/attribute-message.dto';
-import { TemplateReplyDto } from './dto/template-reply.dto';
+import {
+  TemplateOptionsQueryDto,
+  TemplateReplyDto,
+} from './dto/template-reply.dto';
 import {
   AdminConversationMessagesQueryDto,
   AdminConversationsQueryDto,
@@ -132,5 +135,14 @@ export class CommunicationsController {
     @Body() body: TemplateReplyDto,
   ): Promise<unknown> {
     return this.service.replyWithTemplate(id, body);
+  }
+
+  @Get('admin/conversations/:id/template-options')
+  @UseGuards(PlatformAdminGuard)
+  templateOptions(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: TemplateOptionsQueryDto,
+  ): Promise<unknown> {
+    return this.service.templateOptions(id, query);
   }
 }

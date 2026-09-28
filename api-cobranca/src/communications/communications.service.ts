@@ -15,10 +15,14 @@ import { ConfigService } from '@nestjs/config';
 import { ResendMailerService } from '../common/resend-mailer.service';
 import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { TemplateSendPreparerService } from '../templates/template-send-preparer.service';
+import { TemplatePolicyService } from '../templates/template-policy.service';
+import { TemplateContextService } from '../templates/template-context.service';
 import {
-  templateBody,
-  templateVariableNames,
-} from '../templates/template-provider-state';
+  CompanyTemplateView,
+  TemplateCatalogQueryService,
+} from '../templates/template-catalog-query.service';
+import { renderSend } from '../templates/template-reservation';
 import { adminReplyKey, WhatsappService } from '../whatsapp/whatsapp.service';
 import { assertChannelAvailable } from './channel-availability';
 import { CommunicationAttributionService } from './communication-attribution.service';
@@ -29,7 +33,10 @@ import {
 import { olderThan } from './communications-tenant.service';
 import { AttributeMessageDto } from './dto/attribute-message.dto';
 import { ReplyConversationDto } from './dto/reply-conversation.dto';
-import { TemplateReplyDto } from './dto/template-reply.dto';
+import {
+  TemplateReplyContextDto,
+  TemplateReplyDto,
+} from './dto/template-reply.dto';
 
 /** Inbound message no company was attributed to, including legacy rows without method. */
 const UNCLASSIFIED_INBOUND: Prisma.CommunicationMessageWhereInput = {
@@ -68,6 +75,10 @@ export class CommunicationsService {
     private readonly config: ConfigService,
     private readonly attribution: CommunicationAttributionService,
     private readonly tokens: CommunicationTokenService,
+    private readonly templateSender: TemplateSendPreparerService,
+    private readonly policy: TemplatePolicyService,
+    private readonly templateContext: TemplateContextService,
+    private readonly catalog: TemplateCatalogQueryService,
   ) {}
 
   async listOutbound(
@@ -392,81 +403,174 @@ export class CommunicationsService {
     });
   }
 
-  /** Approved global template, for replies outside the service window. */
+  /**
+   * Templates usable for this chat under the selected company context. The company must be
+   * related to the conversation (its messages or a debtor with this phone); invoice and
+   * debtor must belong to it and to this recipient. Values are filled by the server.
+   */
+  async templateOptions(
+    conversationId: string,
+    context: TemplateReplyContextDto,
+  ): Promise<{
+    serviceWindow: { open: boolean; expiresAt: Date | null };
+    templates: Array<{
+      id: string;
+      name: string;
+      language: string;
+      content: CompanyTemplateView['content'];
+      usable: boolean;
+      reason: string | null;
+      field: string | null;
+      previewBody: string | null;
+    }>;
+  }> {
+    const conversation = await this.assertTemplateContext(
+      conversationId,
+      context,
+    );
+    const catalog = await this.catalog.companyCatalog(context.companyId, {
+      limit: 100,
+    });
+    const templates = [];
+    for (const template of catalog.items) {
+      const outcome = await this.prisma.$transaction(async (tx) => {
+        const decision = await this.policy.evaluate(
+          tx,
+          context.companyId,
+          template.id,
+        );
+        if (!decision.allowed)
+          return { ok: false as const, code: decision.code, field: undefined };
+        return renderSend(
+          this.templateContext,
+          this.crypto,
+          tx,
+          {
+            logicalKey: 'preview',
+            origin: 'ADMIN_REPLY',
+            context,
+            selection: { mode: 'EXPLICIT', templateId: template.id },
+            conversationId,
+          },
+          decision.template,
+        );
+      });
+      templates.push({
+        id: template.id,
+        name: template.name,
+        language: template.language,
+        content: template.content,
+        usable: outcome.ok,
+        reason: outcome.ok ? null : outcome.code,
+        field: outcome.ok ? null : (outcome.field ?? null),
+        previewBody: outcome.ok ? outcome.body : null,
+      });
+    }
+    const expiresAt = conversation.serviceWindowExpiresAt;
+    return {
+      serviceWindow: {
+        open: Boolean(expiresAt && expiresAt > new Date()),
+        expiresAt,
+      },
+      templates,
+    };
+  }
+
+  /** Approved template granted to the context company, for replies outside the window. */
   async replyWithTemplate(
     conversationId: string,
     dto: TemplateReplyDto,
   ): Promise<{ id: string; status: string; externalMessageId: string | null }> {
+    await this.assertTemplateContext(conversationId, dto.context);
+    await assertChannelAvailable(this.prisma, 'META');
+    const prepared = await this.templateSender.prepare({
+      logicalKey: `admin-template:${dto.idempotencyId}`,
+      origin: 'ADMIN_REPLY',
+      context: {
+        companyId: dto.context.companyId,
+        ...(dto.context.invoiceId ? { invoiceId: dto.context.invoiceId } : {}),
+        ...(dto.context.debtorId ? { debtorId: dto.context.debtorId } : {}),
+      },
+      selection: { mode: 'EXPLICIT', templateId: dto.templateId },
+      conversationId,
+    });
+    if (prepared.status !== 'QUEUED')
+      throw new HttpException(
+        {
+          code: prepared.code ?? 'TEMPLATE_HELD',
+          message: 'Template indisponível para a empresa selecionada.',
+        },
+        HttpStatus.UNPROCESSABLE_ENTITY,
+      );
+    const queued = await this.whatsapp.enqueuePreparedTemplate(
+      prepared.intentId,
+    );
+    const message = await this.prisma.communicationMessage.findUnique({
+      where: { id: queued.id },
+      select: { content: true },
+    });
+    // Sending a template never reopens the service window.
+    await this.prisma.communicationConversation.update({
+      where: { id: conversationId },
+      data: {
+        status: 'IN_PROGRESS',
+        lastMessagePreview: (message?.content ?? '').slice(0, 255),
+        unreadCount: 0,
+      },
+    });
+    return queued;
+  }
+
+  private async assertTemplateContext(
+    conversationId: string,
+    context: TemplateReplyContextDto,
+  ): Promise<{ serviceWindowExpiresAt: Date | null }> {
     const conversation = await this.prisma.communicationConversation.findUnique(
       {
         where: { id: conversationId },
-        select: { channel: true, recipientEncrypted: true },
+        select: {
+          channel: true,
+          recipientEncrypted: true,
+          recipientType: true,
+          recipientHash: true,
+          serviceWindowExpiresAt: true,
+        },
       },
     );
     if (!conversation) throw new NotFoundException('Conversa não encontrada.');
     if (conversation.channel !== 'WHATSAPP')
       throw new BadRequestException('Templates existem apenas no WhatsApp.');
-    const template = await this.prisma.globalMessageTemplate.findUnique({
-      where: { id: dto.templateId },
-    });
-    if (
-      !template?.isActive ||
-      template.metaStatus !== 'APPROVED' ||
-      template.metaReviewRequired ||
-      !template.metaTemplateName
-    )
-      throw new HttpException(
-        {
-          code: 'TEMPLATE_UNAVAILABLE',
-          message: 'Template não aprovado ou em revisão.',
-        },
-        HttpStatus.UNPROCESSABLE_ENTITY,
-      );
-    const body = templateBody(template.content);
-    const positions = templateVariableNames(template.content).length;
-    if (dto.parameters.length !== positions)
-      throw new BadRequestException(
-        `O template exige ${positions} parâmetro(s).`,
-      );
-    if (template.paymentButtonEnabled && !dto.context?.invoiceId)
-      throw new BadRequestException(
-        'Template com botão de pagamento exige a cobrança de contexto.',
-      );
-    const recipient = conversation.recipientEncrypted
-      ? this.decryptRecipient(conversation.recipientEncrypted)
-      : null;
+    const recipient =
+      conversation.recipientType !== 'BSUID' && conversation.recipientEncrypted
+        ? this.decryptRecipient(conversation.recipientEncrypted)
+        : null;
     if (!recipient)
       throw new HttpException(
         'Destinatário indisponível.',
         HttpStatus.UNPROCESSABLE_ENTITY,
       );
-    await assertChannelAvailable(this.prisma, 'META');
-    const content = body.replace(
-      /\{\{(\d+)\}\}/g,
-      (_match: string, position: string) =>
-        dto.parameters[Number(position) - 1] ?? '',
-    );
-    const queued = await this.whatsapp.enqueueAdminTemplate(
-      recipient,
-      {
-        name: template.metaTemplateName,
-        language: template.metaLanguage,
-        content,
-        parameters: dto.parameters,
-        paymentButton: template.paymentButtonEnabled,
-      },
-      dto.idempotencyId,
-      dto.context ? { context: dto.context } : {},
-    );
-    await this.prisma.communicationConversation.update({
-      where: { id: conversationId },
-      data: {
-        status: 'IN_PROGRESS',
-        lastMessagePreview: content.slice(0, 255),
-        unreadCount: 0,
-      },
+    // Never inferred from the phone alone, and never any company just because the actor is admin.
+    const digits = recipient.replace(/\D/g, '');
+    const [present, debtor] = await Promise.all([
+      this.prisma.communicationMessage.findFirst({
+        where: { conversationId, companyId: context.companyId },
+        select: { id: true },
+      }),
+      this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT "id" FROM "Debtor"
+        WHERE "companyId" = ${context.companyId}
+          AND regexp_replace("phoneNumber", '\\D', '', 'g') = ${digits}
+        LIMIT 1`),
+    ]);
+    if (!present && !debtor.length)
+      throw new BadRequestException(
+        'Selecione uma empresa relacionada a esta conversa.',
+      );
+    await this.attribution.validateContext(this.prisma, context, {
+      hash: conversation.recipientHash,
+      type: 'PHONE',
     });
-    return queued;
+    return { serviceWindowExpiresAt: conversation.serviceWindowExpiresAt };
   }
 
   async updateAdminStatus(

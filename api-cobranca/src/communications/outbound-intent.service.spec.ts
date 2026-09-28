@@ -100,6 +100,9 @@ describe('OutboundIntentService dispatch', () => {
   });
   it('retries a transient acceptance commit without transmitting again', async () => {
     const { service, record, prisma } = setup();
+    const passthrough = (run: (tx: unknown) => Promise<unknown>) => run(prisma);
+    // The first transaction is the claim; the failures hit the acceptance commit.
+    prisma.$transaction.mockImplementationOnce(passthrough);
     prisma.$transaction.mockRejectedValueOnce(new Error('transient'));
     const transmit = jest.fn().mockResolvedValue({
       accepted: true,
@@ -115,6 +118,9 @@ describe('OutboundIntentService dispatch', () => {
   });
   it('marks a persistent local failure after provider acceptance as uncertain', async () => {
     const { service, record, prisma } = setup();
+    const passthrough = (run: (tx: unknown) => Promise<unknown>) => run(prisma);
+    // The first transaction is the claim; the failures hit the acceptance commit.
+    prisma.$transaction.mockImplementationOnce(passthrough);
     for (let i = 0; i < 3; i++)
       prisma.$transaction.mockRejectedValueOnce(new Error('database down'));
     const transmit = jest.fn().mockResolvedValue({
@@ -130,6 +136,46 @@ describe('OutboundIntentService dispatch', () => {
       service.execute('intent', () => Promise.resolve(), transmit),
     ).rejects.toThrow();
     expect(transmit).toHaveBeenCalledTimes(1);
+  });
+  it('authorizes inside the claim transaction; a denial never claims or transmits', async () => {
+    const { service, record } = setup();
+    const transmit = jest.fn();
+    const authorize = jest.fn(() => {
+      expect(record.state).toBe('PENDING');
+      return Promise.reject(new Error('NOT_GRANTED'));
+    });
+    await expect(
+      service.execute(
+        'intent',
+        () => Promise.resolve(),
+        transmit,
+        undefined,
+        authorize,
+      ),
+    ).rejects.toThrow('NOT_GRANTED');
+    expect(record.state).toBe('PENDING');
+    expect(transmit).not.toHaveBeenCalled();
+  });
+  it('requires the authorization callback for pinned template intents', async () => {
+    const { service, record } = setup();
+    Object.assign(record, { templateSnapshot: { templateId: 't' } });
+    const transmit = jest.fn();
+    await expect(
+      service.execute('intent', () => Promise.resolve(), transmit),
+    ).rejects.toThrow('TEMPLATE_AUTHORIZATION_REQUIRED');
+    expect(transmit).not.toHaveBeenCalled();
+  });
+  it('reports a held intent without touching it', async () => {
+    const { service, record } = setup();
+    Object.assign(record, { state: 'BLOCKED' });
+    await expect(
+      service.execute('intent', () => Promise.resolve(), jest.fn()),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: 'OUTBOUND_BLOCKED',
+      }) as unknown,
+    });
+    expect(record.state).toBe('BLOCKED');
   });
   it('keeps proof of acceptance when the lease expired during a slow transmission', async () => {
     const { service, record } = setup();

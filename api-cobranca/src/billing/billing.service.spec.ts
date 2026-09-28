@@ -2,13 +2,13 @@ import { BillingMethod } from '@prisma/client';
 import { BillingService } from './billing.service.ts';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentService } from '../payment/payment.service';
-import { MessageQueueService, SendMessageJob } from '../queue/message.queue';
+import { MessageQueueService } from '../queue/message.queue';
 import { SpintaxService } from '../queue/services/spintax.service';
 import { CollectionRuleEngine } from './collection-rule-engine';
 import { EmailQueueService } from '../email/email.queue';
 import { EmailService } from '../email/email.service';
 import { EmailTemplatesService } from '../email/email-templates.service';
-import { TemplatesService } from '../templates/templates.service';
+import { TemplateSendPreparerService } from '../templates/template-send-preparer.service';
 
 function decimal(value: number): { toNumber(): number; valueOf(): number } {
   return { toNumber: () => value, valueOf: () => value };
@@ -26,6 +26,7 @@ interface TestInvoiceOverrides {
   boletoLink?: string | null;
   boletoPdf?: string | null;
   email?: string | null;
+  whatsappOptIn?: boolean;
 }
 
 function buildCompany(): {
@@ -78,6 +79,7 @@ function buildInvoice(overrides: TestInvoiceOverrides = {}) {
       document: null,
       phoneNumber: '11999999999',
       email: overrides.email ?? null,
+      whatsappOptIn: overrides.whatsappOptIn ?? true,
       gatewayCustomerId: null,
       useGlobalBillingSettings: true,
       collectionReminderDays: [],
@@ -98,7 +100,6 @@ function createService(input: {
   invoices?: ReturnType<typeof buildInvoice>[];
   updatedInvoice?: ReturnType<typeof buildInvoice> | null;
   createPayment?: jest.Mock;
-  templateContent?: string;
 }) {
   const company = input.company ?? buildCompany();
   const invoices = input.invoices ?? [];
@@ -108,12 +109,11 @@ function createService(input: {
     company: {
       findUnique: jest.fn().mockResolvedValue(company),
     },
-    globalMessageTemplate: {
-      findFirst: jest.fn().mockResolvedValue({ slug: 'vencimento-hoje' }),
-    },
     invoice: {
       findMany: jest.fn().mockResolvedValue(invoices),
       findFirst: jest.fn().mockResolvedValue(input.updatedInvoice ?? null),
+      update: jest.fn(),
+      updateMany: jest.fn(),
     },
     debtor: {
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -127,7 +127,7 @@ function createService(input: {
   } as unknown as PrismaService;
 
   const messageQueue = {
-    addBulkSendMessageJobs: jest.fn().mockResolvedValue(undefined),
+    addOutboundIntentJob: jest.fn().mockResolvedValue(undefined),
     addSelectedInitialChargeJobs: jest.fn().mockResolvedValue(undefined),
   } as unknown as MessageQueueService;
 
@@ -144,7 +144,9 @@ function createService(input: {
     getNextStep: jest.fn().mockResolvedValue({
       ruleStepId: 'step-1',
       channel: 'WHATSAPP',
-      templateId: 'template-1',
+      templateId: null,
+      emailTemplateId: null,
+      whatsappSelection: { mode: 'DEFAULT', purpose: 'DUE_TODAY' },
       delayDays: 0,
     }),
   } as unknown as CollectionRuleEngine;
@@ -157,47 +159,27 @@ function createService(input: {
     buildCollectionEmailHtml: jest.fn().mockReturnValue('<html></html>'),
   } as unknown as EmailService;
 
-  const emailTemplatesService = {
-    findActiveOrDefault: jest.fn().mockResolvedValue({
-      id: 'email-template-1',
-      slug: 'vencimento-hoje',
-      name: 'Vencimento hoje',
-      subject: '{{nome_empresa}}: cobranca de {{valor}}',
-      content:
-        'Ola {{nome_devedor}}, acesse {{payment_link}} ate {{data_vencimento}}.',
-      isActive: true,
-      greeting: 'Olá',
-      instructions: 'Acesse o pagamento seguro.',
-      signature: 'Equipe Empresa Teste',
-    }),
-  } as unknown as EmailTemplatesService;
-  const approvedTemplate = {
-    id: 'global-template-1',
+  const resolvedEmail = {
+    id: 'email-template-1',
     slug: 'vencimento-hoje',
+    name: 'Vencimento hoje',
+    subject: '{{nome_empresa}}: cobranca de {{valor}}',
     content:
-      input.templateContent ??
-      [
-        'Ola {{nome_devedor}}, sua cobranca de {{valor}} vence em {{data_vencimento}}.',
-        '',
-        'Forma de pagamento: {{metodo_pagamento}}',
-        'Acesse/pague por aqui: {{payment_link}}',
-        'Pix copia e cola: {{pix_copia_e_cola}}',
-        'Linha digitavel: {{boleto_linha_digitavel}}',
-        'Boleto: {{boleto_link}}',
-        'PDF do boleto: {{boleto_pdf}}',
-      ].join('\n'),
+      'Ola {{nome_devedor}}, acesse {{payment_link}} ate {{data_vencimento}}.',
     isActive: true,
-    metaTemplateName: null,
-    metaLanguage: 'pt_BR',
-    paymentButtonEnabled: true,
     greeting: 'Olá',
     instructions: 'Acesse o pagamento seguro.',
     signature: 'Equipe Empresa Teste',
   };
-  const templatesService = {
-    resolveApproved: jest.fn().mockResolvedValue(approvedTemplate),
-    findAll: jest.fn().mockResolvedValue([approvedTemplate]),
-  } as unknown as TemplatesService;
+  const emailTemplatesService = {
+    findActiveOrDefault: jest.fn().mockResolvedValue(resolvedEmail),
+    resolveForRule: jest.fn().mockResolvedValue(resolvedEmail),
+  } as unknown as EmailTemplatesService;
+  const templateSender = {
+    prepare: jest
+      .fn()
+      .mockResolvedValue({ status: 'QUEUED', intentId: 'intent-1' }),
+  } as unknown as TemplateSendPreparerService;
 
   return {
     service: new BillingService(
@@ -209,20 +191,17 @@ function createService(input: {
       emailQueue,
       emailService,
       emailTemplatesService,
-      templatesService,
+      templateSender,
     ),
     prisma: prisma as unknown as {
       collectionLog: { create: jest.Mock };
+      collectionAttempt: { create: jest.Mock };
       debtor: { updateMany: jest.Mock };
-      globalMessageTemplate: { findFirst: jest.Mock };
+      invoice: { update: jest.Mock; updateMany: jest.Mock };
     },
-    templatesService: templatesService as unknown as {
-      resolveApproved: jest.Mock;
-      findAll: jest.Mock;
-    },
-    approvedTemplate,
+    templateSender: templateSender as unknown as { prepare: jest.Mock },
     messageQueue: messageQueue as unknown as {
-      addBulkSendMessageJobs: jest.Mock;
+      addOutboundIntentJob: jest.Mock;
       addSelectedInitialChargeJobs: jest.Mock;
     },
     ruleEngine: ruleEngine as unknown as {
@@ -236,25 +215,27 @@ function createService(input: {
     },
     emailTemplatesService: emailTemplatesService as unknown as {
       findActiveOrDefault: jest.Mock;
+      resolveForRule: jest.Mock;
     },
     createPayment,
   };
 }
 
-function getQueuedMessage(messageQueue: {
-  addBulkSendMessageJobs: jest.Mock;
-}): string {
-  const firstCall = messageQueue.addBulkSendMessageJobs.mock.calls[0] as
-    | [SendMessageJob[]]
-    | undefined;
-  const firstJob = firstCall?.[0][0];
-
-  if (!firstJob) {
-    throw new Error('Nenhuma mensagem enfileirada no teste.');
-  }
-
-  return firstJob.message;
+function logged(
+  prisma: { collectionLog: { create: jest.Mock } },
+  actionType: string,
+) {
+  return prisma.collectionLog.create.mock.calls.some(
+    ([args]: [{ data: { actionType: string } }]) =>
+      args.data.actionType === actionType,
+  );
 }
+
+const paidPix = {
+  gatewayId: 'tx-invoice-1',
+  efiTxid: 'tx-invoice-1',
+  efiPixCopiaECola: 'pix-copia-e-cola',
+};
 
 describe('BillingService', () => {
   beforeEach(() => {
@@ -265,105 +246,144 @@ describe('BillingService', () => {
     jest.useRealTimers();
   });
 
-  it.each(['WHATSAPP', 'EMAIL'] as const)(
-    'respeita o template global escolhido na regua para %s',
-    async (channel) => {
-      const invoice = buildInvoice({
-        email: 'maria@example.test',
-        gatewayId: 'tx-invoice-1',
-        efiTxid: 'tx-invoice-1',
-        efiPixCopiaECola: 'pix-copia-e-cola',
-      });
-      const fixture = createService({ invoices: [invoice] });
-      const selected = {
-        ...fixture.approvedTemplate,
-        id: 'global-pre-vencimento',
-        slug: 'pre-vencimento',
-      };
-      fixture.ruleEngine.getNextStep.mockResolvedValue({
-        ruleStepId: 'step-1',
-        channel,
-        templateId: selected.id,
-        delayDays: -2,
-      });
-      fixture.prisma.globalMessageTemplate.findFirst.mockResolvedValue({
-        slug: selected.slug,
-      });
-      fixture.templatesService.resolveApproved.mockResolvedValue(selected);
-      fixture.templatesService.findAll.mockResolvedValue([
-        fixture.approvedTemplate,
-        selected,
-      ]);
-
-      expect(await fixture.service.executeBilling('company-1')).toEqual({
-        queued: 1,
-        skipped: 0,
-      });
-      if (channel === 'WHATSAPP') {
-        expect(fixture.templatesService.resolveApproved).toHaveBeenCalledWith(
-          'company-1',
-          selected.slug,
-        );
-      } else {
-        expect(
-          fixture.emailTemplatesService.findActiveOrDefault,
-        ).toHaveBeenCalledWith('company-1', selected.slug);
-      }
-    },
-  );
-
-  it.each(['WHATSAPP', 'EMAIL'] as const)(
-    'nao substitui uma selecao global indisponivel por outro template em %s',
-    async (channel) => {
-      const invoice = buildInvoice({
-        email: 'maria@example.test',
-        gatewayId: 'tx-invoice-1',
-        efiTxid: 'tx-invoice-1',
-        efiPixCopiaECola: 'pix-copia-e-cola',
-      });
-      const fixture = createService({ invoices: [invoice] });
-      fixture.ruleEngine.getNextStep.mockResolvedValue({
-        ruleStepId: 'step-1',
-        channel,
-        templateId: 'global-unavailable',
-        delayDays: 0,
-      });
-      fixture.prisma.globalMessageTemplate.findFirst.mockResolvedValue(null);
-
-      expect(await fixture.service.executeBilling('company-1')).toEqual({
-        queued: 0,
-        skipped: 1,
-      });
-      expect(
-        fixture.messageQueue.addBulkSendMessageJobs,
-      ).not.toHaveBeenCalled();
-      expect(fixture.emailQueue.addBulk).not.toHaveBeenCalled();
-    },
-  );
-
-  it('nao envia um template aprovado desativado nas preferencias da empresa', async () => {
-    const fixture = createService({
-      invoices: [
-        buildInvoice({
-          gatewayId: 'tx-invoice-1',
-          efiTxid: 'tx-invoice-1',
-          efiPixCopiaECola: 'pix-copia-e-cola',
-        }),
-      ],
+  it('prepara a etapa WhatsApp com a escolha explicita da regua', async () => {
+    const fixture = createService({ invoices: [buildInvoice(paidPix)] });
+    const selection = { mode: 'EXPLICIT', templateId: 'template-a' };
+    fixture.ruleEngine.getNextStep.mockResolvedValue({
+      ruleStepId: 'step-1',
+      channel: 'WHATSAPP',
+      templateId: 'template-a',
+      emailTemplateId: null,
+      whatsappSelection: selection,
+      delayDays: -2,
     });
-    fixture.templatesService.resolveApproved.mockResolvedValue({
-      ...fixture.approvedTemplate,
-      isActive: false,
+
+    expect(await fixture.service.executeBilling('company-1')).toEqual({
+      queued: 1,
+      skipped: 0,
+    });
+    expect(fixture.templateSender.prepare).toHaveBeenCalledWith({
+      logicalKey: 'collection:company-1:invoice-1:step-1:WHATSAPP',
+      origin: 'COLLECTION',
+      context: {
+        companyId: 'company-1',
+        invoiceId: 'invoice-1',
+        debtorId: 'debtor-1',
+      },
+      selection,
+      ruleStepId: 'step-1',
+    });
+    expect(fixture.messageQueue.addOutboundIntentJob).toHaveBeenCalledWith(
+      'intent-1',
+    );
+    expect(logged(fixture.prisma, 'WHATSAPP_QUEUED')).toBe(true);
+  });
+
+  it('explicit_template_never_falls_back: an unavailable choice is held, nothing else is tried', async () => {
+    const fixture = createService({
+      invoices: [buildInvoice({ ...paidPix, email: 'maria@example.test' })],
+    });
+    fixture.templateSender.prepare.mockResolvedValue({
+      status: 'BLOCKED',
+      pendingId: 'pending-1',
+      code: 'NOT_GRANTED',
     });
 
     expect(await fixture.service.executeBilling('company-1')).toEqual({
       queued: 0,
       skipped: 1,
     });
-    expect(fixture.messageQueue.addBulkSendMessageJobs).not.toHaveBeenCalled();
+    expect(fixture.templateSender.prepare).toHaveBeenCalledTimes(1);
+    expect(fixture.messageQueue.addOutboundIntentJob).not.toHaveBeenCalled();
+    expect(fixture.emailQueue.addBulk).not.toHaveBeenCalled();
+    expect(logged(fixture.prisma, 'WHATSAPP_TEMPLATE_HELD')).toBe(true);
   });
 
-  it('gera pagamento antes de enfileirar a mensagem de cobranca', async () => {
+  it('missing_default_keeps_invoice_and_blocks_only_whatsapp', async () => {
+    const fixture = createService({ invoices: [buildInvoice(paidPix)] });
+    fixture.templateSender.prepare.mockResolvedValue({
+      status: 'BLOCKED',
+      pendingId: 'pending-1',
+      code: 'DEFAULT_MISSING',
+    });
+
+    await fixture.service.executeBilling('company-1');
+
+    expect(fixture.prisma.invoice.update).not.toHaveBeenCalled();
+    expect(fixture.prisma.invoice.updateMany).not.toHaveBeenCalled();
+    expect(fixture.emailQueue.addBulk).not.toHaveBeenCalled();
+    expect(fixture.prisma.collectionAttempt.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        ruleStepId: 'step-1',
+        channel: 'WHATSAPP',
+      }) as unknown,
+    });
+  });
+
+  it('keeps the email step on its own template and never prepares WhatsApp for it', async () => {
+    const fixture = createService({
+      invoices: [buildInvoice({ ...paidPix, email: 'maria@example.test' })],
+    });
+    fixture.ruleEngine.getNextStep.mockResolvedValue({
+      ruleStepId: 'step-2',
+      channel: 'EMAIL',
+      templateId: null,
+      emailTemplateId: 'email-pre-vencimento',
+      whatsappSelection: { mode: 'UNCONFIGURED' },
+      delayDays: -2,
+    });
+
+    expect(await fixture.service.executeBilling('company-1')).toEqual({
+      queued: 1,
+      skipped: 0,
+    });
+    expect(fixture.emailTemplatesService.resolveForRule).toHaveBeenCalledWith(
+      'company-1',
+      'email-pre-vencimento',
+    );
+    expect(fixture.templateSender.prepare).not.toHaveBeenCalled();
+  });
+
+  it('nao substitui uma selecao de email indisponivel por outro template', async () => {
+    const fixture = createService({
+      invoices: [buildInvoice({ ...paidPix, email: 'maria@example.test' })],
+    });
+    fixture.ruleEngine.getNextStep.mockResolvedValue({
+      ruleStepId: 'step-2',
+      channel: 'EMAIL',
+      templateId: null,
+      emailTemplateId: 'email-unavailable',
+      whatsappSelection: { mode: 'UNCONFIGURED' },
+      delayDays: 0,
+    });
+    fixture.emailTemplatesService.resolveForRule.mockRejectedValue(
+      new Error('unavailable'),
+    );
+
+    expect(await fixture.service.executeBilling('company-1')).toEqual({
+      queued: 0,
+      skipped: 1,
+    });
+    expect(fixture.emailQueue.addBulk).not.toHaveBeenCalled();
+  });
+
+  it('records a missing opt-in as a failed attempt without preparing a message', async () => {
+    const fixture = createService({
+      invoices: [buildInvoice({ ...paidPix, whatsappOptIn: false })],
+    });
+
+    expect(await fixture.service.executeBilling('company-1')).toEqual({
+      queued: 0,
+      skipped: 1,
+    });
+    expect(fixture.templateSender.prepare).not.toHaveBeenCalled();
+    expect(logged(fixture.prisma, 'WHATSAPP_OPT_IN_REQUIRED')).toBe(true);
+    expect(fixture.prisma.collectionAttempt.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ status: 'FAILED' }) as unknown,
+    });
+  });
+
+  it('gera pagamento antes de preparar a mensagem de cobranca', async () => {
     const invoice = buildInvoice();
     const updatedInvoice = buildInvoice({
       gatewayId: 'tx-invoice-1',
@@ -371,7 +391,7 @@ describe('BillingService', () => {
       pixPayload: 'pix-copia-e-cola',
       efiPixCopiaECola: 'pix-copia-e-cola',
     });
-    const { service, messageQueue, createPayment, prisma } = createService({
+    const { service, createPayment, prisma, templateSender } = createService({
       invoices: [invoice],
       updatedInvoice,
     });
@@ -380,147 +400,11 @@ describe('BillingService', () => {
 
     expect(result).toEqual({ queued: 1, skipped: 0 });
     expect(createPayment).toHaveBeenCalledWith('invoice-1', 'company-1', 'PIX');
-    expect(messageQueue.addBulkSendMessageJobs).toHaveBeenCalledWith([
-      expect.objectContaining<Partial<SendMessageJob>>({
-        invoiceId: 'invoice-1',
-        message: expect.stringContaining('pix-copia-e-cola') as string,
-      }),
-    ]);
-    expect(prisma.collectionLog.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          actionType: 'PAYMENT_GENERATED',
-          status: 'PENDING',
-        }) as unknown,
-      }),
+    expect(createPayment.mock.invocationCallOrder[0]).toBeLessThan(
+      templateSender.prepare.mock.invocationCallOrder[0]!,
     );
-    expect(prisma.collectionLog.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          actionType: 'WHATSAPP_QUEUED',
-          status: 'QUEUED',
-        }) as unknown,
-      }),
-    );
-  });
-
-  it('monta mensagem PIX com copia e cola e payment_link preenchido', async () => {
-    const invoice = buildInvoice();
-    const updatedInvoice = buildInvoice({
-      gatewayId: 'tx-invoice-1',
-      efiTxid: 'tx-invoice-1',
-      pixPayload: 'pix-payload',
-      efiPixCopiaECola: 'pix-copia-e-cola',
-    });
-    const { service, messageQueue } = createService({
-      invoices: [invoice],
-      updatedInvoice,
-    });
-
-    await service.executeBilling('company-1');
-
-    const message = getQueuedMessage(messageQueue);
-    expect(message).toContain('Forma de pagamento: PIX');
-    expect(message).toContain('Acesse/pague por aqui: pix-copia-e-cola');
-    expect(message).toContain('Pix copia e cola: pix-copia-e-cola');
-    expect(message).not.toContain('Linha digitavel:');
-    expect(message).not.toContain('{{');
-  });
-
-  it('monta mensagem boleto com link, linha digitavel e pdf quando existirem', async () => {
-    const invoice = buildInvoice({
-      billingType: 'BOLETO',
-      gatewayId: 'charge-1',
-      efiChargeId: 'charge-1',
-      boletoLinhaDigitavel: '00190000000',
-      boletoLink: 'https://boleto.example/12345',
-      boletoPdf: 'https://boleto.example/12345.pdf',
-    });
-    const { service, messageQueue, createPayment } = createService({
-      invoices: [invoice],
-    });
-
-    await service.executeBilling('company-1');
-
-    const message = getQueuedMessage(messageQueue);
-    expect(createPayment).not.toHaveBeenCalled();
-    expect(message).toContain('Forma de pagamento: Boleto');
-    expect(message).toContain(
-      'Acesse/pague por aqui: https://boleto.example/12345',
-    );
-    expect(message).toContain('Linha digitavel: 00190000000');
-    expect(message).toContain('Boleto: https://boleto.example/12345');
-    expect(message).toContain(
-      'PDF do boleto: https://boleto.example/12345.pdf',
-    );
-    expect(message).not.toContain('Pix copia e cola:');
-    expect(message).not.toContain('{{');
-  });
-
-  it('monta mensagem Bolix com boleto e Pix quando a Efi retorna ambos', async () => {
-    const invoice = buildInvoice({
-      billingType: 'BOLIX',
-      gatewayId: 'charge-1',
-      efiChargeId: 'charge-1',
-      boletoLinhaDigitavel: '23790000000',
-      boletoLink: 'https://bolix.example/12345',
-      boletoPdf: 'https://bolix.example/12345.pdf',
-      efiPixCopiaECola: 'pix-bolix-copia-e-cola',
-    });
-    const { service, messageQueue } = createService({
-      invoices: [invoice],
-    });
-
-    await service.executeBilling('company-1');
-
-    const message = getQueuedMessage(messageQueue);
-    expect(message).toContain('Forma de pagamento: Bolix');
-    expect(message).toContain(
-      'Acesse/pague por aqui: https://bolix.example/12345',
-    );
-    expect(message).toContain('Linha digitavel: 23790000000');
-    expect(message).toContain('Pix copia e cola: pix-bolix-copia-e-cola');
-    expect(message).not.toContain('{{');
-  });
-
-  it('usa fallback de payment_link quando boleto nao tem link', async () => {
-    const invoice = buildInvoice({
-      billingType: 'BOLETO',
-      gatewayId: 'charge-1',
-      efiChargeId: 'charge-1',
-      boletoLinhaDigitavel: '34190000000',
-    });
-    const { service, messageQueue } = createService({
-      invoices: [invoice],
-    });
-
-    await service.executeBilling('company-1');
-
-    const message = getQueuedMessage(messageQueue);
-    expect(message).toContain('Acesse/pague por aqui: 34190000000');
-    expect(message).toContain('Linha digitavel: 34190000000');
-    expect(message).not.toContain('Boleto:');
-    expect(message).not.toContain('{{');
-  });
-
-  it('adiciona instrucao de pagamento quando o template nao traz variavel pagavel', async () => {
-    const invoice = buildInvoice({
-      gatewayId: 'tx-invoice-1',
-      efiTxid: 'tx-invoice-1',
-      efiPixCopiaECola: 'pix-copia-e-cola',
-    });
-    const { service, messageQueue } = createService({
-      invoices: [invoice],
-      templateContent: 'Ola {{nome_devedor}}, sua cobranca vence hoje.',
-    });
-
-    await service.executeBilling('company-1');
-
-    const message = getQueuedMessage(messageQueue);
-    expect(message).toContain('Ola Maria Silva, sua cobranca vence hoje.');
-    expect(message).toContain('Forma de pagamento: PIX');
-    expect(message).toContain('Acesse/pague por aqui: pix-copia-e-cola');
-    expect(message).not.toContain('{{');
+    expect(logged(prisma, 'PAYMENT_GENERATED')).toBe(true);
+    expect(logged(prisma, 'WHATSAPP_QUEUED')).toBe(true);
   });
 
   it('reutiliza pagamento existente sem gerar cobranca duplicada', async () => {
@@ -531,7 +415,7 @@ describe('BillingService', () => {
       boletoLinhaDigitavel: '00190000000',
       boletoLink: 'https://boleto.example/12345',
     });
-    const { service, messageQueue, createPayment, prisma } = createService({
+    const { service, createPayment, prisma, templateSender } = createService({
       invoices: [invoice],
     });
 
@@ -539,21 +423,8 @@ describe('BillingService', () => {
 
     expect(result).toEqual({ queued: 1, skipped: 0 });
     expect(createPayment).not.toHaveBeenCalled();
-    expect(messageQueue.addBulkSendMessageJobs).toHaveBeenCalledWith([
-      expect.objectContaining<Partial<SendMessageJob>>({
-        invoiceId: 'invoice-1',
-        message: expect.stringContaining(
-          'https://boleto.example/12345',
-        ) as string,
-      }),
-    ]);
-    expect(prisma.collectionLog.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          actionType: 'PAYMENT_REUSED',
-        }) as unknown,
-      }),
-    );
+    expect(templateSender.prepare).toHaveBeenCalledTimes(1);
+    expect(logged(prisma, 'PAYMENT_REUSED')).toBe(true);
   });
 
   it('atualiza contatos informados antes de enfileirar cobrancas selecionadas', async () => {
@@ -612,7 +483,7 @@ describe('BillingService', () => {
     const result = await service.executeBilling('company-1');
 
     expect(result).toEqual({ queued: 0, skipped: 1 });
-    expect(messageQueue.addBulkSendMessageJobs).not.toHaveBeenCalled();
+    expect(messageQueue.addOutboundIntentJob).not.toHaveBeenCalled();
     expect(prisma.collectionLog.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -645,16 +516,17 @@ describe('BillingService', () => {
     ruleEngine.getNextStep.mockResolvedValue({
       ruleStepId: 'step-1',
       channel: 'EMAIL',
-      templateId: 'template-1',
+      templateId: null,
+      emailTemplateId: null,
       delayDays: 0,
     });
 
     const result = await service.executeBilling('company-1');
 
     expect(result).toEqual({ queued: 1, skipped: 0 });
-    expect(emailTemplatesService.findActiveOrDefault).toHaveBeenCalledWith(
+    expect(emailTemplatesService.resolveForRule).toHaveBeenCalledWith(
       'company-1',
-      'vencimento-hoje',
+      null,
     );
     expect(emailService.buildCollectionEmailHtml).toHaveBeenCalledWith(
       expect.objectContaining({

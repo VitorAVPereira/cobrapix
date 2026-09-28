@@ -57,6 +57,7 @@ describe('Communications access boundaries', () => {
         'listAdmin',
         'listContextOptions',
         'reply',
+        'templateOptions',
         'templateReply',
         'updateStatus',
       ].sort(),

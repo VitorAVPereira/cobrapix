@@ -1,5 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { CollectionChannel } from '@prisma/client';
+import {
+  CollectionChannel,
+  WhatsappSelectionMode,
+  WhatsappTemplatePurpose,
+} from '@prisma/client';
+import type { TemplateSelection } from '../templates/template-contracts';
+import { ruleStepSelection } from '../templates/template-selection';
 import { PrismaService } from '../prisma/prisma.service';
 
 interface IncomingInvoice {
@@ -16,6 +22,9 @@ interface IncomingInvoice {
         stepOrder: number;
         channel: CollectionChannel;
         templateId: string | null;
+        emailTemplateId?: string | null;
+        whatsappSelectionMode?: WhatsappSelectionMode | null;
+        whatsappPurpose?: WhatsappTemplatePurpose | null;
         delayDays: number;
         sendTimeStart: string | null;
         sendTimeEnd: string | null;
@@ -29,6 +38,9 @@ interface ResolvedStep {
   ruleStepId: string;
   channel: CollectionChannel;
   templateId: string | null;
+  emailTemplateId: string | null;
+  /** Meaningful for WHATSAPP steps only. */
+  whatsappSelection: TemplateSelection;
   delayDays: number;
 }
 
@@ -92,6 +104,12 @@ export class CollectionRuleEngine {
         ruleStepId: step.id,
         channel: step.channel,
         templateId: step.templateId,
+        emailTemplateId: step.emailTemplateId ?? null,
+        whatsappSelection: ruleStepSelection({
+          whatsappSelectionMode: step.whatsappSelectionMode ?? null,
+          whatsappPurpose: step.whatsappPurpose ?? null,
+          templateId: step.templateId,
+        }),
         delayDays: cumulativeDelayDays,
       };
     }

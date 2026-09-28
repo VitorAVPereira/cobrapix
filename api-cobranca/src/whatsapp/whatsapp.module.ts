@@ -10,11 +10,13 @@ import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
 import { WhatsappTransportModule } from './transport/whatsapp-transport.module';
 import { OutboundIntentModule } from '../communications/outbound-intent.module';
 import { OutboundDispatcherService } from './outbound-dispatcher.service';
+import { TemplateRenderingModule } from '../templates/template-rendering.module';
 
 @Module({
   imports: [
     ConfigModule,
     OutboundIntentModule,
+    TemplateRenderingModule,
     WhatsappTransportModule,
     PrismaModule,
     PaymentModule,
