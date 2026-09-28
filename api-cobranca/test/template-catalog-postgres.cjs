@@ -200,6 +200,64 @@ section('concurrent mapping edits: one wins, the other gets 409', async ({ prism
   assert.equal(preview.ok, true);
 });
 
+const { TemplatePolicyService } = require('../src/templates/template-policy.service.ts');
+const { CompanyTemplateAccessService } = require('../src/templates/company-template-access.service.ts');
+
+section('grants and defaults: isolation, versions, concurrency and audit rollback', async ({ prisma }) => {
+  const policy = new TemplatePolicyService(config);
+  const access = new CompanyTemplateAccessService(prisma, policy);
+  const a = await company(prisma, 'A');
+  const b = await company(prisma, 'B');
+  const admin = randomUUID();
+  const ready = await prisma.globalMessageTemplate.findUnique({ where: { providerAccountId_metaTemplateId: { providerAccountId: WABA_A, metaTemplateId: '700004' } } });
+  const unmapped = await prisma.globalMessageTemplate.findUnique({ where: { providerAccountId_metaTemplateId: { providerAccountId: WABA_A, metaTemplateId: '799999' } } });
+  const explicit = { mode: 'EXPLICIT', templateId: ready.id };
+  const resolve = (companyId, selection = explicit) => prisma.$transaction(tx => policy.resolve(tx, companyId, selection));
+
+  // A new template starts without grants.
+  assert.deepEqual(await resolve(a.id), { allowed: false, code: 'NOT_GRANTED' });
+
+  // Granting an unusable template fails and leaves neither a version change nor an audit row.
+  await assert.rejects(access.setGrant(a.id, unmapped.id, true, 0, admin), error => error.getStatus() === 422);
+  assert.equal(await prisma.whatsappTemplateAudit.count({ where: { companyId: a.id } }), 0);
+  const placeholder = await prisma.companyWhatsappTemplateGrant.findUnique({ where: { companyId_templateId: { companyId: a.id, templateId: unmapped.id } } });
+  assert.equal(placeholder, null, 'the failed transaction rolled back completely');
+
+  // Concurrent grants with the same expected version: exactly one wins.
+  const concurrent = await Promise.allSettled([1, 2, 3].map(() => access.setGrant(a.id, ready.id, true, 0, admin)));
+  assert.equal(concurrent.filter(result => result.status === 'fulfilled').length, 1);
+  assert.ok(concurrent.filter(result => result.status === 'rejected').every(result => result.reason.getStatus() === 409));
+  assert.equal(await prisma.whatsappTemplateAudit.count({ where: { companyId: a.id, action: 'GRANT_ENABLED' } }), 1);
+
+  const decisionForA = await resolve(a.id);
+  assert.equal(decisionForA.allowed, true);
+  assert.equal(decisionForA.template.snapshot.grantVersion, 1);
+  const decisionForB = await resolve(b.id);
+  assert.deepEqual(decisionForB, { allowed: false, code: 'NOT_GRANTED' }, 'B never uses a template granted only to A');
+
+  // Defaults resolve inside the company and require that company's grant.
+  assert.deepEqual(await resolve(a.id, { mode: 'DEFAULT', purpose: 'BEFORE_DUE' }), { allowed: false, code: 'DEFAULT_MISSING' });
+  await assert.rejects(access.setDefault(b.id, 'BEFORE_DUE', ready.id, 0, admin), error => error.getStatus() === 422);
+  assert.deepEqual(await access.setDefault(a.id, 'BEFORE_DUE', ready.id, 0, admin), { version: 1 });
+  assert.deepEqual(await access.setDefault(a.id, 'BEFORE_DUE', ready.id, 1, admin), { version: 1 }, 'no-op keeps the version');
+  await assert.rejects(access.setDefault(a.id, 'BEFORE_DUE', null, 0, admin), error => error.getStatus() === 409);
+  assert.equal((await resolve(a.id, { mode: 'DEFAULT', purpose: 'BEFORE_DUE' })).allowed, true);
+  assert.deepEqual(await resolve(b.id, { mode: 'DEFAULT', purpose: 'BEFORE_DUE' }), { allowed: false, code: 'DEFAULT_MISSING' });
+
+  // Revoke and re-grant: the version only moves forward and pins the old snapshot out.
+  const oldSnapshot = decisionForA.template.snapshot;
+  assert.deepEqual(await access.setGrant(a.id, ready.id, false, 1, admin), { version: 2 });
+  assert.deepEqual(await resolve(a.id), { allowed: false, code: 'NOT_GRANTED' });
+  assert.deepEqual(await resolve(a.id, { mode: 'DEFAULT', purpose: 'BEFORE_DUE' }), { allowed: false, code: 'NOT_GRANTED' }, 'a revoked default stays recorded but ineffective');
+  assert.deepEqual(await access.setGrant(a.id, ready.id, true, 2, admin), { version: 3 });
+  await assert.rejects(prisma.$transaction(tx => policy.assertPinned(tx, a.id, oldSnapshot)), error => error.code === 'VERSION_CHANGED');
+  await prisma.$transaction(tx => policy.assertPinned(tx, a.id, { ...oldSnapshot, grantVersion: 3 }));
+
+  // Company preferences never grant access.
+  await prisma.companyTemplatePreference.create({ data: { companyId: b.id, channel: 'WHATSAPP', slug: ready.slug, isActive: true, globalMessageTemplateId: ready.id } });
+  assert.deepEqual(await resolve(b.id), { allowed: false, code: 'NOT_GRANTED' });
+});
+
 module.exports = { section, imported, company, WABA_A, WABA_B };
 
 if (require.main === module) {
