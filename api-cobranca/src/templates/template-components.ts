@@ -11,8 +11,10 @@ export interface TemplateComponentsInput {
   paymentBaseUrl: string;
 }
 
-const POSITIONAL = /\{\{(\d+)\}\}/g;
 const ANY_VARIABLE = /\{\{[^{}]*\}\}/g;
+const POSITIONAL_TOKEN = /^\{\{(\d+)\}\}$/;
+/** Meta named parameters: lowercase letters, digits and underscores. */
+const NAMED_TOKEN = /^\{\{([a-z_][a-z0-9_]*)\}\}$/;
 
 /** Canonical JSON: sorted keys, provider `example` values dropped (they carry no meaning). */
 function canonical(value: unknown): unknown {
@@ -62,16 +64,15 @@ function unsupported(reason: string): ParseResult {
 }
 
 /**
- * Strict reader of the formats this version sends: positional BODY, optional text FOOTER
- * and optionally one dynamic URL button pointing at the payment page. Anything else is
- * reported with the blocking component; nothing is rewritten to look compatible.
+ * Strict reader of the formats this version sends: BODY with positional ({{1}}) or named
+ * ({{nome}}) variables as the provider declares, optional text FOOTER and optionally one
+ * dynamic URL button pointing at the payment page. Anything else is reported with the
+ * blocking component; nothing is rewritten to look compatible.
  */
 export function parseTemplate(input: TemplateComponentsInput): ParseResult {
   const format = (input.parameterFormat ?? 'POSITIONAL').toUpperCase();
-  if (format !== 'POSITIONAL')
-    return unsupported(
-      `Formato de parâmetros ${format} não suportado; use variáveis posicionais.`,
-    );
+  if (format !== 'POSITIONAL' && format !== 'NAMED')
+    return unsupported(`Formato de parâmetros ${format} não suportado.`);
   if (input.category.toUpperCase() === 'AUTHENTICATION')
     return unsupported('Templates de autenticação não são suportados.');
   if (!Array.isArray(input.components) || !input.components.length)
@@ -111,19 +112,28 @@ export function parseTemplate(input: TemplateComponentsInput): ParseResult {
   if (body === null) return unsupported('Template sem componente BODY.');
 
   const tokens = Array.from(body.matchAll(ANY_VARIABLE), (match) => match[0]);
-  if (tokens.some((token) => !/^\{\{\d+\}\}$/.test(token)))
-    return unsupported(
-      'BODY contém variáveis nomeadas ou malformadas; apenas {{1}}, {{2}}... são suportadas.',
-    );
-  const positions = [
-    ...new Set(
-      Array.from(body.matchAll(POSITIONAL), (match) => Number(match[1])),
-    ),
-  ].sort((a, b) => a - b);
-  if (positions.some((position, index) => position !== index + 1))
-    return unsupported(
-      'Variáveis do BODY devem começar em {{1}} e não ter lacunas.',
-    );
+  let variables: string[];
+  if (format === 'NAMED') {
+    // The declared format decides: a positional or malformed token is never guessed.
+    const names = tokens.map((token) => NAMED_TOKEN.exec(token)?.[1]);
+    if (names.some((name) => name === undefined))
+      return unsupported(
+        'BODY de template nomeado contém variáveis posicionais ou malformadas; use {{nome}} com letras minúsculas, números e _.',
+      );
+    variables = [...new Set(names as string[])];
+  } else {
+    const numbers = tokens.map((token) => POSITIONAL_TOKEN.exec(token)?.[1]);
+    if (numbers.some((number) => number === undefined))
+      return unsupported(
+        'BODY contém variáveis nomeadas ou malformadas; apenas {{1}}, {{2}}... são suportadas.',
+      );
+    const positions = [...new Set(numbers.map(Number))].sort((a, b) => a - b);
+    if (positions.some((position, index) => position !== index + 1))
+      return unsupported(
+        'Variáveis do BODY devem começar em {{1}} e não ter lacunas.',
+      );
+    variables = positions.map(String);
+  }
 
   let paymentButton: { index: 0; label: string; url: string } | null = null;
   if (buttons !== null) {
@@ -146,7 +156,8 @@ export function parseTemplate(input: TemplateComponentsInput): ParseResult {
     supported: true,
     template: {
       body,
-      positions,
+      parameterFormat: format,
+      variables,
       footer,
       paymentButton,
       fingerprint: templateFingerprint(input),

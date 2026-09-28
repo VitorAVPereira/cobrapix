@@ -219,6 +219,9 @@ que o template real é interpretado corretamente; a importação e a prévia sim
 ## 9. Mapear, liberar, ajustar régua e revisar pendências
 
 1. **Configurar variáveis** de cada template e conferir a **prévia fictícia**.
+   Templates com variáveis numeradas (`{{1}}`) ou com nome (`{{nome_devedor}}`) são
+   aceitos; um template importado antes desta versão que aparece como "Formato
+   NAMED não suportado" é reclassificado ao clicar em **Sincronizar catálogo**.
 2. Em **Disponibilidade por empresa**, liberar os templates para as empresas de
    teste e definir os padrões por finalidade (inclusive `Aviso de ativação` e
    `Lembrete de ativação`, se usados).

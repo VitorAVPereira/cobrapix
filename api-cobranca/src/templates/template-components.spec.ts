@@ -31,7 +31,8 @@ describe('parseTemplate', () => {
     expect(parsed).toMatchObject({
       supported: true,
       template: {
-        positions: [1, 2],
+        parameterFormat: 'POSITIONAL',
+        variables: ['1', '2'],
         footer: 'CifraMais',
         paymentButton: { index: 0, label: 'Pagar', url: `${BASE}/{{1}}` },
       },
@@ -46,21 +47,48 @@ describe('parseTemplate', () => {
     );
     expect(parsed).toMatchObject({
       supported: true,
-      template: { positions: [], footer: null, paymentButton: null },
+      template: { variables: [], footer: null, paymentButton: null },
     });
   });
 
-  it('named_parameters_are_unsupported', () => {
+  it('named parameters follow the declared format, in order of first use', () => {
     const named = parseTemplate(
-      input([{ type: 'BODY', text: 'Olá {{nome}}' }], {
-        parameterFormat: 'NAMED',
-      }),
+      input(
+        [
+          {
+            type: 'BODY',
+            text: 'Olá, {{nome_devedor}}. Valor {{valor}}; até logo, {{nome_devedor}}.',
+          },
+        ],
+        { parameterFormat: 'NAMED' },
+      ),
     );
-    expect(named.supported).toBe(false);
+    expect(named).toMatchObject({
+      supported: true,
+      template: {
+        parameterFormat: 'NAMED',
+        variables: ['nome_devedor', 'valor'],
+      },
+    });
+    // Without the declared format a name is never guessed.
     const inferred = parseTemplate(
       input([{ type: 'BODY', text: 'Olá {{nome}}' }]),
     );
     expect(inferred).toMatchObject({ supported: false });
+    // A named template never mixes positions or malformed names.
+    for (const text of ['Olá {{nome}} {{1}}', 'Olá {{Nome}}', 'Olá {{nome-x}}'])
+      expect(
+        parseTemplate(
+          input([{ type: 'BODY', text }], { parameterFormat: 'NAMED' }),
+        ).supported,
+      ).toBe(false);
+    expect(
+      parseTemplate(
+        input([{ type: 'BODY', text: 'Olá {{nome}}' }], {
+          parameterFormat: 'OTHER',
+        }),
+      ).supported,
+    ).toBe(false);
   });
 
   it('unknown_component_is_not_dropped', () => {

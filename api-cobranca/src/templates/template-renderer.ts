@@ -26,7 +26,7 @@ function acceptedParameter(value: string): boolean {
 }
 
 /**
- * Admin mapping of one parsed revision: every position bound exactly once to a closed
+ * Admin mapping of one parsed revision: every variable bound exactly once to a closed
  * source or a bounded literal, and the payment button bound iff the template has one.
  * No expressions, database paths or URLs are accepted.
  */
@@ -41,18 +41,18 @@ export function validateMapping(
   });
   if (!isRecord(mapping) || !isRecord(mapping.body))
     return fail('body', 'Mapa inválido.');
-  if (parsed.positions.length > TEMPLATE_MAX_BODY_PARAMETERS)
+  if (parsed.variables.length > TEMPLATE_MAX_BODY_PARAMETERS)
     return fail('body', 'Quantidade de variáveis acima do suportado.');
   const allowedKeys = new Set(['body', 'paymentButton']);
   const extra = Object.keys(mapping).find((key) => !allowedKeys.has(key));
   if (extra) return fail(extra, 'Campo não suportado.');
-  const positions = new Set(parsed.positions.map(String));
+  const variables = new Set(parsed.variables);
   for (const key of Object.keys(mapping.body))
-    if (!positions.has(key))
-      return fail(`body.${key}`, 'Posição inexistente no template.');
-  for (const position of parsed.positions) {
-    const field = `body.${position}`;
-    const binding = mapping.body[String(position)];
+    if (!variables.has(key))
+      return fail(`body.${key}`, 'Variável inexistente no template.');
+  for (const variable of parsed.variables) {
+    const field = `body.${variable}`;
+    const binding = mapping.body[variable];
     if (!isRecord(binding)) return fail(field, 'Variável sem fonte.');
     if (binding.kind === 'SOURCE') {
       if (
@@ -112,18 +112,18 @@ export function renderTemplate(
 ): RenderResult {
   const check = validateMapping(parsed, mapping);
   if (!check.ok) return { ok: false, code: 'UNSUPPORTED', field: check.field };
-  const byPosition = new Map<number, string>();
-  for (const position of parsed.positions) {
-    const binding = mapping.body[String(position)]!;
+  const byVariable = new Map<string, string>();
+  for (const variable of parsed.variables) {
+    const binding = mapping.body[variable]!;
     const field =
-      binding.kind === 'SOURCE' ? binding.source : `body.${position}`;
+      binding.kind === 'SOURCE' ? binding.source : `body.${variable}`;
     const value =
       binding.kind === 'SOURCE' ? values[binding.source] : binding.value;
     if (value === undefined || !value.trim())
       return { ok: false, code: 'VALUE_MISSING', field };
     if (!acceptedParameter(value))
       return { ok: false, code: 'UNSUPPORTED', field };
-    byPosition.set(position, value);
+    byVariable.set(variable, value);
   }
   let paymentButtonSuffix: string | undefined;
   if (parsed.paymentButton) {
@@ -139,15 +139,18 @@ export function renderTemplate(
     paymentButtonSuffix = suffix;
   }
   const body = parsed.body.replace(
-    /\{\{(\d+)\}\}/g,
-    (_match: string, position: string) => byPosition.get(Number(position))!,
+    /\{\{([a-z0-9_]+)\}\}/g,
+    (match: string, variable: string) => byVariable.get(variable) ?? match,
   );
   return {
     ok: true,
     body,
-    bodyParameters: parsed.positions.map(
-      (position) => byPosition.get(position)!,
+    bodyParameters: parsed.variables.map(
+      (variable) => byVariable.get(variable)!,
     ),
+    ...(parsed.parameterFormat === 'NAMED'
+      ? { bodyParameterNames: [...parsed.variables] }
+      : {}),
     ...(paymentButtonSuffix ? { paymentButtonSuffix } : {}),
   };
 }

@@ -320,4 +320,128 @@ describe('Template catalog flow with two companies (HTTP)', () => {
       Object.fromEntries(holds.map((hold) => [hold.invoiceId, hold.state])),
     ).toEqual({ [ids.eligible]: 'RESUMED', [ids.paid]: 'CLOSED' });
   });
+
+  it('a named template is mapped by variable name and sent with parameter_name', async () => {
+    const list = await request(http)
+      .get('/admin/whatsapp-templates')
+      .set(auth(tokens.admin));
+    const named = (
+      list.body as {
+        items: Array<{
+          id: string;
+          name: string;
+          supported: boolean;
+          parameterFormat: string;
+          variables: string[];
+          providerRevision: number;
+          mappingRevision: number;
+        }>;
+      }
+    ).items.find((item) => item.name === 'emissao_nomeada')!;
+    expect(named).toMatchObject({
+      supported: true,
+      parameterFormat: 'NAMED',
+      variables: [
+        'nome_devedor',
+        'nome_empresa',
+        'valor',
+        'data_vencimento',
+        'metodo_pagamento',
+      ],
+    });
+    const mapping = {
+      body: {
+        nome_devedor: { kind: 'SOURCE', source: 'DEBTOR_NAME' },
+        nome_empresa: { kind: 'SOURCE', source: 'COMPANY_NAME' },
+        valor: { kind: 'SOURCE', source: 'AMOUNT' },
+        data_vencimento: { kind: 'SOURCE', source: 'DUE_DATE' },
+        metodo_pagamento: { kind: 'LITERAL', value: 'Boleto' },
+      },
+    };
+    // Positional keys are refused for a named template.
+    const wrong = await request(http)
+      .put(`/admin/whatsapp-templates/${named.id}/mapping`)
+      .set(auth(tokens.admin))
+      .send({
+        expectedProviderRevision: named.providerRevision,
+        expectedMappingRevision: named.mappingRevision,
+        mapping: {
+          body: { '1': { kind: 'SOURCE', source: 'DEBTOR_NAME' } },
+        },
+      });
+    expect(wrong.status).toBe(400);
+    await request(http)
+      .put(`/admin/whatsapp-templates/${named.id}/mapping`)
+      .set(auth(tokens.admin))
+      .send({
+        expectedProviderRevision: named.providerRevision,
+        expectedMappingRevision: named.mappingRevision,
+        mapping,
+      })
+      .expect(200);
+    await setGrant(app, tokens.admin, ids.a, named.id, true);
+
+    const invoiceId = (
+      await prisma.invoice.create({
+        data: {
+          companyId: ids.a,
+          debtorId: ids.debtorA,
+          originalAmount: 150,
+          dueDate: new Date('2026-10-05T12:00:00.000Z'),
+          status: 'PENDING',
+        },
+      })
+    ).id;
+    const prepared = await app
+      .get(TemplateSendPreparerService, { strict: false })
+      .prepare({
+        logicalKey: collectionLogicalKey({ companyId: ids.a, invoiceId }),
+        origin: 'COLLECTION',
+        context: { companyId: ids.a, invoiceId, debtorId: ids.debtorA },
+        selection: { mode: 'EXPLICIT', templateId: named.id },
+      });
+    expect(prepared.status).toBe('QUEUED');
+    const before = provider.sends.length;
+    await app.get(OutboundDispatcherService).recover();
+    await untilState(
+      prisma,
+      (prepared as { intentId: string }).intentId,
+      'ACCEPTED',
+    );
+    expect(provider.sends.length - before).toBe(1);
+    expect(provider.sends.at(-1)).toMatchObject({
+      type: 'template',
+      template: {
+        name: 'emissao_nomeada',
+        components: [
+          {
+            type: 'body',
+            parameters: [
+              {
+                type: 'text',
+                parameter_name: 'nome_devedor',
+                text: 'Pagador A',
+              },
+              {
+                type: 'text',
+                parameter_name: 'nome_empresa',
+                text: expect.any(String) as string,
+              },
+              { type: 'text', parameter_name: 'valor', text: 'R$ 150,00' },
+              {
+                type: 'text',
+                parameter_name: 'data_vencimento',
+                text: '05/10/2026',
+              },
+              {
+                type: 'text',
+                parameter_name: 'metodo_pagamento',
+                text: 'Boleto',
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
 });

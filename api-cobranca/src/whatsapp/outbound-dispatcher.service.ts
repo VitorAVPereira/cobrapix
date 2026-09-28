@@ -121,6 +121,8 @@ export interface DispatchInput {
   templateName?: string;
   languageCode?: string;
   bodyParameters?: string[];
+  /** Named templates: `parameter_name` of each body parameter, in the same order. */
+  bodyParameterNames?: string[];
   buttonUrlSuffix?: string | null;
   /** Platform reply: no collection eligibility, collection log or company commercial quota. */
   origin?: 'ADMIN_REPLY';
@@ -544,8 +546,11 @@ export class OutboundDispatcherService {
     if (input.bodyParameters?.length)
       components.push({
         type: 'body',
-        parameters: input.bodyParameters.map((text) => ({
+        parameters: input.bodyParameters.map((text, index) => ({
           type: 'text',
+          ...(input.bodyParameterNames
+            ? { parameter_name: input.bodyParameterNames[index] }
+            : {}),
           text,
         })),
       });

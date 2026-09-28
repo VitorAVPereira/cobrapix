@@ -67,7 +67,10 @@ export type TemplateBinding =
   | { kind: 'LITERAL'; value: string };
 
 export type TemplateMapping = {
-  /** Keys are decimal positions ("1", "2"), never database property names. */
+  /**
+   * Keys are the template's own variables: decimal positions ("1", "2") for positional
+   * templates, the approved names ("nome_devedor") for named ones. Never database paths.
+   */
   body: Record<string, TemplateBinding>;
   paymentButton?: { index: 0; source: 'PAYMENT_URL_SUFFIX' };
 };
@@ -94,9 +97,13 @@ export const TEMPLATE_BLOCK_CODES = [
 ] as const;
 export type TemplateBlockCode = (typeof TEMPLATE_BLOCK_CODES)[number];
 
+export type TemplateParameterFormat = 'POSITIONAL' | 'NAMED';
+
 export type ParsedTemplate = {
   body: string;
-  positions: number[];
+  parameterFormat: TemplateParameterFormat;
+  /** Mapping keys in send order: "1", "2"... or the names in order of first use. */
+  variables: string[];
   footer: string | null;
   paymentButton: { index: 0; label: string; url: string } | null;
   fingerprint: string;
@@ -125,6 +132,8 @@ export type RenderResult =
       ok: true;
       body: string;
       bodyParameters: string[];
+      /** Named templates only: the name of each body parameter, same order. */
+      bodyParameterNames?: string[];
       paymentButtonSuffix?: string;
     }
   | { ok: false; code: 'VALUE_MISSING' | 'UNSUPPORTED'; field: string };

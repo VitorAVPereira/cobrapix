@@ -20,21 +20,21 @@ function initialBody(
   template: AdminWhatsappTemplate,
 ): Record<string, TemplateBinding | undefined> {
   const body: Record<string, TemplateBinding | undefined> = {};
-  for (const position of template.positions)
-    body[String(position)] = template.mapping?.body[String(position)];
+  for (const variable of template.variables)
+    body[variable] = template.mapping?.body[variable];
   return body;
 }
 
 function fieldLabel(field: string): string {
-  const position = /^body\.(\d+)$/.exec(field)?.[1];
-  if (position) return `variável {{${position}}}`;
+  const variable = /^body\.([a-z0-9_]+)$/.exec(field)?.[1];
+  if (variable) return `variável {{${variable}}}`;
   return SOURCE_LABELS[field as TemplateSource] ?? field;
 }
 
 /**
  * Variable mapping of one imported template. The approved content is read-only; each
- * position is bound to a closed data source or a short fixed text, and the preview uses
- * fictitious values. Saving is tied to the revisions the admin loaded.
+ * variable ({{1}} or {{nome}}) is bound to a closed data source or a short fixed text,
+ * and the preview uses fictitious values. Saving is tied to the revisions loaded.
  */
 export function TemplateMappingEditor({
   templateId,
@@ -87,8 +87,8 @@ export function TemplateMappingEditor({
       </section>
     );
 
-  const complete = template.positions.every((position) => {
-    const binding = body[String(position)];
+  const complete = template.variables.every((variable) => {
+    const binding = body[variable];
     return binding && (binding.kind === "SOURCE" || binding.value.trim());
   });
   const mapping = (): TemplateMapping => ({
@@ -103,13 +103,13 @@ export function TemplateMappingEditor({
   });
 
   function change(
-    position: number,
+    variable: string,
     binding: TemplateBinding | undefined,
   ): void {
     // Any edit makes the displayed preview stale.
     setPreview(null);
     setNotice(null);
-    setBody((current) => ({ ...current, [String(position)]: binding }));
+    setBody((current) => ({ ...current, [variable]: binding }));
   }
 
   async function runPreview(): Promise<void> {
@@ -163,6 +163,7 @@ export function TemplateMappingEditor({
             {template.language} · revisão do conteúdo{" "}
             {template.providerRevision} · revisão das variáveis{" "}
             {template.mappingRevision || "nenhuma"}
+            {template.parameterFormat === "NAMED" && " · variáveis com nome"}
           </p>
         </div>
         <button
@@ -191,29 +192,29 @@ export function TemplateMappingEditor({
         </p>
       ) : (
         <>
-          {template.positions.length === 0 && (
+          {template.variables.length === 0 && (
             <p className="text-sm text-slate-600">
               Este template não tem variáveis no corpo.
             </p>
           )}
-          {template.positions.map((position) => {
-            const binding = body[String(position)];
+          {template.variables.map((variable) => {
+            const binding = body[variable];
             const value = binding
               ? binding.kind === "SOURCE"
                 ? binding.source
                 : LITERAL
               : "";
             return (
-              <div key={position} className="space-y-1">
+              <div key={variable} className="space-y-1">
                 <label className="block text-sm">
-                  {`Variável {{${position}}}`}
+                  {`Variável {{${variable}}}`}
                   <select
                     className="mt-1 w-full rounded-lg border p-2"
                     value={value}
                     onChange={(event) => {
                       const next = event.target.value;
                       change(
-                        position,
+                        variable,
                         next === ""
                           ? undefined
                           : next === LITERAL
@@ -236,13 +237,13 @@ export function TemplateMappingEditor({
                 </label>
                 {binding?.kind === "LITERAL" && (
                   <label className="block text-sm">
-                    {`Texto fixo da variável {{${position}}}`}
+                    {`Texto fixo da variável {{${variable}}}`}
                     <input
                       className="mt-1 w-full rounded-lg border p-2"
                       maxLength={200}
                       value={binding.value}
                       onChange={(event) =>
-                        change(position, {
+                        change(variable, {
                           kind: "LITERAL",
                           value: event.target.value,
                         })

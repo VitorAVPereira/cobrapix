@@ -9,8 +9,13 @@ import {
 
 const BASE = 'https://app.test/pagar';
 
-function parsed(body: string, button = true): ParsedTemplate {
+function parsed(
+  body: string,
+  button = true,
+  parameterFormat = 'POSITIONAL',
+): ParsedTemplate {
   const result = parseTemplate({
+    parameterFormat,
     components: [
       { type: 'BODY', text: body },
       ...(button
@@ -52,6 +57,35 @@ describe('renderTemplate', () => {
       bodyParameters: ['Maria Exemplo', 'R$ 150,00'],
       paymentButtonSuffix: 'token-da-fatura',
     });
+  });
+
+  it('named templates send each value with its parameter name', () => {
+    const template = parsed(
+      'Olá {{nome_devedor}}, valor {{valor}}. Até logo, {{nome_devedor}}.',
+      false,
+      'NAMED',
+    );
+    const named: TemplateMapping = {
+      body: {
+        nome_devedor: { kind: 'SOURCE', source: 'DEBTOR_NAME' },
+        valor: { kind: 'LITERAL', value: 'R$ 150,00' },
+      },
+    };
+    expect(
+      renderTemplate(template, named, { DEBTOR_NAME: 'Maria Exemplo' }),
+    ).toEqual({
+      ok: true,
+      body: 'Olá Maria Exemplo, valor R$ 150,00. Até logo, Maria Exemplo.',
+      bodyParameters: ['Maria Exemplo', 'R$ 150,00'],
+      bodyParameterNames: ['nome_devedor', 'valor'],
+    });
+    // Positional keys do not fit a named template, and vice versa.
+    expect(validateMapping(template, mapping)).toMatchObject({ ok: false });
+    expect(
+      validateMapping(parsed('Olá {{1}}', false), {
+        body: { nome_devedor: { kind: 'SOURCE', source: 'DEBTOR_NAME' } },
+      }),
+    ).toMatchObject({ ok: false, field: 'body.nome_devedor' });
   });
 
   it('never sends empty, undefined or partial values', () => {
