@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import Page from "./page";
 
 const mockApi = {
@@ -11,6 +11,13 @@ const mockApi = {
   previewWhatsappTemplate: jest.fn(),
   saveWhatsappTemplateMapping: jest.fn(),
   getAdminClientAnalytics: jest.fn(),
+  getCompanyWhatsappTemplates: jest.fn(),
+  setCompanyWhatsappTemplateGrant: jest.fn(),
+  setCompanyWhatsappTemplateDefault: jest.fn(),
+  getAdminTemplatePending: jest.fn(),
+  getCompanyTemplatePending: jest.fn(),
+  previewTemplateResume: jest.fn(),
+  confirmTemplateResume: jest.fn(),
 };
 let mockRole = "PLATFORM_ADMIN";
 jest.mock("@/lib/use-api-client", () => ({ useApiClient: () => mockApi }));
@@ -58,6 +65,38 @@ beforeEach(() => {
     running: false,
     pendingRequest: false,
   });
+  mockApi.getAdminTemplatePending.mockResolvedValue({
+    items: [
+      {
+        id: "p-1",
+        origin: "COLLECTION",
+        invoiceId: "invoice-a",
+        code: "NOT_GRANTED",
+        state: "BLOCKED",
+        version: 1,
+        occurrences: 1,
+        blockedAt: "2026-09-27T10:00:00.000Z",
+        resolvedAt: null,
+        closedReason: null,
+        companyId: "company-a",
+        companyName: "Empresa A",
+        templateId: "wa-1",
+        templateName: "aviso_cobranca",
+        ruleStepId: null,
+      },
+    ],
+    nextCursor: null,
+  });
+  mockApi.getAdminClientAnalytics.mockResolvedValue({
+    clients: [{ companyId: "company-a", corporateName: "Empresa A" }],
+    pagination: { page: 1, pageSize: 10, total: 1 },
+  });
+  mockApi.getCompanyWhatsappTemplates.mockResolvedValue({
+    companyId: "company-a",
+    grants: [],
+    defaults: [],
+  });
+  mockApi.setCompanyWhatsappTemplateGrant.mockResolvedValue({ version: 1 });
   mockApi.getEmailTemplates.mockResolvedValue([
     { id: "email-1", name: "Lembrete", subject: "Vencimento", content: "Sua cobrança" },
   ]);
@@ -92,6 +131,29 @@ it("refreshes the catalog after a mapping is saved and explains a conflict", asy
   });
   fireEvent.click(screen.getByRole("button", { name: "Salvar variáveis" }));
   await waitFor(() => expect(mockApi.getAdminWhatsappTemplates).toHaveBeenCalledTimes(2));
+});
+
+it("fixing a grant never confirms a resume of held sends", async () => {
+  mockApi.getAdminWhatsappTemplates.mockResolvedValue({
+    items: [{ ...imported, readiness: { ready: true, code: null } }],
+    nextCursor: null,
+  });
+  render(<Page />);
+  expect(await screen.findByText("Não liberado para a empresa")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Buscar" }));
+  const grants = screen.getByRole("region", { name: "Disponibilidade por empresa" });
+  fireEvent.click(await within(grants).findByRole("button", { name: "Empresa A" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Liberar para empresa" }));
+  await waitFor(() =>
+    expect(mockApi.setCompanyWhatsappTemplateGrant).toHaveBeenCalledWith(
+      "company-a",
+      "wa-1",
+      { enabled: true, expectedVersion: 0 },
+    ),
+  );
+  expect(mockApi.previewTemplateResume).not.toHaveBeenCalled();
+  expect(mockApi.confirmTemplateResume).not.toHaveBeenCalled();
+  expect(screen.getByRole("checkbox")).not.toBeChecked();
 });
 
 it("keeps publishing email templates", async () => {

@@ -124,3 +124,50 @@ describe("ApiClient imported WhatsApp catalog", () => {
     expect(client.syncTemplateMetaStatuses).toBeUndefined();
   });
 });
+
+describe("ApiClient held WhatsApp sends", () => {
+  const api = new ApiClient("http://api.test", "token");
+
+  beforeEach(() => {
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue(ok({ items: [], nextCursor: null }));
+  });
+
+  it("filters admin holds and keeps the company listing scoped to the session", async () => {
+    await api.getAdminTemplatePending({
+      companyId: "company-a",
+      code: "NOT_GRANTED",
+      state: "BLOCKED",
+    });
+    await api.getCompanyTemplatePending({ state: "CLOSED" });
+    const admin = new URL(call(0).url);
+    expect(admin.pathname).toBe("/communications/admin/template-pending");
+    expect(Object.fromEntries(admin.searchParams)).toEqual({
+      companyId: "company-a",
+      code: "NOT_GRANTED",
+      state: "BLOCKED",
+    });
+    expect(call(1).url).toBe(
+      "http://api.test/communications/template-pending?state=CLOSED",
+    );
+  });
+
+  it("previews and confirms a resume with the given idempotency key", async () => {
+    await api.previewTemplateResume([
+      { pendingId: "p-1", replacementTemplateId: "tpl" },
+    ]);
+    await api.confirmTemplateResume("review-1", "key-1");
+    expect(call(0).url).toBe(
+      "http://api.test/communications/admin/template-pending/reviews",
+    );
+    expect(JSON.parse(call(0).init.body as string)).toEqual({
+      items: [{ pendingId: "p-1", replacementTemplateId: "tpl" }],
+    });
+    expect(call(1).url).toBe(
+      "http://api.test/communications/admin/template-pending/reviews/review-1/confirm",
+    );
+    expect(JSON.parse(call(1).init.body as string)).toEqual({
+      idempotencyId: "key-1",
+    });
+  });
+});

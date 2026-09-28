@@ -240,3 +240,92 @@ export function isConflict(error: unknown): boolean {
 export function errorText(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
+
+export type PendingState = "BLOCKED" | "RESUMED" | "CLOSED";
+
+/** A held WhatsApp send. Admin rows add company and template; company rows never do. */
+export interface TemplatePendingSend {
+  id: string;
+  origin: "COLLECTION" | "ADMIN_REPLY" | "ACTIVATION";
+  invoiceId: string | null;
+  code: TemplateBlockCode;
+  state: PendingState;
+  version: number;
+  occurrences: number;
+  blockedAt: string;
+  resolvedAt: string | null;
+  closedReason: string | null;
+  companyId?: string;
+  companyName?: string;
+  templateId?: string | null;
+  templateName?: string | null;
+  ruleStepId?: string | null;
+}
+
+export interface TemplatePendingQuery {
+  companyId?: string;
+  templateId?: string;
+  code?: TemplateBlockCode;
+  state?: PendingState;
+  cursor?: string;
+  limit?: number;
+}
+
+export interface ResumeItem {
+  pendingId: string;
+  /** Explicit change of template decided by the admin; limited to granted ones. */
+  replacementTemplateId?: string;
+}
+
+export type ResumeAction = "RESUME" | "CLOSE" | "KEEP_BLOCKED";
+
+export interface ResumeReview {
+  id: string;
+  expiresAt: string;
+  items: Array<{
+    pendingId: string;
+    companyId: string;
+    invoiceId: string | null;
+    templateId: string | null;
+    templateName: string | null;
+    action: ResumeAction;
+    reason: string | null;
+    previewBody: string | null;
+  }>;
+}
+
+export interface ResumeResult {
+  reviewId: string;
+  intentIds: string[];
+  closedPendingIds: string[];
+}
+
+export const ORIGIN_LABELS: Record<TemplatePendingSend["origin"], string> = {
+  COLLECTION: "Régua de cobrança",
+  ADMIN_REPLY: "Resposta do atendimento",
+  ACTIVATION: "Aviso de ativação",
+};
+
+export const PENDING_STATE_LABELS: Record<PendingState, string> = {
+  BLOCKED: "Bloqueado",
+  RESUMED: "Retomada autorizada",
+  CLOSED: "Encerrado",
+};
+
+/** Reasons of a review item: block codes plus the resume-specific outcomes. */
+export function resumeReasonLabel(reason: string | null): string | null {
+  if (!reason) return null;
+  const labels: Record<string, string> = {
+    ALREADY_SENT:
+      "A mensagem já foi aceita pelo provedor; nada será reenviado.",
+    TRANSMISSION_UNKNOWN:
+      "Há um envio em andamento ou incerto; não é possível retomar agora.",
+    INVOICE_NOT_PENDING:
+      "A cobrança não está mais pendente; será encerrada sem mensagem.",
+    OPT_IN_MISSING: "O devedor não autorizou mensagens por WhatsApp.",
+    ACTIVATION_UNAVAILABLE: "A ativação não precisa mais deste aviso.",
+    PENDING_RESUMED: "Esta pendência já teve a retomada autorizada.",
+    PENDING_CLOSED: "Esta pendência já foi encerrada.",
+  };
+  return labels[reason] ?? BLOCK_LABELS[reason as TemplateBlockCode] ?? reason;
+}

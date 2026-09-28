@@ -11,6 +11,7 @@ import type {
   CommunicationChannel,
   ConversationStatus,
 } from "@/lib/api-client";
+import { TemplatePendingSends } from "./templates/TemplatePendingSends";
 import { CompanyConversations } from "./communications/CompanyConversations";
 import { ConversationMessages } from "./communications/ConversationMessages";
 import {
@@ -154,9 +155,7 @@ function AdminInbox(): ReactNode {
   const [olderCursor, setOlderCursor] = useState<string | null>(null);
   const [classifying, setClassifying] =
     useState<AdminConversationMessage | null>(null);
-  const [quoting, setQuoting] = useState<AdminConversationMessage | null>(
-    null,
-  );
+  const [quoting, setQuoting] = useState<AdminConversationMessage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pagedMessages = useRef(false);
 
@@ -428,7 +427,7 @@ export function CommunicationsHistory({
   admin?: boolean;
 }): ReactNode {
   const { data: session, status } = useSession();
-  const [tab, setTab] = useState<"conversations" | "outbound">(
+  const [tab, setTab] = useState<"conversations" | "outbound" | "pending">(
     "conversations",
   );
   const allowed =
@@ -461,6 +460,7 @@ export function CommunicationsHistory({
               [
                 ["conversations", "Conversas"],
                 ["outbound", "Envios"],
+                ["pending", "Pendências"],
               ] as const
             ).map(([value, label]) => (
               <button
@@ -476,8 +476,10 @@ export function CommunicationsHistory({
           </div>
           {tab === "conversations" ? (
             <CompanyConversations key={viewerKey} />
-          ) : (
+          ) : tab === "outbound" ? (
             <OutboundHistory key={viewerKey} />
+          ) : (
+            <TemplatePendingSends key={viewerKey} scope="COMPANY" />
           )}
         </>
       )}

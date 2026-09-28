@@ -30,10 +30,15 @@ import type {
   CompanyTemplateAccess,
   CompanyWhatsappTemplate,
   Readiness,
+  ResumeItem,
+  ResumeResult,
+  ResumeReview,
   SaveTemplateMappingInput,
   SetTemplateDefaultInput,
   SetTemplateGrantInput,
   TemplateMapping,
+  TemplatePendingQuery,
+  TemplatePendingSend,
   TemplatePurpose,
   TemplateRenderResult,
   WhatsappSyncResult,
@@ -652,7 +657,11 @@ export interface AdminConversationMessage extends ConversationMessage {
   companyId: string | null;
   invoiceId: string | null;
   debtorId: string | null;
-  company: { id: string; corporateName: string; tradeName: string | null } | null;
+  company: {
+    id: string;
+    corporateName: string;
+    tradeName: string | null;
+  } | null;
   externalMessageId: string | null;
   replyToMessageId: string | null;
   source: "LEGACY" | "LIVE" | "IMPORTED";
@@ -915,7 +924,12 @@ export interface AdminClient {
 }
 
 export type AdminAnalyticsPeriod =
-  "current_month" | "today" | "7d" | "30d" | "year" | "custom";
+  | "current_month"
+  | "today"
+  | "7d"
+  | "30d"
+  | "year"
+  | "custom";
 
 export interface AdminClientAnalyticsMetrics {
   totalChargedAmount: number;
@@ -1939,6 +1953,42 @@ class ApiClient {
     );
   }
 
+  // Held WhatsApp sends. Companies read their own; only the platform admin resumes.
+  async getAdminTemplatePending(
+    query: TemplatePendingQuery = {},
+  ): Promise<CatalogPage<TemplatePendingSend>> {
+    return this.fetch<CatalogPage<TemplatePendingSend>>(
+      `/communications/admin/template-pending${this.buildQueryString({ ...query })}`,
+    );
+  }
+
+  async getCompanyTemplatePending(
+    query: Pick<TemplatePendingQuery, "state" | "cursor" | "limit"> = {},
+  ): Promise<CatalogPage<TemplatePendingSend>> {
+    return this.fetch<CatalogPage<TemplatePendingSend>>(
+      `/communications/template-pending${this.buildQueryString({ ...query })}`,
+    );
+  }
+
+  /** Evaluates the holds without changing anything; valid for 15 minutes. */
+  async previewTemplateResume(items: ResumeItem[]): Promise<ResumeReview> {
+    return this.fetch<ResumeReview>(
+      "/communications/admin/template-pending/reviews",
+      { method: "POST", body: JSON.stringify({ items }) },
+    );
+  }
+
+  /** Idempotent: repeating the same key returns the recorded result. */
+  async confirmTemplateResume(
+    reviewId: string,
+    idempotencyId: string,
+  ): Promise<ResumeResult> {
+    return this.fetch<ResumeResult>(
+      `/communications/admin/template-pending/reviews/${encodeURIComponent(reviewId)}/confirm`,
+      { method: "POST", body: JSON.stringify({ idempotencyId }) },
+    );
+  }
+
   // Imported WhatsApp catalog (platform admin). Content comes from the Meta catalog and
   // is never authored here; the admin maps variables and grants templates to companies.
   async getAdminWhatsappTemplates(
@@ -1962,7 +2012,9 @@ class ApiClient {
   }
 
   async getWhatsappTemplateSyncState(): Promise<WhatsappSyncState> {
-    return this.fetch<WhatsappSyncState>("/admin/whatsapp-templates/sync-state");
+    return this.fetch<WhatsappSyncState>(
+      "/admin/whatsapp-templates/sync-state",
+    );
   }
 
   /** 409 while another sync holds the lease. */

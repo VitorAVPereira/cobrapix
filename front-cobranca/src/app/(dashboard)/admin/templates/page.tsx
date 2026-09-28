@@ -7,6 +7,7 @@ import type { EmailTemplate } from "@/lib/api-client";
 import { WhatsappCatalog } from "@/components/features/templates/WhatsappCatalog";
 import { TemplateMappingEditor } from "@/components/features/templates/TemplateMappingEditor";
 import { CompanyTemplateGrants } from "@/components/features/templates/CompanyTemplateGrants";
+import { TemplatePendingSends } from "@/components/features/templates/TemplatePendingSends";
 
 export default function AdminTemplatesPage(): ReactNode {
   const api = useApiClient();
@@ -81,10 +82,7 @@ export default function AdminTemplatesPage(): ReactNode {
           {notice}
         </p>
       )}
-      <WhatsappCatalog
-        onConfigure={setEditing}
-        refreshKey={refreshKey}
-      />
+      <WhatsappCatalog onConfigure={setEditing} refreshKey={refreshKey} />
       {editing && (
         <TemplateMappingEditor
           key={editing}
@@ -94,6 +92,7 @@ export default function AdminTemplatesPage(): ReactNode {
         />
       )}
       <CompanyTemplateGrants />
+      <TemplatePendingSends scope="ADMIN" />
       <section className="space-y-4">
         <h2 className="text-xl font-semibold">E-mail</h2>
         {email.map((item) => (
