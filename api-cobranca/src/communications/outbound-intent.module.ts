@@ -8,15 +8,23 @@ import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
 import { CommunicationTokenService } from './communication-token.service';
 import { TemplatePolicyModule } from '../templates/template-policy.module';
 import { TemplatePendingService } from './template-pending.service';
+import { TemplateResumeService } from './template-resume.service';
+import { TemplateRenderingModule } from '../templates/template-rendering.module';
 
 @Module({
-  imports: [PrismaModule, PaymentModule, TemplatePolicyModule],
+  imports: [
+    PrismaModule,
+    PaymentModule,
+    TemplatePolicyModule,
+    TemplateRenderingModule,
+  ],
   controllers: [OutboundIntentController],
   providers: [
     OutboundIntentService,
     CommunicationAttributionService,
     CommunicationTokenService,
     TemplatePendingService,
+    TemplateResumeService,
     PlatformAdminGuard,
   ],
   exports: [
@@ -24,6 +32,7 @@ import { TemplatePendingService } from './template-pending.service';
     CommunicationAttributionService,
     CommunicationTokenService,
     TemplatePendingService,
+    TemplateResumeService,
     TemplatePolicyModule,
   ],
 })

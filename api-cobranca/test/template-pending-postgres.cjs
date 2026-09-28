@@ -286,6 +286,125 @@ section('preparation: activation notices use their own default and renew only af
   assert.equal((await sender.prepare(request, { renewAfterRejection: true })).intentId, renewed.intentId, 'an uncertain result is never renewed');
 });
 
+/** A prepared collection message held at dispatch by a revocation. */
+async function heldSend(prisma, label) {
+  const fixture = await fx.tenant(prisma, label);
+  const template = await fx.readyTemplate(prisma);
+  await fx.grant(prisma, fixture.company.id, template.id);
+  const prepared = await fx.templateIntent(prisma, { fixture, template });
+  await fx.grant(prisma, fixture.company.id, template.id, false);
+  const { service } = fx.dispatcher(prisma);
+  await assert.rejects(service.dispatch(prepared.id), error => error.code === 'NOT_GRANTED');
+  const hold = await prisma.whatsappTemplatePendingSend.findUnique({ where: { logicalKey: prepared.request.logicalKey } });
+  return { fixture, template, prepared, hold };
+}
+
+section('resume: fixing the template never releases holds by itself; one confirmed successor is sent once', async ({ prisma }) => {
+  const { fixture, template, prepared, hold } = await heldSend(prisma, 'Resume');
+  const admin = randomUUID();
+  await fx.grant(prisma, fixture.company.id, template.id, true);
+  const { intents, pending } = fx.services(prisma);
+  await pending.reconcileInvalidSnapshots(100);
+  assert.equal((await intents.recover()).some(row => row.id === prepared.id), false, 'correction alone releases nothing');
+  assert.equal((await prisma.whatsappTemplatePendingSend.findUnique({ where: { id: hold.id } })).state, 'BLOCKED');
+
+  const resume = fx.resumer(prisma);
+  const review = await resume.preview([{ pendingId: hold.id }], admin);
+  assert.equal(review.items[0].action, 'RESUME');
+  assert.match(review.items[0].previewBody, /R\$ 150,00/);
+  const stored = await prisma.whatsappTemplateResumeReview.findUnique({ where: { id: review.id } });
+  assert.equal(JSON.stringify(stored.items).includes('R$'), false, 'no rendered text persisted in the review');
+  assert.equal(JSON.stringify(stored.items).includes(fixture.phone), false);
+
+  const key = randomUUID();
+  const concurrentResults = await Promise.all([1, 2, 3].map(() => resume.confirm(review.id, key, admin)));
+  assert.equal(new Set(concurrentResults.flatMap(result => result.intentIds)).size, 1, 'one effective authorization and successor');
+  const firstResult = concurrentResults[0];
+  const repeatedResult = await resume.confirm(review.id, key, admin);
+  assert.deepEqual(repeatedResult, firstResult, 'a repeated confirmation returns the persisted result');
+  await assert.rejects(resume.confirm(review.id, randomUUID(), admin), error => error.getStatus() === 409);
+
+  const successorId = firstResult.intentIds[0];
+  const successor = await prisma.communicationOutboundIntent.findUnique({ where: { id: successorId } });
+  assert.equal(successor.state, 'PENDING');
+  assert.equal(successor.generation, 1);
+  assert.equal(successor.resumeReviewId, review.id);
+  assert.equal(await intentState(prisma, prepared.id), 'BLOCKED', 'the original attempt stays as history');
+  const resumedHold = await prisma.whatsappTemplatePendingSend.findUnique({ where: { id: hold.id } });
+  assert.equal(resumedHold.state, 'RESUMED');
+  assert.equal(resumedHold.currentIntentId, successorId);
+  assert.equal(await prisma.whatsappTemplateAudit.count({ where: { action: 'PENDING_RESUMED', details: { path: ['pendingId'], equals: hold.id } } }), 1);
+
+  // redis_loss_after_commit_recovers_once: nothing was enqueued; recovery sends it once.
+  const { service, transport } = fx.dispatcher(prisma);
+  const recovered = (await intents.recover()).filter(row => row.id === successorId);
+  assert.equal(recovered.length, 1);
+  await service.dispatch(successorId);
+  // A repeated job for the accepted successor returns the known result, never a resend.
+  await service.dispatch(successorId);
+  assert.equal(transport.calls.length, 1);
+  const datafySendCallsAfterRecovery = transport.calls.length;
+  assert.equal((await intents.recover()).some(row => row.id === successorId), false);
+  assert.equal(datafySendCallsAfterRecovery, 1);
+  // Producers see the resumed communication, not a new generation 0.
+  const again = await fx.preparer(prisma).prepare(prepared.request);
+  assert.deepEqual(again, { status: 'QUEUED', intentId: successorId });
+});
+
+section('resume: paid invoices close without sending; uncertain results are never resumable', async ({ prisma, pool }) => {
+  const admin = randomUUID();
+  const paid = await heldSend(prisma, 'Paid');
+  await fx.grant(prisma, paid.fixture.company.id, paid.template.id, true);
+  await prisma.invoice.update({ where: { id: paid.fixture.invoice.id }, data: { status: 'PAID' } });
+  const resume = fx.resumer(prisma);
+  const review = await resume.preview([{ pendingId: paid.hold.id }], admin);
+  assert.deepEqual([review.items[0].action, review.items[0].reason, review.items[0].previewBody], ['CLOSE', 'INVOICE_NOT_PENDING', null]);
+  const result = await resume.confirm(review.id, randomUUID(), admin);
+  assert.deepEqual(result.intentIds, []);
+  assert.deepEqual(result.closedPendingIds, [paid.hold.id]);
+  assert.equal((await prisma.whatsappTemplatePendingSend.findUnique({ where: { id: paid.hold.id } })).closedReason, 'INVOICE_NOT_PENDING');
+
+  const uncertain = await heldSend(prisma, 'Uncertain resume');
+  await fx.grant(prisma, uncertain.fixture.company.id, uncertain.template.id, true);
+  // A later generation of the same communication ended with an unknown provider result.
+  await pool.query('UPDATE "CommunicationOutboundIntent" SET "state"=\'UNCERTAIN\', "transmission"=\'UNCERTAIN\' WHERE "id"=$1', [uncertain.prepared.id]);
+  const uncertainReview = await resume.preview([{ pendingId: uncertain.hold.id }], admin);
+  assert.deepEqual([uncertainReview.items[0].action, uncertainReview.items[0].reason], ['KEEP_BLOCKED', 'TRANSMISSION_UNKNOWN']);
+  const kept = await resume.confirm(uncertainReview.id, randomUUID(), admin);
+  assert.deepEqual(kept.intentIds, []);
+  const acceptedOrUncertainSuccessors = await prisma.communicationOutboundIntent.findMany({ where: { logicalKey: uncertain.prepared.request.logicalKey, generation: { gt: 0 } } });
+  assert.equal(acceptedOrUncertainSuccessors.length, 0);
+});
+
+section('resume: a change since the preview (mapping, grant, hold) requires a new review, without partial effects', async ({ prisma }) => {
+  const admin = randomUUID();
+  const first = await heldSend(prisma, 'Stale A');
+  const second = await heldSend(prisma, 'Stale B');
+  for (const held of [first, second]) await fx.grant(prisma, held.fixture.company.id, held.template.id, true);
+  const resume = fx.resumer(prisma);
+  const review = await resume.preview([{ pendingId: first.hold.id }, { pendingId: second.hold.id }], admin);
+  assert.deepEqual(review.items.map(item => item.action), ['RESUME', 'RESUME']);
+  // changed_mapping_requires_new_preview: the second template gets a new mapping revision.
+  const template = await prisma.globalMessageTemplate.findUnique({ where: { id: second.template.id } });
+  await fx.services(prisma).mappings.save(template.id, template.providerRevision, template.mappingRevision, fx.MAPPING, admin);
+  await assert.rejects(resume.confirm(review.id, randomUUID(), admin), error => error.getStatus() === 409 && error.getResponse().code === 'VERSION_CHANGED');
+  for (const held of [first, second]) {
+    const hold = await prisma.whatsappTemplatePendingSend.findUnique({ where: { id: held.hold.id } });
+    assert.equal(hold.state, 'BLOCKED', 'no partial effect');
+    assert.equal(hold.version, held.hold.version);
+  }
+  assert.equal(await prisma.communicationOutboundIntent.count({ where: { resumeReviewId: review.id } }), 0);
+  // A replacement must be granted to the same company.
+  const foreign = await fx.readyTemplate(prisma);
+  const replacement = await resume.preview([{ pendingId: first.hold.id, replacementTemplateId: foreign.id }], admin);
+  assert.deepEqual([replacement.items[0].action, replacement.items[0].reason], ['KEEP_BLOCKED', 'NOT_GRANTED']);
+  // An expired preview cannot be confirmed.
+  const fresh = await resume.preview([{ pendingId: first.hold.id }], admin);
+  await prisma.whatsappTemplateResumeReview.update({ where: { id: fresh.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+  await assert.rejects(resume.confirm(fresh.id, randomUUID(), admin), error => error.getResponse().code === 'REVIEW_EXPIRED');
+  await assert.rejects(resume.preview(Array.from({ length: 51 }, () => ({ pendingId: randomUUID() })), admin), error => error.getStatus() === 400);
+});
+
 function intentState(prisma, id) {
   return prisma.communicationOutboundIntent.findUnique({ where: { id }, select: { state: true } }).then(row => row.state);
 }

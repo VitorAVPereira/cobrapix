@@ -7,11 +7,9 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { OutboundIntentService } from '../communications/outbound-intent.service';
-import { messageRecipient } from '../communications/message-context';
 import { TemplatePendingService } from '../communications/template-pending.service';
 import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { PrismaService } from '../prisma/prisma.service';
-import type { DispatchInput } from '../whatsapp/outbound-dispatcher.service';
 import { TemplateContextService } from './template-context.service';
 import {
   ReadyTemplate,
@@ -20,7 +18,7 @@ import {
 } from './template-contracts';
 import { lockLogicalKey } from './template-locks';
 import { TemplatePolicyService } from './template-policy.service';
-import { renderTemplate } from './template-renderer';
+import { renderSend, reserveTemplateIntent } from './template-reservation';
 
 type Tx = Prisma.TransactionClient;
 
@@ -36,8 +34,6 @@ export interface PrepareOptions {
    */
   renewAfterRejection?: boolean;
 }
-
-const RETENTION_YEARS = 5;
 
 /**
  * Single entry point for template sends: policy, trusted context, rendering and the
@@ -122,102 +118,39 @@ export class TemplateSendPreparerService {
     template: ReadyTemplate,
     generation: number,
   ): Promise<PrepareResult> {
-    const adminReply = request.origin === 'ADMIN_REPLY';
-    let loaded: Awaited<ReturnType<TemplateContextService['load']>>;
-    try {
-      loaded = await this.context.load(
-        request.context,
-        request.origin,
-        template.mapping,
-        tx,
-      );
-    } catch (error: unknown) {
-      if (adminReply) throw error;
-      return this.refuse(tx, request, 'VALUE_MISSING', template);
-    }
-    const recipient = adminReply
-      ? await this.conversationRecipient(tx, request.conversationId)
-      : loaded.recipient;
-    if (!recipient) return this.refuse(tx, request, 'VALUE_MISSING', template);
-    const rendered = renderTemplate(
-      template.parsed,
-      template.mapping,
-      loaded.values,
-      loaded.paymentUrl,
+    const rendered = await renderSend(
+      this.context,
+      this.crypto,
+      tx,
+      request,
+      template,
     );
-    if (!rendered.ok)
+    if (!rendered.ok) {
+      // The admin is present: context errors (wrong invoice or company) answer directly.
+      if (request.origin === 'ADMIN_REPLY' && rendered.cause instanceof Error)
+        throw rendered.cause;
       return this.refuse(tx, request, rendered.code, template, rendered.field);
-    const phone = messageRecipient({ type: 'PHONE', value: recipient });
-    const retentionExpiresAt = new Date();
-    retentionExpiresAt.setUTCFullYear(
-      retentionExpiresAt.getUTCFullYear() + RETENTION_YEARS,
-    );
-    const conversation = await tx.communicationConversation.upsert({
-      where: {
-        channel_recipientHash: {
-          channel: 'WHATSAPP',
-          recipientHash: phone.hash,
-        },
+    }
+    const intentId = await reserveTemplateIntent(
+      {
+        intents: this.intents,
+        crypto: this.crypto,
+        transportChannelId: this.config.getOrThrow<string>(
+          'META_PHONE_NUMBER_ID',
+        ),
       },
-      create: {
-        channel: 'WHATSAPP',
-        recipientHash: phone.hash,
-        recipientType: 'PHONE',
-        recipientEncrypted: this.crypto.encrypt(phone.value),
-        retentionExpiresAt,
-      },
-      update: {},
-      select: { id: true },
-    });
-    const { companyId, invoiceId, debtorId } = request.context;
-    const payload: DispatchInput = {
-      companyId,
-      ...(invoiceId ? { invoiceId } : {}),
-      ...(debtorId ? { debtorId } : {}),
-      ...(request.ruleStepId ? { ruleStepId: request.ruleStepId } : {}),
-      phoneNumber: phone.value,
-      content: rendered.body,
-      messageType: 'template',
-      templateName: template.name,
-      languageCode: template.language,
-      bodyParameters: rendered.bodyParameters,
-      ...(template.parsed.paymentButton
-        ? { paymentButtonFromInvoice: true }
-        : {}),
-      ...(adminReply ? { origin: 'ADMIN_REPLY' as const } : {}),
-      ...(request.replyToExternalMessageId
-        ? { replyToExternalMessageId: request.replyToExternalMessageId }
-        : {}),
-    };
-    const { reservation } = await this.intents.reserveInTransaction(tx, {
-      idempotencyKey: generation
-        ? `${request.logicalKey}#${generation}`
-        : request.logicalKey,
-      conversationId: conversation.id,
-      transport: 'DATAFY',
-      transportChannelId: this.config.getOrThrow<string>(
-        'META_PHONE_NUMBER_ID',
-      ),
-      recipient: phone,
-      context: {
-        companyId,
-        ...(invoiceId ? { invoiceId } : {}),
-        ...(debtorId ? { debtorId } : {}),
-      },
-      content: rendered.body,
-      messageType: 'template',
-      payload,
-      retentionExpiresAt,
-      replyToExternalMessageId: request.replyToExternalMessageId ?? null,
-      template: {
-        logicalKey: request.logicalKey,
+      tx,
+      {
+        request,
+        template,
+        rendered,
+        idempotencyKey: generation
+          ? `${request.logicalKey}#${generation}`
+          : request.logicalKey,
         generation,
-        snapshot: template.snapshot,
-        contextFingerprint: loaded.contextFingerprint,
-        context: { logicalKey: request.logicalKey, request },
       },
-    });
-    return { status: 'QUEUED', intentId: reservation.id };
+    );
+    return { status: 'QUEUED', intentId };
   }
 
   private async refuse(
@@ -245,23 +178,5 @@ export class TemplateSendPreparerService {
       ...(template ? { snapshot: template.snapshot } : {}),
     });
     return { status: 'BLOCKED', pendingId: hold.id, code };
-  }
-
-  private async conversationRecipient(
-    tx: Tx,
-    conversationId: string | undefined,
-  ): Promise<string | null> {
-    if (!conversationId) return null;
-    const conversation = await tx.communicationConversation.findUnique({
-      where: { id: conversationId },
-      select: { channel: true, recipientType: true, recipientEncrypted: true },
-    });
-    if (
-      conversation?.channel !== 'WHATSAPP' ||
-      conversation.recipientType === 'BSUID' ||
-      !conversation.recipientEncrypted
-    )
-      return null;
-    return this.crypto.decrypt(conversation.recipientEncrypted);
   }
 }

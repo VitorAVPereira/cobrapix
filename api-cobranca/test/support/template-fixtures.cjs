@@ -19,6 +19,7 @@ const { TemplatePendingService } = require('../../src/communications/template-pe
 const { CommunicationTokenService } = require('../../src/communications/communication-token.service.ts');
 const { OutboundDispatcherService } = require('../../src/whatsapp/outbound-dispatcher.service.ts');
 const { TemplateSendPreparerService } = require('../../src/templates/template-send-preparer.service.ts');
+const { TemplateResumeService } = require('../../src/communications/template-resume.service.ts');
 
 const FRONTEND = 'https://app.ciframais.test';
 const WABA = '333333333333333';
@@ -114,6 +115,11 @@ async function templateIntent(prisma, { fixture, template, logicalKey = `collect
   return { id: reservation.id, request, snapshot: decision.template.snapshot };
 }
 
+function resumer(prisma) {
+  const { intents, policy, context } = services(prisma);
+  return new TemplateResumeService(prisma, config, crypto, intents, policy, context);
+}
+
 function preparer(prisma) {
   const { intents, pending, policy, context } = services(prisma);
   return new TemplateSendPreparerService(prisma, config, crypto, intents, pending, policy, context);
@@ -132,5 +138,6 @@ function dispatcher(prisma, behavior) {
 }
 
 module.exports = {
+  resumer,
   preparer,
   dispatcher, config, crypto, settings, services, tenant, readyTemplate, grant, templateIntent, conversationFor, MAPPING, FRONTEND, WABA };
