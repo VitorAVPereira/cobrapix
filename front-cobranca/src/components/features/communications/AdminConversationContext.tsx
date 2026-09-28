@@ -7,8 +7,9 @@ import type {
   ApiError,
   AttributionMethod,
   ContextOption,
+  ConversationTemplateOption,
   MessageContextInput,
-  MessageTemplate,
+  TemplateReplyContext,
 } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 import {
@@ -25,22 +26,6 @@ const METHOD_LABELS: Record<AttributionMethod, string> = {
   INTERACTIVE_CONTEXT: "Botão da cobrança",
   MANUAL: "Classificação manual",
 };
-
-const VARIABLE = /\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g;
-
-/** Positional variables of an approved template, in order. */
-export function templateVariables(content: string): string[] {
-  return Array.from(content.matchAll(VARIABLE), (match) => match[1] ?? "");
-}
-
-export function isSendableTemplate(template: MessageTemplate): boolean {
-  return (
-    template.isActive &&
-    template.metaStatus === "APPROVED" &&
-    !template.metaReviewRequired &&
-    Boolean(template.metaTemplateName)
-  );
-}
 
 interface ContextChoice {
   value: string;
@@ -177,7 +162,6 @@ export function AdminMessageDetails({
 /** Attribution, text replies and template replies for the selected conversation. */
 export function AdminConversationContext({
   conversation,
-  templates,
   classifying,
   quoting,
   onCancelClassify,
@@ -185,7 +169,6 @@ export function AdminConversationContext({
   onChanged,
 }: {
   conversation: AdminConversationDetail;
-  templates: MessageTemplate[];
   classifying: AdminConversationMessage | null;
   quoting: AdminConversationMessage | null;
   onCancelClassify: () => void;
@@ -199,14 +182,8 @@ export function AdminConversationContext({
   const [busy, setBusy] = useState(false);
   const [attribution, setAttribution] = useState({ context: "", reason: "" });
   const [reply, setReply] = useState({ context: "", content: "" });
-  const [template, setTemplate] = useState({
-    id: "",
-    context: "",
-    parameters: {} as Record<string, string>,
-  });
   // One id per draft: a retry after a network error is the same request.
   const replyDraft = useRef<string | null>(null);
-  const templateDraft = useRef<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -230,14 +207,6 @@ export function AdminConversationContext({
   const windowOpen =
     conversation.channel !== "WHATSAPP" ||
     serviceWindowOpen(conversation.serviceWindowExpiresAt);
-  const sendable = templates.filter(isSendableTemplate);
-  const selectedTemplate = sendable.find((item) => item.id === template.id);
-  const variables = selectedTemplate
-    ? templateVariables(selectedTemplate.content)
-    : [];
-  const templateNeedsInvoice =
-    Boolean(selectedTemplate?.paymentButtonEnabled) &&
-    !choices.find((choice) => choice.value === template.context)?.hasInvoice;
 
   async function run(
     operation: () => Promise<unknown>,
@@ -416,120 +385,176 @@ export function AdminConversationContext({
           </button>
         </form>
       ) : (
-        <form
-          aria-label="Responder com template"
-          className="space-y-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!selectedTemplate) return;
-            templateDraft.current ??= crypto.randomUUID();
-            const context = contextOf(template.context);
-            void run(
-              () =>
-                api.replyWithTemplate(conversation.id, {
-                  idempotencyId: templateDraft.current!,
-                  templateId: selectedTemplate.id,
-                  parameters: variables.map(
-                    (name) => template.parameters[name]?.trim() ?? "",
-                  ),
-                  ...(context ? { context } : {}),
-                }),
-              "Template enviado para a fila do atendimento central.",
-              () => {
-                templateDraft.current = null;
-                setTemplate({ id: "", context: "", parameters: {} });
-              },
-            );
-          }}
-        >
-          <p className="text-sm text-amber-700">
-            A janela de atendimento do WhatsApp está fechada. Somente templates
-            aprovados podem ser enviados.
-          </p>
-          <label className="block text-sm">
-            Template aprovado
-            <select
-              className="mt-1 w-full rounded-lg border p-2"
-              value={template.id}
-              onChange={(event) => {
-                templateDraft.current = null;
-                setTemplate({
-                  id: event.target.value,
-                  context: template.context,
-                  parameters: {},
-                });
-              }}
-            >
-              <option value="">Selecione</option>
-              {sendable.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {sendable.length === 0 && (
-            <p className="text-sm text-slate-500">
-              Nenhum template aprovado e sem revisão pendente.
-            </p>
-          )}
-          {selectedTemplate && (
-            <>
-              <p className="whitespace-pre-wrap rounded bg-slate-50 p-2 text-xs">
-                {selectedTemplate.content}
-              </p>
-              {variables.map((name, index) => (
-                <label key={`${name}-${index}`} className="block text-sm">
-                  {name}
-                  <input
-                    aria-label={`Parâmetro ${name}`}
-                    className="mt-1 w-full rounded-lg border p-2"
-                    maxLength={1024}
-                    value={template.parameters[name] ?? ""}
-                    onChange={(event) => {
-                      templateDraft.current = null;
-                      setTemplate((current) => ({
-                        ...current,
-                        parameters: {
-                          ...current.parameters,
-                          [name]: event.target.value,
-                        },
-                      }));
-                    }}
-                  />
-                </label>
-              ))}
-              <ContextSelect
-                label="Contexto do template"
-                choices={choices}
-                value={template.context}
-                onChange={(value) => {
-                  templateDraft.current = null;
-                  setTemplate((current) => ({ ...current, context: value }));
-                }}
-                emptyLabel="Somente atendimento (não aparece para empresas)"
-              />
-              {templateNeedsInvoice && (
-                <p className="text-sm text-amber-700">
-                  Este template tem botão de pagamento: selecione uma cobrança.
-                </p>
-              )}
-            </>
-          )}
-          <button
-            type="submit"
-            disabled={
-              busy ||
-              !selectedTemplate ||
-              templateNeedsInvoice ||
-              variables.some((name) => !template.parameters[name]?.trim())
-            }
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-          >
-            Enviar template
-          </button>
-        </form>
+        <TemplateReplyForm
+          conversationId={conversation.id}
+          choices={choices}
+          busy={busy}
+          run={run}
+        />
       )}
     </div>
+  );
+}
+
+const REASON_LABELS: Record<string, string> = {
+  VALUE_MISSING: "Faltam dados do contexto (por exemplo, a cobrança).",
+  NOT_GRANTED: "Não liberado para esta empresa.",
+  NOT_APPROVED: "Sem aprovação da Meta no momento.",
+  REVIEW_REQUIRED: "Aguardando revisão das variáveis pelo administrador.",
+  UNSUPPORTED: "Formato ainda não suportado para envio.",
+};
+
+/**
+ * Template replies outside the service window. The company context comes first; the
+ * options, missing values and preview come from the server for that context, and the
+ * parameters are always filled there from the admin mapping.
+ */
+function TemplateReplyForm({
+  conversationId,
+  choices,
+  busy,
+  run,
+}: {
+  conversationId: string;
+  choices: ContextChoice[];
+  busy: boolean;
+  run: (
+    operation: () => Promise<unknown>,
+    success: string,
+    after?: () => void,
+  ) => Promise<void>;
+}): ReactNode {
+  const api = useApiClient();
+  const [contextValue, setContextValue] = useState("");
+  const [templateId, setTemplateId] = useState("");
+  const [options, setOptions] = useState<ConversationTemplateOption[] | null>(
+    null,
+  );
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const draft = useRef<string | null>(null);
+  const companyChoices = choices.filter((choice) => choice.context.companyId);
+  const context = companyChoices.find(
+    (choice) => choice.value === contextValue,
+  )?.context as TemplateReplyContext | undefined;
+
+  useEffect(() => {
+    // A new context discards the previous choice, preview and any late response.
+    setTemplateId("");
+    setOptions(null);
+    setLoadError(null);
+    draft.current = null;
+    if (!context) return;
+    const controller = new AbortController();
+    api
+      .getConversationTemplateOptions(conversationId, context, {
+        signal: controller.signal,
+      })
+      .then((result) => {
+        if (!controller.signal.aborted) setOptions(result.templates);
+      })
+      .catch((caught: unknown) => {
+        if (!controller.signal.aborted)
+          setLoadError(errorMessage(caught, "Falha ao carregar templates."));
+      });
+    return () => controller.abort();
+    // The context object is derived from contextValue.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, conversationId, contextValue]);
+
+  const selected = options?.find((option) => option.id === templateId);
+
+  return (
+    <form
+      aria-label="Responder com template"
+      className="space-y-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!selected?.usable || !context) return;
+        draft.current ??= crypto.randomUUID();
+        void run(
+          () =>
+            api.replyWithTemplate(conversationId, {
+              idempotencyId: draft.current!,
+              templateId: selected.id,
+              context,
+            }),
+          "Template enviado para a fila do atendimento central.",
+          () => {
+            draft.current = null;
+            setTemplateId("");
+          },
+        );
+      }}
+    >
+      <p className="text-sm text-amber-700">
+        A janela de atendimento do WhatsApp está fechada. Somente templates
+        aprovados e liberados para a empresa podem ser enviados; o envio não
+        reabre a janela.
+      </p>
+      <ContextSelect
+        label="Empresa e cobrança do template"
+        choices={companyChoices}
+        value={contextValue}
+        onChange={setContextValue}
+        emptyLabel="Selecione a empresa"
+      />
+      {!context && (
+        <p className="text-sm text-slate-500">
+          Escolha a empresa antes do template: a mesma pessoa pode ter cobranças
+          de empresas diferentes.
+        </p>
+      )}
+      {loadError && (
+        <p role="alert" className="text-sm text-red-700">
+          {loadError}
+        </p>
+      )}
+      {context && options && options.length === 0 && (
+        <p className="text-sm text-slate-500">
+          Nenhum template liberado para esta empresa.
+        </p>
+      )}
+      {context && options && options.length > 0 && (
+        <label className="block text-sm">
+          Template
+          <select
+            className="mt-1 w-full rounded-lg border p-2"
+            value={templateId}
+            onChange={(event) => {
+              draft.current = null;
+              setTemplateId(event.target.value);
+            }}
+          >
+            <option value="">Selecione</option>
+            {options.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.name}
+                {option.usable ? "" : " (indisponível)"}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {selected && !selected.usable && (
+        <p className="text-sm text-amber-700">
+          {REASON_LABELS[selected.reason ?? ""] ?? "Template indisponível."}
+        </p>
+      )}
+      {selected?.previewBody && (
+        <p
+          aria-label="Prévia do template"
+          className="whitespace-pre-wrap rounded bg-slate-50 p-2 text-xs"
+        >
+          {selected.previewBody}
+        </p>
+      )}
+      <button
+        type="submit"
+        disabled={busy || !selected?.usable}
+        className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+      >
+        Enviar template
+      </button>
+    </form>
   );
 }

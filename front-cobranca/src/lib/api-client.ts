@@ -670,6 +670,35 @@ export interface QueuedReply {
   externalMessageId: string | null;
 }
 
+/** Company context of a template reply: the company is mandatory. */
+export interface TemplateReplyContext {
+  companyId: string;
+  invoiceId?: string;
+  debtorId?: string;
+}
+
+export interface TemplateContent {
+  body: string;
+  footer: string | null;
+  button: { label: string; url: string } | null;
+}
+
+export interface ConversationTemplateOption {
+  id: string;
+  name: string;
+  language: string;
+  content: TemplateContent;
+  usable: boolean;
+  reason: string | null;
+  field: string | null;
+  previewBody: string | null;
+}
+
+export interface ConversationTemplateOptions {
+  serviceWindow: { open: boolean; expiresAt: string | null };
+  templates: ConversationTemplateOption[];
+}
+
 export interface MessageTemplate {
   id: string;
   name: string;
@@ -1810,13 +1839,28 @@ class ApiClient {
     );
   }
 
+  /** Templates granted to the selected company, with missing values and a preview. */
+  async getConversationTemplateOptions(
+    conversationId: string,
+    context: TemplateReplyContext,
+    init?: { signal?: AbortSignal },
+  ): Promise<ConversationTemplateOptions> {
+    const query = new URLSearchParams({ companyId: context.companyId });
+    if (context.invoiceId) query.set("invoiceId", context.invoiceId);
+    if (context.debtorId) query.set("debtorId", context.debtorId);
+    return this.fetch<ConversationTemplateOptions>(
+      `/communications/admin/conversations/${encodeURIComponent(conversationId)}/template-options?${query.toString()}`,
+      init?.signal ? { signal: init.signal } : undefined,
+    );
+  }
+
+  /** Parameters are filled by the server from the admin mapping and the context. */
   async replyWithTemplate(
     conversationId: string,
     data: {
       idempotencyId: string;
       templateId: string;
-      parameters: string[];
-      context?: MessageContextInput;
+      context: TemplateReplyContext;
     },
   ): Promise<QueuedReply> {
     return this.fetch(

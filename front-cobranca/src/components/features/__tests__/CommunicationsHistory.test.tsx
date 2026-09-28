@@ -4,7 +4,6 @@ import { CommunicationsHistory } from "../CommunicationsHistory";
 const mockApi = {
   listAdminConversations: jest.fn(),
   getAdminConversation: jest.fn(),
-  getTemplates: jest.fn(),
   getConversationContextOptions: jest.fn(),
   replyToAdminConversation: jest.fn(),
   updateAdminConversationStatus: jest.fn(),
@@ -55,7 +54,6 @@ beforeEach(() => {
     total: 1,
   });
   mockApi.getAdminConversation.mockResolvedValue(detail);
-  mockApi.getTemplates.mockResolvedValue([]);
   mockApi.getConversationContextOptions.mockResolvedValue({ options: [] });
   mockApi.replyToAdminConversation.mockResolvedValue({ status: "pending" });
 });
