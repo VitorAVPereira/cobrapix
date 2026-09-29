@@ -1,4 +1,4 @@
-import { BillingMethod } from '@prisma/client';
+import { BillingMethod, type InvoiceStatus, type Prisma } from '@prisma/client';
 import { BillingService } from './billing.service.ts';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentService } from '../payment/payment.service';
@@ -16,6 +16,7 @@ function decimal(value: number): { toNumber(): number; valueOf(): number } {
 
 interface TestInvoiceOverrides {
   id?: string;
+  status?: InvoiceStatus;
   billingType?: string | null;
   gatewayId?: string | null;
   efiTxid?: string | null;
@@ -54,7 +55,7 @@ function buildInvoice(overrides: TestInvoiceOverrides = {}) {
     debtorId: 'debtor-1',
     originalAmount: decimal(150),
     dueDate: new Date('2026-04-28T12:00:00.000Z'),
-    status: 'PENDING',
+    status: overrides.status ?? 'PENDING',
     gatewayId: overrides.gatewayId ?? null,
     pixPayload: overrides.pixPayload ?? null,
     pixExpiresAt: null,
@@ -100,12 +101,19 @@ function createService(input: {
   invoices?: ReturnType<typeof buildInvoice>[];
   updatedInvoice?: ReturnType<typeof buildInvoice> | null;
   createPayment?: jest.Mock;
+  centralChannelEnabled?: boolean;
+  financiallyActive?: boolean;
 }) {
   const company = input.company ?? buildCompany();
   const invoices = input.invoices ?? [];
   const createPayment = input.createPayment ?? jest.fn().mockResolvedValue({});
 
   const prisma = {
+    platformIntegrationState: {
+      findUnique: jest.fn().mockResolvedValue({
+        enabled: input.centralChannelEnabled ?? true,
+      }),
+    },
     company: {
       findUnique: jest.fn().mockResolvedValue(company),
     },
@@ -137,7 +145,9 @@ function createService(input: {
 
   const paymentService = {
     createPayment,
-    hasActiveFinancialProfile: jest.fn().mockResolvedValue(true),
+    hasActiveFinancialProfile: jest
+      .fn()
+      .mockResolvedValue(input.financiallyActive ?? true),
   } as unknown as PaymentService;
 
   const ruleEngine = {
@@ -194,10 +204,15 @@ function createService(input: {
       templateSender,
     ),
     prisma: prisma as unknown as {
+      platformIntegrationState: { findUnique: jest.Mock };
       collectionLog: { create: jest.Mock };
       collectionAttempt: { create: jest.Mock };
       debtor: { updateMany: jest.Mock };
-      invoice: { update: jest.Mock; updateMany: jest.Mock };
+      invoice: {
+        findMany: jest.Mock;
+        update: jest.Mock;
+        updateMany: jest.Mock;
+      };
     },
     templateSender: templateSender as unknown as { prepare: jest.Mock },
     messageQueue: messageQueue as unknown as {
@@ -425,6 +440,115 @@ describe('BillingService', () => {
     expect(createPayment).not.toHaveBeenCalled();
     expect(templateSender.prepare).toHaveBeenCalledTimes(1);
     expect(logged(prisma, 'PAYMENT_REUSED')).toBe(true);
+  });
+
+  it('enfileira rascunhos e pendentes selecionados somente da empresa autenticada', async () => {
+    const invoices = [
+      buildInvoice({ id: 'draft', status: 'DRAFT' }),
+      buildInvoice({ id: 'pending', status: 'PENDING' }),
+      buildInvoice({ id: 'paid', status: 'PAID' }),
+      buildInvoice({ id: 'canceled', status: 'CANCELED' }),
+      { ...buildInvoice({ id: 'other-company' }), companyId: 'company-2' },
+      buildInvoice({ id: 'not-selected' }),
+    ];
+    const { service, prisma, messageQueue } = createService({ invoices });
+    prisma.invoice.findMany.mockImplementation(
+      (args: Prisma.InvoiceFindManyArgs) => {
+        const where = args.where;
+        const statuses =
+          typeof where?.status === 'string'
+            ? [where.status]
+            : where?.status?.in;
+        const ids = typeof where?.id === 'object' ? where.id.in : [];
+        return Promise.resolve(
+          invoices.filter(
+            (invoice) =>
+              invoice.companyId === where?.companyId &&
+              Array.isArray(ids) &&
+              ids.includes(invoice.id) &&
+              Array.isArray(statuses) &&
+              statuses.includes(invoice.status),
+          ),
+        );
+      },
+    );
+
+    const result = await service.enqueueSelectedInvoices('company-1', [
+      'draft',
+      'pending',
+      'paid',
+      'canceled',
+      'other-company',
+      'draft',
+    ]);
+
+    expect(result).toEqual({ requested: 5, queued: 2, skipped: 3 });
+    expect(messageQueue.addSelectedInitialChargeJobs).toHaveBeenCalledWith([
+      {
+        invoiceId: 'draft',
+        companyId: 'company-1',
+        source: 'SELECTED',
+        channels: ['WHATSAPP'],
+      },
+      {
+        invoiceId: 'pending',
+        companyId: 'company-1',
+        source: 'SELECTED',
+        channels: ['WHATSAPP'],
+      },
+    ]);
+  });
+
+  it('bloqueia WhatsApp pausado antes de alterar contatos ou enfileirar', async () => {
+    const { service, prisma, messageQueue } = createService({
+      invoices: [buildInvoice()],
+      centralChannelEnabled: false,
+    });
+
+    await expect(
+      service.enqueueSelectedInvoices('company-1', ['invoice-1'], {
+        contacts: [{ invoiceId: 'invoice-1', phoneNumber: '+5511998887777' }],
+      }),
+    ).rejects.toMatchObject({
+      status: 503,
+      response: { code: 'CENTRAL_CHANNEL_PAUSED' },
+    });
+    expect(prisma.platformIntegrationState.findUnique).toHaveBeenCalledWith({
+      where: { integration: 'META' },
+    });
+    expect(prisma.debtor.updateMany).not.toHaveBeenCalled();
+    expect(messageQueue.addSelectedInitialChargeJobs).not.toHaveBeenCalled();
+  });
+
+  it('permite EMAIL sem consultar a pausa do WhatsApp central', async () => {
+    const { service, prisma, messageQueue } = createService({
+      invoices: [buildInvoice()],
+      centralChannelEnabled: false,
+    });
+
+    await expect(
+      service.enqueueSelectedInvoices('company-1', ['invoice-1'], {
+        channels: ['EMAIL'],
+      }),
+    ).resolves.toEqual({ requested: 1, queued: 1, skipped: 0 });
+    expect(prisma.platformIntegrationState.findUnique).not.toHaveBeenCalled();
+    expect(messageQueue.addSelectedInitialChargeJobs).toHaveBeenCalledTimes(1);
+  });
+
+  it('mantem a exigencia de ativacao financeira para o envio selecionado', async () => {
+    const { service, prisma, messageQueue } = createService({
+      invoices: [buildInvoice({ status: 'DRAFT' })],
+      financiallyActive: false,
+    });
+
+    await expect(
+      service.enqueueSelectedInvoices('company-1', ['invoice-1']),
+    ).rejects.toMatchObject({
+      status: 409,
+      response: { code: 'FINANCIAL_PROFILE_NOT_READY' },
+    });
+    expect(prisma.invoice.findMany).not.toHaveBeenCalled();
+    expect(messageQueue.addSelectedInitialChargeJobs).not.toHaveBeenCalled();
   });
 
   it('atualiza contatos informados antes de enfileirar cobrancas selecionadas', async () => {

@@ -296,23 +296,6 @@ export class BillingController {
       const channels = this.normalizeSelectedChannels(dto.channels);
       const contacts = this.normalizeSelectedContacts(dto.contacts);
 
-      if (
-        channels.includes('WHATSAPP') &&
-        company.whatsappStatus !== 'CONNECTED'
-      ) {
-        throw new HttpException(
-          'WhatsApp não está conectado. Conecte antes de executar cobranças.',
-          HttpStatus.BAD_REQUEST,
-        );
-      }
-
-      if (channels.includes('WHATSAPP') && !company.whatsappInstanceId) {
-        throw new HttpException(
-          'Nenhuma instância WhatsApp configurada.',
-          HttpStatus.BAD_REQUEST,
-        );
-      }
-
       const result = await this.billingService.enqueueSelectedInvoices(
         user.companyId,
         dto.invoiceIds,
