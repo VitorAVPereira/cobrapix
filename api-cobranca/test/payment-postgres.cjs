@@ -244,7 +244,7 @@ let containerStarted = false;
     console.log('PASS late terms from invoice to charge and Efí payloads (Pix CobV and BOLIX), issued on the active account');
 
     // Company defaults (Configurações → Cobrança) fill what a new charge leaves empty.
-    const billing = new BillingService(prisma, {}, {}, {}, {}, {}, {}, {}, {}, undefined, undefined, fees);
+    const billing = new BillingService(prisma, {}, {}, {}, {}, {}, {}, {}, {}, undefined, fees);
     const saved = await billing.updateSettings(company.id, { preferredBillingMethod: 'PIX', collectionReminderDays: [0], autoGenerateFirstCharge: false, autoDiscountEnabled: false, lateFinePercentage: 2, lateInterestMonthlyPercentage: 1, paymentDaysAfterDue: 15 });
     assert.deepEqual([saved.lateFinePercentage, saved.lateInterestMonthlyPercentage, saved.paymentDaysAfterDue], [2, 1, 15]);
     const kept = await billing.updateSettings(company.id, { preferredBillingMethod: 'PIX', collectionReminderDays: [0], autoGenerateFirstCharge: false, autoDiscountEnabled: false });

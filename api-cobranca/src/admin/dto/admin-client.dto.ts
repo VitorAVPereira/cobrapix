@@ -277,6 +277,10 @@ export class AdminWhatsappUpdateDto {
   @MaxLength(10)
   metaDefaultLanguage?: string;
 
+  /**
+   * @deprecated Ignored: there is no per-company WhatsApp quota. Still
+   * validated so older admin screens keep working during the rollout.
+   */
   @IsOptional()
   @IsIn(MESSAGING_LIMIT_TIERS)
   messagingLimitTier?: (typeof MESSAGING_LIMIT_TIERS)[number] | null;

@@ -32,6 +32,11 @@ const REASON_LABELS: Record<string, string> = {
   WORKER_LOST_AFTER_CLAIM:
     "Resultado incerto: o envio foi interrompido. Não reenvie sem conferir.",
   WAITING_FOR_CHANNEL: "Aguardando limite ou disponibilidade do canal.",
+  CHANNEL_CAPACITY_EXHAUSTED:
+    "Capacidade do canal central esgotada nas últimas 24 horas; o envio aguarda a próxima vaga.",
+  CHANNEL_CONTROL_UNAVAILABLE:
+    "Controle do canal indisponível no momento; o envio aguarda, sem ser liberado.",
+  PROVIDER_RATE_LIMIT: "Limite informado pelo WhatsApp; o envio aguarda.",
 };
 
 export function statusLabel(status: string | null): string {

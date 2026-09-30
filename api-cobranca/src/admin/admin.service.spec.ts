@@ -190,6 +190,15 @@ describe('AdminService financial onboarding', () => {
     expect(prisma.gatewayAccount.update).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).not.toContain('encrypted-client-secret');
   });
+  it('never stores a per-company WhatsApp tier: the channel is central', async () => {
+    const { service, prisma } = fixture();
+    await expect(
+      service.updateClient('company-1', {
+        whatsapp: { messagingLimitTier: 'TIER_10K' },
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(prisma.company.update).not.toHaveBeenCalled();
+  });
   it.each([
     [
       'an active financial profile',

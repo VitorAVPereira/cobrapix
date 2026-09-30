@@ -20,6 +20,7 @@ import type {
   AdminClientAnalyticsResponse,
 } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
+import { ChannelCapacityPanel } from "@/components/features/ChannelCapacityPanel";
 
 const periodOptions: Array<{ label: string; value: AdminAnalyticsPeriod }> = [
   { label: "Mes atual", value: "current_month" },
@@ -337,6 +338,8 @@ export default function AdminOverviewPage() {
             );
           })}
         </section>
+
+        <ChannelCapacityPanel />
 
         <section className="overflow-hidden rounded-md border border-slate-200 bg-white">
           <div className="border-b border-slate-200 px-5 py-4">

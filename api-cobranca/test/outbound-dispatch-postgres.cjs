@@ -242,12 +242,12 @@ module.exports = async ({ prisma, crypto, companyA, companyB }) => {
       console.log('PASS Datafy quota is atomic across processes and keyed by token hash');
     }
 
-    // 7. Daily unique-recipient quota of the shared number across two companies.
+    // 7. In-window text replies do not consume the central channel capacity:
+    // Meta counts unique users reached outside a customer service window. The
+    // capacity shared by templates of all companies is covered by
+    // central-channel-quota.e2e-spec.ts.
     {
       const { dispatcher, fake } = build({ channel: '333' });
-      // Legacy MessagingUsage rows are not channel-scoped; recipients reached earlier today already hold slots.
-      const used = (await prisma.messagingUsage.findMany({ where: { sentAt: { gt: new Date(Date.now() - 86_400_000) } }, distinct: ['phoneNumber'], select: { phoneNumber: true } })).length;
-      const slots = 50 - used;
       const reservations = [];
       for (let i = 0; i < 52; i++) {
         const phone = nextPhone(); await openWindow(phone);
@@ -255,14 +255,11 @@ module.exports = async ({ prisma, crypto, companyA, companyB }) => {
       }
       for (let i = 0; i < reservations.length; i += 8)
         await Promise.allSettled(reservations.slice(i, i + 8).map(reservation => dispatcher.dispatch(reservation.id)));
-      const states = await prisma.communicationOutboundIntent.findMany({ where: { id: { in: reservations.map(reservation => reservation.id) } }, select: { state: true, lastErrorCode: true } });
-      assert.equal(fake.calls.length, slots, 'two companies do not multiply the TIER_50 channel quota');
-      assert.equal(states.filter(state => state.state === 'ACCEPTED').length, slots);
-      assert.equal(states.filter(state => state.state === 'PENDING' && state.lastErrorCode === 'WAITING_FOR_CHANNEL').length, 52 - slots);
-      const repeat = await dispatcher.prepare(text(fake.calls[0].to, { companyId: companyA, content: 'Mesmo destinatario' }), `harness:quota:${runId}:known`);
-      await dispatcher.dispatch(repeat.id);
-      assert.equal(fake.calls.length, slots + 1, 'an already reserved recipient does not consume a new daily slot');
-      console.log('PASS daily channel quota is shared across companies and waits instead of failing');
+      const states = await prisma.communicationOutboundIntent.findMany({ where: { id: { in: reservations.map(reservation => reservation.id) } }, select: { state: true, quotaReservedAt: true } });
+      assert.equal(fake.calls.length, 52, 'in-window text is not held by the fallback channel capacity (50)');
+      assert.equal(states.filter(state => state.state === 'ACCEPTED').length, 52);
+      assert.ok(states.every(state => state.quotaReservedAt === null), 'no capacity unit reserved for in-window text');
+      console.log('PASS in-window text does not consume the central channel capacity');
     }
   } finally {
     // Disconnect (not quit): clients pointed at a closed port would otherwise keep reconnecting.

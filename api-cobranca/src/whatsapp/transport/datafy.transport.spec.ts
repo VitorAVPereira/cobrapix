@@ -240,6 +240,30 @@ describe('Datafy transport contract', () => {
     });
   });
 
+  it.each([
+    [130429, 60],
+    [131056, 60],
+    [131048, 3600],
+    [80007, 3600],
+  ])(
+    'faz o envio aguardar no limite %s informado pela Meta, sem repetir o POST',
+    async (code, wait) => {
+      http.mockResolvedValue(
+        reply({ error: { code, message: 'rate limit hit' } }, 400),
+      );
+      await expect(
+        transport.sendText({ to: '5511999999999', text: 'Teste' }),
+      ).rejects.toMatchObject({
+        kind: 'RATE_LIMIT',
+        outcome: 'NOT_SENT',
+        providerCode: code,
+        retryAfterSeconds: wait,
+        reasonCode: 'PROVIDER_RATE_LIMIT',
+      });
+      expect(http).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('nao expoe um segredo devolvido ate em campo de diagnostico do provedor', async () => {
     http.mockResolvedValue(
       reply(

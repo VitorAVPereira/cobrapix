@@ -413,10 +413,12 @@ export class OutboundIntentService {
             data: {
               state,
               transmission: uncertain ? 'UNCERTAIN' : 'NOT_SENT',
+              // A wait keeps its own reason (central capacity, provider
+              // limit, control unavailable) so the operator sees why.
               lastErrorCode: uncertain
                 ? 'DELIVERY_UNCERTAIN'
                 : retry
-                  ? 'WAITING_FOR_CHANNEL'
+                  ? (safeError?.reasonCode ?? 'WAITING_FOR_CHANNEL')
                   : (reasonCode ?? 'DISPATCH_REJECTED'),
               nextAttemptAt: new Date(Date.now() + wait * 1000),
               leaseToken: null,
