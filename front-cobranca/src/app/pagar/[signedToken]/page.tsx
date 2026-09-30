@@ -1,7 +1,18 @@
+import type { Metadata } from "next";
 import PaymentPageClient from "./PaymentPageClient";
-import type { PublicPaymentData } from "./PaymentPageClient";
+import { loadPayment } from "./load-payment";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+// The link is personal: never indexed, and the token in the URL is not sent
+// as referrer when the payer opens the boleto on the bank's site.
+export const metadata: Metadata = {
+  title: "Pagamento | Cifra+",
+  robots: { index: false, follow: false, nocache: true, googleBot: { index: false, follow: false } },
+  referrer: "no-referrer",
+};
+
+// Every visit reads the current state: a paid or closed charge must not be
+// rendered from an older copy that still had payment instruments.
+export const dynamic = "force-dynamic";
 
 interface PaymentPageProps {
   params: Promise<{
@@ -9,37 +20,7 @@ interface PaymentPageProps {
   }>;
 }
 
-async function loadPayment(
-  signedToken: string,
-): Promise<{ data: PublicPaymentData | null; error: string | null }> {
-  try {
-    const response = await fetch(
-      `${API_URL}/payments/public/${encodeURIComponent(signedToken)}`,
-      { cache: "no-store" },
-    );
-
-    if (!response.ok) {
-      return {
-        data: null,
-        error: "Link de pagamento invalido, expirado ou indisponivel.",
-      };
-    }
-
-    return {
-      data: (await response.json()) as PublicPaymentData,
-      error: null,
-    };
-  } catch {
-    return {
-      data: null,
-      error: "Nao foi possivel carregar esta cobranca agora.",
-    };
-  }
-}
-
 export default async function PaymentPage({ params }: PaymentPageProps) {
   const { signedToken } = await params;
-  const payment = await loadPayment(signedToken);
-
-  return <PaymentPageClient data={payment.data} error={payment.error} />;
+  return <PaymentPageClient payment={await loadPayment(signedToken)} />;
 }

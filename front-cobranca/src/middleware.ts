@@ -1,4 +1,5 @@
 import { auth } from "@/lib/auth";
+import { isPublicPaymentPath } from "@/lib/public-routes";
 import { NextResponse } from "next/server";
 
 const PLATFORM_ADMIN_ALLOWED_PATHS = [
@@ -19,7 +20,7 @@ function isAllowedPlatformAdminPath(pathname: string): boolean {
   );
 }
 
-export default auth((req) => {
+const protectedRoutes = auth((req) => {
   const pathname = req.nextUrl.pathname;
   const isApiRoute = pathname.startsWith("/api/");
 
@@ -74,6 +75,17 @@ export default auth((req) => {
 
   return NextResponse.next();
 });
+
+// The payment link opens without an account and regardless of any session
+// (another company, admin, expired, first access): it is decided before the
+// session is even read, so none of the dashboard rules can redirect it.
+export default function middleware(
+  ...args: Parameters<typeof protectedRoutes>
+): ReturnType<typeof protectedRoutes> {
+  const [req] = args;
+  if (isPublicPaymentPath(req.nextUrl.pathname)) return NextResponse.next();
+  return protectedRoutes(...args);
+}
 
 export const config = {
   matcher: [
