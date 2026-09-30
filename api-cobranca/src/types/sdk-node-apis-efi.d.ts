@@ -140,7 +140,8 @@ declare module 'sdk-node-apis-efi' {
           };
           email?: string;
           phone_number?: string;
-          address: {
+          // Optional at Efí; sent only when complete.
+          address?: {
             street: string;
             number: string;
             neighborhood: string;
@@ -244,5 +245,15 @@ declare module 'sdk-node-apis-efi' {
     }): Promise<CancelChargeResponse>;
 
     getNotification(params: { token: string }): Promise<NotificationResponse>;
+
+    // Cobranças queries; their bodies are normalized by the caller.
+    detailCharge(params: { id: string | number }): Promise<unknown>;
+
+    listCharges(params: {
+      begin_date: string;
+      end_date: string;
+      charge_type: 'billet' | 'card' | 'carnet' | 'subscription';
+      custom_id?: string;
+    }): Promise<unknown>;
   }
 }
