@@ -79,6 +79,94 @@ describe('parseTemplate', () => {
     });
   });
 
+  it('accepts the "Copy Pix code" payment request button, declared by the provider', () => {
+    const pix = {
+      type: 'PAYMENT_REQUEST',
+      text: 'Copiar código Pix',
+      payment_setting: {
+        type: 'pix_dynamic_code',
+        pix_dynamic_code: {
+          code: '00020101021226700014br.gov.bcb.pix2548exemplo',
+        },
+      },
+    };
+    const components = [
+      {
+        type: 'BODY',
+        text: 'Boa tarde, {{nome_devedor}}. Valor {{valor}}, vence em {{data_vencimento}}.',
+      },
+      {
+        type: 'FOOTER',
+        text: 'Caso já tenha realizado o pagamento, desconsidere!',
+      },
+      {
+        type: 'BUTTONS',
+        buttons: [pix, { type: 'QUICK_REPLY', text: 'Preciso de ajuda' }],
+      },
+    ];
+    expect(
+      parseTemplate(input(components, { parameterFormat: 'NAMED' })),
+    ).toMatchObject({
+      supported: true,
+      template: {
+        variables: ['nome_devedor', 'valor', 'data_vencimento'],
+        paymentButton: null,
+        pixButton: { index: 0, label: 'Copiar código Pix' },
+        quickReplies: ['Preciso de ajuda'],
+      },
+    });
+    // Next to the payment link, in its own position.
+    const payment = { type: 'URL', text: 'Pagar', url: `${BASE}/{{1}}` };
+    expect(
+      parseTemplate(
+        input([approved[0], { type: 'BUTTONS', buttons: [payment, pix] }]),
+      ),
+    ).toMatchObject({
+      supported: true,
+      template: {
+        paymentButton: { index: 0 },
+        pixButton: { index: 1 },
+      },
+    });
+    // Other payment kinds, an undeclared kind or a second Pix button are not guessed.
+    const refused = [
+      [
+        {
+          type: 'PAYMENT_REQUEST',
+          text: 'Copiar código do boleto',
+          payment_setting: {
+            type: 'boleto',
+            boleto: {
+              digitable_line: '03399026944140000002628346101018898510000008848',
+            },
+          },
+        },
+      ],
+      [
+        {
+          type: 'PAYMENT_REQUEST',
+          text: 'Abrir link de pagamento',
+          payment_setting: {
+            type: 'payment_link',
+            payment_link: { uri: 'https://pagamento.test' },
+          },
+        },
+      ],
+      [{ type: 'PAYMENT_REQUEST', text: 'Copiar código Pix' }],
+      [pix, pix],
+    ];
+    for (const buttons of refused) {
+      const parsed = parseTemplate(
+        input([approved[0], { type: 'BUTTONS', buttons }]),
+      );
+      expect(parsed.supported).toBe(false);
+    }
+    const boleto = parseTemplate(
+      input([approved[0], { type: 'BUTTONS', buttons: refused[0] }]),
+    );
+    expect(!boleto.supported && boleto.reason).toMatch(/boleto/);
+  });
+
   it('accepts body only and positional format declared explicitly', () => {
     const parsed = parseTemplate(
       input([{ type: 'BODY', text: 'Aviso sem variáveis.' }], {
@@ -87,7 +175,12 @@ describe('parseTemplate', () => {
     );
     expect(parsed).toMatchObject({
       supported: true,
-      template: { variables: [], footer: null, paymentButton: null },
+      template: {
+        variables: [],
+        footer: null,
+        paymentButton: null,
+        pixButton: null,
+      },
     });
   });
 

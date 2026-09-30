@@ -146,6 +146,27 @@ describe('TemplateContextService', () => {
     expect(phoneChanged.contextFingerprint).not.toBe(first.contextFingerprint);
   });
 
+  it('the Pix button reads the current invoice code; a replaced charge changes the fingerprint', async () => {
+    const { service, invoice } = setup();
+    const pixMapping: TemplateMapping = {
+      body: { '1': { kind: 'SOURCE', source: 'DEBTOR_NAME' } },
+      pixButton: { index: 0, source: 'PIX_COPY_PASTE' },
+    };
+    await expect(
+      service.load({ companyId: 'company-a' }, 'ADMIN_REPLY', pixMapping),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    const context = { companyId: 'company-a', invoiceId: 'invoice-a' };
+    Object.assign(invoice, { efiPixCopiaECola: '000201-cobranca-1' });
+    const first = await service.load(context, 'COLLECTION', pixMapping);
+    expect(first.values).toEqual({
+      DEBTOR_NAME: 'Maria Exemplo',
+      PIX_COPY_PASTE: '000201-cobranca-1',
+    });
+    Object.assign(invoice, { efiPixCopiaECola: '000201-cobranca-2' });
+    const replaced = await service.load(context, 'COLLECTION', pixMapping);
+    expect(replaced.contextFingerprint).not.toBe(first.contextFingerprint);
+  });
+
   it('activation messages use the validated representative of the same company', async () => {
     const { service, prisma } = setup();
     prisma.efiOnboarding.findFirst.mockResolvedValue({

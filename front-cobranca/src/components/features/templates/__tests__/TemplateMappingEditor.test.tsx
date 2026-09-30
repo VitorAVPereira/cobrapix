@@ -238,6 +238,42 @@ describe("TemplateMappingEditor", () => {
     );
   });
 
+  it("binds the Copy Pix code button to the invoice Pix code", async () => {
+    mockApi.getAdminWhatsappTemplate.mockResolvedValue(
+      template({
+        parameterFormat: "NAMED",
+        variables: ["nome_devedor"],
+        content: {
+          body: "Boa tarde, {{nome_devedor}}.",
+          footer: "Caso já tenha realizado o pagamento, desconsidere!",
+          button: null,
+          pixButton: { label: "Copiar código Pix", index: 0 },
+          quickReplies: ["Preciso de ajuda"],
+        },
+      }),
+    );
+    mockApi.saveWhatsappTemplateMapping.mockResolvedValue({ mappingRevision: 1 });
+    renderEditor();
+    expect(
+      await screen.findByText(/Botão “Copiar código Pix”: copia o Pix copia e cola/),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Variável {{nome_devedor}}"), {
+      target: { value: "DEBTOR_NAME" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar variáveis" }));
+    await waitFor(() =>
+      expect(mockApi.saveWhatsappTemplateMapping).toHaveBeenCalledWith(
+        "tpl-1",
+        expect.objectContaining({
+          mapping: {
+            body: { nome_devedor: { kind: "SOURCE", source: "DEBTOR_NAME" } },
+            pixButton: { index: 0, source: "PIX_COPY_PASTE" },
+          },
+        }),
+      ),
+    );
+  });
+
   it("offers no mapping for an unsupported format", async () => {
     mockApi.getAdminWhatsappTemplate.mockResolvedValue(
       template({ supported: false, supportReason: "HEADER_MEDIA", variables: [] }),

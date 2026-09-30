@@ -27,7 +27,7 @@ function acceptedParameter(value: string): boolean {
 
 /**
  * Admin mapping of one parsed revision: every variable bound exactly once to a closed
- * source or a bounded literal, and the payment button bound iff the template has one.
+ * source or a bounded literal, and the payment and Pix buttons bound iff the template has them.
  * No expressions, database paths or URLs are accepted.
  */
 export function validateMapping(
@@ -43,7 +43,7 @@ export function validateMapping(
     return fail('body', 'Mapa inválido.');
   if (parsed.variables.length > TEMPLATE_MAX_BODY_PARAMETERS)
     return fail('body', 'Quantidade de variáveis acima do suportado.');
-  const allowedKeys = new Set(['body', 'paymentButton']);
+  const allowedKeys = new Set(['body', 'paymentButton', 'pixButton']);
   const extra = Object.keys(mapping).find((key) => !allowedKeys.has(key));
   if (extra) return fail(extra, 'Campo não suportado.');
   const variables = new Set(parsed.variables);
@@ -86,17 +86,35 @@ export function validateMapping(
       return fail('paymentButton', 'Botão exige o link desta cobrança.');
   } else if (button !== undefined)
     return fail('paymentButton', 'O template aprovado não tem botão.');
+  const pix = mapping.pixButton;
+  if (parsed.pixButton) {
+    if (
+      !isRecord(pix) ||
+      pix.index !== parsed.pixButton.index ||
+      pix.source !== 'PIX_COPY_PASTE' ||
+      Object.keys(pix).length !== 2
+    )
+      return fail(
+        'pixButton',
+        'Botão exige o Pix copia e cola desta cobrança.',
+      );
+  } else if (pix !== undefined)
+    return fail(
+      'pixButton',
+      'O template aprovado não tem botão de código Pix.',
+    );
   return { ok: true };
 }
 
 /** Sources a mapping reads; the context loader fetches only these. */
 export function mappingSources(mapping: TemplateMapping): TemplateSource[] {
   return [
-    ...new Set(
-      Object.values(mapping.body).flatMap((binding) =>
+    ...new Set([
+      ...Object.values(mapping.body).flatMap((binding) =>
         binding.kind === 'SOURCE' ? [binding.source] : [],
       ),
-    ),
+      ...(mapping.pixButton ? [mapping.pixButton.source] : []),
+    ]),
   ];
 }
 
@@ -138,6 +156,16 @@ export function renderTemplate(
       return { ok: false, code: 'UNSUPPORTED', field: 'PAYMENT_URL' };
     paymentButtonSuffix = suffix;
   }
+  let pixButtonCode: string | undefined;
+  if (parsed.pixButton) {
+    // Only the code of this invoice; without it the send waits, never goes out empty.
+    const code = values.PIX_COPY_PASTE;
+    if (code === undefined || !code.trim())
+      return { ok: false, code: 'VALUE_MISSING', field: 'PIX_COPY_PASTE' };
+    if (!acceptedParameter(code))
+      return { ok: false, code: 'UNSUPPORTED', field: 'PIX_COPY_PASTE' };
+    pixButtonCode = code;
+  }
   const body = parsed.body.replace(
     /\{\{([a-z0-9_]+)\}\}/g,
     (match: string, variable: string) => byVariable.get(variable) ?? match,
@@ -152,6 +180,7 @@ export function renderTemplate(
       ? { bodyParameterNames: [...parsed.variables] }
       : {}),
     ...(paymentButtonSuffix ? { paymentButtonSuffix } : {}),
+    ...(pixButtonCode ? { pixButtonCode } : {}),
   };
 }
 

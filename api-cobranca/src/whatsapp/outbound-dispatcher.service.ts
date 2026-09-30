@@ -139,6 +139,8 @@ export interface DispatchInput {
   paymentButtonFromInvoice?: boolean;
   /** Position of the payment button among the template's buttons (absent: 0). */
   paymentButtonIndex?: number;
+  /** "Copy Pix code" button: its position and the invoice's code rendered at preparation. */
+  pixButton?: { index: number; code: string };
   /** Template quick-reply button indexes that receive server-issued opaque references. */
   quickReplyButtons?: number[];
 }
@@ -577,6 +579,25 @@ export class OutboundDispatcherService {
         sub_type: 'url',
         index: String(input.paymentButtonIndex ?? 0),
         parameters: [{ type: 'text', text: urlSuffix }],
+      });
+    if (input.pixButton)
+      components.push({
+        type: 'button',
+        sub_type: 'payment_request',
+        index: String(input.pixButton.index),
+        parameters: [
+          {
+            type: 'action',
+            action: {
+              payment_request: {
+                payment_setting: {
+                  type: 'pix_dynamic_code',
+                  pix_dynamic_code: { code: input.pixButton.code },
+                },
+              },
+            },
+          },
+        ],
       });
     for (const index of input.quickReplyButtons ?? []) {
       // Persisted before transmission, so an immediate tap already resolves.
