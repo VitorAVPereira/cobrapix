@@ -10,9 +10,16 @@ import {
 import { PaymentCharge } from '@prisma/client';
 import {
   EfiIssuanceContext,
+  EfiIssuedPayment,
   EfiPaymentResult,
   EfiService,
 } from './efi.service';
+import {
+  classifyEfiIssuanceError,
+  IssuanceFailure,
+  issuanceFailureOf,
+  toIssuanceError,
+} from './efi-issuance-error';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentChargeService } from './payment-charge.service';
 import { FinancialEligibilityService } from '../financial-activation/financial-eligibility.service';
@@ -126,24 +133,69 @@ export class PaymentService {
     );
     const context = this.buildIssuanceContext(charge);
     await this.charges.transition(charge.id, companyId, 'PENDING', {});
+    return this.submitIssuance(
+      this.charges,
+      charge.id,
+      invoiceId,
+      companyId,
+      billingType,
+      context,
+    );
+  }
+
+  // One provider submission per reservation. A proven refusal releases the
+  // reservation (FAILED) with its diagnosis; anything uncertain keeps it
+  // PENDING for reconciliation. Never retried here.
+  private async submitIssuance(
+    charges: PaymentChargeService,
+    chargeId: string,
+    invoiceId: string,
+    companyId: string,
+    billingType: BillingType,
+    context: EfiIssuanceContext,
+  ): Promise<EfiPaymentResult> {
+    let issued: EfiIssuedPayment;
     try {
-      const result = await this.efiService.createPayment(
+      issued = await this.efiService.createPayment(
         invoiceId,
         companyId,
         billingType,
         context,
       );
-      await this.charges.markIssued(charge.id, companyId, result);
-      return result;
     } catch (error: unknown) {
-      if (
-        error instanceof HttpException &&
-        error.getStatus() < 500 &&
-        !this.isUncertainSubmission(error)
-      ) {
-        await this.charges.markFailed(charge.id, companyId);
-      }
+      await this.recordFailure(
+        charges,
+        chargeId,
+        companyId,
+        issuanceFailureOf(error) ??
+          classifyEfiIssuanceError(error, 'PROVIDER_REQUEST'),
+      );
       throw error;
+    }
+    try {
+      await charges.confirmIssuance(companyId, chargeId, issued.confirmation);
+    } catch (error: unknown) {
+      // Efí already created the charge; its reference stays for reconciliation.
+      const failed = toIssuanceError(error, 'LOCAL_PERSISTENCE');
+      await this.recordFailure(charges, chargeId, companyId, failed.failure);
+      throw failed;
+    }
+    return issued.result;
+  }
+
+  // The diagnosis is best effort: the original outcome is what the caller sees.
+  private async recordFailure(
+    charges: PaymentChargeService,
+    chargeId: string,
+    companyId: string,
+    failure: IssuanceFailure,
+  ): Promise<void> {
+    try {
+      await charges.recordIssuanceFailure(chargeId, companyId, failure);
+    } catch {
+      this.logger.error(
+        `Diagnóstico da emissão não registrado (${failure.kind} ${failure.code}).`,
+      );
     }
   }
 
@@ -398,24 +450,14 @@ export class PaymentService {
     await this.charges.transition(replacement.id, companyId, 'PENDING', {
       gatewayStatusRaw: 'SUBMITTING',
     });
-    try {
-      const result = await this.efiService.createPayment(
-        invoiceId,
-        companyId,
-        previous.billingMethod,
-        this.buildIssuanceContext(replacement),
-      );
-      await this.charges.markIssued(replacement.id, companyId, result);
-      return result;
-    } catch (error: unknown) {
-      if (
-        error instanceof HttpException &&
-        error.getStatus() < 500 &&
-        !this.isUncertainSubmission(error)
-      )
-        await this.charges.markFailed(replacement.id, companyId);
-      throw error;
-    }
+    return this.submitIssuance(
+      this.charges,
+      replacement.id,
+      invoiceId,
+      companyId,
+      previous.billingMethod,
+      this.buildIssuanceContext(replacement),
+    );
   }
 
   private buildIssuanceContext(charge: PaymentCharge): EfiIssuanceContext {
@@ -486,13 +528,6 @@ export class PaymentService {
     return typeof value === 'object' && value !== null && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : {};
-  }
-
-  private isUncertainSubmission(error: unknown): boolean {
-    if (!(error instanceof HttpException)) return false;
-    return (
-      this.asRecord(error.getResponse()).code === 'EFI_SUBMISSION_UNCERTAIN'
-    );
   }
 
   private async ensureInvoiceCanGeneratePayment(

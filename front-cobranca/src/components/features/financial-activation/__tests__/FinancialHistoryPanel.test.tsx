@@ -22,3 +22,20 @@ it("lists versions and redacted events of the requested company", async () => {
   expect(screen.getByText("credentialVersion: 2")).toBeInTheDocument();
   expect(mockApi.getFinancialHistory).toHaveBeenCalledWith("company-1");
 });
+
+it("explains the Bolix acknowledgement in words and keeps the technical detail available", async () => {
+  mockApi.getFinancialHistory.mockResolvedValue({
+    versions: [],
+    events: [
+      { id: "e1", action: "FINANCIAL_ACTIVATION_ACTIVATED", entityType: "FinancialProfileVersion", actor: "Admin", createdAt: "2026-09-29T00:00:00Z", details: { version: 1, credentialVersion: 1, unverifiedStepsAcknowledged: ["BOLIX_ISSUANCE", "BOLIX_SPLIT"] } },
+    ],
+  });
+  render(<FinancialHistoryPanel companyId="company-1" />);
+  expect(
+    await screen.findByText(
+      "Você confirmou que emissão e split do Bolix ainda precisam de comprovação em uma operação real",
+    ),
+  ).toBeInTheDocument();
+  expect(screen.getByText("Detalhe técnico")).toBeInTheDocument();
+  expect(screen.getByText(/unverifiedStepsAcknowledged: \["BOLIX_ISSUANCE","BOLIX_SPLIT"\]/)).toBeInTheDocument();
+});

@@ -22,6 +22,23 @@ function when(value: string | null): string {
   return value ? new Date(value).toLocaleString("pt-BR") : "—";
 }
 
+const UNVERIFIED_STEP_LABELS: Record<string, string> = {
+  BOLIX_ISSUANCE: "emissão",
+  BOLIX_SPLIT: "split",
+};
+
+// The acknowledgement recorded at activation is not an error nor proof that
+// the step works: it says what still needs a real operation to be proven.
+function acknowledgement(details: unknown): string | null {
+  if (!details || typeof details !== "object") return null;
+  const steps = (details as Record<string, unknown>).unverifiedStepsAcknowledged;
+  if (!Array.isArray(steps) || steps.length === 0) return null;
+  const names = steps.map((step) => UNVERIFIED_STEP_LABELS[String(step)] ?? String(step));
+  if (names.length === 1)
+    return `Você confirmou que ${names[0] === "split" ? "o split" : `a ${names[0]}`} do Bolix ainda precisa de comprovação em uma operação real`;
+  return `Você confirmou que ${names.slice(0, -1).join(", ")} e ${names.at(-1)} do Bolix ainda precisam de comprovação em uma operação real`;
+}
+
 // Only fields the server already redacted; rendered as plain text.
 function describe(details: unknown): string {
   if (!details || typeof details !== "object") return "";
@@ -130,10 +147,24 @@ export function FinancialHistoryPanel({
                   · {when(event.createdAt)}
                   {event.actor ? ` · ${event.actor}` : ""}
                 </span>
-                {describe(event.details) && (
-                  <span className="block text-xs text-slate-500">
-                    {describe(event.details)}
-                  </span>
+                {acknowledgement(event.details) ? (
+                  <>
+                    <span className="block text-xs text-slate-700">
+                      {acknowledgement(event.details)}
+                    </span>
+                    <details className="text-xs text-slate-500">
+                      <summary className="cursor-pointer">
+                        Detalhe técnico
+                      </summary>
+                      {describe(event.details)}
+                    </details>
+                  </>
+                ) : (
+                  describe(event.details) && (
+                    <span className="block text-xs text-slate-500">
+                      {describe(event.details)}
+                    </span>
+                  )
                 )}
               </li>
             ))}
