@@ -148,9 +148,13 @@ O catálogo é importado pelo Datafy, identificado por WABA + ID do provedor:
   `parameter_format` aprovado) são aceitos; nos nomeados cada parâmetro é enviado com
   `parameter_name`. Outros formatos aparecem como não suportados.
 - **Botões**: no máximo um botão de URL, que precisa apontar para o link de pagamento
-  (`<FRONTEND_URL>/pagar/{{1}}`), em qualquer posição, e respostas rápidas estáticas,
-  enviadas como aprovadas. Telefone, copiar código e outros tipos não são suportados.
-  Cada gravação é uma revisão imutável vinculada à revisão do conteúdo.
+  (`<FRONTEND_URL>/pagar/{{1}}`), em qualquer posição; no máximo um botão de
+  pagamento da Meta (`PAYMENT_REQUEST`) do tipo `pix_dynamic_code` ("Copiar código
+  Pix"); e respostas rápidas estáticas, enviadas como aprovadas. O código Pix aprovado
+  na Meta é só exemplo: cada envio leva o Pix copia e cola da própria cobrança
+  (`sub_type: payment_request`), e cobrança sem Pix fica pendente (`VALUE_MISSING`).
+  Botões de pagamento de boleto ou link, telefone, cupom e outros tipos não são
+  suportados. Cada gravação é uma revisão imutável vinculada à revisão do conteúdo.
 - **Liberação**: novo template não é liberado para ninguém. O admin libera por
   empresa e define o padrão de cada finalidade (emissão, lembretes, atrasos, avisos
   de ativação). A empresa só vê e escolhe o que foi liberado.

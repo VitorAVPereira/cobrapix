@@ -22,6 +22,7 @@ export type RenderedSend = {
   body: string;
   bodyParameters: string[];
   bodyParameterNames?: string[];
+  pixButtonCode?: string;
 };
 
 export type RenderOutcome =
@@ -72,6 +73,9 @@ export async function renderSend(
     bodyParameters: rendered.bodyParameters,
     ...(rendered.bodyParameterNames
       ? { bodyParameterNames: rendered.bodyParameterNames }
+      : {}),
+    ...(rendered.pixButtonCode
+      ? { pixButtonCode: rendered.pixButtonCode }
       : {}),
   };
 }
@@ -154,6 +158,14 @@ export async function reserveTemplateIntent(
       ? {
           paymentButtonFromInvoice: true,
           paymentButtonIndex: template.parsed.paymentButton.index,
+        }
+      : {}),
+    ...(template.parsed.pixButton && rendered.pixButtonCode
+      ? {
+          pixButton: {
+            index: template.parsed.pixButton.index,
+            code: rendered.pixButtonCode,
+          },
         }
       : {}),
     ...(adminReply ? { origin: 'ADMIN_REPLY' as const } : {}),

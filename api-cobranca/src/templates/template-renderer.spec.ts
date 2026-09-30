@@ -3,6 +3,7 @@ import type { ParsedTemplate, TemplateMapping } from './template-contracts';
 import {
   formatAmount,
   formatCivilDate,
+  mappingSources,
   renderTemplate,
   validateMapping,
 } from './template-renderer';
@@ -129,6 +130,79 @@ describe('renderTemplate', () => {
           url,
         ),
       ).toMatchObject({ ok: false, code: 'UNSUPPORTED', field: 'PAYMENT_URL' });
+  });
+
+  it('fills the Pix button with the invoice code only, never empty', () => {
+    const result = parseTemplate({
+      parameterFormat: 'NAMED',
+      components: [
+        { type: 'BODY', text: 'Olá {{nome_devedor}}' },
+        {
+          type: 'BUTTONS',
+          buttons: [
+            {
+              type: 'PAYMENT_REQUEST',
+              text: 'Copiar código Pix',
+              payment_setting: {
+                type: 'pix_dynamic_code',
+                pix_dynamic_code: { code: '000201exemplo' },
+              },
+            },
+          ],
+        },
+      ],
+      language: 'pt_BR',
+      category: 'UTILITY',
+      paymentBaseUrl: BASE,
+    });
+    if (!result.supported) throw new Error(result.reason);
+    const template = result.template;
+    const pixMapping: TemplateMapping = {
+      body: { nome_devedor: { kind: 'SOURCE', source: 'DEBTOR_NAME' } },
+      pixButton: { index: 0, source: 'PIX_COPY_PASTE' },
+    };
+    expect(mappingSources(pixMapping)).toEqual([
+      'DEBTOR_NAME',
+      'PIX_COPY_PASTE',
+    ]);
+    expect(
+      renderTemplate(template, pixMapping, {
+        DEBTOR_NAME: 'Maria',
+        PIX_COPY_PASTE: '00020101021226860014br.gov.bcb.pix2564cobranca',
+      }),
+    ).toEqual({
+      ok: true,
+      body: 'Olá Maria',
+      bodyParameters: ['Maria'],
+      bodyParameterNames: ['nome_devedor'],
+      pixButtonCode: '00020101021226860014br.gov.bcb.pix2564cobranca',
+    });
+    // A boleto-only invoice has no Pix code: the send waits instead of going out.
+    expect(
+      renderTemplate(template, pixMapping, { DEBTOR_NAME: 'Maria' }),
+    ).toEqual({ ok: false, code: 'VALUE_MISSING', field: 'PIX_COPY_PASTE' });
+    expect(
+      renderTemplate(template, pixMapping, {
+        DEBTOR_NAME: 'Maria',
+        PIX_COPY_PASTE: '000201\n6304ABCD',
+      }),
+    ).toEqual({ ok: false, code: 'UNSUPPORTED', field: 'PIX_COPY_PASTE' });
+    // The binding is required, fixed to the invoice code and at the approved position.
+    for (const pixButton of [
+      undefined,
+      { index: 1, source: 'PIX_COPY_PASTE' },
+      { index: 0, source: 'BOLETO_LINE' },
+      { index: 0, source: 'PIX_COPY_PASTE', code: 'fixo' },
+    ])
+      expect(
+        validateMapping(template, { ...pixMapping, pixButton }),
+      ).toMatchObject({ ok: false, field: 'pixButton' });
+    expect(
+      validateMapping(parsed('Olá {{1}}, valor {{2}}.'), {
+        ...mapping,
+        pixButton: { index: 0, source: 'PIX_COPY_PASTE' },
+      }),
+    ).toMatchObject({ ok: false, field: 'pixButton' });
   });
 
   it('rejects values the provider does not accept instead of rewriting them', () => {

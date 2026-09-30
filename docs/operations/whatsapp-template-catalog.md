@@ -222,6 +222,9 @@ que o template real é interpretado corretamente; a importação e a prévia sim
    Templates com variáveis numeradas (`{{1}}`) ou com nome (`{{nome_devedor}}`) são
    aceitos; um template importado antes desta versão que aparece como "Formato
    NAMED não suportado" é reclassificado ao clicar em **Sincronizar catálogo**.
+   O mesmo vale para o botão **Copiar código Pix** (tipo `PAYMENT_REQUEST`): ele
+   passa a ser aceito e envia o Pix copia e cola da cobrança; cobrança sem Pix fica
+   em **Envios pendentes** como "Faltam dados".
 2. Em **Disponibilidade por empresa**, liberar os templates para as empresas de
    teste e definir os padrões por finalidade (inclusive `Aviso de ativação` e
    `Lembrete de ativação`, se usados).

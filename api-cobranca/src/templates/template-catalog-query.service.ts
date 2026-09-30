@@ -25,6 +25,8 @@ export interface TemplateContentView {
   footer: string | null;
   /** `index` is the payment button's position among the template's buttons. */
   button: { label: string; url: string; index: number } | null;
+  /** "Copy Pix code" button; the code sent is always the invoice's own. */
+  pixButton: { label: string; index: number } | null;
   /** Static quick reply buttons, shown as approved. */
   quickReplies: string[];
 }
@@ -338,6 +340,9 @@ export class TemplateCatalogQueryService {
               index: parsed.paymentButton.index,
             }
           : null,
+        pixButton: parsed.pixButton
+          ? { label: parsed.pixButton.label, index: parsed.pixButton.index }
+          : null,
         quickReplies: parsed.quickReplies,
       },
       defaultFor: defaults.map((row) => row.purpose),
@@ -396,6 +401,12 @@ export class TemplateCatalogQueryService {
                   index: parsed.template.paymentButton.index,
                 }
               : null,
+            pixButton: parsed.template.pixButton
+              ? {
+                  label: parsed.template.pixButton.label,
+                  index: parsed.template.pixButton.index,
+                }
+              : null,
             quickReplies: parsed.template.quickReplies,
           }
         : rawContent(row.metaComponents),
@@ -419,6 +430,7 @@ function rawContent(components: Prisma.JsonValue): TemplateContentView {
     body: text('BODY') ?? '',
     footer: text('FOOTER'),
     button: null,
+    pixButton: null,
     quickReplies: [],
   };
 }

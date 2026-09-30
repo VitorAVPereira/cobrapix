@@ -456,4 +456,113 @@ describe('Template catalog flow with two companies (HTTP)', () => {
       },
     });
   });
+
+  it('a "Copy Pix code" template carries the invoice Pix code; without one the send waits', async () => {
+    const list = await request(http)
+      .get('/admin/whatsapp-templates')
+      .set(auth(tokens.admin));
+    const pix = (
+      list.body as {
+        items: Array<{
+          id: string;
+          name: string;
+          providerRevision: number;
+          mappingRevision: number;
+        }>;
+      }
+    ).items.find((item) => item.name === 'emissao_pix')!;
+    expect(pix).toMatchObject({
+      supported: true,
+      supportReason: null,
+      content: {
+        button: null,
+        pixButton: { label: 'Copiar código Pix', index: 0 },
+        quickReplies: ['Preciso de ajuda'],
+      },
+    });
+    const body = {
+      nome_devedor: { kind: 'SOURCE', source: 'DEBTOR_NAME' },
+      valor: { kind: 'SOURCE', source: 'AMOUNT' },
+      data_vencimento: { kind: 'SOURCE', source: 'DUE_DATE' },
+    };
+    const save = (mapping: Record<string, unknown>) =>
+      request(http)
+        .put(`/admin/whatsapp-templates/${pix.id}/mapping`)
+        .set(auth(tokens.admin))
+        .send({
+          expectedProviderRevision: pix.providerRevision,
+          expectedMappingRevision: pix.mappingRevision,
+          mapping,
+        });
+    // The button is bound to the invoice's own code, never left implicit.
+    expect((await save({ body })).status).toBe(400);
+    await save({
+      body,
+      pixButton: { index: 0, source: 'PIX_COPY_PASTE' },
+    }).expect(200);
+    await setGrant(app, tokens.admin, ids.a, pix.id, true);
+
+    const invoice = (efiPixCopiaECola: string | null) =>
+      prisma.invoice.create({
+        data: {
+          companyId: ids.a,
+          debtorId: ids.debtorA,
+          originalAmount: 150,
+          dueDate: new Date('2026-10-05T12:00:00.000Z'),
+          status: 'PENDING',
+          efiPixCopiaECola,
+        },
+      });
+    const code = '00020101021226860014br.gov.bcb.pix2564cobranca-e2e6304ABCD';
+    const withPix = (await invoice(code)).id;
+    const boletoOnly = (await invoice(null)).id;
+    const prepare = (invoiceId: string) =>
+      app.get(TemplateSendPreparerService, { strict: false }).prepare({
+        logicalKey: collectionLogicalKey({ companyId: ids.a, invoiceId }),
+        origin: 'COLLECTION',
+        context: { companyId: ids.a, invoiceId, debtorId: ids.debtorA },
+        selection: { mode: 'EXPLICIT', templateId: pix.id },
+      });
+    await expect(prepare(boletoOnly)).resolves.toMatchObject({
+      status: 'BLOCKED',
+      code: 'VALUE_MISSING',
+    });
+    const prepared = await prepare(withPix);
+    expect(prepared.status).toBe('QUEUED');
+    const before = provider.sends.length;
+    await app.get(OutboundDispatcherService).recover();
+    await untilState(
+      prisma,
+      (prepared as { intentId: string }).intentId,
+      'ACCEPTED',
+    );
+    expect(provider.sends.length - before).toBe(1);
+    expect(provider.sends.at(-1)).toMatchObject({
+      type: 'template',
+      template: {
+        name: 'emissao_pix',
+        components: [
+          { type: 'body' },
+          {
+            type: 'button',
+            sub_type: 'payment_request',
+            index: '0',
+            parameters: [
+              {
+                type: 'action',
+                action: {
+                  payment_request: {
+                    payment_setting: {
+                      type: 'pix_dynamic_code',
+                      pix_dynamic_code: { code },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
 });

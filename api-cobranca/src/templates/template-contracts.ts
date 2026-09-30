@@ -74,6 +74,8 @@ export type TemplateMapping = {
   body: Record<string, TemplateBinding>;
   /** `index` is the payment button's position among the template's buttons. */
   paymentButton?: { index: number; source: 'PAYMENT_URL_SUFFIX' };
+  /** "Copy Pix code" button: always the Pix copy-paste code of the invoice sent. */
+  pixButton?: { index: number; source: 'PIX_COPY_PASTE' };
 };
 
 export type TemplateSnapshot = {
@@ -107,6 +109,8 @@ export type ParsedTemplate = {
   variables: string[];
   footer: string | null;
   paymentButton: { index: number; label: string; url: string } | null;
+  /** Meta payment request button with a Pix code; the approved code is only an example. */
+  pixButton: { index: number; label: string } | null;
   /** Static quick reply buttons: sent as approved, never parameterized. */
   quickReplies: string[];
   fingerprint: string;
@@ -138,6 +142,8 @@ export type RenderResult =
       /** Named templates only: the name of each body parameter, same order. */
       bodyParameterNames?: string[];
       paymentButtonSuffix?: string;
+      /** Pix copy-paste code the "Copy Pix code" button carries. */
+      pixButtonCode?: string;
     }
   | { ok: false; code: 'VALUE_MISSING' | 'UNSUPPORTED'; field: string };
 

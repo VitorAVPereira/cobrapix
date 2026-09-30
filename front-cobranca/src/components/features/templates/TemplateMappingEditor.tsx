@@ -105,6 +105,14 @@ export function TemplateMappingEditor({
           },
         }
       : {}),
+    ...(template.content.pixButton
+      ? {
+          pixButton: {
+            index: template.content.pixButton.index,
+            source: "PIX_COPY_PASTE",
+          },
+        }
+      : {}),
   });
 
   function change(
@@ -263,6 +271,12 @@ export function TemplateMappingEditor({
             <p className="text-sm text-slate-600">
               Botão “{template.content.button.label}”: completado com o link de
               pagamento da cobrança enviada.
+            </p>
+          )}
+          {template.content.pixButton && (
+            <p className="text-sm text-slate-600">
+              Botão “{template.content.pixButton.label}”: copia o Pix copia e
+              cola da cobrança enviada. Cobrança sem Pix fica pendente.
             </p>
           )}
           {template.content.quickReplies?.length ? (
