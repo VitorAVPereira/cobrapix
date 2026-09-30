@@ -3,6 +3,7 @@ import { PaymentService } from './payment.service';
 import { EfiService } from './efi.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentChargeService } from './payment-charge.service';
+import { toIssuanceError } from './efi-issuance-error';
 
 describe('PaymentService billing method restrictions', () => {
   afterEach(() => {
@@ -94,9 +95,17 @@ describe('PaymentService billing method restrictions', () => {
         }),
       },
     } as unknown as PrismaService;
-    const efiCreatePayment = jest
-      .fn()
-      .mockResolvedValue({ gatewayId: 'gateway-1' });
+    const confirmation = {
+      source: 'CREATION',
+      billingMethod: 'PIX',
+      gatewayId: 'gateway-1',
+      paymentLink: '',
+      expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+    };
+    const efiCreatePayment = jest.fn().mockResolvedValue({
+      result: { gatewayId: 'gateway-1' },
+      confirmation,
+    });
     const efiService = {
       assertIssuable: jest
         .fn()
@@ -110,20 +119,130 @@ describe('PaymentService billing method restrictions', () => {
       accountMode,
       feeSnapshot: { platformFee: { kind: 'PERCENTAGE', basisPoints: 250 } },
     });
+    const confirmIssuance = jest.fn().mockResolvedValue('ACTIVE');
+    const recordIssuanceFailure = jest.fn().mockResolvedValue('FAILED');
     const charges = {
       findReusable: jest.fn().mockResolvedValue(null),
       createDraft,
       transition: jest.fn().mockResolvedValue(undefined),
-      markIssued: jest.fn().mockResolvedValue(undefined),
-      markFailed: jest.fn().mockResolvedValue(undefined),
+      confirmIssuance,
+      recordIssuanceFailure,
     } as unknown as PaymentChargeService;
     return {
       financial,
+      confirmation,
       createDraft,
       efiCreatePayment,
+      confirmIssuance,
+      recordIssuanceFailure,
       service: new PaymentService(efiService, prisma, charges),
     };
   }
+
+  it('confirms the issued charge and returns its instruments', async () => {
+    const { service, confirmation, confirmIssuance, recordIssuanceFailure } =
+      issuanceFixture('identity-1');
+    await expect(
+      service.createPayment('invoice-1', 'company-1', 'PIX'),
+    ).resolves.toEqual({ gatewayId: 'gateway-1' });
+    expect(confirmIssuance).toHaveBeenCalledWith(
+      'company-1',
+      'charge-1',
+      confirmation,
+    );
+    expect(recordIssuanceFailure).not.toHaveBeenCalled();
+  });
+
+  it('releases the reservation when Efí proves it refused the issuance', async () => {
+    const {
+      service,
+      efiCreatePayment,
+      recordIssuanceFailure,
+      confirmIssuance,
+    } = issuanceFixture('identity-1');
+    const refusal = toIssuanceError(
+      {
+        code: 3500034,
+        error: 'validation_error',
+        error_description: {
+          property: '/payment/banking_billet/customer/phone_number',
+        },
+      },
+      'PROVIDER_REQUEST',
+    );
+    efiCreatePayment.mockRejectedValue(refusal);
+    await expect(
+      service.createPayment('invoice-1', 'company-1', 'BOLIX'),
+    ).rejects.toMatchObject({
+      status: 422,
+      response: { code: 'EFI_ISSUANCE_REJECTED' },
+    });
+    expect(recordIssuanceFailure).toHaveBeenCalledWith(
+      'charge-1',
+      'company-1',
+      expect.objectContaining({
+        kind: 'REJECTED',
+        code: 'EFI_VALIDATION_REJECTED',
+      }),
+    );
+    expect(confirmIssuance).not.toHaveBeenCalled();
+  });
+
+  it('keeps an ambiguous submission reserved and never retries it', async () => {
+    const { service, efiCreatePayment, recordIssuanceFailure } =
+      issuanceFixture('identity-1');
+    efiCreatePayment.mockRejectedValue(
+      toIssuanceError(new Error('socket hang up'), 'PROVIDER_REQUEST'),
+    );
+    await expect(
+      service.createPayment('invoice-1', 'company-1', 'BOLIX'),
+    ).rejects.toMatchObject({
+      response: { code: 'EFI_SUBMISSION_UNCERTAIN' },
+    });
+    expect(efiCreatePayment).toHaveBeenCalledTimes(1);
+    expect(recordIssuanceFailure).toHaveBeenCalledWith(
+      'charge-1',
+      'company-1',
+      expect.objectContaining({ kind: 'UNCERTAIN' }),
+    );
+  });
+
+  it('keeps the issuance uncertain when its local confirmation fails', async () => {
+    const { service, confirmIssuance, recordIssuanceFailure } =
+      issuanceFixture('identity-1');
+    confirmIssuance.mockRejectedValue(new Error('deadlock'));
+    await expect(
+      service.createPayment('invoice-1', 'company-1', 'PIX'),
+    ).rejects.toMatchObject({
+      status: 502,
+      response: {
+        code: 'EFI_SUBMISSION_UNCERTAIN',
+        reasonCode: 'LOCAL_PERSISTENCE_FAILED',
+      },
+    });
+    expect(recordIssuanceFailure).toHaveBeenCalledWith(
+      'charge-1',
+      'company-1',
+      expect.objectContaining({
+        kind: 'UNCERTAIN',
+        stage: 'LOCAL_PERSISTENCE',
+      }),
+    );
+  });
+
+  it('returns the original outcome even if its diagnosis cannot be stored', async () => {
+    const { service, efiCreatePayment, recordIssuanceFailure } =
+      issuanceFixture('identity-1');
+    efiCreatePayment.mockRejectedValue(
+      toIssuanceError(new Error('socket hang up'), 'PROVIDER_REQUEST'),
+    );
+    recordIssuanceFailure.mockRejectedValue(new Error('db down'));
+    await expect(
+      service.createPayment('invoice-1', 'company-1', 'BOLIX'),
+    ).rejects.toMatchObject({
+      response: { code: 'EFI_SUBMISSION_UNCERTAIN' },
+    });
+  });
 
   it('reserves the charge under the resolved profile and issues on its account', async () => {
     const { service, financial, createDraft, efiCreatePayment } =

@@ -16,6 +16,39 @@ import {
   SettlementEvidence,
   syncSettlement,
 } from '../settlements/settlement-ledger';
+import { IssuanceFailure, issuanceFailureDetails } from './efi-issuance-error';
+
+// Instruments of an issued charge, from the creation response or recovered
+// from the provider detail during reconciliation.
+export interface IssuanceConfirmation {
+  source: 'CREATION' | 'RECONCILIATION';
+  billingMethod: 'PIX' | 'BOLETO' | 'BOLIX';
+  gatewayId: string;
+  txid?: string;
+  locId?: string;
+  providerChargeId?: string;
+  pixCopyPaste?: string;
+  boletoCode?: string;
+  boletoLink?: string;
+  boletoPdf?: string;
+  paymentLink: string;
+  expiresAt: Date;
+  splitConfigId?: string;
+  providerStatus?: string;
+  discountApplied?: string | null;
+}
+
+// Diagnosis of a reconciliation that did not change the charge, or that
+// proved the provider never created it.
+export interface ReconciliationOutcome {
+  reasonCode: string;
+  providerStatus?: string | null;
+  // Only from DRAFT/PENDING: the provider proved the charge does not exist.
+  fail?: boolean;
+  gatewayStatusRaw?: string;
+}
+
+const OPEN_ISSUANCE: PaymentChargeStatus[] = ['DRAFT', 'PENDING'];
 
 // `distinctPayment`: the reference identifies one payment (Pix endToEndId),
 // so another reference on a paid charge is a second payment.
@@ -224,6 +257,306 @@ export class PaymentChargeService {
 
   async markFailed(chargeId: string, companyId: string): Promise<void> {
     await this.transition(chargeId, companyId, 'FAILED', {});
+  }
+
+  // Charge ACTIVE, invoice instruments and history in one transaction, for a
+  // new issuance and for one recovered by reconciliation. A charge already
+  // settled or closed (e.g. by a webhook) is never reopened.
+  async confirmIssuance(
+    companyId: string,
+    chargeId: string,
+    confirmation: IssuanceConfirmation,
+  ): Promise<'ACTIVE' | 'ALREADY_FINALIZED'> {
+    const identity = await this.prisma.paymentCharge.findFirst({
+      where: { id: chargeId, companyId },
+      select: { invoiceId: true },
+    });
+    if (!identity) throw new HttpException('Cobrança não encontrada.', 404);
+    return this.prisma.$transaction(
+      async (tx): Promise<'ACTIVE' | 'ALREADY_FINALIZED'> => {
+        await this.lockIssuance(tx, identity.invoiceId, chargeId, companyId);
+        const current = await tx.paymentCharge.findFirst({
+          where: { id: chargeId, companyId },
+        });
+        if (!current) throw new HttpException('Cobrança não encontrada.', 404);
+        if (
+          (current.efiChargeId &&
+            confirmation.providerChargeId &&
+            current.efiChargeId !== confirmation.providerChargeId) ||
+          (current.efiTxid &&
+            confirmation.txid &&
+            current.efiTxid !== confirmation.txid) ||
+          current.billingMethod !== confirmation.billingMethod
+        )
+          throw new HttpException(
+            {
+              code: 'PROVIDER_REFERENCE_MISMATCH',
+              message: 'A emissão confirmada não corresponde a esta cobrança.',
+            },
+            409,
+          );
+        if (current.status === 'ACTIVE') return 'ACTIVE';
+        if (!OPEN_ISSUANCE.includes(current.status)) return 'ALREADY_FINALIZED';
+        const issuedAt = current.issuedAt ?? new Date();
+        await tx.paymentCharge.updateMany({
+          where: { id: chargeId, companyId, status: current.status },
+          data: {
+            status: 'ACTIVE',
+            gatewayId: confirmation.gatewayId,
+            efiTxid: confirmation.txid ?? current.efiTxid,
+            efiChargeId: confirmation.providerChargeId ?? current.efiChargeId,
+            efiLocId: confirmation.locId ?? current.efiLocId,
+            pixPayload: confirmation.pixCopyPaste,
+            boletoLine: confirmation.boletoCode,
+            paymentUrl: confirmation.paymentLink,
+            splitConfigId: confirmation.splitConfigId ?? current.splitConfigId,
+            expiresAt: confirmation.expiresAt,
+            issuedAt,
+          },
+        });
+        await tx.paymentChargeStatusHistory.create({
+          data: {
+            paymentChargeId: chargeId,
+            previousStatus: current.status,
+            status: 'ACTIVE',
+            providerStatus: confirmation.providerStatus ?? null,
+            sanitizedDetails: {
+              event: 'ISSUANCE_CONFIRMED',
+              source: confirmation.source,
+            },
+          },
+        });
+        const pix = confirmation.billingMethod === 'PIX';
+        const updated = await tx.invoice.updateMany({
+          where: {
+            id: current.invoiceId,
+            companyId,
+            status: { in: ['DRAFT', 'PENDING'] },
+          },
+          data: pix
+            ? {
+                gatewayId: confirmation.gatewayId,
+                billingType: 'PIX',
+                status: 'PENDING',
+                pixPayload: confirmation.pixCopyPaste,
+                pixExpiresAt: confirmation.expiresAt,
+                efiTxid: confirmation.txid,
+                efiLocId: confirmation.locId,
+                efiPixCopiaECola: confirmation.pixCopyPaste,
+                splitConfigId: confirmation.splitConfigId,
+                gatewayStatusRaw: confirmation.providerStatus,
+                discountApplied: confirmation.discountApplied ?? null,
+              }
+            : {
+                gatewayId: confirmation.gatewayId,
+                billingType: confirmation.billingMethod,
+                status: 'PENDING',
+                pixExpiresAt: confirmation.expiresAt,
+                efiChargeId: confirmation.providerChargeId,
+                boletoLinhaDigitavel: confirmation.boletoCode,
+                boletoLink: confirmation.boletoLink,
+                boletoPdf: confirmation.boletoPdf,
+                efiPixCopiaECola: confirmation.pixCopyPaste,
+                gatewayStatusRaw: confirmation.providerStatus,
+                discountApplied: confirmation.discountApplied ?? null,
+              },
+        });
+        if (updated.count === 1)
+          await tx.collectionLog.create({
+            data: {
+              companyId,
+              invoiceId: current.invoiceId,
+              ...this.issuanceLog(confirmation),
+              status: 'PENDING',
+            },
+          });
+        return 'ACTIVE';
+      },
+    );
+  }
+
+  // Records why an issuance stopped. Only a proven refusal releases the
+  // reservation (FAILED); an uncertain outcome keeps it PENDING for
+  // reconciliation, with the diagnosis attached.
+  async recordIssuanceFailure(
+    chargeId: string,
+    companyId: string,
+    failure: IssuanceFailure,
+  ): Promise<PaymentChargeStatus | null> {
+    return this.recordDiagnosis(
+      chargeId,
+      companyId,
+      failure.kind === 'REJECTED',
+      issuanceFailureDetails(failure),
+      null,
+    );
+  }
+
+  async recordReconciliation(
+    chargeId: string,
+    companyId: string,
+    outcome: ReconciliationOutcome,
+  ): Promise<PaymentChargeStatus | null> {
+    return this.recordDiagnosis(
+      chargeId,
+      companyId,
+      Boolean(outcome.fail),
+      { event: 'RECONCILIATION', reasonCode: outcome.reasonCode },
+      outcome.providerStatus ?? null,
+      outcome.gatewayStatusRaw,
+    );
+  }
+
+  // Associates the Efí charge returned by the creation or found by its
+  // custom_id. Only an open reservation takes a reference, and the unique
+  // index keeps one provider charge from being linked to two local charges.
+  async attachProviderReference(
+    chargeId: string,
+    companyId: string,
+    providerChargeId: string,
+    gatewayStatusRaw?: string,
+  ): Promise<void> {
+    const identity = await this.prisma.paymentCharge.findFirst({
+      where: { id: chargeId, companyId },
+      select: { invoiceId: true },
+    });
+    if (!identity) throw new HttpException('Cobrança não encontrada.', 404);
+    const conflict = () =>
+      new HttpException(
+        {
+          code: 'PROVIDER_REFERENCE_MISMATCH',
+          message: 'A referência da Efí já pertence a outra cobrança.',
+        },
+        409,
+      );
+    try {
+      await this.prisma.$transaction(async (tx): Promise<void> => {
+        await this.lockIssuance(tx, identity.invoiceId, chargeId, companyId);
+        const current = await tx.paymentCharge.findFirst({
+          where: { id: chargeId, companyId },
+        });
+        if (!current) throw new HttpException('Cobrança não encontrada.', 404);
+        if (!OPEN_ISSUANCE.includes(current.status))
+          throw new HttpException(
+            {
+              code: 'ISSUANCE_NOT_OPEN',
+              message: 'A tentativa de emissão já foi encerrada.',
+            },
+            409,
+          );
+        if (
+          current.efiTxid ||
+          (current.efiChargeId && current.efiChargeId !== providerChargeId)
+        )
+          throw conflict();
+        await tx.paymentCharge.updateMany({
+          where: { id: chargeId, companyId, status: current.status },
+          data: {
+            efiChargeId: providerChargeId,
+            gatewayId: providerChargeId,
+            ...(gatewayStatusRaw ? { gatewayStatusRaw } : {}),
+          },
+        });
+      });
+    } catch (error: unknown) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      )
+        throw conflict();
+      throw error;
+    }
+  }
+
+  private async recordDiagnosis(
+    chargeId: string,
+    companyId: string,
+    fail: boolean,
+    details: Prisma.InputJsonObject,
+    providerStatus: string | null,
+    gatewayStatusRaw?: string,
+  ): Promise<PaymentChargeStatus | null> {
+    const identity = await this.prisma.paymentCharge.findFirst({
+      where: { id: chargeId, companyId },
+      select: { invoiceId: true },
+    });
+    if (!identity) return null;
+    return this.prisma.$transaction(
+      async (tx): Promise<PaymentChargeStatus | null> => {
+        await this.lockIssuance(tx, identity.invoiceId, chargeId, companyId);
+        const current = await tx.paymentCharge.findFirst({
+          where: { id: chargeId, companyId },
+        });
+        if (!current) return null;
+        // A provider reference attached meanwhile means the charge exists.
+        const target: PaymentChargeStatus =
+          fail && OPEN_ISSUANCE.includes(current.status) && !current.efiChargeId
+            ? 'FAILED'
+            : current.status;
+        if (target !== current.status || gatewayStatusRaw) {
+          const changed = await tx.paymentCharge.updateMany({
+            where: { id: chargeId, companyId, status: current.status },
+            data: {
+              status: target,
+              ...(gatewayStatusRaw ? { gatewayStatusRaw } : {}),
+            },
+          });
+          if (changed.count !== 1) return current.status;
+        }
+        // Also written when only the diagnosis changed: no new issuance.
+        await tx.paymentChargeStatusHistory.create({
+          data: {
+            paymentChargeId: chargeId,
+            previousStatus: current.status,
+            status: target,
+            providerStatus,
+            sanitizedDetails: details,
+          },
+        });
+        return target;
+      },
+    );
+  }
+
+  // Same lock order as transition(): invoice, then charge.
+  private async lockIssuance(
+    tx: Prisma.TransactionClient,
+    invoiceId: string,
+    chargeId: string,
+    companyId: string,
+  ): Promise<void> {
+    await tx.$queryRaw(
+      Prisma.sql`SELECT id FROM "Invoice" WHERE id=${invoiceId} AND "companyId"=${companyId} FOR UPDATE`,
+    );
+    await tx.$queryRaw(
+      Prisma.sql`SELECT id FROM "PaymentCharge" WHERE id=${chargeId} AND "companyId"=${companyId} FOR UPDATE`,
+    );
+  }
+
+  private issuanceLog(confirmation: IssuanceConfirmation): {
+    actionType: string;
+    description: string;
+  } {
+    if (confirmation.source === 'RECONCILIATION')
+      return {
+        actionType: 'EFI_ISSUANCE_RECOVERED',
+        description:
+          'Emissão localizada na Efí e confirmada pela conciliação, sem novo envio.',
+      };
+    if (confirmation.billingMethod === 'PIX')
+      return {
+        actionType: 'EFI_PIX_CREATED',
+        description: 'Pix CobV Efi criado com split automatico',
+      };
+    return confirmation.billingMethod === 'BOLIX'
+      ? {
+          actionType: 'EFI_BOLIX_CREATED',
+          description: 'Bolix Efi criado com split automatico',
+        }
+      : {
+          actionType: 'EFI_BOLETO_CREATED',
+          description: 'Boleto Efi criado com split automatico',
+        };
   }
 
   async recordSettlement(

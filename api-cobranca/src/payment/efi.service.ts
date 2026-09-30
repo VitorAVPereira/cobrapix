@@ -7,7 +7,12 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { GatewayAccount, InvoiceStatus, Prisma } from '@prisma/client';
+import {
+  GatewayAccount,
+  InvoiceStatus,
+  PaymentCharge,
+  Prisma,
+} from '@prisma/client';
 import { randomBytes } from 'crypto';
 import EfiPay from 'sdk-node-apis-efi';
 import { validateDebtorDocument } from '../common/debtor-document';
@@ -16,9 +21,23 @@ import { CreateGatewayAccountDto } from './dto/gateway-account.dto';
 import { PaymentCryptoService } from './payment-crypto.service';
 import { PaymentNotificationsService } from './payment-notifications.service';
 import { GatewayHealthService } from './gateway-health.service';
-import { PaymentChargeService } from './payment-charge.service';
+import {
+  IssuanceConfirmation,
+  PaymentChargeService,
+} from './payment-charge.service';
 import { matchesBoletoMode } from './efi-boleto-mode';
 import type { IssuanceContext } from '../financial-activation/financial-eligibility.service';
+import {
+  classifyEfiIssuanceError,
+  EfiIssuanceError,
+  IssuanceStage,
+  toIssuanceError,
+} from './efi-issuance-error';
+import {
+  EfiChargeObservation,
+  normalizeEfiChargeDetail,
+  normalizeEfiChargeListing,
+} from './efi-charge-normalizer';
 
 type EfiEnvironment = 'homologation' | 'production';
 type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
@@ -175,6 +194,25 @@ export interface EfiPaymentResult {
   splitConfigId?: string;
 }
 
+// What the issuance produced: the instruments returned to the caller and the
+// data persisted atomically when the charge is confirmed.
+export interface EfiIssuedPayment {
+  result: EfiPaymentResult;
+  confirmation: IssuanceConfirmation;
+}
+
+export interface ReconcileChargeResult {
+  status: string;
+  reasonCode?: string;
+  recommendedAction?: string;
+}
+
+// Efí phone_number pattern (DDD + number, no country code).
+const EFI_PHONE_PATTERN = /^[1-9]{2}9?[0-9]{8}$/;
+// An open reservation is declared absent at Efí only after this age: a slower
+// submission may still be in flight (the SDK sets no request timeout).
+const RECONCILE_MIN_AGE_MS = 30 * 60_000;
+
 export interface EfiIssuanceContext {
   chargeId: string;
   platformFeeKind: 'FIXED' | 'PERCENTAGE';
@@ -251,42 +289,61 @@ export class EfiService {
     return this.gatewayHealth.assertIssuable(companyId, method);
   }
 
+  // Every error leaves classified by the stage it reached: before the creation
+  // request nothing exists at Efí; after it, the charge may exist.
   async createPayment(
     invoiceId: string,
     companyId: string,
     billingType: BillingType,
     issuance?: EfiIssuanceContext,
-  ): Promise<EfiPaymentResult> {
-    assertNewBillingMethod(billingType);
-    const invoice = await this.prisma.invoice.findFirst({
-      where: { id: invoiceId, companyId },
-      include: { debtor: true, company: true },
-    });
+  ): Promise<EfiIssuedPayment> {
+    const progress: { stage: IssuanceStage } = { stage: 'PRE_SUBMISSION' };
+    try {
+      assertNewBillingMethod(billingType);
+      const invoice = await this.prisma.invoice.findFirst({
+        where: { id: invoiceId, companyId },
+        include: { debtor: true, company: true },
+      });
 
-    if (!invoice) {
-      throw new HttpException('Fatura não encontrada', HttpStatus.NOT_FOUND);
-    }
+      if (!invoice) {
+        throw new HttpException('Fatura não encontrada', HttpStatus.NOT_FOUND);
+      }
 
-    if (!this.gatewayHealth || !issuance)
-      throw new HttpException(
-        {
-          code: 'EFI_ONBOARDING_REQUIRED',
-          message: 'A emissão exige ativação e uma tarifa fotografada.',
-        },
-        409,
+      if (!this.gatewayHealth || !issuance)
+        throw new HttpException(
+          {
+            code: 'EFI_ONBOARDING_REQUIRED',
+            message: 'A emissão exige ativação e uma tarifa fotografada.',
+          },
+          409,
+        );
+      await this.gatewayHealth.assertIssuable(companyId, billingType);
+      // Never the company's "current" account: the one recorded on the charge.
+      const account = await this.accountForIdentity(
+        issuance.issuerIdentityId,
+        companyId,
       );
-    await this.gatewayHealth.assertIssuable(companyId, billingType);
-    // Never the company's "current" account: the one recorded on the charge.
-    const account = await this.accountForIdentity(
-      issuance.issuerIdentityId,
-      companyId,
-    );
 
-    if (billingType === 'BOLETO' || billingType === 'BOLIX') {
-      return this.createBoleto(invoice, account, billingType, issuance);
+      if (billingType === 'BOLETO' || billingType === 'BOLIX') {
+        return await this.createBoleto(
+          invoice,
+          account,
+          billingType,
+          issuance,
+          progress,
+        );
+      }
+
+      return await this.createPixCobv(invoice, account, issuance, progress);
+    } catch (error: unknown) {
+      const issuanceError = toIssuanceError(error, progress.stage);
+      const { failure } = issuanceError;
+      // Codes and field path only: never the provider body or payer data.
+      this.logger.error(
+        `Emissão Efí ${failure.kind} ${failure.code} etapa=${failure.stage} provider=${failure.providerCode ?? '-'} campo=${failure.field ?? '-'}`,
+      );
+      throw issuanceError;
     }
-
-    return this.createPixCobv(invoice, account, issuance);
   }
 
   async cancelPixDueCharge(companyId: string, txid: string): Promise<string> {
@@ -321,11 +378,12 @@ export class EfiService {
     return 'canceled';
   }
 
+  // Reads Efí with the account that issued the charge; never creates one.
   async reconcileCharge(
     companyId: string,
     chargeId: string,
     actorId: string,
-  ): Promise<{ status: string }> {
+  ): Promise<ReconcileChargeResult> {
     const charge = await this.prisma.paymentCharge.findFirst({
       where: { id: chargeId, companyId },
     });
@@ -341,23 +399,114 @@ export class EfiService {
         retentionExpiresAt: new Date(Date.now() + 5 * 365.25 * 86400_000),
       },
     });
-    if (!charge.efiTxid && !charge.efiChargeId)
-      return { status: 'REVIEW_REQUIRED' };
+    const open = charge.status === 'DRAFT' || charge.status === 'PENDING';
+    if (
+      !charge.efiTxid &&
+      !charge.efiChargeId &&
+      (charge.billingMethod === 'PIX' || !open)
+    )
+      return this.reviewCharge(
+        charge,
+        'MISSING_PROVIDER_REFERENCE',
+        'CONTACT_EFI',
+      );
     const account = charge.issuerIdentityId
       ? await this.accountForIdentity(charge.issuerIdentityId, companyId)
       : await this.legacyAccount(companyId, false);
     const client = this.createSdkClient(account);
-    const response: unknown = await this.runEfiRequest(
-      () =>
-        charge.efiTxid
-          ? client.pixDetailDueCharge({ txid: charge.efiTxid })
-          : (
-              client as EfiPay & {
-                detailCharge(params: { id: string }): Promise<unknown>;
-              }
-            ).detailCharge({ id: charge.efiChargeId! }),
-      'conciliar cobrança',
-    );
+    let located: unknown = null;
+    if (!charge.efiTxid && !charge.efiChargeId) {
+      // The creation response was lost: the one-step charge carries our id
+      // as custom_id, so the issuing account can be searched for it.
+      const listing = normalizeEfiChargeListing(
+        await this.runEfiRequest(
+          () =>
+            client.listCharges({
+              begin_date: this.brazilDate(
+                new Date(charge.createdAt.getTime() - 86_400_000),
+              ),
+              end_date: this.brazilDate(new Date()),
+              charge_type: 'billet',
+              custom_id: charge.id,
+            }),
+          'localizar cobrança pelo custom_id',
+        ),
+      );
+      if (!listing)
+        throw new HttpException('Resposta de conciliação inválida.', 502);
+      const matches = listing.filter((entry) => entry.customId === charge.id);
+      if (matches.length === 0) return this.resolveNotFound(charge);
+      const match = matches[0];
+      if (matches.length > 1 || !match)
+        return this.reviewCharge(
+          charge,
+          'PROVIDER_DUPLICATE_ISSUANCE',
+          'CONTACT_EFI',
+        );
+      if (
+        !match.providerChargeId ||
+        match.totalCents !== charge.grossAmountCents
+      )
+        return this.reviewCharge(
+          charge,
+          'PROVIDER_AMOUNT_MISMATCH',
+          'CONTACT_EFI',
+        );
+      // The listing alone does not link it: the charge detail, read with the
+      // issuing account, must name this attempt and its amount.
+      const providerChargeId = match.providerChargeId;
+      located = await this.runEfiRequest(
+        () => client.detailCharge({ id: providerChargeId }),
+        'consultar cobrança localizada',
+      );
+      const observed = normalizeEfiChargeDetail(located);
+      if (
+        observed.providerChargeId !== providerChargeId ||
+        observed.customId !== charge.id
+      )
+        return this.reviewCharge(
+          charge,
+          'PROVIDER_REFERENCE_MISMATCH',
+          'CONTACT_EFI',
+          observed.status,
+        );
+      if (observed.totalCents !== charge.grossAmountCents)
+        return this.reviewCharge(
+          charge,
+          'PROVIDER_AMOUNT_MISMATCH',
+          'CONTACT_EFI',
+          observed.status,
+        );
+      await this.charges.attachProviderReference(
+        charge.id,
+        companyId,
+        providerChargeId,
+      );
+      charge.efiChargeId = providerChargeId;
+      charge.gatewayId = providerChargeId;
+    }
+    let response: unknown = located;
+    try {
+      if (!located)
+        response = charge.efiTxid
+          ? await client.pixDetailDueCharge({ txid: charge.efiTxid })
+          : await client.detailCharge({ id: charge.efiChargeId! });
+    } catch (error: unknown) {
+      // Only an explicit "not found" for a txid we generated proves absence.
+      if (charge.efiTxid && open && this.isPixChargeNotFound(error))
+        return this.resolveNotFound(charge);
+      const { providerCode } = classifyEfiIssuanceError(
+        error,
+        'PROVIDER_REQUEST',
+      );
+      this.logger.error(
+        `Erro Efi ao conciliar cobrança provider=${providerCode ?? '-'}`,
+      );
+      throw new HttpException(
+        'Falha ao processar cobranca na Efi.',
+        HttpStatus.BAD_GATEWAY,
+      );
+    }
     const data = this.isRecord(response)
       ? charge.efiTxid
         ? response
@@ -442,7 +591,35 @@ export class EfiService {
           companyId,
           charge.invoiceId,
         );
-      return { status: 'PAID' };
+      return { status: 'PAID', recommendedAction: 'NONE' };
+    }
+    // Issued and still payable at Efí.
+    if (
+      (!charge.efiTxid && providerStatus === 'waiting') ||
+      (charge.efiTxid && providerStatus === 'ATIVA')
+    ) {
+      if (charge.status === 'ACTIVE')
+        return {
+          status: 'ACTIVE',
+          reasonCode: 'ALREADY_ACTIVE',
+          recommendedAction: 'NONE',
+        };
+      if (!open)
+        return this.reviewCharge(
+          charge,
+          'PROVIDER_STATE_DIVERGENT',
+          'CONTACT_EFI',
+          providerStatus,
+        );
+      // A Pix CobV has a separate split link that its detail does not show.
+      if (charge.efiTxid)
+        return this.reviewCharge(
+          charge,
+          'PIX_SPLIT_LINK_UNVERIFIED',
+          'CHECK_EFI_PANEL',
+          providerStatus,
+        );
+      return this.recoverBillet(charge, response);
     }
     const target =
       providerStatus === 'refunded'
@@ -458,7 +635,13 @@ export class EfiService {
               ].includes(providerStatus)
             ? 'CANCELED'
             : null;
-    if (!target) return { status: 'REVIEW_REQUIRED' };
+    if (!target)
+      return this.reviewCharge(
+        charge,
+        'PROVIDER_STATUS_UNKNOWN',
+        'CONTACT_EFI',
+        providerStatus || null,
+      );
     await this.charges.transition(
       charge.id,
       companyId,
@@ -466,7 +649,155 @@ export class EfiService {
       { gatewayStatusRaw: providerStatus, canceledAt: new Date() },
       providerStatus,
     );
-    return { status: target };
+    return { status: target, recommendedAction: 'NONE' };
+  }
+
+  // A payable Bolix/boleto found at Efí: confirmed only when the provider
+  // proves it is this charge, with the requested modality and instruments.
+  private async recoverBillet(
+    charge: PaymentCharge,
+    response: unknown,
+  ): Promise<ReconcileChargeResult> {
+    const observed: EfiChargeObservation = normalizeEfiChargeDetail(response);
+    const method = charge.billingMethod;
+    if (
+      observed.customId !== charge.id ||
+      (method !== 'BOLIX' && method !== 'BOLETO')
+    )
+      return this.reviewCharge(
+        charge,
+        'PROVIDER_REFERENCE_MISMATCH',
+        'CONTACT_EFI',
+        observed.status,
+      );
+    if (observed.totalCents !== charge.grossAmountCents)
+      return this.reviewCharge(
+        charge,
+        'PROVIDER_AMOUNT_MISMATCH',
+        'CONTACT_EFI',
+        observed.status,
+      );
+    if (!matchesBoletoMode(method, observed.pixQrcode ?? undefined)) {
+      // Instruments of another modality are never distributed.
+      await this.charges.recordReconciliation(charge.id, charge.companyId, {
+        reasonCode: 'MODALITY_MISMATCH',
+        providerStatus: observed.status,
+        gatewayStatusRaw: 'EFI_BILLING_MODE_MISMATCH',
+      });
+      return {
+        status: 'REVIEW_REQUIRED',
+        reasonCode: 'MODALITY_MISMATCH',
+        recommendedAction: 'REVIEW_ACCOUNT_MODALITY',
+      };
+    }
+    const link = observed.billetLink ?? observed.pdfLink;
+    if (!observed.barcode || !link || !observed.providerChargeId)
+      return this.reviewCharge(
+        charge,
+        'INSTRUMENTS_MISSING',
+        'CONTACT_EFI',
+        observed.status,
+      );
+    const invoice = await this.prisma.invoice.findFirst({
+      where: { id: charge.invoiceId, companyId: charge.companyId },
+      select: { dueDate: true },
+    });
+    if (!invoice) throw new HttpException('Fatura não encontrada.', 404);
+    const outcome = await this.charges.confirmIssuance(
+      charge.companyId,
+      charge.id,
+      {
+        source: 'RECONCILIATION',
+        billingMethod: method,
+        gatewayId: observed.providerChargeId,
+        providerChargeId: observed.providerChargeId,
+        boletoCode: observed.barcode,
+        boletoLink: link,
+        boletoPdf: observed.pdfLink ?? '',
+        pixCopyPaste: observed.pixQrcode ?? undefined,
+        paymentLink: link,
+        expiresAt: this.addDays(
+          invoice.dueDate,
+          (charge.paymentDaysAfterDue ?? 0) + 1,
+        ),
+        providerStatus: observed.status ?? undefined,
+        discountApplied: null,
+      },
+    );
+    if (outcome === 'ACTIVE')
+      return {
+        status: 'ACTIVE',
+        reasonCode: 'ISSUANCE_RECOVERED',
+        recommendedAction: 'NONE',
+      };
+    // Settled or closed meanwhile (e.g. by a webhook): report what stands.
+    const current = await this.prisma.paymentCharge.findFirst({
+      where: { id: charge.id, companyId: charge.companyId },
+      select: { status: true },
+    });
+    return {
+      status: current?.status ?? 'REVIEW_REQUIRED',
+      reasonCode: 'ALREADY_FINALIZED',
+      recommendedAction: 'NONE',
+    };
+  }
+
+  // Efí answered that the charge does not exist. An old open reservation is
+  // released so the invoice can be issued again; nothing is resubmitted.
+  private async resolveNotFound(
+    charge: PaymentCharge,
+  ): Promise<ReconcileChargeResult> {
+    if (Date.now() - charge.createdAt.getTime() < RECONCILE_MIN_AGE_MS)
+      return this.reviewCharge(
+        charge,
+        'ISSUANCE_TOO_RECENT',
+        'WAIT_AND_RECONCILE',
+      );
+    const status = await this.charges.recordReconciliation(
+      charge.id,
+      charge.companyId,
+      { reasonCode: 'PROVIDER_NOT_FOUND', fail: true },
+    );
+    return status === 'FAILED'
+      ? {
+          status: 'FAILED',
+          reasonCode: 'PROVIDER_NOT_FOUND',
+          recommendedAction: 'REISSUE',
+        }
+      : {
+          status: 'REVIEW_REQUIRED',
+          reasonCode: 'PROVIDER_NOT_FOUND',
+          recommendedAction: 'CONTACT_EFI',
+        };
+  }
+
+  // Keeps the charge as it is and records why it still needs a decision.
+  private async reviewCharge(
+    charge: Pick<PaymentCharge, 'id' | 'companyId'>,
+    reasonCode: string,
+    recommendedAction: string,
+    providerStatus: string | null = null,
+  ): Promise<ReconcileChargeResult> {
+    await this.charges.recordReconciliation(charge.id, charge.companyId, {
+      reasonCode,
+      providerStatus,
+    });
+    return { status: 'REVIEW_REQUIRED', reasonCode, recommendedAction };
+  }
+
+  private isPixChargeNotFound(error: unknown): boolean {
+    if (!this.isRecord(error)) return false;
+    if (error.nome === 'cobranca_nao_encontrada') return true;
+    return (
+      typeof error.type === 'string' &&
+      error.type.endsWith('NaoEncontrada') &&
+      error.status === 404
+    );
+  }
+
+  // Efí filters listings by calendar date in Brasília time (UTC-3, no DST).
+  private brazilDate(value: Date): string {
+    return new Date(value.getTime() - 3 * 3_600_000).toISOString().slice(0, 10);
   }
 
   async handlePixWebhook(payload: unknown): Promise<{
@@ -775,20 +1106,16 @@ export class EfiService {
   private async createPixCobv(
     invoice: PaymentInvoice,
     gatewayAccount: EfiAccountRef,
-    issuance?: EfiIssuanceContext,
-  ): Promise<EfiPaymentResult> {
-    const existing = issuance ? null : this.buildExistingPixResult(invoice);
-    if (existing) {
-      return existing;
-    }
-
+    issuance: EfiIssuanceContext,
+    progress: { stage: IssuanceStage },
+  ): Promise<EfiIssuedPayment> {
     this.ensurePixCertificate(gatewayAccount);
 
     const client = this.createSdkClient(gatewayAccount);
-    const txid = this.generateTxid(issuance?.chargeId ?? invoice.id);
+    const txid = this.generateTxid(issuance.chargeId);
     const dueDate = this.formatDate(invoice.dueDate);
     const amount = this.formatAmount(invoice.originalAmount);
-    const daysAfterDue = issuance?.paymentDaysAfterDue ?? 0;
+    const daysAfterDue = issuance.paymentDaysAfterDue;
     const discountSettings: ResolvedDiscountSettings = {
       enabled: false,
       daysAfterDue: null,
@@ -824,14 +1151,13 @@ export class EfiService {
       issuance,
     );
 
-    await this.runIssuanceRequest(
-      () =>
-        client.pixCreateDueCharge(
-          { txid },
-          cobvPayload as unknown as PixCreateDueChargeBody,
-        ),
-      'criar Pix CobV',
+    progress.stage = 'PROVIDER_REQUEST';
+    await client.pixCreateDueCharge(
+      { txid },
+      cobvPayload as unknown as PixCreateDueChargeBody,
     );
+    // Created: from here on a failure never proves the CobV does not exist.
+    progress.stage = 'PROVIDER_RESPONSE';
 
     const detail = (await this.runEfiRequest(
       () => client.pixDetailDueCharge({ txid }),
@@ -854,47 +1180,35 @@ export class EfiService {
       : null;
     const pixCopyPaste = qrCode?.qrcode ?? detail.pixCopiaECola ?? '';
     const expiresAt = this.addDays(invoice.dueDate, daysAfterDue + 1);
+    const paymentLink = detail.loc?.location ?? detail.location ?? '';
 
-    await this.prisma.invoice.updateMany({
-      where: {
-        id: invoice.id,
-        companyId: invoice.companyId,
-        status: { in: ['DRAFT', 'PENDING'] },
-      },
-      data: {
+    // Invoice and charge are confirmed together by the caller.
+    return {
+      result: {
         gatewayId: txid,
-        billingType: 'PIX',
-        status: 'PENDING',
-        pixPayload: pixCopyPaste,
-        pixExpiresAt: expiresAt,
-        efiTxid: txid,
-        efiLocId: detail.loc?.id?.toString(),
-        efiPixCopiaECola: pixCopyPaste,
-        splitConfigId,
-        gatewayStatusRaw: detail.status,
+        txid,
+        pixCopyPaste,
+        pixQrCode: qrCode?.imagemQrcode,
+        expiresAt,
+        paymentLink,
+        splitConfigId: splitConfigId ?? undefined,
+      },
+      confirmation: {
+        source: 'CREATION',
+        billingMethod: 'PIX',
+        gatewayId: txid,
+        txid,
+        locId: detail.loc?.id?.toString(),
+        pixCopyPaste,
+        paymentLink,
+        expiresAt,
+        splitConfigId: splitConfigId ?? undefined,
+        providerStatus: detail.status,
         discountApplied: this.calculateDiscountAmount(
           invoice.originalAmount,
           discountSettings.percentage,
         ),
       },
-    });
-
-    await this.createLog(
-      invoice.companyId,
-      invoice.id,
-      'EFI_PIX_CREATED',
-      'Pix CobV Efi criado com split automatico',
-      'PENDING',
-    );
-
-    return {
-      gatewayId: txid,
-      txid,
-      pixCopyPaste,
-      pixQrCode: qrCode?.imagemQrcode,
-      expiresAt,
-      paymentLink: detail.loc?.location ?? detail.location ?? '',
-      splitConfigId: splitConfigId ?? undefined,
     };
   }
 
@@ -902,13 +1216,9 @@ export class EfiService {
     invoice: PaymentInvoice,
     gatewayAccount: EfiAccountRef,
     billingType: 'BOLETO' | 'BOLIX',
-    issuance?: EfiIssuanceContext,
-  ): Promise<EfiPaymentResult> {
-    const existing = issuance ? null : this.buildExistingBoletoResult(invoice);
-    if (existing) {
-      return existing;
-    }
-
+    issuance: EfiIssuanceContext,
+    progress: { stage: IssuanceStage },
+  ): Promise<EfiIssuedPayment> {
     const client = this.createSdkClient(gatewayAccount);
     // The notification names the issuing account; the company comes from the
     // charge linked to it, never from the URL.
@@ -968,51 +1278,42 @@ export class EfiService {
         },
       },
       metadata: {
-        custom_id: issuance?.chargeId ?? invoice.id,
+        // Lets reconciliation find the charge at Efí when the response is lost.
+        custom_id: issuance.chargeId,
         notification_url: webhookUrl,
       },
     };
 
-    const charge = (await this.runIssuanceRequest(
-      () => client.createOneStepCharge({}, payload),
-      'criar boleto',
-    )) as EfiChargeResponse;
+    progress.stage = 'PROVIDER_REQUEST';
+    const charge = (await client.createOneStepCharge({}, payload)) as
+      | EfiChargeResponse
+      | undefined;
+    // Accepted: from here on a failure never proves the charge does not exist.
+    progress.stage = 'PROVIDER_RESPONSE';
 
-    const chargeData = charge.data;
+    const chargeData = charge?.data;
     const chargeId = chargeData?.charge_id?.toString();
-    if (!chargeId) {
-      throw new HttpException(
-        'Efi nao retornou charge_id para o boleto.',
-        HttpStatus.BAD_GATEWAY,
-      );
-    }
+    if (!chargeId) throw new Error('Efí response without charge_id');
 
     const boletoLink = chargeData?.billet_link ?? chargeData?.link ?? '';
     const expiresAt = this.addDays(
       invoice.dueDate,
-      (issuance?.paymentDaysAfterDue ?? 0) + 1,
+      issuance.paymentDaysAfterDue + 1,
     );
     const boletoPdf = chargeData?.pdf?.charge ?? '';
     const boletoCode = chargeData?.barcode ?? '';
+    const modeMatches = matchesBoletoMode(billingType, chargeData?.pix?.qrcode);
 
-    if (issuance)
-      await this.charges.transition(
-        issuance.chargeId,
-        invoice.companyId,
-        'PENDING',
-        {
-          gatewayId: chargeId,
-          efiChargeId: chargeId,
-        },
-      );
-    if (!matchesBoletoMode(billingType, chargeData?.pix?.qrcode)) {
-      if (issuance)
-        await this.charges.transition(
-          issuance.chargeId,
-          invoice.companyId,
-          'PENDING',
-          { gatewayStatusRaw: 'EFI_BILLING_MODE_MISMATCH' },
-        );
+    // The reference is kept even if the confirmation below fails. Only an
+    // open reservation takes it: one already released is never revived.
+    await this.charges.attachProviderReference(
+      issuance.chargeId,
+      invoice.companyId,
+      chargeId,
+      modeMatches ? undefined : 'EFI_BILLING_MODE_MISMATCH',
+    );
+    progress.stage = 'LOCAL_PERSISTENCE';
+    if (!modeMatches) {
       await this.createLog(
         invoice.companyId,
         invoice.id,
@@ -1020,7 +1321,17 @@ export class EfiService {
         'A modalidade retornada pela Efí não corresponde à tarifa solicitada. Revisar a configuração da conta e a emissão no painel Efí.',
         'REVIEW_REQUIRED',
       );
-      throw new HttpException(
+      throw new EfiIssuanceError(
+        {
+          kind: 'UNCERTAIN',
+          code: 'EFI_BILLING_MODE_MISMATCH',
+          stage: 'PROVIDER_RESPONSE',
+          httpStatus: null,
+          providerCode: null,
+          field: null,
+          message:
+            'A Efí emitiu uma modalidade diferente da solicitada; os instrumentos não foram disponibilizados.',
+        },
         {
           code: 'EFI_BILLING_MODE_MISMATCH',
           message:
@@ -1030,50 +1341,36 @@ export class EfiService {
       );
     }
 
-    await this.prisma.invoice.updateMany({
-      where: {
-        id: invoice.id,
-        companyId: invoice.companyId,
-        status: { in: ['DRAFT', 'PENDING'] },
-      },
-      data: {
+    // Invoice and charge are confirmed together by the caller.
+    return {
+      result: {
         gatewayId: chargeId,
-        billingType,
-        status: 'PENDING',
-        pixExpiresAt: expiresAt,
-        efiChargeId: chargeId,
-        boletoLinhaDigitavel: boletoCode,
+        chargeId,
+        boletoCode,
         boletoLink,
         boletoPdf,
-        efiPixCopiaECola: chargeData?.pix?.qrcode,
-        gatewayStatusRaw: chargeData?.status,
+        pixCopyPaste: chargeData?.pix?.qrcode,
+        pixQrCode: chargeData?.pix?.qrcode_image,
+        expiresAt,
+        paymentLink: boletoLink,
+      },
+      confirmation: {
+        source: 'CREATION',
+        billingMethod: billingType,
+        gatewayId: chargeId,
+        providerChargeId: chargeId,
+        boletoCode,
+        boletoLink,
+        boletoPdf,
+        pixCopyPaste: chargeData?.pix?.qrcode,
+        paymentLink: boletoLink,
+        expiresAt,
+        providerStatus: chargeData?.status,
         discountApplied: this.calculateDiscountAmount(
           invoice.originalAmount,
           discountSettings.percentage,
         ),
       },
-    });
-
-    await this.createLog(
-      invoice.companyId,
-      invoice.id,
-      billingType === 'BOLIX' ? 'EFI_BOLIX_CREATED' : 'EFI_BOLETO_CREATED',
-      billingType === 'BOLIX'
-        ? 'Bolix Efi criado com split automatico'
-        : 'Boleto Efi criado com split automatico',
-      'PENDING',
-    );
-
-    return {
-      gatewayId: chargeId,
-      chargeId,
-      boletoCode,
-      boletoLink,
-      boletoPdf,
-      pixCopyPaste: chargeData?.pix?.qrcode,
-      pixQrCode: chargeData?.pix?.qrcode_image,
-      expiresAt,
-      paymentLink: boletoLink,
     };
   }
 
@@ -1246,53 +1543,6 @@ export class EfiService {
           : { percentage: issuance.platformFeeBasisPoints }),
       },
     ];
-  }
-
-  private buildExistingPixResult(
-    invoice: PaymentInvoice,
-  ): EfiPaymentResult | null {
-    if (!invoice.efiTxid || !invoice.efiPixCopiaECola) {
-      return null;
-    }
-
-    if (this.isPixExpired(invoice.pixExpiresAt)) {
-      return null;
-    }
-
-    return {
-      gatewayId: invoice.efiTxid,
-      txid: invoice.efiTxid,
-      pixCopyPaste: invoice.efiPixCopiaECola,
-      expiresAt: invoice.pixExpiresAt ?? invoice.dueDate,
-      paymentLink: '',
-    };
-  }
-
-  private buildExistingBoletoResult(
-    invoice: PaymentInvoice,
-  ): EfiPaymentResult | null {
-    if (!invoice.efiChargeId) {
-      return null;
-    }
-
-    if (this.isPixExpired(invoice.pixExpiresAt)) {
-      return null;
-    }
-
-    return {
-      gatewayId: invoice.efiChargeId,
-      chargeId: invoice.efiChargeId,
-      boletoCode: invoice.boletoLinhaDigitavel ?? undefined,
-      boletoLink: invoice.boletoLink ?? undefined,
-      boletoPdf: invoice.boletoPdf ?? undefined,
-      expiresAt: invoice.pixExpiresAt ?? invoice.dueDate,
-      paymentLink: invoice.boletoLink ?? '',
-    };
-  }
-
-  private isPixExpired(expiresAt: Date | null): boolean {
-    if (!expiresAt) return false;
-    return new Date() > expiresAt;
   }
 
   private resolveDiscountSettings(
@@ -1531,28 +1781,17 @@ export class EfiService {
   ): Promise<T> {
     try {
       return await request();
-    } catch {
-      this.logger.error(`Erro Efi ao ${action}`);
+    } catch (error: unknown) {
+      // Only the sanitized provider code: the body may carry payer data.
+      const { providerCode } = classifyEfiIssuanceError(
+        error,
+        'PROVIDER_REQUEST',
+      );
+      this.logger.error(
+        `Erro Efi ao ${action} provider=${providerCode ?? '-'}`,
+      );
       throw new HttpException(
         'Falha ao processar cobranca na Efi.',
-        HttpStatus.BAD_GATEWAY,
-      );
-    }
-  }
-
-  private async runIssuanceRequest<T>(
-    request: () => Promise<T>,
-    action: string,
-  ): Promise<T> {
-    try {
-      return await request();
-    } catch {
-      this.logger.error(`Falha ambígua da Efí ao ${action}`);
-      throw new HttpException(
-        {
-          code: 'EFI_SUBMISSION_UNCERTAIN',
-          message: 'A confirmação da emissão está incerta e exige conciliação.',
-        },
         HttpStatus.BAD_GATEWAY,
       );
     }
@@ -1653,7 +1892,7 @@ export class EfiService {
     };
     email?: string;
     phone_number?: string;
-    address: {
+    address?: {
       street: string;
       number: string;
       neighborhood: string;
@@ -1665,19 +1904,15 @@ export class EfiService {
     const debtorDocument = this.normalizeRequiredDebtorDocument(
       invoice.debtor.document,
     );
+    // Optional fields are omitted rather than sent in a format Efí refuses:
+    // the debtor phone is stored for WhatsApp (+55...), Efí wants DDD+number.
+    const email = invoice.debtor.email?.trim();
+    const phoneNumber = this.efiPhoneNumber(invoice.debtor.phoneNumber);
+    const address = this.buildBoletoAddress(invoice);
     const customer = {
-      email: invoice.debtor.email ?? undefined,
-      phone_number: this.onlyDigits(invoice.debtor.phoneNumber),
-      address: {
-        street: invoice.company.addressStreet ?? 'Nao informado',
-        number: invoice.company.addressNumber ?? '0',
-        neighborhood: invoice.company.addressDistrict ?? 'Nao informado',
-        zipcode: this.onlyDigits(
-          invoice.company.addressPostalCode ?? '00000000',
-        ),
-        city: invoice.company.addressCity ?? 'Sao Paulo',
-        state: invoice.company.addressState ?? 'SP',
-      },
+      ...(email ? { email } : {}),
+      ...(phoneNumber ? { phone_number: phoneNumber } : {}),
+      ...(address ? { address } : {}),
     };
 
     if (debtorDocument.length === 14) {
@@ -1694,6 +1929,51 @@ export class EfiService {
       ...customer,
       name: invoice.debtor.name,
       cpf: debtorDocument,
+    };
+  }
+
+  private efiPhoneNumber(value: string | null): string | undefined {
+    const digits = this.onlyDigits(value ?? '');
+    const national =
+      digits.startsWith('55') && (digits.length === 12 || digits.length === 13)
+        ? digits.slice(2)
+        : digits;
+    return EFI_PHONE_PATTERN.test(national) ? national : undefined;
+  }
+
+  // Sent only when complete; placeholders ("Nao informado", CEP 00000000)
+  // would be printed on a registered boleto or refused by Efí.
+  private buildBoletoAddress(invoice: PaymentInvoice):
+    | {
+        street: string;
+        number: string;
+        neighborhood: string;
+        zipcode: string;
+        city: string;
+        state: string;
+      }
+    | undefined {
+    const street = invoice.company.addressStreet?.trim();
+    const neighborhood = invoice.company.addressDistrict?.trim();
+    const city = invoice.company.addressCity?.trim();
+    const state = invoice.company.addressState?.trim().toUpperCase();
+    const zipcode = this.onlyDigits(invoice.company.addressPostalCode ?? '');
+    if (
+      !street ||
+      !neighborhood ||
+      !city ||
+      !state ||
+      !/^[A-Z]{2}$/.test(state) ||
+      zipcode.length !== 8
+    )
+      return undefined;
+    return {
+      street,
+      number: invoice.company.addressNumber?.trim() || 'S/N',
+      neighborhood,
+      zipcode,
+      city,
+      state,
     };
   }
 

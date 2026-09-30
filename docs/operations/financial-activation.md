@@ -128,9 +128,20 @@ A tela mostra cada passo com o código do erro. Códigos `EFI_REJECTED_<NOME>` r
 | `EFI_INTEGRATION_UNHEALTHY` | Duas checagens de saúde seguidas falharam (seção 4) |
 | `EFI_CREDENTIALS_UNAVAILABLE`, `EFI_CERTIFICATE_EXPIRED` | Renovar credenciais (seção 4) |
 | `FINANCIAL_PROFILE_CHANGED` | A ativação mudou durante a emissão; basta tentar de novo |
-| `EFI_SUBMISSION_UNCERTAIN` | A Efí pode ter criado a cobrança. **Não reenviar**. A emissão aparece, após 10 minutos, em **Operação → Emissões para conciliar** na tela do cliente; use "Conciliar com a Efí", que consulta a Efí só pelo identificador gravado |
-| `EFI_BILLING_MODE_MISMATCH` | A Efí devolveu boleto sem Pix (ou o inverso). Revisar a modalidade da conta no painel Efí; a cobrança fica preservada para conciliação |
+| `EFI_ISSUANCE_REJECTED` (422 ou 503) | A Efí **recusou** a criação: nada foi criado e a tentativa fica `FAILED`. `reasonCode` diz o tipo (`EFI_VALIDATION_REJECTED` = dado recusado, com o campo em `field`; `EFI_AUTH_REJECTED` = credencial/permissão). Corrigir o dado e emitir de novo pelo fluxo normal |
+| `ISSUANCE_PRECONDITION_FAILED` e outros erros antes do envio | A emissão parou antes de chamar a Efí (configuração local, CPF/CNPJ, recebedor do split). A tentativa fica `FAILED` com o motivo; corrigir e emitir de novo |
+| `EFI_SUBMISSION_UNCERTAIN` | A Efí pode ter criado a cobrança (timeout, conexão perdida, erro 5xx, resposta incompleta ou falha local depois do aceite). **Não reenviar**. A tentativa fica `PENDING`, com o diagnóstico, e aparece após 10 minutos em **Operação → Emissões para conciliar** (seção 5.4) |
+| `EFI_BILLING_MODE_MISMATCH` | A Efí devolveu boleto sem Pix (ou o inverso). Revisar a modalidade da conta no painel Efí; a cobrança fica preservada para conciliação e seus instrumentos não são distribuídos |
 | `FINANCIAL_MODE_NOT_SUPPORTED` | Modo de conta CifraMais (Fase B) |
+
+Nenhum desses casos tem nova tentativa automática. O log da API registra só
+`Emissão Efí <REJECTED|UNCERTAIN> <código> etapa=<etapa> provider=<código Efí> campo=<caminho>`,
+sem valores, payload, certificado ou dados do pagador.
+
+Dados do pagador no Bolix/boleto: `phone_number` vai no formato da Efí (DDD +
+número, sem o 55; o cadastro guarda `+55…` para o WhatsApp). Telefone
+estrangeiro ou inválido, e-mail vazio e endereço incompleto são omitidos, pois
+são opcionais na Efí; nome e CPF/CNPJ continuam obrigatórios.
 
 ### 5.3 Webhooks
 
@@ -151,6 +162,87 @@ A tela mostra cada passo com o código do erro. Códigos `EFI_REJECTED_<NOME>` r
   | `UNKNOWN_CHARGE` | Cobrança que não pertence à conta da URL. |
 
 - Notificações repetidas não geram nada novo: a baixa e os lançamentos são idempotentes.
+
+### 5.4 Emissões para conciliar (Operação, na tela do cliente)
+
+Emitir, pagar e receber o split são eventos diferentes. Esta lista trata só da
+**emissão**: `PaymentCharge.PENDING` é uma tentativa ainda não confirmada
+localmente, não uma fatura aguardando pagamento. O recebimento do split é
+conferido na seção 6.
+
+| Rótulo | Situação | Ação |
+| --- | --- | --- |
+| Emissão rejeitada | A Efí recusou (ou a emissão parou antes do envio). Mostrada por 30 dias | Corrigir o motivo e emitir a fatura de novo |
+| Confirmação da emissão pendente | Há referência da Efí (`txid`/`charge_id`) mas a confirmação local não terminou | "Conciliar com a Efí" |
+| Referência da Efí necessária | Bolix/boleto sem `charge_id` gravado (resposta perdida ou emissão antiga) | "Conciliar com a Efí": procura a cobrança pelo `custom_id` (o id da tentativa) na conta emissora original |
+| Modalidade diferente da solicitada | Boleto sem Pix quando foi pedido Bolix | Revisar a chave Pix da conta; os instrumentos não são distribuídos |
+
+A conciliação consulta a Efí com a conta e as credenciais da identidade que
+emitiu a cobrança, mesmo que o cliente tenha trocado de conta depois. Ela nunca
+chama a criação. Resultados:
+
+1. **Encontrada, pagável e compatível** (mesmo `custom_id`, valor e modalidade,
+   com linha digitável e link): tentativa `ACTIVE`, fatura com os instrumentos,
+   tudo na mesma transação (`ISSUANCE_RECOVERED`). Isso não comprova o split.
+2. **Paga / cancelada / vencida na Efí:** aplica a mesma rotina idempotente dos
+   webhooks. Uma cobrança já paga nunca volta para ativa ou pendente.
+3. **Não existe na Efí** (`PROVIDER_NOT_FOUND`): só é aceito para uma tentativa
+   aberta com mais de 30 minutos, sem referência gravada, e quando a Efí
+   responde à consulta (listagem por `custom_id` para Bolix/boleto; "cobrança não
+   encontrada" para o txid do Pix). A reserva vira `FAILED` e a fatura pode ser
+   emitida de novo. Uma consulta que falhou nunca é lida como ausência.
+4. **Revisão necessária** (não é sucesso): valor, `custom_id` ou modalidade
+   divergentes, duas cobranças com o mesmo `custom_id`, situação desconhecida,
+   Pix ativo cujo vínculo de split não aparece na consulta, ou tentativa recente
+   demais. Conferir no painel da conta emissora e, se preciso, acionar a Efí.
+
+Cada consulta fica registrada (autor e horário em `AuditLog`; motivo em
+`PaymentChargeStatusHistory.sanitizedDetails`), sem payload da Efí. Não há botão
+genérico de "tentar novamente": uma tentativa incerta sem prova do resultado
+permanece bloqueada até a Efí comprovar a situação.
+
+### 5.5 Diagnóstico somente leitura de uma emissão
+
+Para investigar uma emissão sem expor dados de clientes. Registrar o resultado
+em um registro operacional protegido; não commitar exportações de produção.
+
+1. Anotar o fuso da tela (o painel mostra horário de Brasília) e converter para
+   UTC antes de procurar nos logs.
+2. Tentativas da fatura (substituir o prefixo):
+
+   ```bash
+   sudo bash infra/interserver/compose.sh exec -T postgres psql -U postgres -d ciframais -c \
+     "SELECT id, \"companyId\", \"invoiceId\", \"billingMethod\", status, \"gatewayStatusRaw\", \"grossAmountCents\", \"issuerIdentityId\", \"issuerCredentialVersionId\", \"financialEnvironment\", (\"efiChargeId\" IS NOT NULL) AS tem_charge_id, (\"efiTxid\" IS NOT NULL) AS tem_txid, (\"createdAt\" AT TIME ZONE 'UTC') AT TIME ZONE 'America/Sao_Paulo' AS criada_brt FROM \"PaymentCharge\" WHERE \"invoiceId\" LIKE 'dfcfed91%';"
+   ```
+
+3. Histórico da tentativa (diagnóstico sanitizado; registros antigos não têm o
+   motivo original):
+
+   ```bash
+   sudo bash infra/interserver/compose.sh exec -T postgres psql -U postgres -d ciframais -c \
+     "SELECT h.\"previousStatus\", h.status, h.\"providerStatus\", h.\"sanitizedDetails\", h.\"occurredAt\" FROM \"PaymentChargeStatusHistory\" h JOIN \"PaymentCharge\" c ON c.id = h.\"paymentChargeId\" WHERE c.\"invoiceId\" LIKE 'dfcfed91%' ORDER BY h.\"occurredAt\";"
+   ```
+
+4. Formato dos dados opcionais do pagador, sem exibi-los:
+
+   ```bash
+   sudo bash infra/interserver/compose.sh exec -T postgres psql -U postgres -d ciframais -c \
+     "SELECT i.id, length(regexp_replace(d.\"phoneNumber\", '\\D', '', 'g')) AS digitos_telefone, left(regexp_replace(d.\"phoneNumber\", '\\D', '', 'g'), 2) AS prefixo, coalesce(btrim(d.email), '') <> '' AS tem_email FROM \"Invoice\" i JOIN \"Debtor\" d ON d.id = i.\"debtorId\" WHERE i.id LIKE 'dfcfed91%';"
+   ```
+
+5. Logs da API no intervalo (UTC). Versões anteriores a esta correção só
+   registravam `Falha ambígua da Efí ao criar boleto`, sem o motivo:
+
+   ```bash
+   sudo bash infra/interserver/compose.sh logs --since 2026-09-29T18:00:00Z --until 2026-09-29T18:30:00Z api | grep -E "Emissão Efí|Falha ambígua|Erro Efi"
+   ```
+
+6. Consultar a Efí pela conta emissora: "Conciliar com a Efí" (seção 5.4). Sem
+   referência, a própria conciliação procura pelo `custom_id`. A ausência visual
+   no painel da Efí, sozinha, não comprova que a requisição foi recusada.
+7. Classificar: rejeição comprovada; emissão existente recuperável; divergência
+   de modalidade; ou resultado ainda incerto. Separar fatos de hipóteses e não
+   emitir de novo para testar uma hipótese.
 
 ## 6. Conciliação (Admin → Conciliação)
 
