@@ -461,6 +461,42 @@ describe('Shared outbound dispatch policies', () => {
       }),
     );
   });
+  it('sends the invoice Pix code in the approved "Copy Pix code" button', async () => {
+    const { service, pinTemplate, transport, paymentLinks } = setup();
+    pinTemplate({
+      paymentButtonFromInvoice: undefined,
+      pixButton: { index: 0, code: '00020101021226860014br.gov.bcb.pix' },
+    });
+    await service.dispatch('intent');
+    expect(paymentLinks.createInvoicePaymentPage).not.toHaveBeenCalled();
+    expect(transport.sendTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        components: [
+          { type: 'body', parameters: [{ type: 'text', text: 'Ana' }] },
+          {
+            type: 'button',
+            sub_type: 'payment_request',
+            index: '0',
+            parameters: [
+              {
+                type: 'action',
+                action: {
+                  payment_request: {
+                    payment_setting: {
+                      type: 'pix_dynamic_code',
+                      pix_dynamic_code: {
+                        code: '00020101021226860014br.gov.bcb.pix',
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+  });
   it('refuses quick replies the approved catalog does not support', async () => {
     const { service, pinTemplate, transport } = setup();
     pinTemplate({ quickReplyButtons: [1] });

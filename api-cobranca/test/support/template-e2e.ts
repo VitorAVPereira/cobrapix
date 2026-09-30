@@ -90,6 +90,41 @@ export const CATALOG = [
       },
     ],
   },
+  // "Copy Pix code" payment request button, as created in the WhatsApp Manager.
+  {
+    id: '777003',
+    name: 'emissao_pix',
+    language: 'pt_BR',
+    status: 'APPROVED',
+    category: 'UTILITY',
+    parameter_format: 'NAMED',
+    components: [
+      {
+        type: 'BODY',
+        text: 'Boa tarde, {{nome_devedor}}. Seu valor em aberto de {{valor}} vence no dia {{data_vencimento}}.',
+      },
+      {
+        type: 'FOOTER',
+        text: 'Caso já tenha realizado o pagamento, desconsidere!',
+      },
+      {
+        type: 'BUTTONS',
+        buttons: [
+          {
+            type: 'PAYMENT_REQUEST',
+            text: 'Copiar código Pix',
+            payment_setting: {
+              type: 'pix_dynamic_code',
+              pix_dynamic_code: {
+                code: '00020101021226700014br.gov.bcb.pix2548exemplo',
+              },
+            },
+          },
+          { type: 'QUICK_REPLY', text: 'Preciso de ajuda' },
+        ],
+      },
+    ],
+  },
 ];
 
 export function assertDisposable(spec: string): void {
