@@ -116,7 +116,7 @@ export function AdminMessageDetails({
 }): ReactNode {
   const intent = message.outboundIntent;
   const reason =
-    intent && ["UNCERTAIN", "FAILED"].includes(intent.state)
+    intent && ["UNCERTAIN", "FAILED", "PENDING"].includes(intent.state)
       ? reasonLabel(intent.lastErrorCode)
       : null;
   return (
@@ -136,6 +136,12 @@ export function AdminMessageDetails({
       )}
       {intent?.state === "FAILED" && (
         <p className="rounded bg-red-50 p-2 text-red-800">{reason}</p>
+      )}
+      {/* Queued is not sent: say why it is still waiting. */}
+      {intent?.state === "PENDING" && reason && (
+        <p role="note" className="rounded bg-slate-100 p-2 text-slate-700">
+          Ainda não enviada. {reason}
+        </p>
       )}
       <div className="flex gap-3">
         {!intent && (

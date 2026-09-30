@@ -33,10 +33,14 @@ indica que essa verificação terminou; não confirma recebimento de eventos, en
 de mensagens ou capacidade de cobrança.
 
 `/health` não chama o fornecedor: informa configuração local completa e
-`authentication: NOT_CHECKED`; não é evidência de token válido. A consulta de tier
-usa o canal compartilhado e não altera cotas comerciais das empresas. O consumo das
-últimas 24 h em `GET /whatsapp/usage` vem das mensagens da empresa no histórico
-de conversas (status recebidos pelo webhook Datafy).
+`authentication: NOT_CHECKED`; não é evidência de token válido.
+
+As estatísticas da empresa (`GET /whatsapp/stats`, empresa da sessão) são as
+mensagens dela nas últimas 24 horas (janela móvel) no histórico de conversas,
+com os status recebidos pelo webhook Datafy: enviadas, entregues, lidas,
+falhas e respostas. Não trazem limite, tier, capacidade ou qualidade do número.
+`GET /whatsapp/usage` continua respondendo durante a transição, com campos de
+cota que não limitam mais nenhum envio.
 
 ## Envios, limites e templates (etapa 4)
 
@@ -49,7 +53,7 @@ onboarding Efí usam o mesmo ciclo. O envio pela inbox antiga
 
 | Estado | Significado | Reenvio automático |
 | --- | --- | --- |
-| `PENDING` | Não transmitido; aguarda quota, canal pausado, Redis ou banco | Sim, pela recuperação a cada 10 s após `nextAttemptAt` |
+| `PENDING` | Não transmitido; aguarda capacidade, canal pausado, Redis ou banco. `lastErrorCode` diz o motivo (`CHANNEL_CAPACITY_EXHAUSTED`, `PROVIDER_RATE_LIMIT`, `CHANNEL_CONTROL_UNAVAILABLE` ou `WAITING_FOR_CHANNEL`) | Sim, pela recuperação a cada 10 s após `nextAttemptAt` |
 | `SENDING` | Reclamado por um worker com lease de 60 s | Não; lease expirado vira `UNCERTAIN` |
 | `ACCEPTED` | Provedor aceitou; entrega/leitura chegam por webhook | Não |
 | `FAILED` | Rejeitado antes de transmitir ou recusa definitiva | Não; exige nova ação |
@@ -77,17 +81,53 @@ contexto precisam produzir a mesma impressão digital. Qualquer divergência vir
 | BullMQ `whatsapp-messages` | 60 jobs/s, concorrência 20 | Técnico (vazão do worker) | Processo |
 | Remetente | 60 mensagens/h | Proteção local existente | Número compartilhado (`sender:<phone_number_id>`) |
 | Destinatário | 20 mensagens/h | Proteção local existente | Telefone |
-| Destinatários únicos/24 h | Tier do canal (`TIER_50` sem tier verificado) | Limite do número na WABA | Número compartilhado, somando todas as empresas |
-| Destinatários únicos/24 h | `messagingLimitTier` da empresa | Proteção comercial | Empresa |
+| Capacidade do canal central | Tier confirmado pelo Datafy; sem confirmação, 50 (proteção local) | Limite de mensagens da Meta | Canal (`channel:<phone_number_id>`), somando todas as empresas |
 | Quota Datafy | envio 500/min, upload 60/min, demais 60/min, espaçados sem rajada | Técnico (contrato do provedor) | Hash do token, todos os processos |
 
-Os limites se somam. O teto de 60/h
-do remetente vale para o número inteiro e é hoje o limite efetivo da plataforma. A
-documentação pública do Datafy consultada em 24/09/2026 informa 4.800 envios/min;
-os valores acima são deliberadamente conservadores. Redis indisponível nunca libera
-envio: a intenção permanece pendente. Em 429 o prazo informado é respeitado; sem
-prazo confiável, espera exponencial. Consultas GET podem repetir até duas vezes;
-POST com resultado incerto não repete.
+Não existe cota por empresa: `Company.messagingLimitTier` e `MessagingUsage`
+permanecem só como histórico e não influenciam envios. Os limites se somam. O teto
+de 60/h do remetente vale para o número inteiro e é hoje o limite efetivo da
+plataforma. A documentação pública do Datafy consultada em 24/09/2026 informa
+4.800 envios/min; os valores acima são deliberadamente conservadores. Redis
+indisponível nunca libera envio: a intenção permanece pendente. Em 429 o prazo
+informado é respeitado; sem prazo confiável, espera exponencial. Os códigos de
+limite da Meta repassados pelo Datafy (130429, 131056: 60 s; 131048, 80007: 1 h)
+também deixam a intenção pendente, com `PROVIDER_RATE_LIMIT`. Consultas GET podem
+repetir até duas vezes; POST com resultado incerto não repete.
+
+### Capacidade do canal central
+
+Semântica confirmada na documentação da Meta (consultada em 29/09/2026): o limite
+é o número de **destinatários únicos alcançados fora de uma janela de
+atendimento em 24 horas móveis**, definido por **portfólio de negócios** e
+compartilhado por todos os números dele. Valores atuais: `TIER_250`, `TIER_2K`,
+`TIER_10K`, `TIER_100K`, `TIER_UNLIMITED` (`TIER_50` e `TIER_1K` ainda são
+aceitos). O campo `messaging_limit_tier` foi descontinuado em favor de
+`whatsapp_business_manager_messaging_limit`; o transporte pede o novo e só recorre
+ao antigo quando o Datafy recusa ou omite o novo. Nenhum rótulo diferente de um
+tier exato (por exemplo, empresa verificada) é tratado como limite, muito menos
+ilimitado.
+
+Aplicação local:
+
+- Só **templates** reservam capacidade; texto livre só é transmitido com a janela
+  de atendimento aberta e não conta para a Meta.
+- A reserva (`reserveDispatchQuota`) ocorre antes da transmissão, sob um lock
+  consultivo por canal, na mesma transação que grava `quotaReservedAt`. Um retry
+  da mesma intenção não reserva de novo; um destinatário já alcançado nas últimas
+  24 h não consome nova vaga, qualquer que seja a empresa.
+- Canal cheio: a intenção fica `PENDING` com `CHANNEL_CAPACITY_EXHAUSTED` e nova
+  tentativa quando a vaga mais antiga sai da janela (entre 1 min e 1 h); não troca
+  template nem canal.
+- O escopo da reserva é o número (`phone_number_id`). Com um único número isso
+  equivale ao portfólio; incluir outro número do mesmo portfólio exigiria somá-los.
+- `GET /whatsapp/admin/channel-capacity` (somente admin) informa `limit`, `used`,
+  `remaining`, `tier`, `source`, `checkedAt` e `nextAvailableAt` (só quando
+  esgotado). `source`: `PROVIDER` (lido agora), `VERIFIED_CACHE` (lido nas últimas
+  24 h), `FALLBACK` (sem tier confirmado; vale a proteção de 50, que não é o
+  limite da conta) ou `UNAVAILABLE` (Redis ou banco sem resposta; nada é
+  liberado). `POST /whatsapp/sync-tier` (admin) consulta o Datafy e guarda o tier
+  por 24 h. Não há promessa de reinício à meia-noite: a janela é móvel.
 
 ### Templates
 
@@ -129,4 +169,5 @@ Operação e transição: [docs/operations/whatsapp-template-catalog.md](../../.
 - [Introdução Datafy](https://developers.datafyapi.com.br/api-reference/whatsapp/introducao)
 - [Identidade /me](https://developers.datafyapi.com.br/api-reference/whatsapp/datafy/me)
 - [Requisições e limites](https://developers.datafyapi.com.br/api-reference/whatsapp/visao-geral/requisicoes)
+- [Messaging limits (Meta)](https://developers.facebook.com/documentation/business-messaging/whatsapp/messaging-limits)
 - [Download de bytes](https://developers.datafyapi.com.br/api-reference/whatsapp/datafy/baixar-arquivo-midia)

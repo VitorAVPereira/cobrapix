@@ -337,5 +337,10 @@ Dados sintéticos em PostgreSQL 16 descartável limitado a 1,5 GiB de RAM
 | Ingestão de webhook | 5,8 ms por entrega para persistir; 229 mensagens/s processadas com concorrência 4 |
 | Tamanho | banco 407 MB (tabela de mensagens 371 MB), PostgreSQL 367 MiB de RAM |
 
-Os limites comerciais continuam valendo: o teto do número compartilhado
-(60 mensagens/h) é o limite efetivo da plataforma.
+Não há mais cota de WhatsApp por empresa: todas as empresas disputam a
+capacidade do canal central (tier da Meta, confirmado pelo Datafy) e o teto do
+número compartilhado (60 mensagens/h), que continua sendo o limite efetivo da
+plataforma. Depois de publicar, confirme o tier em **Admin → Visão geral →
+Canal WhatsApp central → Confirmar tier no Datafy**; até isso, vale a proteção
+local de 50 destinatários únicos em 24 h, indicada como "não confirmado".
+Semântica e escopo: `api-cobranca/src/whatsapp/transport/README.md`.

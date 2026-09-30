@@ -11,13 +11,11 @@ import {
   MessageCircle,
   Percent,
   Send,
-  Smartphone,
-  TrendingDown,
-  TrendingUp,
+  MessagesSquare,
   WalletCards,
   type LucideIcon,
 } from "lucide-react";
-import type { BillingMetrics, DashboardPeriod, WhatsAppUsageResponse } from "@/lib/api-client";
+import type { BillingMetrics, DashboardPeriod, WhatsAppStatsResponse } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 
 type Period = "Hoje" | "7 Dias" | "30 Dias" | "Este Ano";
@@ -67,7 +65,7 @@ export default function DashboardPage() {
   const apiClient = useApiClient();
   const [selectedPeriod, setSelectedPeriod] = useState<Period>("30 Dias");
   const [metrics, setMetrics] = useState<BillingMetrics>(emptyMetrics);
-  const [usage, setUsage] = useState<WhatsAppUsageResponse | null>(null);
+  const [whatsapp, setWhatsapp] = useState<WhatsAppStatsResponse | null>(null);
   const [emailStats, setEmailStats] = useState<{
     sent: number;
     delivered: number;
@@ -102,12 +100,12 @@ export default function DashboardPage() {
   }, [apiClient, selectedPeriod]);
 
   useEffect(() => {
-    async function fetchUsage(): Promise<void> {
+    // Results of this company only; the central channel capacity is not shown here.
+    async function fetchWhatsappStats(): Promise<void> {
       try {
-        const data = await apiClient.getWhatsappUsage();
-        setUsage(data);
+        setWhatsapp(await apiClient.getWhatsappStats());
       } catch {
-        // consumo nao critico - nao mostra erro
+        // estatisticas nao criticas - nao mostra erro
       }
     }
 
@@ -125,7 +123,7 @@ export default function DashboardPage() {
       }
     }
 
-    void fetchUsage();
+    void fetchWhatsappStats();
     void fetchEmailStats();
   }, [apiClient]);
 
@@ -165,7 +163,7 @@ export default function DashboardPage() {
     {
       label: "Mensagens Enviadas",
       value: metrics.sentMessages.toLocaleString("pt-BR"),
-      helper: "Disparos confirmados pela fila",
+      helper: "Aceitas pelo WhatsApp (não inclui as que estão na fila)",
       icon: Send,
     },
     {
@@ -284,9 +282,10 @@ export default function DashboardPage() {
               <div className="flex h-10 w-10 items-center justify-center rounded-md bg-rose-50 text-rose-600">
                 <Mail size={20} />
               </div>
-              <p className="text-sm font-medium text-slate-500">
-                E-mails de Cobranca (30d)
-              </p>
+              <div>
+                <h2 className="text-sm font-medium text-slate-500">E-mails de cobrança</h2>
+                <p className="text-xs text-slate-400">Últimos 30 dias</p>
+              </div>
             </div>
 
             <div className="grid grid-cols-4 gap-3">
@@ -335,91 +334,41 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        {usage && (
-          <section className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-            <article className="rounded-md border border-slate-200 bg-white p-5">
-              <div className="mb-4 flex items-center gap-2">
-                <div className="flex h-10 w-10 items-center justify-center rounded-md bg-blue-50 text-blue-600">
-                  <Smartphone size={20} />
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-slate-500">
-                    Limite Diario WhatsApp
-                  </p>
-                  <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
-                    {usage.tier.replace("TIER_", "Tier ")}
-                  </span>
-                </div>
-              </div>
-
-              <div className="mb-3">
-                <div className="flex items-baseline justify-between">
-                  <strong className="block text-2xl font-bold tracking-tight text-slate-900">
-                    {usage.dailyUsage.toLocaleString("pt-BR")}
-                  </strong>
-                  <span className="text-sm text-slate-400">
-                    / {usage.dailyLimit.toLocaleString("pt-BR")}
-                  </span>
-                </div>
-                <p className="text-sm text-slate-500">clientes unicos hoje</p>
-              </div>
-
-              <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
-                <div
-                  className={`h-full rounded-full transition-all ${
-                    usage.remaining === 0
-                      ? "bg-rose-500"
-                      : usage.dailyUsage / usage.dailyLimit > 0.8
-                        ? "bg-amber-500"
-                        : "bg-emerald-500"
-                  }`}
-                  style={{
-                    width: `${Math.min(
-                      100,
-                      (usage.dailyUsage / usage.dailyLimit) * 100,
-                    )}%`,
-                  }}
-                />
-              </div>
-              <p className="mt-2 text-xs text-slate-400">
-                {usage.remaining > 0
-                  ? `${usage.remaining} envios restantes hoje`
-                  : "Limite diario esgotado"}
-              </p>
-            </article>
-
-            <article className="rounded-md border border-slate-200 bg-white p-5">
+        {whatsapp && (
+          <section aria-label="WhatsApp" className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+            <article className="rounded-md border border-slate-200 bg-white p-5 xl:col-span-2">
               <div className="mb-4 flex items-center gap-2">
                 <div className="flex h-10 w-10 items-center justify-center rounded-md bg-emerald-50 text-emerald-600">
                   <Send size={20} />
                 </div>
-                <p className="text-sm font-medium text-slate-500">
-                  Envios Hoje
-                </p>
+                <div>
+                  <h2 className="text-sm font-medium text-slate-500">Mensagens de WhatsApp</h2>
+                  <p className="text-xs text-slate-400">Últimas 24 horas</p>
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <div>
                   <span className="text-2xl font-bold text-slate-900">
-                    {usage.interactions.outbound.toLocaleString("pt-BR")}
+                    {whatsapp.interactions.outbound.toLocaleString("pt-BR")}
                   </span>
-                  <p className="text-xs text-slate-400">enviados</p>
+                  <p className="text-xs text-slate-400">enviadas</p>
                 </div>
                 <div>
                   <span className="text-2xl font-bold text-emerald-700">
-                    {usage.interactions.delivered.toLocaleString("pt-BR")}
+                    {whatsapp.interactions.delivered.toLocaleString("pt-BR")}
                   </span>
                   <p className="text-xs text-slate-400">entregues</p>
                 </div>
                 <div>
                   <span className="text-2xl font-bold text-blue-700">
-                    {usage.interactions.read.toLocaleString("pt-BR")}
+                    {whatsapp.interactions.read.toLocaleString("pt-BR")}
                   </span>
-                  <p className="text-xs text-slate-400">lidos</p>
+                  <p className="text-xs text-slate-400">lidas</p>
                 </div>
                 <div>
                   <span className="text-2xl font-bold text-rose-700">
-                    {usage.interactions.failed.toLocaleString("pt-BR")}
+                    {whatsapp.interactions.failed.toLocaleString("pt-BR")}
                   </span>
                   <p className="text-xs text-slate-400">falhas</p>
                 </div>
@@ -429,31 +378,18 @@ export default function DashboardPage() {
             <article className="rounded-md border border-slate-200 bg-white p-5">
               <div className="mb-4 flex items-center gap-2">
                 <div className="flex h-10 w-10 items-center justify-center rounded-md bg-violet-50 text-violet-600">
-                  {usage.interactions.inbound > 0 ? (
-                    <TrendingUp size={20} />
-                  ) : (
-                    <TrendingDown size={20} />
-                  )}
+                  <MessagesSquare size={20} />
                 </div>
-                <p className="text-sm font-medium text-slate-500">
-                  Interacoes Hoje
-                </p>
+                <div>
+                  <h2 className="text-sm font-medium text-slate-500">Respostas de clientes</h2>
+                  <p className="text-xs text-slate-400">Últimas 24 horas</p>
+                </div>
               </div>
 
               <span className="text-2xl font-bold text-violet-700">
-                {usage.interactions.inbound.toLocaleString("pt-BR")}
+                {whatsapp.interactions.inbound.toLocaleString("pt-BR")}
               </span>
-              <p className="text-sm text-slate-500">
-                respostas de clientes
-              </p>
-
-              <div className="mt-4 rounded-md bg-slate-50 p-3">
-                <p className="text-xs leading-relaxed text-slate-500">
-                  Clientes que respondem as mensagens ajudam a melhorar a
-                  qualidade do seu numero e podem aumentar seu limite de envios
-                  na Meta.
-                </p>
-              </div>
+              <p className="text-sm text-slate-500">mensagens recebidas</p>
             </article>
           </section>
         )}

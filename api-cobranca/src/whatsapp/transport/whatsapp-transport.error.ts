@@ -49,6 +49,15 @@ export function invalidResponse(mutating: boolean): WhatsappTransportError {
   );
 }
 
+// Seconds to wait for each Meta limit code (130429 throughput, 131056 pair
+// rate, 131048 spam rate, 80007 account rate).
+const PROVIDER_LIMIT_WAIT: Record<number, number> = {
+  130429: 60,
+  131056: 60,
+  131048: 3600,
+  80007: 3600,
+};
+
 export function providerError(
   status: number,
   payload: unknown,
@@ -105,6 +114,21 @@ export function providerError(
       status,
       code,
       wait,
+    );
+  }
+  // Meta throughput/limit codes relayed by the provider: nothing was sent, so
+  // the message waits instead of failing (throughput and pair limits clear in
+  // seconds; spam and account limits take longer).
+  const limitWait = code === undefined ? undefined : PROVIDER_LIMIT_WAIT[code];
+  if (limitWait !== undefined) {
+    return new WhatsappTransportError(
+      `Limite do canal informado pelo provedor. O envio aguardara.${suffix}`,
+      'RATE_LIMIT',
+      'NOT_SENT',
+      status,
+      code,
+      limitWait,
+      'PROVIDER_RATE_LIMIT',
     );
   }
   if (status >= 500 || status === 408 || status < 400) {

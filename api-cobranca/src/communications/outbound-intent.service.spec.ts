@@ -241,7 +241,34 @@ describe('OutboundIntentService dispatch', () => {
     expect(record.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(
       before + 90_000,
     );
+    expect(record.lastErrorCode).toBe('WAITING_FOR_CHANNEL');
   });
+  it.each([
+    ['CHANNEL_CAPACITY_EXHAUSTED', 'RATE_LIMIT' as const],
+    ['PROVIDER_RATE_LIMIT', 'RATE_LIMIT' as const],
+    ['CHANNEL_CONTROL_UNAVAILABLE', 'TEMPORARY' as const],
+  ])(
+    'keeps a %s wait pending with its own reason',
+    async (reasonCode, kind) => {
+      const { service, record } = setup();
+      const wait = new WhatsappTransportError(
+        'wait',
+        kind,
+        'NOT_SENT',
+        undefined,
+        undefined,
+        600,
+        reasonCode,
+      );
+      await expect(
+        service.execute('intent', () => Promise.reject(wait), jest.fn()),
+      ).rejects.toThrow();
+      expect(record).toMatchObject({
+        state: 'PENDING',
+        lastErrorCode: reasonCode,
+      });
+    },
+  );
   it.each([
     [
       new WhatsappTransportError(
