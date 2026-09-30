@@ -570,9 +570,8 @@ export class AdminService {
       if (whatsapp.metaDefaultLanguage !== undefined) {
         data.metaDefaultLanguage = whatsapp.metaDefaultLanguage;
       }
-      if (whatsapp.messagingLimitTier !== undefined) {
-        data.messagingLimitTier = whatsapp.messagingLimitTier;
-      }
+      // messagingLimitTier is still accepted from older admin screens but has
+      // no effect: WhatsApp capacity is the central channel's, not a company's.
     }
 
     if (dto.integrations) {

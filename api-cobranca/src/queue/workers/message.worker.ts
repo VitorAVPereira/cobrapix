@@ -1,6 +1,7 @@
 import {
   Injectable,
   ConflictException,
+  HttpException,
   Logger,
   OnModuleInit,
   OnModuleDestroy,
@@ -12,7 +13,8 @@ import {
   CollectionChannel,
   Prisma,
 } from '@prisma/client';
-import { Worker, Job } from 'bullmq';
+import { Worker, Job, UnrecoverableError } from 'bullmq';
+import { issuanceFailureOf } from '../../payment/efi-issuance-error';
 import { WhatsappTransportError } from '../../whatsapp/transport/whatsapp-transport.error';
 import { TemplatePolicyError } from '../../templates/template-contracts';
 import { TemplateSendPreparerService } from '../../templates/template-send-preparer.service';
@@ -527,7 +529,13 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    if (!this.shouldAutoGenerateFirstCharge(invoice)) {
+    // The setting governs the automatic first charge (new, imported or
+    // recurring invoices). A send the user selected explicitly still runs,
+    // with the same financial and communication validations.
+    if (
+      data.source !== 'SELECTED' &&
+      !this.shouldAutoGenerateFirstCharge(invoice)
+    ) {
       await this.createCollectionLog(
         data.companyId,
         data.invoiceId,
@@ -845,6 +853,11 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         'FAILED',
       );
 
+      // A refusal by Efí or an uncertain issuance is never retried by the
+      // queue: the first would be refused again, the second waits for
+      // reconciliation. The user sends again after fixing the data.
+      if (this.isFinalIssuanceFailure(error))
+        throw new UnrecoverableError('INITIAL_CHARGE_PAYMENT_FAILED');
       throw error;
     }
   }
@@ -1132,6 +1145,19 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
 
       throw error;
     }
+  }
+
+  // A diagnosed issuance failure, or a reservation still awaiting
+  // reconciliation (EFI_SUBMISSION_UNCERTAIN): retrying cannot help.
+  private isFinalIssuanceFailure(error: unknown): boolean {
+    if (issuanceFailureOf(error)) return true;
+    if (!(error instanceof HttpException)) return false;
+    const response = error.getResponse();
+    return (
+      typeof response === 'object' &&
+      response !== null &&
+      (response as { code?: unknown }).code === 'EFI_SUBMISSION_UNCERTAIN'
+    );
   }
 
   private isBillingMethod(value: unknown): value is BillingMethod {

@@ -139,6 +139,22 @@ export class WhatsappController {
     return this.whatsappService.testIntegration();
   }
 
+  // Results of the signed-in company only (the company comes from the session,
+  // never from the request); no channel capacity, tier or quality.
+  @Get('stats')
+  async getStats(@GetUser() user: AuthenticatedUser) {
+    return {
+      period: 'rolling_24h' as const,
+      interactions: await this.messagingLimitService.getInteractionStats(
+        user.companyId,
+      ),
+    };
+  }
+
+  /**
+   * @deprecated Kept for frontends published before GET /whatsapp/stats; the
+   * tier fields no longer limit sends and are removed in a coordinated step.
+   */
   @Get('usage')
   async getUsage(@GetUser() user: AuthenticatedUser) {
     const [dailyStatus, interactions] = await Promise.all([
@@ -155,20 +171,27 @@ export class WhatsappController {
     };
   }
 
+  // Central channel operation: platform administrators only.
+  @Get('admin/channel-capacity')
+  @UseGuards(PlatformAdminGuard)
+  async getChannelCapacity() {
+    return this.messagingLimitService.getChannelCapacity();
+  }
+
+  // Reads the central channel tier through Datafy; no company is changed.
   @Post('sync-tier')
   @UseGuards(PlatformAdminGuard)
-  async syncTier(@GetUser() user: AuthenticatedUser) {
-    const tier = await this.messagingLimitService.syncTierFromMeta(
-      user.companyId,
-    );
+  async syncTier() {
+    const { tier, capacity } =
+      await this.messagingLimitService.syncChannelTier();
 
     if (!tier) {
       throw new HttpException(
-        'Nao foi possivel sincronizar o tier com a Meta',
+        'Nao foi possivel confirmar o tier do canal pelo Datafy.',
         HttpStatus.BAD_GATEWAY,
       );
     }
 
-    return { tier };
+    return { tier, capacity };
   }
 }

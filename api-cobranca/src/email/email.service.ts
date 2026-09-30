@@ -21,6 +21,8 @@ interface SendEmailInput {
 }
 
 interface EmailStats {
+  // Start of the counted period (the end is now).
+  periodStart: string;
   sent: number;
   delivered: number;
   opened: number;
@@ -199,7 +201,16 @@ export class EmailService {
         }),
       ]);
 
-    return { sent, delivered, opened, clicked, bounced, complained, failed };
+    return {
+      periodStart: since.toISOString(),
+      sent,
+      delivered,
+      opened,
+      clicked,
+      bounced,
+      complained,
+      failed,
+    };
   }
 
   async handleWebhookEvent(
@@ -675,9 +686,12 @@ export class EmailService {
   private sinceDate(period: 'today' | '7d' | '30d'): Date {
     const now = new Date();
     switch (period) {
-      case 'today':
-        now.setHours(0, 0, 0, 0);
-        return now;
+      case 'today': {
+        // Calendar day in Brasília (UTC-3, no DST), not the server's midnight.
+        const brasilia = new Date(now.getTime() - 3 * 3_600_000);
+        brasilia.setUTCHours(0, 0, 0, 0);
+        return new Date(brasilia.getTime() + 3 * 3_600_000);
+      }
       case '7d':
         now.setDate(now.getDate() - 7);
         return now;

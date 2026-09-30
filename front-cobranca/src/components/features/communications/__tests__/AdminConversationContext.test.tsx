@@ -312,4 +312,28 @@ describe("Admin conversation actions", () => {
     expect(screen.getAllByRole("button", { name: "Classificar" })).toHaveLength(1);
     expect(screen.queryByRole("button", { name: /reenviar/i })).toBeNull();
   });
+
+  it.each([
+    ["CHANNEL_CAPACITY_EXHAUSTED", /Capacidade do canal central esgotada/],
+    ["PROVIDER_RATE_LIMIT", /Limite informado pelo WhatsApp/],
+    ["WAITING_FOR_CHANNEL", /Aguardando limite ou disponibilidade do canal/],
+  ])("says why a queued send (%s) is still not sent", (code, text) => {
+    render(
+      <AdminMessageDetails
+        message={{
+          ...uncertain,
+          status: "pending",
+          outboundIntent: { state: "PENDING", lastErrorCode: code },
+        }}
+        canQuote={false}
+        onClassify={jest.fn()}
+        onQuote={jest.fn()}
+      />,
+    );
+    const note = screen.getByRole("note");
+    expect(note).toHaveTextContent("Ainda não enviada.");
+    expect(note).toHaveTextContent(text);
+    expect(screen.queryByText(/Entregue|Enviada\b/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /reenviar/i })).toBeNull();
+  });
 });

@@ -70,8 +70,14 @@ export function providerTemplateBlock(
 export interface DispatchPolicy {
   /** Invoice must still be pending and the debtor opted in, rechecked before transmission. */
   checksCollectionEligibility: boolean;
-  /** Consumes the company's commercial daily quota and MessagingUsage. */
-  consumesCompanyQuota: boolean;
+  /**
+   * Reserves the central channel capacity (unique recipients reached outside
+   * the service window in 24 h). In-window text replies do not consume it.
+   * There is no per-company quota.
+   */
+  consumesChannelCapacity: boolean;
+  /** Keeps the company's MessagingUsage history (statistics only). */
+  recordsCompanyUsage: boolean;
   /** Acceptance and rejection are recorded on the collection (log/attempt). */
   recordsCollection: boolean;
 }
@@ -83,7 +89,8 @@ export function dispatchPolicy(input: DispatchInput): DispatchPolicy {
     !platformReply && Boolean(input.companyId && input.invoiceId);
   return {
     checksCollectionEligibility: collection,
-    consumesCompanyQuota: !platformReply,
+    consumesChannelCapacity: input.messageType === 'template',
+    recordsCompanyUsage: !platformReply,
     recordsCollection: collection,
   };
 }
@@ -517,7 +524,7 @@ export class OutboundDispatcherService {
     await this.messaging.reserveDispatchQuota(
       intent.id,
       intent.transportChannelId,
-      { commercial: policy.consumesCompanyQuota },
+      { consumesCapacity: policy.consumesChannelCapacity },
     );
   }
 
@@ -612,7 +619,7 @@ export class OutboundDispatcherService {
     await reevaluateReplies(tx, intent.messageId);
     const input = this.payload(intent);
     const policy = dispatchPolicy(input);
-    if (policy.consumesCompanyQuota && input.companyId)
+    if (policy.recordsCompanyUsage && input.companyId)
       await tx.messagingUsage.upsert({
         where: {
           companyId_phoneNumber: {

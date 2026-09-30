@@ -251,6 +251,27 @@ Acompanhe por códigos e IDs, nunca por conteúdo de mensagem:
 - Registros de cobrança `WHATSAPP_TEMPLATE_HELD` (mensagem retida) e recusas do
   provedor 132xxx nas intenções (`lastErrorCode`).
 
+### "Enfileirou, mas não entregou": em que etapa está
+
+Emitir o pagamento, enfileirar, transmitir, entregar e pagar são eventos
+diferentes. Siga a cobrança pela fatura:
+
+| Onde aparece | Etapa e motivo | O que fazer |
+| --- | --- | --- |
+| `INITIAL_CHARGE_PAYMENT_FAILED` no histórico da fatura | A emissão Efí falhou; nenhuma mensagem foi preparada. O texto traz o motivo (ex.: telefone do pagador recusado) | Corrigir o cadastro e enviar de novo; a fila não repete uma emissão recusada ou incerta. Emissão incerta: Operação → Emissões para conciliar |
+| `INITIAL_CHARGE_SKIPPED` | Ativação financeira pendente, primeira cobrança automática desligada (vale só para criação, importação e recorrência; o envio selecionado pelo usuário segue) ou template retido | Conferir a mensagem do registro |
+| `WHATSAPP_OPT_IN_REQUIRED` | Devedor sem opt-in | Obter o opt-in |
+| Pendência de template (`template-pending/summary`) | `BLOCKED`: sem template padrão `EMISSION` liberado, mapeamento ou contexto alterado | Revisar e confirmar as pendências; mudar capacidade ou liberação não as retoma sozinho |
+| Intenção `PENDING` | Na fila, ainda não transmitida. `lastErrorCode`: `CHANNEL_CAPACITY_EXHAUSTED` (capacidade central esgotada), `PROVIDER_RATE_LIMIT` (limite informado pelo WhatsApp), `CHANNEL_CONTROL_UNAVAILABLE` (Redis/banco) ou `WAITING_FOR_CHANNEL` (canal pausado ou ritmo de envio) | Aguardar; conferir a capacidade em Admin → Visão geral |
+| Intenção `FAILED` | Recusa antes ou na transmissão (`lastErrorCode`: janela fechada, cobrança não pendente, template, destinatário pausado) | Agir conforme o motivo; não há reenvio automático |
+| Intenção `ACCEPTED`, mensagem sem `delivered` | O Datafy aceitou; entrega e leitura dependem do webhook | Conferir os eventos do webhook; aceito não é entregue |
+| Intenção `UNCERTAIN` | Pode ter sido aceita | Nunca reenviar sem conciliar com o Datafy |
+
+Antes de transmitir, o worker revalida canal, opt-out, janela, fatura ainda
+pendente, opt-in e o template fixado; cobrança paga ou cancelada enquanto
+esperava na fila não é enviada. O pagamento já emitido é reaproveitado; um
+reenvio de mensagem não gera nova emissão.
+
 Em qualquer falha, **pause o WhatsApp primeiro** (passo 2). Depois:
 
 - **Correção adiante (preferida)**: publique uma release corrigida seguindo este

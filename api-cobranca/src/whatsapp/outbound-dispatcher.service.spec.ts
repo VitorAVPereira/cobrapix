@@ -344,7 +344,7 @@ describe('Shared outbound dispatch policies', () => {
     await expect(service.dispatch('intent')).rejects.toBe(uncertain);
     expect(pending.block).not.toHaveBeenCalled();
   });
-  it('enforces shared sender, recipient and commercial quotas on direct/recovery paths', async () => {
+  it('enforces shared sender and recipient limits; in-window text uses no channel capacity', async () => {
     const { service, rates, messaging } = setup();
     await service.dispatch('intent');
     expect(rates.checkRateLimit).toHaveBeenCalledWith(
@@ -355,7 +355,7 @@ describe('Shared outbound dispatch policies', () => {
     expect(messaging.reserveDispatchQuota).toHaveBeenCalledWith(
       'intent',
       '123',
-      { commercial: true },
+      { consumesCapacity: false },
     );
   });
   it('holds queued intents while the channel is paused', async () => {
@@ -392,7 +392,7 @@ describe('Shared outbound dispatch policies', () => {
     expect(messaging.reserveDispatchQuota).toHaveBeenCalledWith(
       'intent',
       '123',
-      { commercial: false },
+      { consumesCapacity: false },
     );
     expect(transport.sendText).toHaveBeenCalledWith({
       to: '5511999999999',
@@ -413,9 +413,17 @@ describe('Shared outbound dispatch policies', () => {
     expect(transport.sendText).not.toHaveBeenCalled();
   });
   it('builds the payment link at transmission for the pinned invoice', async () => {
-    const { service, pinTemplate, transport, paymentLinks } = setup();
+    const { service, pinTemplate, transport, paymentLinks, messaging } =
+      setup();
     pinTemplate();
     await service.dispatch('intent');
+    // A template can reach a user outside the service window: it consumes the
+    // central capacity, whichever company sends it.
+    expect(messaging.reserveDispatchQuota).toHaveBeenCalledWith(
+      'intent',
+      '123',
+      { consumesCapacity: true },
+    );
     expect(paymentLinks.createInvoicePaymentPage).toHaveBeenCalledWith({
       companyId: 'company-a',
       invoiceId: 'invoice-a',

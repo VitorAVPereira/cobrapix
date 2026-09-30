@@ -167,13 +167,13 @@ export class DatafyTransport implements WhatsappTransport {
       account.waba_id !== businessAccountId
     )
       throw configError();
-    const phone = options.includeMessagingLimit ? await this.phoneInfo() : {};
+    const tier = options.includeMessagingLimit
+      ? await this.messagingLimitTier()
+      : undefined;
     return {
       phoneNumberId,
       businessAccountId,
-      ...(typeof phone.messaging_limit_tier === 'string'
-        ? { messagingLimitTier: phone.messaging_limit_tier }
-        : {}),
+      ...(tier ? { messagingLimitTier: tier } : {}),
     };
   }
 
@@ -185,13 +185,28 @@ export class DatafyTransport implements WhatsappTransport {
     );
   }
 
-  private async phoneInfo(): Promise<Record<string, unknown>> {
+  // Meta now sets the messaging limit per business portfolio and reports it in
+  // whatsapp_business_manager_messaging_limit; messaging_limit_tier is
+  // deprecated. The old field is only asked for when the new one is refused
+  // or absent. The raw value is returned; the caller validates it.
+  private async messagingLimitTier(): Promise<string | undefined> {
+    const current = await this.phoneField(
+      'whatsapp_business_manager_messaging_limit',
+    ).catch((error: unknown) => {
+      if (error instanceof WhatsappTransportError && error.kind === 'REJECTED')
+        return undefined;
+      throw error;
+    });
+    const value = tierLabel(current);
+    if (value) return value;
+    return tierLabel(await this.phoneField('messaging_limit_tier'));
+  }
+
+  private async phoneField(field: string): Promise<unknown> {
     const id = this.id('META_PHONE_NUMBER_ID');
-    const result = await this.json(
-      this.apiPath(`/${id}?fields=id,messaging_limit_tier`),
-    );
+    const result = await this.json(this.apiPath(`/${id}?fields=id,${field}`));
     if (!isRecord(result) || result.id !== id) throw configError();
-    return result;
+    return result[field];
   }
 
   private async json(
@@ -328,6 +343,16 @@ export class DatafyTransport implements WhatsappTransport {
         response.headers.get('content-type') ?? 'application/octet-stream',
     };
   }
+}
+
+// A tier label ("TIER_2K") or an object carrying one; anything else is unknown.
+function tierLabel(value: unknown): string | undefined {
+  const candidate = isRecord(value)
+    ? (value.tier ?? value.messaging_limit_tier ?? value.value)
+    : value;
+  return typeof candidate === 'string' && /^[A-Z0-9_]{1,32}$/.test(candidate)
+    ? candidate
+    : undefined;
 }
 
 function requestCategory(
