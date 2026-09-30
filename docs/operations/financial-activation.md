@@ -21,6 +21,27 @@ Todos os comandos rodam na VPS a partir da pasta extraída do pacote (ver `infra
 
 Uma instalação anterior a esta versão precisa editar o `api.env` à mão: `setup.sh` não sobrescreve o arquivo. Ajuste `EFI_OPENING_ENABLED=false`, confira as variáveis da tabela e acrescente `PLATFORM_ALERT_EMAIL`. O arquivo modelo é `infra/interserver/api.env.example`.
 
+**Atenção:** a abertura só fica desligada com o valor exato `false`. Variável
+ausente vale `true` (padrão da validação do ambiente), e o menu "Ativação
+financeira", o banner "Continuar ativação" e o formulário de abertura voltam a
+aparecer para empresas pendentes. Para conferir sem exibir o arquivo:
+
+```bash
+sudo grep -c '^EFI_OPENING_ENABLED=false$' /opt/ciframais/secrets/api.env
+```
+
+O resultado precisa ser `1`. A capacidade efetiva também aparece na resposta
+de `GET /financial-profile` de uma empresa (`openingEnabled`). Depois de corrigir
+a variável, recrie a API (`sudo bash infra/interserver/compose.sh up -d --wait
+api`); o frontend não tem flag própria e segue o que a API informar.
+
+Com a abertura desligada a API recusa, com 503 `EFI_OPENING_DISABLED`, salvar
+rascunho de abertura, enviar, repetir e as ações de abertura do admin; a leitura
+do histórico continua disponível, sem ações. Nada disso afeta a ativação manual,
+a emissão por perfil ativo, conciliação, mensagens ou rascunhos de cobrança. A
+empresa pendente vê o aviso de que a equipe está configurando a conta; a
+empresa ativa vê a conta ativa e nunca o convite para ativar.
+
 ### 1.2 Chaves no painel
 
 No painel, em **Admin → Ativações e saúde**:
