@@ -33,10 +33,10 @@
 
 **Interface:** reconhecimento estrito da rota `/pagar/<um-segmento-de-token>` antes das regras de login, papel de usuário, sessão invalidada e primeiro acesso. A validade criptográfica permanece responsabilidade do backend.
 
-- [ ] Criar testes de regressão para anônimo, admin, usuário da mesma/outra empresa, `authInvalidated` e `mustChangePassword`: `/pagar/<token>` deve seguir para a página, sem redirecionamento para login, admin ou primeiro acesso.
-- [ ] Incluir controles negativos: `/cobrancas`, `/admin/clientes`, APIs protegidas e nomes parecidos como `/pagar-admin` continuam com a proteção original. Não liberar toda rota que apenas contenha a palavra “pagar”.
-- [ ] Executar em `front-cobranca`: `npx jest --runInBand src/__tests__/middleware.test.ts`, confirmando falha dos novos casos antes da mudança.
-- [ ] Implementar a exceção estrita no ponto correto do middleware. Conferir também callbacks de autenticação para garantir que o redirecionamento não ocorre antes da exceção.
+- [x] Criar testes de regressão para anônimo, admin, usuário da mesma/outra empresa, `authInvalidated` e `mustChangePassword`: `/pagar/<token>` deve seguir para a página, sem redirecionamento para login, admin ou primeiro acesso.
+- [x] Incluir controles negativos: `/cobrancas`, `/admin/clientes`, APIs protegidas e nomes parecidos como `/pagar-admin` continuam com a proteção original. Não liberar toda rota que apenas contenha a palavra “pagar”.
+- [x] Executar em `front-cobranca`: `npx jest --runInBand src/__tests__/middleware.test.ts`, confirmando falha dos novos casos antes da mudança.
+- [x] Implementar a exceção estrita no ponto correto do middleware. Conferir também callbacks de autenticação para garantir que o redirecionamento não ocorre antes da exceção.
 - [ ] Reexecutar testes e comprovar em navegador anônimo que a rota chega à página. Commit sugerido: `fix: liberar pagina de pagamento sem sessao`.
 
 **Aceite:** link válido abre sem conta; uma tentativa de abrir o dashboard continua exigindo autenticação.
@@ -47,14 +47,14 @@
 
 **Contrato:** manter os campos públicos atuais e acrescentar `state: 'PAYABLE' | 'PAID' | 'CANCELED' | 'EXPIRED' | 'UNAVAILABLE'` e `canPay: boolean`. Para qualquer estado diferente de `PAYABLE`, `pixCopyPaste`, `boletoLine`, `boletoLink` e `boletoPdf` devem ser `null` na resposta do servidor. Acrescentar `paidAt` apenas se houver dado confirmado e necessário para a tela.
 
-- [ ] Remover a restrição de consulta que só encontra `Invoice.status=PENDING`, mantendo obrigatoriamente `invoiceId` e `companyId` extraídos do token verificado.
-- [ ] Derivar o estado público a partir da fatura e de sua emissão confirmada. Reutilizar o critério de emissão válida do plano financeiro; `PENDING` da fatura não basta para expor um instrumento cuja tentativa ainda esteja incerta.
-- [ ] Usar o instrumento vigente da fatura, preservando sua conta emissora. Sem instrumento confirmado, retornar `UNAVAILABLE`, sem criar outro. Para vínculo legado incompleto, exigir consistência explícita antes de exibir dados.
-- [ ] Mapear pagamento e encerramento confirmados para páginas de status. Usar o prazo real de pagamento/baixa da modalidade; não expirar boleto só porque a data de vencimento passou ou porque um campo de Pix está ausente.
-- [ ] Tornar a verificação do token estrita: exatamente payload e assinatura, formato esperado, finalidade correta, IDs não vazios, expiração finita e rejeição quando `exp <= agora`. Não aceitar campos de consulta que substituam os IDs assinados.
-- [ ] Testar os estados com dados sintéticos: emissão válida, pago, cancelado, expirado, vencido ainda pagável, rascunho, emissão incerta, instrumento substituído, conta atual alterada, novas emissões pausadas, token malformado/adulterado/expirado e tentativa de trocar empresa. Verificar ausência de instrumentos nos estados encerrados, inclusive na resposta JSON.
-- [ ] Manter leitura sem cache compartilhado e aplicar `Cache-Control: no-store` no endpoint. Não registrar o token completo em logs de aplicação ou mensagens de erro.
-- [ ] Executar em `api-cobranca`: `npm test -- --runInBand payment-link public-payment`. Commit sugerido: `fix: limitar dados publicos ao estado pagavel da cobranca`.
+- [x] Remover a restrição de consulta que só encontra `Invoice.status=PENDING`, mantendo obrigatoriamente `invoiceId` e `companyId` extraídos do token verificado.
+- [x] Derivar o estado público a partir da fatura e de sua emissão confirmada. Reutilizar o critério de emissão válida do plano financeiro; `PENDING` da fatura não basta para expor um instrumento cuja tentativa ainda esteja incerta.
+- [x] Usar o instrumento vigente da fatura, preservando sua conta emissora. Sem instrumento confirmado, retornar `UNAVAILABLE`, sem criar outro. Para vínculo legado incompleto, exigir consistência explícita antes de exibir dados.
+- [x] Mapear pagamento e encerramento confirmados para páginas de status. Usar o prazo real de pagamento/baixa da modalidade; não expirar boleto só porque a data de vencimento passou ou porque um campo de Pix está ausente.
+- [x] Tornar a verificação do token estrita: exatamente payload e assinatura, formato esperado, finalidade correta, IDs não vazios, expiração finita e rejeição quando `exp <= agora`. Não aceitar campos de consulta que substituam os IDs assinados.
+- [x] Testar os estados com dados sintéticos: emissão válida, pago, cancelado, expirado, vencido ainda pagável, rascunho, emissão incerta, instrumento substituído, conta atual alterada, novas emissões pausadas, token malformado/adulterado/expirado e tentativa de trocar empresa. Verificar ausência de instrumentos nos estados encerrados, inclusive na resposta JSON.
+- [x] Manter leitura sem cache compartilhado e aplicar `Cache-Control: no-store` no endpoint. Não registrar o token completo em logs de aplicação ou mensagens de erro.
+- [x] Executar em `api-cobranca`: `npm test -- --runInBand payment-link public-payment`. Commit sugerido: `fix: limitar dados publicos ao estado pagavel da cobranca`.
 
 **Aceite:** nenhum estado encerrado devolve instrumentos para novo pagamento; adulterar o link não permite consultar outra fatura.
 
@@ -64,12 +64,12 @@
 
 **Consome:** `state` e `canPay` da P2. **Produz:** tela independente do painel, com informações mínimas e botões apenas quando o backend confirmar pagamento disponível.
 
-- [ ] Manter consulta server-side com `cache: 'no-store'` e sem exigir JWT. Não carregar providers, sidebar ou endpoints do dashboard nessa página.
-- [ ] Renderizar os textos: “Pagamento confirmado”, “Cobrança cancelada”, “Prazo de pagamento encerrado” ou “Pagamento indisponível no momento”. Token inválido/expirado continua com aviso genérico, sem detalhes da fatura.
-- [ ] Exibir copiar Pix, copiar linha digitável e abrir boleto/PDF somente com `canPay=true` e instrumento presente. URLs externas devem usar protocolo permitido; não renderizar URL arbitrária executável devolvida por um payload inesperado.
-- [ ] Usar o logotipo sem encaminhar o pagador ao painel. Não incluir menus de navegação do produto. Metadados devem impedir indexação; aplicar política de referrer que não envie o token ao abrir o boleto externo.
-- [ ] Testar todos os estados, cópia integral de códigos, ausência de ações no encerramento, timeout da API e atualização após mudança de status. A API indisponível não pode ser apresentada como cobrança paga ou cancelada.
-- [ ] Executar em `front-cobranca`: `npx jest --runInBand --testPathPatterns=PaymentPageClient` e `npm run build`.
+- [x] Manter consulta server-side com `cache: 'no-store'` e sem exigir JWT. Não carregar providers, sidebar ou endpoints do dashboard nessa página.
+- [x] Renderizar os textos: “Pagamento confirmado”, “Cobrança cancelada”, “Prazo de pagamento encerrado” ou “Pagamento indisponível no momento”. Token inválido/expirado continua com aviso genérico, sem detalhes da fatura.
+- [x] Exibir copiar Pix, copiar linha digitável e abrir boleto/PDF somente com `canPay=true` e instrumento presente. URLs externas devem usar protocolo permitido; não renderizar URL arbitrária executável devolvida por um payload inesperado.
+- [x] Usar o logotipo sem encaminhar o pagador ao painel. Não incluir menus de navegação do produto. Metadados devem impedir indexação; aplicar política de referrer que não envie o token ao abrir o boleto externo.
+- [x] Testar todos os estados, cópia integral de códigos, ausência de ações no encerramento, timeout da API e atualização após mudança de status. A API indisponível não pode ser apresentada como cobrança paga ou cancelada.
+- [x] Executar em `front-cobranca`: `npx jest --runInBand --testPathPatterns=PaymentPageClient` e `npm run build`.
 - [ ] Validar em navegador real, anônimo e autenticado: link recebido por WhatsApp; expiração; conclusão do pagamento; volta pelo histórico do navegador; celular de 375 px. Na atualização, a página não pode continuar exibindo instrumentos obtidos de um cache antigo.
 - [ ] Commit sugerido: `feat: exibir status final no pagamento publico`.
 
@@ -81,3 +81,42 @@
 2. Publicar P2 antes de P3, com campos novos aditivos. Preservar a compatibilidade durante a janela entre backend e frontend.
 3. P2/P3 dependem do critério de emissão confirmada da frente financeira, mas não precisam aguardar a resolução externa das duas ocorrências específicas.
 4. Validar a URL verdadeira em janela anônima após publicação, sem copiar tokens para o relatório. Registrar apenas resultado, versão e horário.
+
+## Registro de execução (29/09/2026, branch `fix/pagamento-publico`, a partir de `fix/bolix-conciliacao`)
+
+**Causa do login no link:** o `matcher` do middleware incluía `/pagar/...` e, sem
+sessão, a regra geral redirecionava para `/login`; um admin era mandado para
+`/admin/clientes` e uma sessão invalidada ou em primeiro acesso também era
+desviada. Agora `/pagar/<um segmento>` é decidido antes de ler a sessão
+(`src/lib/public-routes.ts`); `/pagar`, `/pagar-admin`, `/pagar/x/y` e o painel
+continuam protegidos. O `SessionProvider` da raiz não é montado nessa rota.
+
+**Estado público (P2):** consulta pela fatura e empresa assinadas, sem filtro de
+status. Só uma emissão `ACTIVE` cujos identificadores coincidem com os da fatura
+expõe instrumentos (emissão incerta, legado sem emissão, instrumento de emissão
+substituída ou emissão sem instrumento → `UNAVAILABLE`). Boleto/Bolix continua
+pagável depois do vencimento até a Efí informar a baixa (`EXPIRED`); o Pix CobV
+encerra no fim do último dia de validade em Brasília. Não há consulta à conta
+atual, à ativação ou à pausa de emissões. Token: exatamente
+`payload.assinatura` em base64url, até 512 caracteres, campos exatos, ids não
+vazios, `exp` inteiro e `exp <= agora` rejeitado. Links já enviados continuam
+válidos. `Cache-Control: no-store` também nas respostas de erro.
+
+**Página (P3):** estados com os textos do plano; ações só com `canPay`; links só
+`https:` com `noreferrer`; código exibido inteiro para cópia manual; botão
+"Atualizar situação" e releitura ao voltar pelo histórico (`pageshow`);
+`noindex` e `no-referrer` em metadados e cabeçalhos HTTP. API fora do ar ou
+lenta (8 s) mostra indisponibilidade, nunca pago/cancelado; 400/404 mostram só
+"Link indisponível". Uma resposta sem `state` (API anterior) é tratada como
+pagável, preservando a janela de publicação.
+
+**Validação:** `api-cobranca` 831 testes e build; `front-cobranca` 251 testes,
+build e ESLint dos arquivos alterados. Conferido por HTTP, sem cookie, contra o
+servidor Next (dev e build de produção) com uma API simulada local: painel e
+rotas parecidas redirecionam para login; `/pagar/<token>` responde 200 em todos
+os estados, instrumentos só no pagável, `Cache-Control: private, no-cache,
+no-store`, `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex`.
+
+**Pendente:** validação em navegador real (o navegador embutido recusou
+`localhost`): link recebido por WhatsApp, sessão autenticada, voltar pelo
+histórico e celular de 375 px, após a publicação. Commits.

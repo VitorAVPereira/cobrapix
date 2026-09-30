@@ -123,6 +123,67 @@ describe("middleware", () => {
   });
 });
 
+describe("public payment page", () => {
+  // Same shape as the backend token: base64url payload "." base64url signature.
+  const token =
+    "eyJwdXJwb3NlIjoiaW52b2ljZS1wYXltZW50In0.c2lnbmF0dXJlLXdpdGgtdXJsLXNhZmUtY2hhcnM";
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it.each([
+    ["an anonymous payer", null, {}],
+    ["a platform admin", "PLATFORM_ADMIN", {}],
+    ["a company user of any company", "COMPANY_ADMIN", {}],
+    ["an invalidated session", "COMPANY_ADMIN", { authInvalidated: true }],
+    ["a user who must change the password", "COMPANY_ADMIN", { mustChangePassword: true }],
+  ] as const)("reaches the page for %s without any redirect", (_who, role, overrides) => {
+    expect(runMiddleware(createRequest(`/pagar/${token}`, role, overrides))).toEqual({
+      kind: "next",
+    });
+    expect(mockedNextResponse.redirect).not.toHaveBeenCalled();
+  });
+
+  it("reaches the page with a malformed single segment, left for the backend to refuse", () => {
+    expect(runMiddleware(createRequest("/pagar/not-a-token", null))).toEqual({ kind: "next" });
+  });
+
+  it.each([
+    "/cobrancas",
+    "/admin/clientes",
+    "/pagar",
+    "/pagar/",
+    "/pagar-admin",
+    "/pagarx/token",
+    `/pagar/${token}/extra`,
+    `/cobrancas/pagar/${token}`,
+    "/admin/pagar",
+  ])("keeps %s behind the login", (path) => {
+    expect(runMiddleware(createRequest(path, null))).toEqual({
+      kind: "redirect",
+      url: "http://localhost:3000/login",
+    });
+  });
+
+  it("keeps protected APIs answering 401 to anonymous callers", () => {
+    expect(runMiddleware(createRequest("/api/pagar/token", null))).toMatchObject({
+      kind: "json",
+      init: { status: 401 },
+    });
+  });
+
+  it("keeps the dashboard rules for signed-in users outside the payment page", () => {
+    expect(runMiddleware(createRequest("/pagar-admin", "PLATFORM_ADMIN"))).toEqual({
+      kind: "redirect",
+      url: "http://localhost:3000/admin/clientes",
+    });
+    expect(
+      runMiddleware(createRequest("/cobrancas", "COMPANY_ADMIN", { mustChangePassword: true })),
+    ).toEqual({ kind: "redirect", url: "http://localhost:3000/primeiro-acesso" });
+  });
+});
+
 describe("financial onboarding route authorization", () => {
   it.each([
     "/admin/efi-onboarding",
