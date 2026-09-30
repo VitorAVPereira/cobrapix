@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { DebtorPaymentHistoryModal } from "@/components/features/DebtorPaymentHistoryModal";
 import { DebtorSettingsModal } from "@/components/features/DebtorSettingsModal";
+import { DebtorActionsMenu } from "@/components/features/debtors/DebtorActionsMenu";
 import type {
   BillingMethod,
   CollectionRuleProfile,
@@ -196,9 +197,12 @@ export default function ClientesPage() {
   // Company defaults for fine, interest and days after due.
   const [companyLateTerms, setCompanyLateTerms] =
     useState<LateTermsFormValues>(EMPTY_LATE_TERMS);
-  const [openActionDebtorId, setOpenActionDebtorId] = useState<string | null>(
-    null,
-  );
+  // Row whose actions menu is open, with the button it is anchored to.
+  const [openAction, setOpenAction] = useState<{
+    debtorId: string;
+    anchor: HTMLButtonElement;
+  } | null>(null);
+  const closeActions = useCallback(() => setOpenAction(null), []);
   const [historyTarget, setHistoryTarget] = useState<DebtorListItem | null>(
     null,
   );
@@ -232,6 +236,8 @@ export default function ClientesPage() {
       ]);
 
       setResponse(debtorsResponse);
+      // A new list (reload, filter or page) never keeps a menu of the old one.
+      setOpenAction(null);
       setProfiles(profilesResponse);
     } catch (loadError: unknown) {
       setError(getErrorMessage(loadError, "Nao foi possivel carregar clientes."));
@@ -298,7 +304,7 @@ export default function ClientesPage() {
   function openEditClientModal(debtor: DebtorListItem): void {
     setError(null);
     setSuccess(null);
-    setOpenActionDebtorId(null);
+    setOpenAction(null);
     setEditingDebtor(debtor);
     setClientForm(buildClientForm(debtor, defaultProfileId));
     setClientModalMode("edit");
@@ -314,7 +320,7 @@ export default function ClientesPage() {
   function openChargeModal(debtor: DebtorListItem): void {
     setError(null);
     setSuccess(null);
-    setOpenActionDebtorId(null);
+    setOpenAction(null);
     setChargeTarget(debtor);
     setChargeForm({ ...emptyChargeForm, lateTerms: companyLateTerms });
   }
@@ -413,12 +419,16 @@ export default function ClientesPage() {
   }
 
   function navigateToOpenInvoices(debtor: DebtorListItem): void {
-    setOpenActionDebtorId(null);
+    setOpenAction(null);
     router.push(`/cobrancas?debtorId=${debtor.debtorId}&status=PENDING`);
   }
 
   const debtors = response.data;
   const summary = response.summary;
+  // Only a debtor still listed keeps its menu (reload, filter, pagination).
+  const actionDebtor = openAction
+    ? (debtors.find((debtor) => debtor.debtorId === openAction.debtorId) ?? null)
+    : null;
   const clientModalTitle =
     clientModalMode === "edit" ? "Editar cliente" : "Novo cliente";
 
@@ -617,80 +627,24 @@ export default function ClientesPage() {
                           {formatDateTime(debtor.lastPaymentAt)}
                         </p>
                       </td>
-                      <td className="relative px-4 py-3 text-right">
+                      <td className="px-4 py-3 text-right">
                         <button
                           type="button"
                           aria-label={`Abrir acoes do cliente ${debtor.name}`}
-                          onClick={() =>
-                            setOpenActionDebtorId((current) =>
-                              current === debtor.debtorId
+                          aria-haspopup="menu"
+                          aria-expanded={openAction?.debtorId === debtor.debtorId}
+                          onClick={(event) => {
+                            const anchor = event.currentTarget;
+                            setOpenAction((current) =>
+                              current?.debtorId === debtor.debtorId
                                 ? null
-                                : debtor.debtorId,
-                            )
-                          }
-                          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100"
+                                : { debtorId: debtor.debtorId, anchor },
+                            );
+                          }}
+                          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100"
                         >
                           <MoreVertical size={17} />
                         </button>
-
-                        {openActionDebtorId === debtor.debtorId && (
-                          <div
-                            role="menu"
-                            className="absolute right-4 z-20 mt-2 w-56 rounded-md border border-slate-200 bg-white py-1 text-left shadow-lg"
-                          >
-                            <button
-                              type="button"
-                              role="menuitem"
-                              onClick={() => openEditClientModal(debtor)}
-                              className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-                            >
-                              <Pencil size={15} />
-                              Editar cliente
-                            </button>
-                            <button
-                              type="button"
-                              role="menuitem"
-                              onClick={() => openChargeModal(debtor)}
-                              className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-                            >
-                              <Plus size={15} />
-                              Nova cobranca
-                            </button>
-                            <button
-                              type="button"
-                              role="menuitem"
-                              onClick={() => navigateToOpenInvoices(debtor)}
-                              className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-                            >
-                              <ReceiptText size={15} />
-                              Ver cobrancas em aberto
-                            </button>
-                            <button
-                              type="button"
-                              role="menuitem"
-                              onClick={() => {
-                                setOpenActionDebtorId(null);
-                                setHistoryTarget(debtor);
-                              }}
-                              className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-                            >
-                              <History size={15} />
-                              Historico de pagamentos
-                            </button>
-                            <button
-                              type="button"
-                              role="menuitem"
-                              onClick={() => {
-                                setOpenActionDebtorId(null);
-                                setSettingsTarget(debtor);
-                              }}
-                              className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-                            >
-                              <Settings2 size={15} />
-                              Configurar perfil/cobranca
-                            </button>
-                          </div>
-                        )}
                       </td>
                     </tr>
                   ))}
@@ -700,6 +654,49 @@ export default function ClientesPage() {
           )}
         </section>
       </div>
+
+      <DebtorActionsMenu
+        open={Boolean(actionDebtor)}
+        anchor={openAction?.anchor ?? null}
+        onClose={closeActions}
+        label={actionDebtor ? `Acoes do cliente ${actionDebtor.name}` : "Acoes do cliente"}
+        actions={
+          actionDebtor
+            ? [
+                {
+                  id: "edit",
+                  label: "Editar cliente",
+                  icon: <Pencil size={15} />,
+                  onSelect: () => openEditClientModal(actionDebtor),
+                },
+                {
+                  id: "charge",
+                  label: "Nova cobranca",
+                  icon: <Plus size={15} />,
+                  onSelect: () => openChargeModal(actionDebtor),
+                },
+                {
+                  id: "open-invoices",
+                  label: "Ver cobrancas em aberto",
+                  icon: <ReceiptText size={15} />,
+                  onSelect: () => navigateToOpenInvoices(actionDebtor),
+                },
+                {
+                  id: "history",
+                  label: "Historico de pagamentos",
+                  icon: <History size={15} />,
+                  onSelect: () => setHistoryTarget(actionDebtor),
+                },
+                {
+                  id: "settings",
+                  label: "Configurar perfil/cobranca",
+                  icon: <Settings2 size={15} />,
+                  onSelect: () => setSettingsTarget(actionDebtor),
+                },
+              ]
+            : []
+        }
+      />
 
       {clientModalMode && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">

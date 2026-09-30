@@ -57,7 +57,9 @@ export function ConversationMessages<T extends ConversationMessage>({
         {messages.map((message) => (
           <li
             key={message.id}
-            className={`rounded-lg p-3 text-sm ${message.direction === "INBOUND" ? "mr-8 bg-slate-100" : "ml-8 bg-emerald-50"}`}
+            // Long unbroken text (payment codes, URLs) wraps inside the bubble;
+            // the content itself, and what is copied from it, is untouched.
+            className={`min-w-0 rounded-lg p-3 text-sm wrap-anywhere ${message.direction === "INBOUND" ? "mr-8 bg-slate-100" : "ml-8 bg-emerald-50"}`}
           >
             <p className="text-xs font-medium text-slate-600">
               {message.direction === "INBOUND" ? "Recebida" : "Enviada"}
@@ -66,7 +68,7 @@ export function ConversationMessages<T extends ConversationMessage>({
                 : ""}
             </p>
             {message.replyTo && (
-              <blockquote className="mt-2 border-l-4 border-slate-300 pl-2 text-xs text-slate-600">
+              <blockquote className="mt-2 whitespace-pre-wrap border-l-4 border-slate-300 pl-2 text-xs text-slate-600">
                 {message.replyTo.excerpt}
               </blockquote>
             )}

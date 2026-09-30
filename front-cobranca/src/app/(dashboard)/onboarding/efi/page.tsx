@@ -152,8 +152,9 @@ export default function EfiOnboardingPage(): ReactNode {
         </Link>
       </div>
     );
-  // While the opening API is not approved, activation is done by CifraMais.
-  if (profile && !openingEnabled)
+  // While the opening API is not approved, activation is done by CifraMais;
+  // an active company only sees its condition, never the opening form.
+  if (profile && (!openingEnabled || profile.canIssue))
     return (
       <div className="mx-auto max-w-3xl p-5 sm:p-8">
         <div

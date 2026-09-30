@@ -323,8 +323,10 @@ function AdminInbox(): ReactNode {
               className={`w-full rounded-xl border p-4 text-left ${item.id === selectedId ? "border-indigo-500 bg-indigo-50" : "bg-white"}`}
             >
               <div className="flex justify-between gap-2">
-                <strong>{item.recipient ?? "Destinatário anonimizado"}</strong>
-                <span className="text-xs">
+                <strong className="min-w-0 wrap-anywhere">
+                  {item.recipient ?? "Destinatário anonimizado"}
+                </strong>
+                <span className="shrink-0 text-xs">
                   {item.channel} · {item.unreadCount} novas
                 </span>
               </div>
@@ -367,7 +369,7 @@ function AdminInbox(): ReactNode {
             aria-label="Conversa selecionada"
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="font-semibold">
+              <h2 className="min-w-0 font-semibold wrap-anywhere">
                 {selected.recipient ?? "Destinatário anonimizado"}
               </h2>
               <label className="text-sm">

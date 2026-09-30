@@ -206,7 +206,9 @@ export function CompanyConversations(): ReactNode {
                 </span>
               </div>
               {item.contact.name && item.contact.address && (
-                <p className="text-xs text-slate-500">{item.contact.address}</p>
+                <p className="text-xs text-slate-500 wrap-anywhere">
+                  {item.contact.address}
+                </p>
               )}
               <p className="mt-2 truncate text-sm text-slate-600">
                 {item.lastMessage?.preview}
@@ -237,7 +239,7 @@ export function CompanyConversations(): ReactNode {
             aria-label="Mensagens da conversa"
           >
             {header && (
-              <h2 className="font-semibold">
+              <h2 className="font-semibold wrap-anywhere">
                 {header.contact.name ?? header.contact.address ?? "Contato"}
               </h2>
             )}

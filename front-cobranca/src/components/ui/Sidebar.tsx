@@ -122,12 +122,13 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const [settingsOpen, setSettingsOpen] = useState(true);
   const DashboardIcon = dashboardItem.icon;
   const isPlatformAdmin = session?.user.role === "PLATFORM_ADMIN";
-  const { openingEnabled } = useFinancialActivation();
-  // Self-service activation stays hidden while the opening API is disabled.
+  const { openingEnabled, canIssue } = useFinancialActivation();
+  // Self-service activation stays hidden while the opening API is disabled,
+  // and an active company is never invited to activate again.
   const visibleSettingsItems = settingsItems.filter(
     (item) =>
       item.href !== "/configuracoes/conecte-seu-banco" &&
-      (openingEnabled || item.href !== "/onboarding/efi"),
+      ((openingEnabled && !canIssue) || item.href !== "/onboarding/efi"),
   );
 
   return (
