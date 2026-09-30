@@ -24,6 +24,7 @@ import { EmailTemplatesService } from '../email/email-templates.service';
 import { TemplateSendPreparerService } from '../templates/template-send-preparer.service';
 import type { TemplateSelection } from '../templates/template-contracts';
 import { collectionLogicalKey } from '../templates/template-selection';
+import { assertChannelAvailable } from '../communications/channel-availability';
 
 const DEFAULT_COLLECTION_REMINDER_DAYS = [0];
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -245,11 +246,15 @@ export class BillingService {
       return { requested: 0, queued: 0, skipped: 0 };
     }
 
+    if (channels.includes('WHATSAPP')) {
+      await assertChannelAvailable(this.prisma, 'META');
+    }
+
     const pendingInvoices = await this.prisma.invoice.findMany({
       where: {
         companyId,
         id: { in: uniqueInvoiceIds },
-        status: 'PENDING',
+        status: { in: ['DRAFT', 'PENDING'] },
       },
       select: {
         id: true,

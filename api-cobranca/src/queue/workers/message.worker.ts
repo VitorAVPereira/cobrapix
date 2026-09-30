@@ -723,9 +723,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       where: {
         id: data.invoiceId,
         companyId: data.companyId,
-        status: {
-          in: data.source === 'SELECTED' ? ['PENDING'] : ['DRAFT', 'PENDING'],
-        },
+        status: { in: ['DRAFT', 'PENDING'] },
       },
       select: {
         id: true,

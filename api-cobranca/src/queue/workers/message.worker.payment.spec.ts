@@ -76,15 +76,20 @@ describe('initial payment issuance fencing', () => {
     );
   });
 
-  it('loads active-era initial jobs from draft or pending invoices', async () => {
-    const { process, invoiceFindFirst } = fixture(true);
-    await process.processInitialChargeJob(job);
-    expect(invoiceFindFirst).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          status: { in: ['DRAFT', 'PENDING'] },
-        }) as unknown,
-      }),
-    );
-  });
+  it.each(['MANUAL', 'SELECTED'] as const)(
+    'loads %s initial jobs from draft or pending invoices',
+    async (source) => {
+      const { process, invoiceFindFirst } = fixture(true);
+      await process.processInitialChargeJob({ ...job, source });
+      expect(invoiceFindFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            id: 'invoice-1',
+            companyId: 'company-1',
+            status: { in: ['DRAFT', 'PENDING'] },
+          }) as unknown,
+        }),
+      );
+    },
+  );
 });
