@@ -1,3 +1,4 @@
+import type { BillingMethod } from '@prisma/client';
 import { isRecord } from '../whatsapp/transport/whatsapp-transport.error';
 import {
   ParsedTemplate,
@@ -27,7 +28,7 @@ function acceptedParameter(value: string): boolean {
 
 /**
  * Admin mapping of one parsed revision: every variable bound exactly once to a closed
- * source or a bounded literal, and the payment and Pix buttons bound iff the template has them.
+ * source or a bounded literal, and each button bound iff the template has it.
  * No expressions, database paths or URLs are accepted.
  */
 export function validateMapping(
@@ -43,7 +44,12 @@ export function validateMapping(
     return fail('body', 'Mapa inválido.');
   if (parsed.variables.length > TEMPLATE_MAX_BODY_PARAMETERS)
     return fail('body', 'Quantidade de variáveis acima do suportado.');
-  const allowedKeys = new Set(['body', 'paymentButton', 'pixButton']);
+  const allowedKeys = new Set([
+    'body',
+    'paymentButton',
+    'pixButton',
+    'boletoButton',
+  ]);
   const extra = Object.keys(mapping).find((key) => !allowedKeys.has(key));
   if (extra) return fail(extra, 'Campo não suportado.');
   const variables = new Set(parsed.variables);
@@ -103,6 +109,23 @@ export function validateMapping(
       'pixButton',
       'O template aprovado não tem botão de código Pix.',
     );
+  const boleto = mapping.boletoButton;
+  if (parsed.boletoButton) {
+    if (
+      !isRecord(boleto) ||
+      boleto.index !== parsed.boletoButton.index ||
+      boleto.source !== 'BOLETO_LINE' ||
+      Object.keys(boleto).length !== 2
+    )
+      return fail(
+        'boletoButton',
+        'Botão exige a linha digitável desta cobrança.',
+      );
+  } else if (boleto !== undefined)
+    return fail(
+      'boletoButton',
+      'O template aprovado não tem botão de código do boleto.',
+    );
   return { ok: true };
 }
 
@@ -114,8 +137,37 @@ export function mappingSources(mapping: TemplateMapping): TemplateSource[] {
         binding.kind === 'SOURCE' ? [binding.source] : [],
       ),
       ...(mapping.pixButton ? [mapping.pixButton.source] : []),
+      ...(mapping.boletoButton ? [mapping.boletoButton.source] : []),
     ]),
   ];
+}
+
+const BOLETO_SOURCES: readonly TemplateSource[] = [
+  'BOLETO_LINE',
+  'BOLETO_LINK',
+  'BOLETO_PDF',
+];
+
+/** Charge data a mapped template reads: the Pix code and/or the boleto (buttons included). */
+export function templateDataNeeds(mapping: TemplateMapping): {
+  pix: boolean;
+  boleto: boolean;
+} {
+  const sources = mappingSources(mapping);
+  return {
+    pix: sources.includes('PIX_COPY_PASTE'),
+    boleto: sources.some((source) => BOLETO_SOURCES.includes(source)),
+  };
+}
+
+/** A Pix charge has no boleto and a boleto charge no Pix code; BOLIX has both. */
+export function methodCanFill(
+  method: BillingMethod,
+  needs: { pix: boolean; boleto: boolean },
+): boolean {
+  if (method === 'PIX') return !needs.boleto;
+  if (method === 'BOLETO') return !needs.pix;
+  return true;
 }
 
 /**
@@ -166,6 +218,17 @@ export function renderTemplate(
       return { ok: false, code: 'UNSUPPORTED', field: 'PIX_COPY_PASTE' };
     pixButtonCode = code;
   }
+  let boletoButtonCode: string | undefined;
+  if (parsed.boletoButton) {
+    const line = values.BOLETO_LINE;
+    if (line === undefined || !line.trim())
+      return { ok: false, code: 'VALUE_MISSING', field: 'BOLETO_LINE' };
+    // The provider copies the 47 digits of a bank boleto; Efí formats them with dots.
+    const digits = line.replace(/[\s.]/g, '');
+    if (!/^\d{47}$/.test(digits))
+      return { ok: false, code: 'UNSUPPORTED', field: 'BOLETO_LINE' };
+    boletoButtonCode = digits;
+  }
   const body = parsed.body.replace(
     /\{\{([a-z0-9_]+)\}\}/g,
     (match: string, variable: string) => byVariable.get(variable) ?? match,
@@ -181,6 +244,7 @@ export function renderTemplate(
       : {}),
     ...(paymentButtonSuffix ? { paymentButtonSuffix } : {}),
     ...(pixButtonCode ? { pixButtonCode } : {}),
+    ...(boletoButtonCode ? { boletoButtonCode } : {}),
   };
 }
 

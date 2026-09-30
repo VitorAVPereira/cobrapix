@@ -108,6 +108,7 @@ export class WhatsappService {
     companyId: string;
     invoiceId: string;
     ruleStepId?: string;
+    emailFallback: boolean;
   } | null> {
     return this.dispatcher.rejectedCollection(id);
   }

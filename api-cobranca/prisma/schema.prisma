@@ -1395,7 +1395,10 @@ model GlobalMessageTemplate {
   stateVersion          Int                               @default(0)
   archivedAt            DateTime?
   preferences           CompanyTemplatePreference[]
-  ruleSteps             CollectionRuleStep[]
+  ruleSteps             CollectionRuleStep[]              @relation("RuleStepTemplate")
+  pixRuleSteps          CollectionRuleStep[]              @relation("RuleStepPixTemplate")
+  boletoRuleSteps       CollectionRuleStep[]              @relation("RuleStepBoletoTemplate")
+  bolixRuleSteps        CollectionRuleStep[]              @relation("RuleStepBolixTemplate")
   mappingRevisions      WhatsappTemplateMappingRevision[]
   grants                CompanyWhatsappTemplateGrant[]
   defaults              CompanyWhatsappTemplateDefault[]
@@ -1608,7 +1611,14 @@ model CollectionRuleStep {
   channel               CollectionChannel
   /// WhatsApp only; a CHECK keeps each channel on its own catalog.
   templateId            String?
-  template              GlobalMessageTemplate?   @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  template              GlobalMessageTemplate?   @relation("RuleStepTemplate", fields: [templateId], references: [id], onDelete: SetNull)
+  /// WhatsApp only: template for charges of one billing method; null keeps the step's choice.
+  pixTemplateId         String?
+  pixTemplate           GlobalMessageTemplate?   @relation("RuleStepPixTemplate", fields: [pixTemplateId], references: [id], onDelete: Restrict)
+  boletoTemplateId      String?
+  boletoTemplate        GlobalMessageTemplate?   @relation("RuleStepBoletoTemplate", fields: [boletoTemplateId], references: [id], onDelete: Restrict)
+  bolixTemplateId       String?
+  bolixTemplate         GlobalMessageTemplate?   @relation("RuleStepBolixTemplate", fields: [bolixTemplateId], references: [id], onDelete: Restrict)
   /// EMAIL only; null keeps the email default.
   emailTemplateId       String?
   emailTemplate         GlobalEmailTemplate?     @relation(fields: [emailTemplateId], references: [id], onDelete: Restrict)
@@ -1626,6 +1636,9 @@ model CollectionRuleStep {
   @@unique([profileId, stepOrder, channel])
   @@index([profileId, stepOrder])
   @@index([emailTemplateId])
+  @@index([pixTemplateId])
+  @@index([boletoTemplateId])
+  @@index([bolixTemplateId])
 }
 
 model CollectionAttempt {

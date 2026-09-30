@@ -320,9 +320,100 @@ describe("ReguaPage", () => {
     expect(
       (await screen.findAllByText("No dia do vencimento")).length,
     ).toBeGreaterThan(0);
+    // The "Inicial" step is the first message of the charge.
+    expect(screen.getByText("Na emissão da cobrança")).toBeInTheDocument();
+  });
+
+  it("escolhe um template por forma de pagamento na etapa inicial", async () => {
+    const user = userEvent.setup();
+    mockGetTemplates.mockResolvedValue([
+      createTemplateFixture("template-emissao", "Cobranca na emissao"),
+      {
+        ...createTemplateFixture("template-pix", "emissao_pix"),
+        content: {
+          body: "Pix",
+          footer: null,
+          button: null,
+          pixButton: { label: "Copiar código Pix", index: 0 },
+        },
+      },
+      {
+        ...createTemplateFixture("template-bolix", "emissao_bolix"),
+        content: {
+          body: "Bolix",
+          footer: null,
+          button: null,
+          pixButton: { label: "Copiar código Pix", index: 0 },
+          boletoButton: { label: "Copiar código do boleto", index: 1 },
+        },
+      },
+    ]);
+    render(<ReguaPage />);
+
+    const label = "Template do contato inicial por WhatsApp";
+    await screen.findByLabelText(label);
+    expect(screen.queryByLabelText(`${label} para BOLIX`)).toBeNull();
+    await user.click(
+      screen.getByLabelText(`${label}: templates diferentes por forma de pagamento`),
+    );
+    const bolix = screen.getByLabelText(`${label} para BOLIX`);
+    // Templates that need data the method lacks are not offered.
     expect(
-      screen.getByText("A partir de 30 dias antes do vencimento"),
+      within(screen.getByLabelText(`${label} para Pix`))
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).not.toContain("Pix: emissao_bolix");
+    expect(
+      within(screen.getByLabelText(`${label} para Boleto`))
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["Boleto: igual à etapa", "Boleto: Cobranca na emissao"]);
+    await user.selectOptions(bolix, "template-bolix");
+    await user.click(screen.getByRole("button", { name: /salvar/i }));
+
+    await waitFor(() => expect(mockSetRuleSteps).toHaveBeenCalledTimes(1));
+    expect(mockSetRuleSteps.mock.calls[0]![1][0]).toMatchObject({
+      id: "step-emission",
+      whatsappSelection: { mode: "DEFAULT", purpose: "EMISSION" },
+      whatsappMethodTemplates: {
+        PIX: null,
+        BOLETO: null,
+        BOLIX: "template-bolix",
+      },
+    });
+  });
+
+  it("mostra as escolhas salvas, o aviso de compatibilidade e limpa ao desmarcar", async () => {
+    const user = userEvent.setup();
+    const profile = createProfileFixture();
+    profile.steps[0] = whatsappStep({
+      ...profile.steps[0],
+      whatsappMethodTemplates: { PIX: null, BOLETO: null, BOLIX: "template-emissao" },
+      whatsappMethodStatus: { BOLIX: { ready: false, code: "NOT_GRANTED" } },
+      whatsappIncompatibleMethods: ["BOLETO"],
+    });
+    mockGetRules.mockResolvedValue([profile]);
+    render(<ReguaPage />);
+
+    const label = "Template do contato inicial por WhatsApp";
+    expect(await screen.findByLabelText(`${label} para BOLIX`)).toHaveValue(
+      "template-emissao",
+    );
+    expect(
+      screen.getByText(/Envios BOLIX pendentes: Não liberado para a empresa/),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Cobranças Boleto não têm os dados que este template usa/),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByLabelText(`${label}: templates diferentes por forma de pagamento`),
+    );
+    expect(screen.queryByLabelText(`${label} para BOLIX`)).toBeNull();
+    await user.click(screen.getByRole("button", { name: /salvar/i }));
+    await waitFor(() => expect(mockSetRuleSteps).toHaveBeenCalledTimes(1));
+    expect(mockSetRuleSteps.mock.calls[0]![1][0]).toMatchObject({
+      whatsappMethodTemplates: { PIX: null, BOLETO: null, BOLIX: null },
+    });
   });
 
   it("avisa antes de descartar alterações ao trocar de perfil", async () => {

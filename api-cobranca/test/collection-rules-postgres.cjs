@@ -185,6 +185,23 @@ async function seedLegacy() {
     await assert.rejects(service.setSteps(company.id, profileId, unchanged.map((step, index) => index === 1 ? { ...step, delayDays: 3 } : step)), error => error.getStatus() === 400);
     assert.ok(await prisma.collectionAttempt.count({ where: { ruleStepId: current[0].id } }) > 0, 'attempt history kept');
     console.log('PASS attempted steps change only their template choice, by stable ID');
+
+    // Templates per billing method: granted and compatible only, changeable on attempted
+    // steps, kept by clients that do not send the field, never on e-mail steps.
+    const boletoTemplate = await fx.readyTemplate(prisma);
+    await fx.services(prisma).mappings.save(boletoTemplate.id, 1, 1, { ...fx.MAPPING, body: { '1': { kind: 'SOURCE', source: 'DEBTOR_NAME' }, '2': { kind: 'SOURCE', source: 'BOLETO_LINE' } } }, randomUUID());
+    const withMethod = methods => unchanged.map(step => step.channel === 'WHATSAPP' ? { ...step, whatsappMethodTemplates: methods } : step);
+    await assert.rejects(service.setSteps(company.id, profileId, withMethod({ BOLETO: boletoTemplate.id })), error => error.getStatus() === 400, 'a template not granted is refused');
+    await fx.grant(prisma, company.id, boletoTemplate.id);
+    const byMethod = await service.setSteps(company.id, profileId, withMethod({ BOLETO: boletoTemplate.id }));
+    assert.equal(byMethod[0].boletoTemplateId, boletoTemplate.id);
+    assert.deepEqual(byMethod[0].whatsappMethodStatus, { BOLETO: { ready: true, code: null } });
+    await assert.rejects(service.setSteps(company.id, profileId, withMethod({ PIX: boletoTemplate.id })), error => error.getStatus() === 400, 'a boleto template never serves Pix charges');
+    assert.equal((await service.setSteps(company.id, profileId, unchanged))[0].boletoTemplateId, boletoTemplate.id, 'an older client keeps the choice');
+    assert.equal((await service.setSteps(company.id, profileId, withMethod({ BOLETO: null })))[0].boletoTemplateId, null);
+    await assert.rejects(pool.query('UPDATE "CollectionRuleStep" SET "pixTemplateId"=$1 WHERE "id"=$2', [readyTemplate.id, current[1].id]), /method_templates_check/);
+    await assert.rejects(pool.query('UPDATE "CollectionRuleStep" SET "bolixTemplateId"=$1 WHERE "id"=$2', [randomUUID(), current[0].id]), /bolixTemplateId_fkey/);
+    console.log('PASS templates per billing method: granted, compatible, kept by older clients, WhatsApp steps only');
     console.log(`PASS collection rules on PostgreSQL 16 with ${migrations.length} migrations`);
   } finally {
     if (prisma) await prisma.$disconnect();

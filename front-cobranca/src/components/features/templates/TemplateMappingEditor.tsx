@@ -113,6 +113,14 @@ export function TemplateMappingEditor({
           },
         }
       : {}),
+    ...(template.content.boletoButton
+      ? {
+          boletoButton: {
+            index: template.content.boletoButton.index,
+            source: "BOLETO_LINE",
+          },
+        }
+      : {}),
   });
 
   function change(
@@ -277,6 +285,12 @@ export function TemplateMappingEditor({
             <p className="text-sm text-slate-600">
               Botão “{template.content.pixButton.label}”: copia o Pix copia e
               cola da cobrança enviada. Cobrança sem Pix fica pendente.
+            </p>
+          )}
+          {template.content.boletoButton && (
+            <p className="text-sm text-slate-600">
+              Botão “{template.content.boletoButton.label}”: copia a linha
+              digitável da cobrança enviada. Cobrança sem boleto fica pendente.
             </p>
           )}
           {template.content.quickReplies?.length ? (

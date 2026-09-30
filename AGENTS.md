@@ -200,9 +200,13 @@ nova cobrança.
   nunca são retomados.
 - Formatos aceitos: BODY com variáveis `{{1}}` ou nomeadas (`{{nome_devedor}}`, conforme o
   `parameter_format`), FOOTER de texto, no máximo um botão URL apontando exatamente para
-  `<FRONTEND_URL>/pagar/{{1}}`, no máximo um botão "Copiar código Pix" (`PAYMENT_REQUEST`
-  `pix_dynamic_code`, preenchido com o Pix da cobrança) e respostas rápidas estáticas.
-  Cabeçalho/mídia e outros botões aparecem como não suportados; nunca "adapte" o texto aprovado.
+  `<FRONTEND_URL>/pagar/{{1}}`, no máximo um botão "Copiar código Pix" e um "Copiar código
+  do boleto" (`PAYMENT_REQUEST` `pix_dynamic_code`/`boleto`, preenchidos com o Pix e a linha
+  digitável da cobrança) e respostas rápidas estáticas. Cabeçalho/mídia e outros botões
+  aparecem como não suportados; nunca "adapte" o texto aprovado.
+- A primeira mensagem da cobrança (WhatsApp e e-mail) segue a etapa "Inicial" da régua do
+  devedor e conta como envio dela; sem essa etapa, vale o padrão de Emissão. Etapas de
+  WhatsApp podem ter um template por forma de pagamento (Pix, Boleto, BOLIX).
 - Respeite opt-in, supressão do destinatário, janela de 24 h para texto livre e limites do
   canal. Admin responde no atendimento central; a empresa só visualiza.
 

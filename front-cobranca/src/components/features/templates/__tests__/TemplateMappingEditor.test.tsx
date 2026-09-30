@@ -274,6 +274,44 @@ describe("TemplateMappingEditor", () => {
     );
   });
 
+  it("binds Pix, boleto and payment link buttons of the BOLIX template", async () => {
+    mockApi.getAdminWhatsappTemplate.mockResolvedValue(
+      template({
+        variables: [],
+        content: {
+          body: "Seu boleto está disponível.",
+          footer: null,
+          button: {
+            label: "Abrir link de pagamento",
+            url: "https://app.test/pagar/{{1}}",
+            index: 2,
+          },
+          pixButton: { label: "Copiar código Pix", index: 0 },
+          boletoButton: { label: "Copiar código do boleto", index: 1 },
+        },
+      }),
+    );
+    mockApi.saveWhatsappTemplateMapping.mockResolvedValue({ mappingRevision: 1 });
+    renderEditor();
+    expect(
+      await screen.findByText(/Botão “Copiar código do boleto”: copia a linha/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Salvar variáveis" }));
+    await waitFor(() =>
+      expect(mockApi.saveWhatsappTemplateMapping).toHaveBeenCalledWith(
+        "tpl-1",
+        expect.objectContaining({
+          mapping: {
+            body: {},
+            paymentButton: { index: 2, source: "PAYMENT_URL_SUFFIX" },
+            pixButton: { index: 0, source: "PIX_COPY_PASTE" },
+            boletoButton: { index: 1, source: "BOLETO_LINE" },
+          },
+        }),
+      ),
+    );
+  });
+
   it("offers no mapping for an unsupported format", async () => {
     mockApi.getAdminWhatsappTemplate.mockResolvedValue(
       template({ supported: false, supportReason: "HEADER_MEDIA", variables: [] }),

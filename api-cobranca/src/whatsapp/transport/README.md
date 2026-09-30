@@ -148,13 +148,22 @@ O catálogo é importado pelo Datafy, identificado por WABA + ID do provedor:
   `parameter_format` aprovado) são aceitos; nos nomeados cada parâmetro é enviado com
   `parameter_name`. Outros formatos aparecem como não suportados.
 - **Botões**: no máximo um botão de URL, que precisa apontar para o link de pagamento
-  (`<FRONTEND_URL>/pagar/{{1}}`), em qualquer posição; no máximo um botão de
-  pagamento da Meta (`PAYMENT_REQUEST`) do tipo `pix_dynamic_code` ("Copiar código
-  Pix"); e respostas rápidas estáticas, enviadas como aprovadas. O código Pix aprovado
-  na Meta é só exemplo: cada envio leva o Pix copia e cola da própria cobrança
-  (`sub_type: payment_request`), e cobrança sem Pix fica pendente (`VALUE_MISSING`).
-  Botões de pagamento de boleto ou link, telefone, cupom e outros tipos não são
-  suportados. Cada gravação é uma revisão imutável vinculada à revisão do conteúdo.
+  (`<FRONTEND_URL>/pagar/{{1}}`), em qualquer posição e com o texto aprovado (por
+  exemplo "Abrir link de pagamento"); no máximo um botão de pagamento da Meta
+  (`PAYMENT_REQUEST`) do tipo `pix_dynamic_code` ("Copiar código Pix") e um do tipo
+  `boleto` ("Copiar código do boleto"); e respostas rápidas estáticas, enviadas como
+  aprovadas. O código aprovado na Meta é só exemplo: cada envio leva o Pix copia e cola
+  ou a linha digitável (47 dígitos, sem pontos e espaços) da própria cobrança
+  (`sub_type: payment_request`), e cobrança sem esse dado fica pendente
+  (`VALUE_MISSING`). Botões de pagamento do tipo link, telefone, cupom e outros tipos
+  não são suportados. Cada gravação é uma revisão imutável vinculada à revisão do
+  conteúdo.
+- **Régua**: a primeira mensagem da cobrança usa a etapa "Inicial" de WhatsApp do
+  perfil do devedor (sem ela, o padrão de Emissão da empresa) e conta como envio dessa
+  etapa; o agendador não a repete. Cada etapa de WhatsApp pode ter um template por
+  forma de pagamento (Pix, Boleto, BOLIX), escolhido pela forma da cobrança ativa; sem
+  template da forma, vale a escolha da etapa. Um template que usa dados que a forma não
+  tem (boleto numa cobrança Pix, Pix num boleto) é recusado nessa escolha.
 - **Liberação**: novo template não é liberado para ninguém. O admin libera por
   empresa e define o padrão de cada finalidade (emissão, lembretes, atrasos, avisos
   de ativação). A empresa só vê e escolhe o que foi liberado.

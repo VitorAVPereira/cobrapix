@@ -222,14 +222,18 @@ que o template real é interpretado corretamente; a importação e a prévia sim
    Templates com variáveis numeradas (`{{1}}`) ou com nome (`{{nome_devedor}}`) são
    aceitos; um template importado antes desta versão que aparece como "Formato
    NAMED não suportado" é reclassificado ao clicar em **Sincronizar catálogo**.
-   O mesmo vale para o botão **Copiar código Pix** (tipo `PAYMENT_REQUEST`): ele
-   passa a ser aceito e envia o Pix copia e cola da cobrança; cobrança sem Pix fica
-   em **Envios pendentes** como "Faltam dados".
+   O mesmo vale para os botões **Copiar código Pix** e **Copiar código do boleto**
+   (tipo `PAYMENT_REQUEST`): eles passam a ser aceitos e enviam o Pix copia e cola e a
+   linha digitável da cobrança; cobrança sem esse dado fica em **Envios pendentes**
+   como "Faltam dados".
 2. Em **Disponibilidade por empresa**, liberar os templates para as empresas de
    teste e definir os padrões por finalidade (inclusive `Aviso de ativação` e
    `Lembrete de ativação`, se usados).
 3. Com a empresa de teste, ajustar a régua: cada etapa WhatsApp usa o padrão da
    finalidade ou um template liberado; etapas antigas aparecem pendentes até a escolha.
+   O **Contato inicial** (etapa Inicial) é a primeira mensagem da cobrança, no
+   WhatsApp e no e-mail. Em **Usar templates diferentes por forma de pagamento**, a
+   etapa pode usar um template para Pix e outro para BOLIX, por exemplo.
 4. Em **Envios pendentes de WhatsApp**, revisar as pendências `LEGACY_PAYLOAD` e as
    demais. Selecione explicitamente, revise a prévia e confirme apenas o que deve ser
    enviado; cobrança paga é encerrada sem mensagem.

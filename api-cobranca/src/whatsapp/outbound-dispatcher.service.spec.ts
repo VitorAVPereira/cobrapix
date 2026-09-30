@@ -461,6 +461,53 @@ describe('Shared outbound dispatch policies', () => {
       }),
     );
   });
+  it('sends Pix code, boleto line and payment link in their approved positions', async () => {
+    const { service, pinTemplate, transport } = setup();
+    pinTemplate({
+      paymentButtonIndex: 2,
+      pixButton: { index: 0, code: '000201-pix' },
+      boletoButton: {
+        index: 1,
+        code: '00190000090123456700400000001234198760000015000',
+      },
+    });
+    await service.dispatch('intent');
+    expect(transport.sendTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        components: [
+          { type: 'body', parameters: [{ type: 'text', text: 'Ana' }] },
+          {
+            type: 'button',
+            sub_type: 'url',
+            index: '2',
+            parameters: [{ type: 'text', text: 'signed-payment-token' }],
+          },
+          expect.objectContaining({ sub_type: 'payment_request', index: '0' }),
+          {
+            type: 'button',
+            sub_type: 'payment_request',
+            index: '1',
+            parameters: [
+              {
+                type: 'action',
+                action: {
+                  payment_request: {
+                    payment_setting: {
+                      type: 'boleto',
+                      boleto: {
+                        digitable_line:
+                          '00190000090123456700400000001234198760000015000',
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+  });
   it('sends the invoice Pix code in the approved "Copy Pix code" button', async () => {
     const { service, pinTemplate, transport, paymentLinks } = setup();
     pinTemplate({

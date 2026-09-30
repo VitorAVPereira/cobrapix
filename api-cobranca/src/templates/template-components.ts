@@ -66,8 +66,9 @@ function unsupported(reason: string): ParseResult {
 /**
  * Strict reader of the formats this version sends: BODY with positional ({{1}}) or named
  * ({{nome}}) variables as the provider declares, optional text FOOTER, at most one
- * dynamic URL button pointing at the payment page, at most one "Copy Pix code" payment
- * request button and static quick reply buttons. Anything else is reported with the
+ * dynamic URL button pointing at the payment page, at most one "Copy Pix code" and one
+ * "Copy Boleto code" payment request button and static quick reply buttons. Anything
+ * else is reported with the
  * blocking component; nothing is rewritten to look compatible.
  */
 export function parseTemplate(input: TemplateComponentsInput): ParseResult {
@@ -139,6 +140,7 @@ export function parseTemplate(input: TemplateComponentsInput): ParseResult {
   let paymentButton: { index: number; label: string; url: string } | null =
     null;
   let pixButton: { index: number; label: string } | null = null;
+  let boletoButton: { index: number; label: string } | null = null;
   const quickReplies: string[] = [];
   if (buttons !== null) {
     if (!buttons.length) return unsupported('BUTTONS sem botões.');
@@ -168,16 +170,23 @@ export function parseTemplate(input: TemplateComponentsInput): ParseResult {
           : undefined;
         const kind =
           typeof setting?.type === 'string' ? setting.type.toLowerCase() : '';
-        if (kind !== 'pix_dynamic_code')
+        if (kind === 'pix_dynamic_code') {
+          if (pixButton)
+            return unsupported('Apenas um botão de código Pix é suportado.');
+          pixButton = { index, label: button.text };
+        } else if (kind === 'boleto') {
+          if (boletoButton)
+            return unsupported(
+              'Apenas um botão de código do boleto é suportado.',
+            );
+          boletoButton = { index, label: button.text };
+        } else
           return unsupported(
-            `Botão de pagamento do tipo ${kind || 'não informado'} não é suportado; apenas o botão de copiar código Pix.`,
+            `Botão de pagamento do tipo ${kind || 'não informado'} não é suportado; apenas os botões de copiar código Pix e código do boleto.`,
           );
-        if (pixButton)
-          return unsupported('Apenas um botão de código Pix é suportado.');
-        pixButton = { index, label: button.text };
       } else
         return unsupported(
-          `Botão do tipo ${type} não é suportado; use o link de pagamento, o botão de código Pix e respostas rápidas.`,
+          `Botão do tipo ${type} não é suportado; use o link de pagamento, os botões de código Pix e do boleto e respostas rápidas.`,
         );
     }
   }
@@ -191,6 +200,7 @@ export function parseTemplate(input: TemplateComponentsInput): ParseResult {
       footer,
       paymentButton,
       pixButton,
+      boletoButton,
       quickReplies,
       fingerprint: templateFingerprint(input),
     },

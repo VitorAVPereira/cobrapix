@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  BillingMethod,
   CollectionChannel,
   CollectionProfileType,
   CollectionRuleStep,
@@ -16,12 +17,19 @@ import { TemplatePolicyService } from '../templates/template-policy.service';
 import {
   COLLECTION_PURPOSES,
   TemplateBlockCode,
+  TemplateDecision,
   TemplateSelection,
 } from '../templates/template-contracts';
 import {
+  MethodTemplates,
   purposeForScheduleDay,
   ruleStepSelection,
+  stepMethodTemplates,
 } from '../templates/template-selection';
+import {
+  methodCanFill,
+  templateDataNeeds,
+} from '../templates/template-renderer';
 
 interface CreateProfileInput {
   name: string;
@@ -38,15 +46,30 @@ interface CreateStepInput {
   channel: CollectionChannel;
   emailTemplateId?: string;
   whatsappSelection?: TemplateSelection;
+  /** Per billing method: a template ID, null to clear or absent to keep the current one. */
+  whatsappMethodTemplates?: MethodTemplates;
   delayDays: number;
   sendTimeStart?: string;
   sendTimeEnd?: string;
 }
 
+type TemplateStatus = { ready: boolean; code: TemplateBlockCode | null };
+
 /** Step as returned to the company: selection per channel and whether it is usable now. */
 export type PresentedStep = CollectionRuleStep & {
   whatsappSelection: TemplateSelection | null;
-  whatsappStatus: { ready: boolean; code: TemplateBlockCode | null } | null;
+  whatsappStatus: TemplateStatus | null;
+  whatsappMethodTemplates: MethodTemplates | null;
+  whatsappMethodStatus: Partial<Record<BillingMethod, TemplateStatus>> | null;
+  /** Methods without their own template whose charges lack data the step's template reads. */
+  whatsappIncompatibleMethods: BillingMethod[] | null;
+};
+
+const BILLING_METHODS: readonly BillingMethod[] = ['PIX', 'BOLETO', 'BOLIX'];
+const METHOD_LABELS: Record<BillingMethod, string> = {
+  PIX: 'Pix',
+  BOLETO: 'Boleto',
+  BOLIX: 'BOLIX',
 };
 
 interface StandardProfileStep {
@@ -233,34 +256,64 @@ export class CollectionProfileService {
     companyId: string,
     steps: CollectionRuleStep[],
   ): Promise<PresentedStep[]> {
-    const decisions = new Map<
-      string,
-      { ready: boolean; code: TemplateBlockCode | null }
-    >();
+    const decisions = new Map<string, TemplateDecision>();
+    const decide = async (
+      selection: TemplateSelection,
+    ): Promise<TemplateDecision> => {
+      const key = JSON.stringify(selection);
+      if (!decisions.has(key))
+        decisions.set(
+          key,
+          await this.prisma.$transaction((tx) =>
+            this.policy.resolve(tx, companyId, selection),
+          ),
+        );
+      return decisions.get(key)!;
+    };
+    const status = (decision: TemplateDecision): TemplateStatus =>
+      decision.allowed
+        ? { ready: true, code: null }
+        : { ready: false, code: decision.code };
     const result: PresentedStep[] = [];
     for (const step of steps) {
       if (step.channel !== 'WHATSAPP') {
-        result.push({ ...step, whatsappSelection: null, whatsappStatus: null });
+        result.push({
+          ...step,
+          whatsappSelection: null,
+          whatsappStatus: null,
+          whatsappMethodTemplates: null,
+          whatsappMethodStatus: null,
+          whatsappIncompatibleMethods: null,
+        });
         continue;
       }
       const selection = ruleStepSelection(step);
-      const key = JSON.stringify(selection);
-      if (!decisions.has(key)) {
-        const decision = await this.prisma.$transaction((tx) =>
-          this.policy.resolve(tx, companyId, selection),
-        );
-        decisions.set(
-          key,
-          decision.allowed
-            ? { ready: true, code: null }
-            : { ready: false, code: decision.code },
-        );
+      const decision = await decide(selection);
+      const methodTemplates = stepMethodTemplates(step);
+      const methodStatus: Partial<Record<BillingMethod, TemplateStatus>> = {};
+      for (const method of BILLING_METHODS) {
+        const templateId = methodTemplates[method];
+        if (templateId)
+          methodStatus[method] = status(
+            await decide({ mode: 'EXPLICIT', templateId }),
+          );
       }
+      const needs = decision.allowed
+        ? templateDataNeeds(decision.template.mapping)
+        : null;
       // An unavailable explicit template is not exposed to the company beyond its status.
       result.push({
         ...step,
         whatsappSelection: selection,
-        whatsappStatus: decisions.get(key)!,
+        whatsappStatus: status(decision),
+        whatsappMethodTemplates: methodTemplates,
+        whatsappMethodStatus: methodStatus,
+        whatsappIncompatibleMethods: needs
+          ? BILLING_METHODS.filter(
+              (method) =>
+                !methodTemplates[method] && !methodCanFill(method, needs),
+            )
+          : [],
       });
     }
     return result;
@@ -470,6 +523,9 @@ export class CollectionProfileService {
     | 'emailTemplateId'
     | 'whatsappSelectionMode'
     | 'whatsappPurpose'
+    | 'pixTemplateId'
+    | 'boletoTemplateId'
+    | 'bolixTemplateId'
   > {
     if (step.channel === 'EMAIL')
       return {
@@ -477,7 +533,21 @@ export class CollectionProfileService {
         emailTemplateId: step.emailTemplateId || null,
         whatsappSelectionMode: null,
         whatsappPurpose: null,
+        pixTemplateId: null,
+        boletoTemplateId: null,
+        bolixTemplateId: null,
       };
+    const previous = existing.find((item) => item.id === step.id);
+    // Absent keeps the current template (clients that do not know the field); null clears.
+    const method = (key: BillingMethod, current: string | null | undefined) => {
+      const value = step.whatsappMethodTemplates?.[key];
+      return value === undefined ? (current ?? null) : value;
+    };
+    const methods = {
+      pixTemplateId: method('PIX', previous?.pixTemplateId),
+      boletoTemplateId: method('BOLETO', previous?.boletoTemplateId),
+      bolixTemplateId: method('BOLIX', previous?.bolixTemplateId),
+    };
     const selection = step.whatsappSelection ?? { mode: 'UNCONFIGURED' };
     if (selection.mode === 'EXPLICIT')
       return {
@@ -485,6 +555,7 @@ export class CollectionProfileService {
         emailTemplateId: null,
         whatsappSelectionMode: 'EXPLICIT',
         whatsappPurpose: null,
+        ...methods,
       };
     if (selection.mode === 'DEFAULT')
       return {
@@ -492,14 +563,15 @@ export class CollectionProfileService {
         emailTemplateId: null,
         whatsappSelectionMode: 'DEFAULT',
         whatsappPurpose: selection.purpose,
+        ...methods,
       };
     // A legacy step saved without a new choice keeps its references for history.
-    const previous = existing.find((item) => item.id === step.id);
     return {
       templateId: previous?.templateId ?? null,
       emailTemplateId: null,
       whatsappSelectionMode: 'UNCONFIGURED',
       whatsappPurpose: previous?.whatsappPurpose ?? null,
+      ...methods,
     };
   }
 
@@ -938,7 +1010,11 @@ export class CollectionProfileService {
     if (
       steps.some(
         (step) =>
-          (step.channel === 'EMAIL' && step.whatsappSelection) ||
+          (step.channel === 'EMAIL' &&
+            (step.whatsappSelection ||
+              Object.values(step.whatsappMethodTemplates ?? {}).some(
+                Boolean,
+              ))) ||
           (step.channel === 'WHATSAPP' && step.emailTemplateId),
       )
     ) {
@@ -970,6 +1046,24 @@ export class CollectionProfileService {
         if (!decision.allowed)
           throw new BadRequestException(
             'Um ou mais templates nao estao disponiveis para esta empresa.',
+          );
+      }
+      for (const method of BILLING_METHODS) {
+        const templateId = step.whatsappMethodTemplates?.[method];
+        if (!templateId) continue;
+        const decision = await this.prisma.$transaction((tx) =>
+          this.policy.resolve(tx, companyId, { mode: 'EXPLICIT', templateId }),
+        );
+        if (!decision.allowed)
+          throw new BadRequestException(
+            'Um ou mais templates nao estao disponiveis para esta empresa.',
+          );
+        // A template reading data this method never has would only produce pending sends.
+        if (
+          !methodCanFill(method, templateDataNeeds(decision.template.mapping))
+        )
+          throw new BadRequestException(
+            `O template escolhido para ${METHOD_LABELS[method]} usa dados que essa forma de pagamento nao tem.`,
           );
       }
     }

@@ -132,6 +132,73 @@ describe('renderTemplate', () => {
       ).toMatchObject({ ok: false, code: 'UNSUPPORTED', field: 'PAYMENT_URL' });
   });
 
+  it('fills the boleto button with the digits of the invoice line only', () => {
+    const result = parseTemplate({
+      parameterFormat: 'NAMED',
+      components: [
+        { type: 'BODY', text: 'Olá {{nome_devedor}}' },
+        {
+          type: 'BUTTONS',
+          buttons: [
+            {
+              type: 'PAYMENT_REQUEST',
+              text: 'Copiar código do boleto',
+              payment_setting: {
+                type: 'boleto',
+                boleto: { digitable_line: '0019' },
+              },
+            },
+          ],
+        },
+      ],
+      language: 'pt_BR',
+      category: 'UTILITY',
+      paymentBaseUrl: BASE,
+    });
+    if (!result.supported) throw new Error(result.reason);
+    const template = result.template;
+    const boletoMapping: TemplateMapping = {
+      body: { nome_devedor: { kind: 'SOURCE', source: 'DEBTOR_NAME' } },
+      boletoButton: { index: 0, source: 'BOLETO_LINE' },
+    };
+    expect(mappingSources(boletoMapping)).toEqual([
+      'DEBTOR_NAME',
+      'BOLETO_LINE',
+    ]);
+    // Efí formats the line with dots and spaces; the provider copies the 47 digits.
+    expect(
+      renderTemplate(template, boletoMapping, {
+        DEBTOR_NAME: 'Maria',
+        BOLETO_LINE: '00190.00009 01234.567004 00000.001234 1 98760000015000',
+      }),
+    ).toMatchObject({
+      ok: true,
+      boletoButtonCode: '00190000090123456700400000001234198760000015000',
+    });
+    // A Pix charge has no line: the send waits instead of going out.
+    expect(
+      renderTemplate(template, boletoMapping, { DEBTOR_NAME: 'Maria' }),
+    ).toEqual({ ok: false, code: 'VALUE_MISSING', field: 'BOLETO_LINE' });
+    for (const line of [
+      '0019000009',
+      '00190.00009-01234 5670040000000123419876000001500a',
+    ])
+      expect(
+        renderTemplate(template, boletoMapping, {
+          DEBTOR_NAME: 'Maria',
+          BOLETO_LINE: line,
+        }),
+      ).toEqual({ ok: false, code: 'UNSUPPORTED', field: 'BOLETO_LINE' });
+    for (const boletoButton of [
+      undefined,
+      { index: 1, source: 'BOLETO_LINE' },
+      { index: 0, source: 'BOLETO_LINK' },
+    ])
+      expect(
+        validateMapping(template, { ...boletoMapping, boletoButton }),
+      ).toMatchObject({ ok: false, field: 'boletoButton' });
+  });
+
   it('fills the Pix button with the invoice code only, never empty', () => {
     const result = parseTemplate({
       parameterFormat: 'NAMED',

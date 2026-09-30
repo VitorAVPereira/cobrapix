@@ -34,7 +34,7 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "test:e2e:datafy": "node test/e2e-disposable.cjs datafy-communications.e2e-spec.ts",
-    "test:e2e:templates": "node test/e2e-disposable.cjs template-access.e2e-spec.ts template-catalog-flow.e2e-spec.ts",
+    "test:e2e:templates": "node test/e2e-disposable.cjs template-access.e2e-spec.ts template-catalog-flow.e2e-spec.ts emission-template-selection.e2e-spec.ts",
     "test:e2e:smoke": "jest --config ./test/jest-e2e.json --runInBand cobrapix-flow.e2e-spec.ts",
     "seed:production": "node dist/scripts/seed-production.js",
     "templates:transition": "node dist/scripts/transition-whatsapp-templates.js"

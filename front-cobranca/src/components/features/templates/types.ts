@@ -62,6 +62,7 @@ export interface TemplateMapping {
   body: Record<string, TemplateBinding>;
   paymentButton?: { index: number; source: "PAYMENT_URL_SUFFIX" };
   pixButton?: { index: number; source: "PIX_COPY_PASTE" };
+  boletoButton?: { index: number; source: "BOLETO_LINE" };
 }
 
 export type TemplateBlockCode =
@@ -96,6 +97,8 @@ export interface TemplateContentView {
   button: { label: string; url: string; index?: number } | null;
   /** "Copy Pix code" button: always carries the Pix code of the invoice sent. */
   pixButton?: { label: string; index: number } | null;
+  /** "Copy Boleto code" button: always carries the digitable line of the invoice sent. */
+  boletoButton?: { label: string; index: number } | null;
   /** Static quick reply buttons, sent as approved. */
   quickReplies?: string[];
 }
