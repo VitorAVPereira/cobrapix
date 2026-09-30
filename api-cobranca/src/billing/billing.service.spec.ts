@@ -422,6 +422,47 @@ describe('BillingService', () => {
     expect(logged(prisma, 'WHATSAPP_QUEUED')).toBe(true);
   });
 
+  it('usa o template da etapa para a forma de pagamento da cobranca', async () => {
+    const boleto = buildInvoice({
+      billingType: 'BOLETO',
+      gatewayId: '12345',
+      efiChargeId: '12345',
+      boletoLinhaDigitavel: '00190000000',
+      boletoLink: 'https://boleto.example/12345',
+    });
+    const fixture = createService({ invoices: [buildInvoice(paidPix)] });
+    const step = {
+      ruleStepId: 'step-1',
+      channel: 'WHATSAPP',
+      templateId: null,
+      emailTemplateId: null,
+      whatsappSelection: { mode: 'DEFAULT', purpose: 'DUE_TODAY' },
+      whatsappMethodTemplates: {
+        PIX: null,
+        BOLETO: 'template-boleto',
+        BOLIX: null,
+      },
+      delayDays: 0,
+    };
+    fixture.ruleEngine.getNextStep.mockResolvedValue(step);
+    await fixture.service.executeBilling('company-1');
+    // A Pix charge has no own template: the step's choice applies.
+    expect(fixture.templateSender.prepare).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        selection: { mode: 'DEFAULT', purpose: 'DUE_TODAY' },
+      }),
+    );
+
+    const boletoFixture = createService({ invoices: [boleto] });
+    boletoFixture.ruleEngine.getNextStep.mockResolvedValue(step);
+    await boletoFixture.service.executeBilling('company-1');
+    expect(boletoFixture.templateSender.prepare).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        selection: { mode: 'EXPLICIT', templateId: 'template-boleto' },
+      }),
+    );
+  });
+
   it('reutiliza pagamento existente sem gerar cobranca duplicada', async () => {
     const invoice = buildInvoice({
       billingType: 'BOLETO',

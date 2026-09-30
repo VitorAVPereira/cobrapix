@@ -22,9 +22,11 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type {
+  BillingMethod,
   CollectionProfileType,
   CollectionRuleProfile,
   EmailTemplate,
+  MethodTemplates,
   RuleStepInput,
   WhatsappSelection,
 } from "@/lib/api-client";
@@ -94,6 +96,29 @@ interface StepChoice {
   whatsappSelection?: WhatsappSelection;
   /** Server status of the saved choice; dropped as soon as the choice changes. */
   whatsappStatus?: Readiness | null;
+  /** WhatsApp template per billing method; null uses the step's choice. */
+  whatsappMethodTemplates?: MethodTemplates;
+  /** Server status of each method's saved template; dropped when it changes. */
+  whatsappMethodStatus?: Partial<Record<BillingMethod, Readiness>> | null;
+  /** Server warning for the saved choice; dropped when any choice changes. */
+  whatsappIncompatibleMethods?: BillingMethod[] | null;
+}
+
+const BILLING_METHODS: readonly BillingMethod[] = ["PIX", "BOLETO", "BOLIX"];
+const METHOD_LABELS: Record<BillingMethod, string> = {
+  PIX: "Pix",
+  BOLETO: "Boleto",
+  BOLIX: "BOLIX",
+};
+
+/** A Pix charge has no boleto and a boleto charge no Pix code; BOLIX has both. */
+function fitsMethod(
+  template: CompanyWhatsappTemplate,
+  method: BillingMethod,
+): boolean {
+  if (method === "PIX") return !template.content.boletoButton;
+  if (method === "BOLETO") return !template.content.pixButton;
+  return true;
 }
 
 interface StepForm extends StepChoice {
@@ -295,6 +320,9 @@ function getScheduledStepForms(steps: StepForm[]): ScheduledStepForm[] {
     emailTemplateId: step.emailTemplateId,
     whatsappSelection: step.whatsappSelection,
     whatsappStatus: step.whatsappStatus,
+    whatsappMethodTemplates: step.whatsappMethodTemplates,
+    whatsappMethodStatus: step.whatsappMethodStatus,
+    whatsappIncompatibleMethods: step.whatsappIncompatibleMethods,
     sendTimeStart: step.sendTimeStart,
     sendTimeEnd: step.sendTimeEnd,
     scheduleDay: scheduleDays[index] ?? 0,
@@ -324,6 +352,9 @@ function buildStepFormsFromScheduledSteps(
         emailTemplateId: step.emailTemplateId,
         whatsappSelection: step.whatsappSelection,
         whatsappStatus: step.whatsappStatus,
+        whatsappMethodTemplates: step.whatsappMethodTemplates,
+        whatsappMethodStatus: step.whatsappMethodStatus,
+        whatsappIncompatibleMethods: step.whatsappIncompatibleMethods,
         delayDays,
         sendTimeStart: step.sendTimeStart,
         sendTimeEnd: step.sendTimeEnd,
@@ -469,6 +500,16 @@ function toStepInput(step: StepForm): RuleStepInput {
         ...base,
         channel: "WHATSAPP",
         whatsappSelection: step.whatsappSelection ?? { mode: "UNCONFIGURED" },
+        ...(step.whatsappMethodTemplates
+          ? {
+              whatsappMethodTemplates: Object.fromEntries(
+                BILLING_METHODS.map((method) => [
+                  method,
+                  step.whatsappMethodTemplates?.[method] ?? null,
+                ]),
+              ),
+            }
+          : {}),
       };
 }
 
@@ -485,14 +526,20 @@ function choiceLabel(
         ?.name ?? "Modelo padrão"
     );
   const selection = step.whatsappSelection;
-  if (selection?.mode === "DEFAULT")
-    return `Padrão: ${PURPOSE_LABELS[selection.purpose]}`;
-  if (selection?.mode === "EXPLICIT")
-    return (
-      whatsappTemplates.find((template) => template.id === selection.templateId)
-        ?.name ?? "Template indisponível"
-    );
-  return "Sem template escolhido";
+  const name = (templateId: string) =>
+    whatsappTemplates.find((template) => template.id === templateId)?.name ??
+    "Template indisponível";
+  const base =
+    selection?.mode === "DEFAULT"
+      ? `Padrão: ${PURPOSE_LABELS[selection.purpose]}`
+      : selection?.mode === "EXPLICIT"
+        ? name(selection.templateId)
+        : "Sem template escolhido";
+  const byMethod = BILLING_METHODS.flatMap((method) => {
+    const templateId = step.whatsappMethodTemplates?.[method];
+    return templateId ? [`${METHOD_LABELS[method]}: ${name(templateId)}`] : [];
+  });
+  return [base, ...byMethod].join(" · ");
 }
 
 const UNAVAILABLE = "unavailable";
@@ -577,6 +624,7 @@ function StepTemplateSelect({
             onChange({
               whatsappSelection: { mode: "DEFAULT", purpose },
               whatsappStatus: undefined,
+              whatsappIncompatibleMethods: undefined,
             });
           else if (next.startsWith("t:"))
             onChange({
@@ -585,6 +633,7 @@ function StepTemplateSelect({
                 templateId: next.slice(2),
               },
               whatsappStatus: undefined,
+              whatsappIncompatibleMethods: undefined,
             });
         }}
         className="h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700"
@@ -629,7 +678,117 @@ function StepTemplateSelect({
             : "O padrão da finalidade é definido pela CifraMais entre os templates liberados para sua empresa."}
         </span>
       )}
+      {step.whatsappIncompatibleMethods?.length ? (
+        <span role="note" className="text-xs font-medium text-amber-700">
+          Cobranças{" "}
+          {step.whatsappIncompatibleMethods
+            .map((method) => METHOD_LABELS[method])
+            .join(" e ")}{" "}
+          não têm os dados que este template usa e ficarão pendentes. Escolha um
+          template para essa forma de pagamento.
+        </span>
+      ) : null}
+      <MethodTemplatesPicker
+        label={label}
+        step={step}
+        whatsappTemplates={whatsappTemplates}
+        onChange={onChange}
+      />
     </>
+  );
+}
+
+/**
+ * Optional template per billing method of a WhatsApp step: a Pix charge and a BOLIX
+ * charge of the same step can use different approved templates. "Igual à etapa" keeps
+ * the step's choice; only templates that fit the method are offered.
+ */
+function MethodTemplatesPicker({
+  label,
+  step,
+  whatsappTemplates,
+  onChange,
+}: {
+  label: string;
+  step: StepChoice;
+  whatsappTemplates: CompanyWhatsappTemplate[];
+  onChange: (choice: StepChoice) => void;
+}): ReactElement {
+  const templates = step.whatsappMethodTemplates ?? {};
+  // Saved templates keep it open; the checkbox opens it before any is chosen.
+  const [expanded, setExpanded] = useState(false);
+  const open =
+    expanded || BILLING_METHODS.some((method) => templates[method]);
+  const change = (method: BillingMethod, templateId: string | null) =>
+    onChange({
+      whatsappMethodTemplates: { ...templates, [method]: templateId },
+      whatsappMethodStatus: step.whatsappMethodStatus
+        ? { ...step.whatsappMethodStatus, [method]: undefined }
+        : undefined,
+      whatsappIncompatibleMethods: undefined,
+    });
+  return (
+    <div className="grid gap-2">
+      <span className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+        <input
+          type="checkbox"
+          aria-label={`${label}: templates diferentes por forma de pagamento`}
+          checked={open}
+          onChange={(event) => {
+            setExpanded(event.target.checked);
+            if (!event.target.checked)
+              onChange({
+                whatsappMethodTemplates: { PIX: null, BOLETO: null, BOLIX: null },
+                whatsappMethodStatus: undefined,
+                whatsappIncompatibleMethods: undefined,
+              });
+          }}
+        />
+        Usar templates diferentes por forma de pagamento
+      </span>
+      {open &&
+        BILLING_METHODS.map((method) => {
+          const templateId = templates[method] ?? null;
+          const options = whatsappTemplates.filter((template) =>
+            fitsMethod(template, method),
+          );
+          const available =
+            !templateId || options.some((template) => template.id === templateId);
+          const status = step.whatsappMethodStatus?.[method];
+          return (
+            <div key={method} className="grid gap-1">
+              <select
+                aria-label={`${label} para ${METHOD_LABELS[method]}`}
+                value={available ? (templateId ?? "") : UNAVAILABLE}
+                onChange={(event) =>
+                  change(method, event.target.value || null)
+                }
+                className="h-10 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700"
+              >
+                <option value="">
+                  {METHOD_LABELS[method]}: igual à etapa
+                </option>
+                {!available && (
+                  <option value={UNAVAILABLE} disabled>
+                    {METHOD_LABELS[method]}: template indisponível
+                  </option>
+                )}
+                {options.map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {METHOD_LABELS[method]}: {template.name}
+                  </option>
+                ))}
+              </select>
+              {status && !status.ready && status.code && (
+                <span role="note" className="text-xs font-medium text-amber-700">
+                  Envios {METHOD_LABELS[method]} pendentes:{" "}
+                  {BLOCK_LABELS[status.code]}.
+                </span>
+              )}
+            </div>
+          );
+        })}
+    </div>
   );
 }
 
@@ -824,6 +983,10 @@ export default function ReguaPage() {
               ? (step.whatsappSelection ?? { mode: "UNCONFIGURED" })
               : undefined,
           whatsappStatus: step.whatsappStatus,
+          // An older API without the field leaves it undefined: nothing is sent back.
+          whatsappMethodTemplates: step.whatsappMethodTemplates ?? undefined,
+          whatsappMethodStatus: step.whatsappMethodStatus,
+          whatsappIncompatibleMethods: step.whatsappIncompatibleMethods,
           delayDays: step.delayDays,
           sendTimeStart: step.sendTimeStart ?? "",
           sendTimeEnd: step.sendTimeEnd ?? "",
@@ -984,6 +1147,9 @@ export default function ReguaPage() {
           emailTemplateId: undefined,
           whatsappSelection: undefined,
           whatsappStatus: undefined,
+          whatsappMethodTemplates: undefined,
+          whatsappMethodStatus: undefined,
+          whatsappIncompatibleMethods: undefined,
           ...choiceForChannel(channel, scheduleDays[index] ?? 0),
         };
       }),
@@ -1517,7 +1683,7 @@ export default function ReguaPage() {
                             <div className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                               <p className="text-sm font-bold text-slate-900">
                                 {point.day === EMISSION_DAY
-                                  ? "A partir de 30 dias antes do vencimento"
+                                  ? "Na emissão da cobrança"
                                   : formatScheduleDay(point.day)}
                               </p>
                               <div className="mt-2 flex flex-wrap gap-2">
@@ -1617,8 +1783,10 @@ export default function ReguaPage() {
                         Contato inicial
                       </h3>
                       <p className="mt-1 text-sm text-slate-500">
-                        Envie uma mensagem a partir de 30 dias antes do
-                        vencimento, quando a fatura já estiver cadastrada.
+                        Primeira mensagem da cobrança, enviada na emissão.
+                        Se a primeira cobrança automática estiver desligada
+                        para o cliente, ela sai a partir de 30 dias antes do
+                        vencimento.
                       </p>
                     </div>
                     <button
@@ -1692,7 +1860,7 @@ export default function ReguaPage() {
                       {(["EMAIL", "WHATSAPP"] as const)
                         .filter((channel) => emissionChannels[channel])
                         .map((channel) => (
-                          <label
+                          <div
                             key={channel}
                             className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3"
                           >
@@ -1714,7 +1882,7 @@ export default function ReguaPage() {
                                 updateEmissionChoice(channel, choice)
                               }
                             />
-                          </label>
+                          </div>
                         ))}
                     </div>
                   )}
@@ -1853,7 +2021,7 @@ export default function ReguaPage() {
                                   </button>
                                 </div>
                               </div>
-                              <label className="grid gap-1.5 md:col-span-2">
+                              <div className="grid gap-1.5 md:col-span-2">
                                 <span className="text-xs font-bold text-slate-700">
                                   Mensagem que será enviada
                                 </span>
@@ -1869,7 +2037,7 @@ export default function ReguaPage() {
                                     updateStepChoice(index, choice)
                                   }
                                 />
-                              </label>
+                              </div>
                               <div className="md:col-span-2">
                                 <span className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
                                   <Clock3 size={14} /> Horário de envio{" "}

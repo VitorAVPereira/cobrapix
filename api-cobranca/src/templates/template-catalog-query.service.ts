@@ -27,6 +27,8 @@ export interface TemplateContentView {
   button: { label: string; url: string; index: number } | null;
   /** "Copy Pix code" button; the code sent is always the invoice's own. */
   pixButton: { label: string; index: number } | null;
+  /** "Copy Boleto code" button; the line sent is always the invoice's own. */
+  boletoButton: { label: string; index: number } | null;
   /** Static quick reply buttons, shown as approved. */
   quickReplies: string[];
 }
@@ -343,6 +345,12 @@ export class TemplateCatalogQueryService {
         pixButton: parsed.pixButton
           ? { label: parsed.pixButton.label, index: parsed.pixButton.index }
           : null,
+        boletoButton: parsed.boletoButton
+          ? {
+              label: parsed.boletoButton.label,
+              index: parsed.boletoButton.index,
+            }
+          : null,
         quickReplies: parsed.quickReplies,
       },
       defaultFor: defaults.map((row) => row.purpose),
@@ -407,6 +415,12 @@ export class TemplateCatalogQueryService {
                   index: parsed.template.pixButton.index,
                 }
               : null,
+            boletoButton: parsed.template.boletoButton
+              ? {
+                  label: parsed.template.boletoButton.label,
+                  index: parsed.template.boletoButton.index,
+                }
+              : null,
             quickReplies: parsed.template.quickReplies,
           }
         : rawContent(row.metaComponents),
@@ -431,6 +445,7 @@ function rawContent(components: Prisma.JsonValue): TemplateContentView {
     footer: text('FOOTER'),
     button: null,
     pixButton: null,
+    boletoButton: null,
     quickReplies: [],
   };
 }

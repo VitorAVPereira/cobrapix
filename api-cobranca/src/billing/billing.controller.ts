@@ -159,6 +159,21 @@ class WhatsappSelectionDto {
   purpose?: TemplatePurpose;
 }
 
+/** Template per billing method: an ID, null to clear or absent to keep the current one. */
+class WhatsappMethodTemplatesDto {
+  @IsOptional()
+  @IsUUID()
+  PIX?: string | null;
+
+  @IsOptional()
+  @IsUUID()
+  BOLETO?: string | null;
+
+  @IsOptional()
+  @IsUUID()
+  BOLIX?: string | null;
+}
+
 /** Explicit, default or pending choice; fields of other modes are never accepted. */
 function toSelection(dto: WhatsappSelectionDto): TemplateSelection {
   if (dto.mode === 'EXPLICIT' && dto.templateId && !dto.purpose)
@@ -194,6 +209,11 @@ class RuleStepDto {
   @ValidateNested()
   @Type(() => WhatsappSelectionDto)
   whatsappSelection?: WhatsappSelectionDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => WhatsappMethodTemplatesDto)
+  whatsappMethodTemplates?: WhatsappMethodTemplatesDto;
 
   @IsInt()
   @Min(-30)
@@ -439,12 +459,23 @@ export class BillingController {
     return this.collectionProfileService.setSteps(
       user.companyId,
       profileId,
-      body.steps.map(({ whatsappSelection, ...step }) => ({
-        ...step,
-        ...(whatsappSelection
-          ? { whatsappSelection: toSelection(whatsappSelection) }
-          : {}),
-      })),
+      body.steps.map(
+        ({ whatsappSelection, whatsappMethodTemplates, ...step }) => ({
+          ...step,
+          ...(whatsappSelection
+            ? { whatsappSelection: toSelection(whatsappSelection) }
+            : {}),
+          ...(whatsappMethodTemplates
+            ? {
+                whatsappMethodTemplates: {
+                  PIX: whatsappMethodTemplates.PIX,
+                  BOLETO: whatsappMethodTemplates.BOLETO,
+                  BOLIX: whatsappMethodTemplates.BOLIX,
+                },
+              }
+            : {}),
+        }),
+      ),
     );
   }
 

@@ -23,7 +23,11 @@ import { EmailService } from '../email/email.service';
 import { EmailTemplatesService } from '../email/email-templates.service';
 import { TemplateSendPreparerService } from '../templates/template-send-preparer.service';
 import type { TemplateSelection } from '../templates/template-contracts';
-import { collectionLogicalKey } from '../templates/template-selection';
+import {
+  MethodTemplates,
+  collectionLogicalKey,
+  selectionForMethod,
+} from '../templates/template-selection';
 import { assertChannelAvailable } from '../communications/channel-availability';
 
 const DEFAULT_COLLECTION_REMINDER_DAYS = [0];
@@ -633,6 +637,7 @@ export class BillingService {
         ruleStepId: string;
         channel: CollectionChannel;
         whatsappSelection: TemplateSelection;
+        whatsappMethodTemplates: MethodTemplates;
         emailTemplateId: string | null;
         delayDays: number;
       }
@@ -652,6 +657,7 @@ export class BillingService {
           ruleStepId: nextStep.ruleStepId,
           channel: nextStep.channel,
           whatsappSelection: nextStep.whatsappSelection,
+          whatsappMethodTemplates: nextStep.whatsappMethodTemplates,
           emailTemplateId: nextStep.emailTemplateId,
           delayDays: nextStep.delayDays,
         });
@@ -711,6 +717,7 @@ export class BillingService {
         ruleStepId,
         channel,
         whatsappSelection,
+        whatsappMethodTemplates,
         emailTemplateId,
       } of resolved) {
         const paymentData = paymentResults.get(invoice.id);
@@ -740,7 +747,8 @@ export class BillingService {
             skippedCount++;
             continue;
           }
-          // The step's own choice (explicit or purpose default); never another template.
+          // The step's choice for this charge's billing method, else its own choice
+          // (explicit or purpose default); never another template.
           const prepared = await this.templateSender.prepare({
             logicalKey: collectionLogicalKey({
               companyId: company.id,
@@ -753,7 +761,11 @@ export class BillingService {
               invoiceId: invoice.id,
               debtorId: invoice.debtor.id,
             },
-            selection: whatsappSelection,
+            selection: selectionForMethod(
+              whatsappSelection,
+              whatsappMethodTemplates,
+              paymentData.billingType,
+            ),
             ruleStepId,
           });
           if (prepared.status === 'BLOCKED') {

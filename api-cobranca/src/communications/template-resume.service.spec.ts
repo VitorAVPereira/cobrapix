@@ -92,3 +92,55 @@ describe('TemplateResumeService.confirm', () => {
     ).rejects.toMatchObject({ status: 400 });
   });
 });
+
+describe('TemplateResumeService selection on resume', () => {
+  it('follows the rule step choice for the billing method of the active charge', async () => {
+    const { service } = setup({});
+    const tx = {
+      collectionRuleStep: {
+        findFirst: jest.fn().mockResolvedValue({
+          whatsappSelectionMode: 'DEFAULT',
+          whatsappPurpose: 'EMISSION',
+          templateId: null,
+          pixTemplateId: null,
+          boletoTemplateId: null,
+          bolixTemplateId: 'template-bolix',
+        }),
+      },
+      paymentCharge: {
+        findFirst: jest.fn().mockResolvedValue({ billingMethod: 'BOLIX' }),
+      },
+    };
+    const request = {
+      logicalKey: 'collection:company-a:invoice-a:initial:WHATSAPP',
+      origin: 'COLLECTION',
+      context: { companyId: 'company-a', invoiceId: 'invoice-a' },
+      selection: { mode: 'DEFAULT', purpose: 'EMISSION' },
+      ruleStepId: 'step-inicial',
+    };
+    const selectionFor = (
+      service as unknown as {
+        selectionFor(tx: unknown, request: unknown): Promise<unknown>;
+      }
+    ).selectionFor.bind(service);
+    await expect(selectionFor(tx, request)).resolves.toEqual({
+      mode: 'EXPLICIT',
+      templateId: 'template-bolix',
+    });
+    expect(tx.paymentCharge.findFirst).toHaveBeenCalledWith({
+      where: {
+        companyId: 'company-a',
+        invoiceId: 'invoice-a',
+        status: 'ACTIVE',
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { billingMethod: true },
+    });
+    // The charge was replaced by a Pix one: the step's own choice applies.
+    tx.paymentCharge.findFirst.mockResolvedValue({ billingMethod: 'PIX' });
+    await expect(selectionFor(tx, request)).resolves.toEqual({
+      mode: 'DEFAULT',
+      purpose: 'EMISSION',
+    });
+  });
+});

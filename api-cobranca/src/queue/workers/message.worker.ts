@@ -11,15 +11,23 @@ import {
   BillingMethod,
   CollectionAttemptStatus,
   CollectionChannel,
+  CollectionRuleStep,
   Prisma,
 } from '@prisma/client';
 import { Worker, Job, UnrecoverableError } from 'bullmq';
 import { issuanceFailureOf } from '../../payment/efi-issuance-error';
 import { WhatsappTransportError } from '../../whatsapp/transport/whatsapp-transport.error';
 import { TemplatePolicyError } from '../../templates/template-contracts';
-import { TemplateSendPreparerService } from '../../templates/template-send-preparer.service';
+import {
+  PrepareResult,
+  TemplateSendPreparerService,
+} from '../../templates/template-send-preparer.service';
 import { TemplatePendingService } from '../../communications/template-pending.service';
-import { collectionLogicalKey } from '../../templates/template-selection';
+import {
+  collectionLogicalKey,
+  ruleStepSelection,
+} from '../../templates/template-selection';
+import { initialRuleStep } from '../../billing/collection-rule-engine';
 import { PaymentService } from '../../payment/payment.service';
 import { PublicPaymentLinkService } from '../../payment/payment-link.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -84,6 +92,7 @@ interface InitialChargeInvoice {
     useGlobalBillingSettings: boolean;
     preferredBillingMethod: BillingMethod | null;
     autoGenerateFirstCharge: boolean | null;
+    collectionProfile: { steps: InitialRuleStep[] } | null;
   };
   company: {
     corporateName: string;
@@ -95,6 +104,22 @@ interface InitialChargeInvoice {
   };
   collectionLogs: Array<{ id: string }>;
 }
+
+type InitialRuleStep = Pick<
+  CollectionRuleStep,
+  | 'id'
+  | 'stepOrder'
+  | 'channel'
+  | 'delayDays'
+  | 'isActive'
+  | 'templateId'
+  | 'emailTemplateId'
+  | 'whatsappSelectionMode'
+  | 'whatsappPurpose'
+  | 'pixTemplateId'
+  | 'boletoTemplateId'
+  | 'bolixTemplateId'
+>;
 
 interface InitialChargePaymentInvoice {
   id: string;
@@ -327,7 +352,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      const attemptCreated = await this.createQueuedFallbackAttempt(
+      const attemptCreated = await this.createQueuedAttempt(
         data.companyId,
         data.invoiceId,
         data.ruleStepId,
@@ -464,7 +489,8 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       'WHATSAPP',
       errorMessage,
     );
-    await this.tryEmailFallback(collection, errorMessage);
+    if (collection.emailFallback)
+      await this.tryEmailFallback(collection, errorMessage);
   }
 
   private async recordCollectionAttemptFailed(
@@ -575,7 +601,14 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
           'PENDING',
         );
       } else {
-        if (await this.prepareInitialWhatsapp(data, invoice)) queuedCount++;
+        if (
+          await this.prepareInitialWhatsapp(
+            data,
+            invoice,
+            paymentData.billingType,
+          )
+        )
+          queuedCount++;
       }
     }
 
@@ -588,75 +621,15 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
           'Cobranca por email ignorada: devedor sem email cadastrado.',
           'SKIPPED',
         );
-      } else {
-        const emailTemplate =
-          await this.emailTemplatesService.findActiveOrDefault(
-            invoice.companyId,
-            null,
-          );
-        const personalizedEmailContent = emailTemplate.content
-          .replace(/{{\s*saudacao\s*}}/g, emailTemplate.greeting)
-          .replace(/{{\s*instrucoes\s*}}/g, emailTemplate.instructions)
-          .replace(/{{\s*assinatura\s*}}/g, emailTemplate.signature);
-        const subject = this.buildTemplateText(emailTemplate.subject, {
-          debtorName: invoice.debtor.name,
-          originalAmount: Number(invoice.originalAmount),
-          dueDate: invoice.dueDate,
-          companyName:
-            invoice.company.tradeName ?? invoice.company.corporateName,
+      } else if (
+        await this.queueInitialEmail(
+          data,
+          invoice,
+          invoice.debtor.email,
           paymentData,
-        });
-        const bodyText = this.ensurePaymentInstruction(
-          this.buildTemplateText(personalizedEmailContent, {
-            debtorName: invoice.debtor.name,
-            originalAmount: Number(invoice.originalAmount),
-            dueDate: invoice.dueDate,
-            companyName:
-              invoice.company.tradeName ?? invoice.company.corporateName,
-            paymentData,
-          }),
-          paymentData,
-        );
-        const html = this.emailService.buildCollectionEmailHtml({
-          debtorName: invoice.debtor.name,
-          companyName:
-            invoice.company.tradeName ?? invoice.company.corporateName,
-          amount: new Intl.NumberFormat('pt-BR', {
-            style: 'currency',
-            currency: 'BRL',
-          }).format(Number(invoice.originalAmount)),
-          dueDate: new Intl.DateTimeFormat('pt-BR', {
-            day: '2-digit',
-            month: '2-digit',
-            year: 'numeric',
-            timeZone: 'America/Sao_Paulo',
-          }).format(invoice.dueDate),
-          paymentMethod: paymentData.billingTypeLabel,
-          paymentLink: paymentData.paymentLink,
-          pixCopyPaste: paymentData.pixCopiaECola,
-          boletoLine: paymentData.boletoLinhaDigitavel,
-          bodyText,
-        });
-
-        await this.emailQueue.addJob({
-          companyId: invoice.companyId,
-          invoiceId: invoice.id,
-          debtorId: invoice.debtor.id,
-          debtorName: invoice.debtor.name,
-          email: invoice.debtor.email,
-          subject,
-          html,
-        });
-
+        )
+      ) {
         queuedCount++;
-
-        await this.createCollectionLog(
-          invoice.companyId,
-          invoice.id,
-          'EMAIL_QUEUED',
-          `Email de cobranca enfileirado para ${invoice.debtor.name} (${invoice.debtor.email}).`,
-          'QUEUED',
-        );
       }
     }
 
@@ -666,12 +639,140 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * First charge on WhatsApp: the company's EMISSION default, never another template.
-   * A manual re-send of selected invoices is its own communication.
+   * First charge by e-mail: the template of the rule's "Inicial" e-mail step, which this
+   * e-mail fulfills, else the default e-mail template. An unavailable step template skips
+   * the e-mail, as in the rule; it never falls back to the default.
+   */
+  private async queueInitialEmail(
+    data: InitialChargeJob,
+    invoice: InitialChargeInvoice,
+    email: string,
+    paymentData: PaymentMessageData,
+  ): Promise<boolean> {
+    const step = initialRuleStep(
+      invoice.debtor.collectionProfile?.steps ?? [],
+      'EMAIL',
+    );
+    const emailTemplate = step
+      ? await this.emailTemplatesService
+          .resolveForRule(invoice.companyId, step.emailTemplateId)
+          .catch(() => null)
+      : await this.emailTemplatesService.findActiveOrDefault(
+          invoice.companyId,
+          null,
+        );
+    if (!emailTemplate) {
+      await this.createCollectionLog(
+        invoice.companyId,
+        invoice.id,
+        'EMAIL_SKIPPED',
+        'Cobranca por email ignorada: template de email da etapa Inicial indisponivel.',
+        'SKIPPED',
+      );
+      return false;
+    }
+    const claimed = step
+      ? await this.createQueuedAttempt(
+          invoice.companyId,
+          invoice.id,
+          step.id,
+          'EMAIL',
+        )
+      : false;
+    if (step && !claimed && data.source !== 'SELECTED') {
+      await this.createCollectionLog(
+        invoice.companyId,
+        invoice.id,
+        'EMAIL_SKIPPED',
+        'Cobranca por email ignorada: a etapa Inicial de email da regua ja foi enviada.',
+        'SKIPPED',
+      );
+      return false;
+    }
+    const personalizedEmailContent = emailTemplate.content
+      .replace(/{{\s*saudacao\s*}}/g, emailTemplate.greeting)
+      .replace(/{{\s*instrucoes\s*}}/g, emailTemplate.instructions)
+      .replace(/{{\s*assinatura\s*}}/g, emailTemplate.signature);
+    const subject = this.buildTemplateText(emailTemplate.subject, {
+      debtorName: invoice.debtor.name,
+      originalAmount: Number(invoice.originalAmount),
+      dueDate: invoice.dueDate,
+      companyName: invoice.company.tradeName ?? invoice.company.corporateName,
+      paymentData,
+    });
+    const bodyText = this.ensurePaymentInstruction(
+      this.buildTemplateText(personalizedEmailContent, {
+        debtorName: invoice.debtor.name,
+        originalAmount: Number(invoice.originalAmount),
+        dueDate: invoice.dueDate,
+        companyName: invoice.company.tradeName ?? invoice.company.corporateName,
+        paymentData,
+      }),
+      paymentData,
+    );
+    const html = this.emailService.buildCollectionEmailHtml({
+      debtorName: invoice.debtor.name,
+      companyName: invoice.company.tradeName ?? invoice.company.corporateName,
+      amount: new Intl.NumberFormat('pt-BR', {
+        style: 'currency',
+        currency: 'BRL',
+      }).format(Number(invoice.originalAmount)),
+      dueDate: new Intl.DateTimeFormat('pt-BR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        timeZone: 'America/Sao_Paulo',
+      }).format(invoice.dueDate),
+      paymentMethod: paymentData.billingTypeLabel,
+      paymentLink: paymentData.paymentLink,
+      pixCopyPaste: paymentData.pixCopiaECola,
+      boletoLine: paymentData.boletoLinhaDigitavel,
+      bodyText,
+    });
+
+    try {
+      await this.emailQueue.addJob({
+        companyId: invoice.companyId,
+        invoiceId: invoice.id,
+        debtorId: invoice.debtor.id,
+        debtorName: invoice.debtor.name,
+        email,
+        subject,
+        html,
+        // Only the send that claimed the step records it: sent, failed or deduplicated.
+        ...(step && claimed ? { ruleStepId: step.id } : {}),
+      });
+    } catch (error) {
+      if (step && claimed)
+        await this.releaseInitialStep(
+          invoice.companyId,
+          invoice.id,
+          step.id,
+          'EMAIL',
+        );
+      throw error;
+    }
+
+    await this.createCollectionLog(
+      invoice.companyId,
+      invoice.id,
+      'EMAIL_QUEUED',
+      `Email de cobranca enfileirado para ${invoice.debtor.name} (${email}).`,
+      'QUEUED',
+    );
+    return true;
+  }
+
+  /**
+   * First charge on WhatsApp: the choice of the rule's "Inicial" WhatsApp step for the
+   * charge's billing method, which this message fulfills, else the company's EMISSION
+   * default; never another template. A manual send of selected invoices is its own
+   * communication.
    */
   private async prepareInitialWhatsapp(
     data: InitialChargeJob,
     invoice: InitialChargeInvoice,
+    billingMethod: BillingMethod,
   ): Promise<boolean> {
     if (!invoice.debtor.whatsappOptIn) {
       await this.createCollectionLog(
@@ -683,23 +784,69 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       );
       return false;
     }
-    const prepared = await this.templateSender.prepare({
-      logicalKey: collectionLogicalKey({
-        companyId: invoice.companyId,
-        invoiceId: invoice.id,
-        ruleStepId:
-          data.source === 'SELECTED' && data.requestId
-            ? `selected-${data.requestId}`
-            : null,
-      }),
-      origin: 'COLLECTION',
-      context: {
-        companyId: invoice.companyId,
-        invoiceId: invoice.id,
-        debtorId: invoice.debtor.id,
-      },
-      selection: { mode: 'DEFAULT', purpose: 'EMISSION' },
+    const logicalKey = collectionLogicalKey({
+      companyId: invoice.companyId,
+      invoiceId: invoice.id,
+      ruleStepId:
+        data.source === 'SELECTED' && data.requestId
+          ? `selected-${data.requestId}`
+          : null,
     });
+    const step = initialRuleStep(
+      invoice.debtor.collectionProfile?.steps ?? [],
+      'WHATSAPP',
+    );
+    // The step's attempt keeps the rule from sending it again.
+    const claimed = step
+      ? await this.createQueuedAttempt(
+          invoice.companyId,
+          invoice.id,
+          step.id,
+          'WHATSAPP',
+        )
+      : false;
+    if (
+      step &&
+      !claimed &&
+      data.source !== 'SELECTED' &&
+      !(await this.hasInitialWhatsapp(logicalKey))
+    ) {
+      // The rule already sent its "Inicial" step (a retry of this job finds its own message).
+      await this.createCollectionLog(
+        invoice.companyId,
+        invoice.id,
+        'INITIAL_CHARGE_SKIPPED',
+        'Primeira mensagem WhatsApp nao enviada: a etapa Inicial da regua ja foi enviada.',
+        'SKIPPED',
+      );
+      return false;
+    }
+    let prepared: PrepareResult;
+    try {
+      prepared = await this.templateSender.prepare({
+        logicalKey,
+        origin: 'COLLECTION',
+        context: {
+          companyId: invoice.companyId,
+          invoiceId: invoice.id,
+          debtorId: invoice.debtor.id,
+        },
+        selection: step
+          ? ruleStepSelection(step, billingMethod)
+          : { mode: 'DEFAULT', purpose: 'EMISSION' },
+        // Only the send that claimed the step records it as sent or failed.
+        ...(step && claimed ? { ruleStepId: step.id } : {}),
+      });
+    } catch (error) {
+      if (step && claimed)
+        await this.releaseInitialStep(
+          invoice.companyId,
+          invoice.id,
+          step.id,
+          'WHATSAPP',
+        );
+      throw error;
+    }
     if (prepared.status === 'BLOCKED') {
       await this.createCollectionLog(
         invoice.companyId,
@@ -758,6 +905,28 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
             useGlobalBillingSettings: true,
             preferredBillingMethod: true,
             autoGenerateFirstCharge: true,
+            collectionProfile: {
+              select: {
+                steps: {
+                  where: { isActive: true },
+                  orderBy: { stepOrder: 'asc' },
+                  select: {
+                    id: true,
+                    stepOrder: true,
+                    channel: true,
+                    delayDays: true,
+                    isActive: true,
+                    templateId: true,
+                    emailTemplateId: true,
+                    whatsappSelectionMode: true,
+                    whatsappPurpose: true,
+                    pixTemplateId: true,
+                    boletoTemplateId: true,
+                    bolixTemplateId: true,
+                  },
+                },
+              },
+            },
           },
         },
         company: {
@@ -1117,7 +1286,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  private async createQueuedFallbackAttempt(
+  private async createQueuedAttempt(
     companyId: string,
     invoiceId: string,
     ruleStepId: string,
@@ -1145,6 +1314,32 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
 
       throw error;
     }
+  }
+
+  private async hasInitialWhatsapp(logicalKey: string): Promise<boolean> {
+    const [intent, hold] = await Promise.all([
+      this.prisma.communicationOutboundIntent.findFirst({
+        where: { OR: [{ logicalKey }, { idempotencyKey: logicalKey }] },
+        select: { id: true },
+      }),
+      this.prisma.whatsappTemplatePendingSend.findUnique({
+        where: { logicalKey },
+        select: { id: true },
+      }),
+    ]);
+    return Boolean(intent || hold);
+  }
+
+  /** Nothing was prepared or queued for a claimed "Inicial" step: it returns to the rule. */
+  private async releaseInitialStep(
+    companyId: string,
+    invoiceId: string,
+    ruleStepId: string,
+    channel: CollectionChannel,
+  ): Promise<void> {
+    await this.prisma.collectionAttempt.deleteMany({
+      where: { companyId, invoiceId, ruleStepId, channel, status: 'QUEUED' },
+    });
   }
 
   // A diagnosed issuance failure, or a reservation still awaiting

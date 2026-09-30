@@ -5,8 +5,37 @@ import {
   WhatsappTemplatePurpose,
 } from '@prisma/client';
 import type { TemplateSelection } from '../templates/template-contracts';
-import { ruleStepSelection } from '../templates/template-selection';
+import {
+  EMISSION_SCHEDULE_DAY,
+  MethodTemplates,
+  collectionLogicalKey,
+  ruleStepSelection,
+  stepMethodTemplates,
+} from '../templates/template-selection';
 import { PrismaService } from '../prisma/prisma.service';
+
+/**
+ * The rule's "Inicial" step of a channel: the first active one at the emission day. It
+ * is the first message of the charge; without it the company's emission default applies.
+ */
+export function initialRuleStep<
+  T extends {
+    stepOrder: number;
+    channel: CollectionChannel;
+    delayDays: number;
+    isActive: boolean;
+  },
+>(steps: readonly T[], channel: CollectionChannel): T | null {
+  let day = 0;
+  for (const step of steps
+    .filter((item) => item.isActive)
+    .sort((a, b) => a.stepOrder - b.stepOrder)) {
+    day += step.delayDays;
+    if (day > EMISSION_SCHEDULE_DAY) return null;
+    if (step.channel === channel) return step;
+  }
+  return null;
+}
 
 interface IncomingInvoice {
   id: string;
@@ -25,6 +54,9 @@ interface IncomingInvoice {
         emailTemplateId?: string | null;
         whatsappSelectionMode?: WhatsappSelectionMode | null;
         whatsappPurpose?: WhatsappTemplatePurpose | null;
+        pixTemplateId?: string | null;
+        boletoTemplateId?: string | null;
+        bolixTemplateId?: string | null;
         delayDays: number;
         sendTimeStart: string | null;
         sendTimeEnd: string | null;
@@ -41,6 +73,8 @@ interface ResolvedStep {
   emailTemplateId: string | null;
   /** Meaningful for WHATSAPP steps only. */
   whatsappSelection: TemplateSelection;
+  /** WHATSAPP only: templates by billing method, applied once the charge is known. */
+  whatsappMethodTemplates: MethodTemplates;
   delayDays: number;
 }
 
@@ -99,6 +133,11 @@ export class CollectionRuleEngine {
       });
 
       if (alreadyAttempted) continue;
+      if (
+        cumulativeDelayDays <= EMISSION_SCHEDULE_DAY &&
+        (await this.firstMessageSent(invoice, step.channel))
+      )
+        continue;
 
       return {
         ruleStepId: step.id,
@@ -110,11 +149,53 @@ export class CollectionRuleEngine {
           whatsappPurpose: step.whatsappPurpose ?? null,
           templateId: step.templateId,
         }),
+        whatsappMethodTemplates: stepMethodTemplates(step),
         delayDays: cumulativeDelayDays,
       };
     }
 
     return null;
+  }
+
+  /**
+   * The first message of the charge already fulfilled the "Inicial" step. Charges issued
+   * before the first message claimed the step have no attempt: their first WhatsApp is
+   * an intent or hold under the initial keys, their first e-mail an EMAIL_QUEUED log
+   * (written only by the first charge).
+   */
+  private async firstMessageSent(
+    invoice: IncomingInvoice,
+    channel: CollectionChannel,
+  ): Promise<boolean> {
+    const { companyId, id: invoiceId } = invoice;
+    if (channel === 'EMAIL')
+      return Boolean(
+        await this.prisma.collectionLog.findFirst({
+          where: { companyId, invoiceId, actionType: 'EMAIL_QUEUED' },
+          select: { id: true },
+        }),
+      );
+    const keys = {
+      OR: [
+        { logicalKey: collectionLogicalKey({ companyId, invoiceId }) },
+        {
+          logicalKey: {
+            startsWith: `collection:${companyId}:${invoiceId}:selected-`,
+          },
+        },
+      ],
+    };
+    const [intent, hold] = await Promise.all([
+      this.prisma.communicationOutboundIntent.findFirst({
+        where: { companyId, invoiceId, ...keys },
+        select: { id: true },
+      }),
+      this.prisma.whatsappTemplatePendingSend.findFirst({
+        where: { companyId, invoiceId, ...keys },
+        select: { id: true },
+      }),
+    ]);
+    return Boolean(intent || hold);
   }
 
   private startOfDay(date: Date): Date {

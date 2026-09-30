@@ -128,32 +128,48 @@ describe('parseTemplate', () => {
         pixButton: { index: 1 },
       },
     });
-    // Other payment kinds, an undeclared kind or a second Pix button are not guessed.
+    // The BOLIX template: Pix code, boleto code and the payment page, in their positions.
+    const boleto = {
+      type: 'PAYMENT_REQUEST',
+      text: 'Copiar código do boleto',
+      payment_setting: {
+        type: 'boleto',
+        boleto: {
+          digitable_line: '03399026944140000002628346101018898510000008848',
+        },
+      },
+    };
+    const link = {
+      type: 'URL',
+      text: 'Abrir link de pagamento',
+      url: `${BASE}/{{1}}`,
+    };
+    expect(
+      parseTemplate(
+        input([approved[0], { type: 'BUTTONS', buttons: [pix, boleto, link] }]),
+      ),
+    ).toMatchObject({
+      supported: true,
+      template: {
+        pixButton: { index: 0 },
+        boletoButton: { index: 1, label: 'Copiar código do boleto' },
+        paymentButton: { index: 2, label: 'Abrir link de pagamento' },
+      },
+    });
+    // Payment links, an undeclared kind or a second button of a kind are not guessed.
+    const paymentLink = {
+      type: 'PAYMENT_REQUEST',
+      text: 'Abrir link de pagamento',
+      payment_setting: {
+        type: 'payment_link',
+        payment_link: { uri: 'https://pagamento.test' },
+      },
+    };
     const refused = [
-      [
-        {
-          type: 'PAYMENT_REQUEST',
-          text: 'Copiar código do boleto',
-          payment_setting: {
-            type: 'boleto',
-            boleto: {
-              digitable_line: '03399026944140000002628346101018898510000008848',
-            },
-          },
-        },
-      ],
-      [
-        {
-          type: 'PAYMENT_REQUEST',
-          text: 'Abrir link de pagamento',
-          payment_setting: {
-            type: 'payment_link',
-            payment_link: { uri: 'https://pagamento.test' },
-          },
-        },
-      ],
+      [paymentLink],
       [{ type: 'PAYMENT_REQUEST', text: 'Copiar código Pix' }],
       [pix, pix],
+      [boleto, boleto],
     ];
     for (const buttons of refused) {
       const parsed = parseTemplate(
@@ -161,10 +177,10 @@ describe('parseTemplate', () => {
       );
       expect(parsed.supported).toBe(false);
     }
-    const boleto = parseTemplate(
-      input([approved[0], { type: 'BUTTONS', buttons: refused[0] }]),
+    const linkKind = parseTemplate(
+      input([approved[0], { type: 'BUTTONS', buttons: [paymentLink] }]),
     );
-    expect(!boleto.supported && boleto.reason).toMatch(/boleto/);
+    expect(!linkKind.supported && linkKind.reason).toMatch(/payment_link/);
   });
 
   it('accepts body only and positional format declared explicitly', () => {
@@ -180,6 +196,7 @@ describe('parseTemplate', () => {
         footer: null,
         paymentButton: null,
         pixButton: null,
+        boletoButton: null,
       },
     });
   });

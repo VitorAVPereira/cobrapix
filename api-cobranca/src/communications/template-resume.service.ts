@@ -5,7 +5,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Prisma, WhatsappTemplatePendingSend } from '@prisma/client';
+import {
+  BillingMethod,
+  Prisma,
+  WhatsappTemplatePendingSend,
+} from '@prisma/client';
 import { isDeepStrictEqual } from 'node:util';
 import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -385,9 +389,31 @@ export class TemplateResumeService {
           profile: { companyId: request.context.companyId },
         },
       });
-      if (step) return ruleStepSelection(step);
+      if (step)
+        return ruleStepSelection(
+          step,
+          await this.billingMethod(tx, request.context),
+        );
     }
     return request.selection;
+  }
+
+  /** Billing method of the charge the message carries now, which may have been replaced. */
+  private async billingMethod(
+    tx: Tx,
+    context: TemplateSendRequest['context'],
+  ): Promise<BillingMethod | null> {
+    if (!context.invoiceId) return null;
+    const charge = await tx.paymentCharge.findFirst({
+      where: {
+        companyId: context.companyId,
+        invoiceId: context.invoiceId,
+        status: 'ACTIVE',
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { billingMethod: true },
+    });
+    return charge?.billingMethod ?? null;
   }
 
   private stored(evaluation: Evaluation): StoredItem {

@@ -229,6 +229,12 @@ export function WhatsappCatalog({
               Botão: {item.content.pixButton.label} (Pix da cobrança)
             </p>
           )}
+          {item.content.boletoButton && (
+            <p className="text-xs text-slate-500">
+              Botão: {item.content.boletoButton.label} (linha digitável da
+              cobrança)
+            </p>
+          )}
           {item.content.quickReplies?.length ? (
             <p className="text-xs text-slate-500">
               Respostas rápidas: {item.content.quickReplies.join(", ")}

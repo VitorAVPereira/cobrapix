@@ -76,6 +76,8 @@ export type TemplateMapping = {
   paymentButton?: { index: number; source: 'PAYMENT_URL_SUFFIX' };
   /** "Copy Pix code" button: always the Pix copy-paste code of the invoice sent. */
   pixButton?: { index: number; source: 'PIX_COPY_PASTE' };
+  /** "Copy Boleto code" button: always the digitable line of the invoice sent. */
+  boletoButton?: { index: number; source: 'BOLETO_LINE' };
 };
 
 export type TemplateSnapshot = {
@@ -111,6 +113,8 @@ export type ParsedTemplate = {
   paymentButton: { index: number; label: string; url: string } | null;
   /** Meta payment request button with a Pix code; the approved code is only an example. */
   pixButton: { index: number; label: string } | null;
+  /** Meta payment request button with a boleto line; the approved line is only an example. */
+  boletoButton: { index: number; label: string } | null;
   /** Static quick reply buttons: sent as approved, never parameterized. */
   quickReplies: string[];
   fingerprint: string;
@@ -144,6 +148,8 @@ export type RenderResult =
       paymentButtonSuffix?: string;
       /** Pix copy-paste code the "Copy Pix code" button carries. */
       pixButtonCode?: string;
+      /** Digitable line (digits only) the "Copy Boleto code" button carries. */
+      boletoButtonCode?: string;
     }
   | { ok: false; code: 'VALUE_MISSING' | 'UNSUPPORTED'; field: string };
 

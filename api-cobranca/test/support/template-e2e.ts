@@ -125,6 +125,50 @@ export const CATALOG = [
       },
     ],
   },
+  // BOLIX: Pix code, boleto code and the payment page, as created in the WhatsApp Manager.
+  {
+    id: '777004',
+    name: 'emissao_bolix',
+    language: 'pt_BR',
+    status: 'APPROVED',
+    category: 'UTILITY',
+    parameter_format: 'NAMED',
+    components: [
+      {
+        type: 'BODY',
+        text: 'Olá, {{nome_devedor}}. Seu boleto de {{valor}} vence em {{data_vencimento}}.',
+      },
+      {
+        type: 'BUTTONS',
+        buttons: [
+          {
+            type: 'PAYMENT_REQUEST',
+            text: 'Copiar código Pix',
+            payment_setting: {
+              type: 'pix_dynamic_code',
+              pix_dynamic_code: { code: '00020101021226700014br.gov.bcb.pix' },
+            },
+          },
+          {
+            type: 'PAYMENT_REQUEST',
+            text: 'Copiar código do boleto',
+            payment_setting: {
+              type: 'boleto',
+              boleto: {
+                digitable_line:
+                  '03399026944140000002628346101018898510000008848',
+              },
+            },
+          },
+          {
+            type: 'URL',
+            text: 'Abrir link de pagamento',
+            url: `${FRONTEND}/pagar/{{1}}`,
+          },
+        ],
+      },
+    ],
+  },
 ];
 
 export function assertDisposable(spec: string): void {

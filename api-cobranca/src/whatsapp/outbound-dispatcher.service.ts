@@ -40,7 +40,10 @@ import {
   TemplateSnapshot,
 } from '../templates/template-contracts';
 import { lockLogicalKey } from '../templates/template-locks';
-import { legacyTemplateRequest } from '../templates/template-selection';
+import {
+  isInitialChargeKey,
+  legacyTemplateRequest,
+} from '../templates/template-selection';
 import { requestTemplateSync } from '../templates/template-provider-state';
 
 /**
@@ -141,6 +144,8 @@ export interface DispatchInput {
   paymentButtonIndex?: number;
   /** "Copy Pix code" button: its position and the invoice's code rendered at preparation. */
   pixButton?: { index: number; code: string };
+  /** "Copy Boleto code" button: its position and the invoice's digitable line (digits). */
+  boletoButton?: { index: number; code: string };
   /** Template quick-reply button indexes that receive server-issued opaque references. */
   quickReplyButtons?: number[];
 }
@@ -407,6 +412,7 @@ export class OutboundDispatcherService {
     companyId: string;
     invoiceId: string;
     ruleStepId?: string;
+    emailFallback: boolean;
   } | null> {
     const intent = await this.prisma.communicationOutboundIntent.findUnique({
       where: { id },
@@ -420,6 +426,8 @@ export class OutboundDispatcherService {
           companyId: input.companyId,
           invoiceId: input.invoiceId,
           ruleStepId: input.ruleStepId,
+          // The first message never had an e-mail fallback, even as the "Inicial" step.
+          emailFallback: !isInitialChargeKey(intent.logicalKey),
         }
       : null;
   }
@@ -580,25 +588,34 @@ export class OutboundDispatcherService {
         index: String(input.paymentButtonIndex ?? 0),
         parameters: [{ type: 'text', text: urlSuffix }],
       });
+    const paymentRequest = (
+      index: number,
+      paymentSetting: Record<string, unknown>,
+    ) => ({
+      type: 'button',
+      sub_type: 'payment_request',
+      index: String(index),
+      parameters: [
+        {
+          type: 'action',
+          action: { payment_request: { payment_setting: paymentSetting } },
+        },
+      ],
+    });
     if (input.pixButton)
-      components.push({
-        type: 'button',
-        sub_type: 'payment_request',
-        index: String(input.pixButton.index),
-        parameters: [
-          {
-            type: 'action',
-            action: {
-              payment_request: {
-                payment_setting: {
-                  type: 'pix_dynamic_code',
-                  pix_dynamic_code: { code: input.pixButton.code },
-                },
-              },
-            },
-          },
-        ],
-      });
+      components.push(
+        paymentRequest(input.pixButton.index, {
+          type: 'pix_dynamic_code',
+          pix_dynamic_code: { code: input.pixButton.code },
+        }),
+      );
+    if (input.boletoButton)
+      components.push(
+        paymentRequest(input.boletoButton.index, {
+          type: 'boleto',
+          boleto: { digitable_line: input.boletoButton.code },
+        }),
+      );
     for (const index of input.quickReplyButtons ?? []) {
       // Persisted before transmission, so an immediate tap already resolves.
       const token = this.tokens.interactiveToken(intent.messageId, index);

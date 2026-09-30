@@ -23,6 +23,7 @@ export type RenderedSend = {
   bodyParameters: string[];
   bodyParameterNames?: string[];
   pixButtonCode?: string;
+  boletoButtonCode?: string;
 };
 
 export type RenderOutcome =
@@ -76,6 +77,9 @@ export async function renderSend(
       : {}),
     ...(rendered.pixButtonCode
       ? { pixButtonCode: rendered.pixButtonCode }
+      : {}),
+    ...(rendered.boletoButtonCode
+      ? { boletoButtonCode: rendered.boletoButtonCode }
       : {}),
   };
 }
@@ -165,6 +169,14 @@ export async function reserveTemplateIntent(
           pixButton: {
             index: template.parsed.pixButton.index,
             code: rendered.pixButtonCode,
+          },
+        }
+      : {}),
+    ...(template.parsed.boletoButton && rendered.boletoButtonCode
+      ? {
+          boletoButton: {
+            index: template.parsed.boletoButton.index,
+            code: rendered.boletoButtonCode,
           },
         }
       : {}),

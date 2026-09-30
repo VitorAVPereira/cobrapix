@@ -564,6 +564,12 @@ export interface CollectionRuleStep {
   whatsappSelection: WhatsappSelection | null;
   /** WHATSAPP only: whether the choice can send right now, and why not. */
   whatsappStatus: Readiness | null;
+  /** WHATSAPP only: template per billing method; null uses the step's choice. */
+  whatsappMethodTemplates?: MethodTemplates | null;
+  /** WHATSAPP only: status of each billing method's own template. */
+  whatsappMethodStatus?: Partial<Record<BillingMethod, Readiness>> | null;
+  /** WHATSAPP only: methods whose charges lack data the step's template reads. */
+  whatsappIncompatibleMethods?: BillingMethod[] | null;
   delayDays: number;
   sendTimeStart: string | null;
   sendTimeEnd: string | null;
@@ -579,8 +585,16 @@ export type RuleStepInput = {
   sendTimeEnd?: string;
 } & (
   | { channel: "EMAIL"; emailTemplateId?: string }
-  | { channel: "WHATSAPP"; whatsappSelection: WhatsappSelection }
+  | {
+      channel: "WHATSAPP";
+      whatsappSelection: WhatsappSelection;
+      /** Absent keeps the saved templates; null clears one. */
+      whatsappMethodTemplates?: MethodTemplates;
+    }
 );
+
+/** Template of a WhatsApp step for each billing method; null uses the step's choice. */
+export type MethodTemplates = Partial<Record<BillingMethod, string | null>>;
 
 export interface CollectionRuleProfile {
   id: string;

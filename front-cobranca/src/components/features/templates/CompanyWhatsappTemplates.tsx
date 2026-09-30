@@ -179,6 +179,12 @@ export function CompanyWhatsappTemplates(): ReactNode {
               Botão: {selected.content.pixButton.label} (Pix da cobrança)
             </p>
           )}
+          {selected.content.boletoButton && (
+            <p className="mt-2 text-xs text-slate-500">
+              Botão: {selected.content.boletoButton.label} (linha digitável da
+              cobrança)
+            </p>
+          )}
           {selected.content.quickReplies?.length ? (
             <p className="mt-2 text-xs text-slate-500">
               Respostas rápidas: {selected.content.quickReplies.join(", ")}
