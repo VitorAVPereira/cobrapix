@@ -129,11 +129,11 @@ export function MessageAttachment({
         <img
           src={file.url}
           alt="Imagem anexada à mensagem"
-          className="max-h-64 rounded border"
+          className="h-auto max-h-64 max-w-full rounded border"
         />
       )}
       {file?.type.startsWith("audio/") && (
-        <audio controls src={file.url} aria-label="Áudio anexado à mensagem" />
+        <audio controls src={file.url} aria-label="Áudio anexado à mensagem" className="max-w-full" />
       )}
       {file?.type === "application/pdf" && (
         <a

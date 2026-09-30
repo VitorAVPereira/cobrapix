@@ -155,6 +155,71 @@ describe("ClientesPage", () => {
     );
   });
 
+  describe("row actions menu", () => {
+    const joao = {
+      ...debtorResponse.data[0]!,
+      debtorId: "debtor-2",
+      name: "Joao Souza",
+      phone_number: "+5511988887777",
+    };
+    const twoRows: DebtorListResponse = {
+      ...debtorResponse,
+      data: [debtorResponse.data[0]!, joao],
+      total: 2,
+    };
+
+    it("opens outside the table's scroll container and acts on the last row's debtor", async () => {
+      const user = userEvent.setup();
+      getDebtors.mockResolvedValue(twoRows);
+      render(<ClientesPage />);
+      await screen.findByText("Joao Souza");
+      const button = screen.getByRole("button", { name: /abrir acoes do cliente joao/i });
+      await user.click(button);
+      const menu = screen.getByRole("menu", { name: /acoes do cliente joao souza/i });
+      expect(button).toHaveAttribute("aria-expanded", "true");
+      // Not inside the table (whose overflow container used to cut it).
+      expect(screen.getByRole("table")).not.toContainElement(menu);
+      await user.click(screen.getByRole("menuitem", { name: /nova cobranca/i }));
+      await user.type(screen.getByLabelText(/valor/i), "50");
+      await user.type(screen.getByLabelText(/data de vencimento/i), "2026-10-10");
+      await user.click(screen.getByRole("button", { name: /salvar cobranca/i }));
+      await waitFor(() =>
+        expect(createDebtorInvoice).toHaveBeenCalledWith("debtor-2", expect.anything()),
+      );
+    });
+
+    it("moves to another row and closes with Escape", async () => {
+      const user = userEvent.setup();
+      getDebtors.mockResolvedValue(twoRows);
+      render(<ClientesPage />);
+      await screen.findByText("Joao Souza");
+      await user.click(screen.getByRole("button", { name: /abrir acoes do cliente maria/i }));
+      await user.click(screen.getByRole("button", { name: /abrir acoes do cliente joao/i }));
+      expect(screen.getAllByRole("menu")).toHaveLength(1);
+      expect(screen.getByRole("menu", { name: /joao souza/i })).toBeInTheDocument();
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(screen.getByRole("button", { name: /abrir acoes do cliente joao/i })).toHaveFocus();
+    });
+
+    it("never keeps a menu open over a reloaded or filtered list", async () => {
+      const user = userEvent.setup();
+      render(<ClientesPage />);
+      await screen.findByText("Maria Silva");
+      await user.click(screen.getByRole("button", { name: /abrir acoes do cliente maria/i }));
+      expect(screen.getByRole("menu")).toBeInTheDocument();
+      getDebtors.mockResolvedValue({ ...debtorResponse, data: [], total: 0 });
+      await user.type(screen.getByPlaceholderText(/buscar por nome/i), "x");
+      await screen.findByText("Nenhum cliente encontrado");
+      expect(screen.queryByRole("menu")).toBeNull();
+      getDebtors.mockResolvedValue(debtorResponse);
+      await user.clear(screen.getByPlaceholderText(/buscar por nome/i));
+      await screen.findByText("Maria Silva");
+      // Coming back does not reopen the old menu.
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+  });
+
   it("creates debtor with Novo pagador as default profile", async () => {
     const user = userEvent.setup();
     render(<ClientesPage />);

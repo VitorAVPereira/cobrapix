@@ -8,7 +8,10 @@ import { OnboardingJobs } from './onboarding-jobs';
 import { OnboardingDraftDto } from './onboarding.dto';
 import { assertFreshConsent, canEditOnboarding } from './onboarding-policy';
 import { validateDebtorDocument } from '../common/debtor-document';
-import { assertEfiOpeningEnabled } from '../config/account-opening';
+import {
+  assertEfiOpeningEnabled,
+  isEfiOpeningEnabled,
+} from '../config/account-opening';
 import { hasActiveManualProfile } from '../financial-activation/opening-profile';
 
 const SENSITIVE_FIELDS = [
@@ -56,8 +59,12 @@ export class EfiOnboardingService {
       }),
     ]);
     if (!company) throw new HttpException('Empresa não encontrada.', 404);
+    // With account opening off (manual phase) nothing here can be acted on;
+    // the history stays readable.
     const editable =
-      !row || canEditOnboarding(row.status, row.retryBlockedUntil, new Date());
+      isEfiOpeningEnabled(this.config) &&
+      (!row ||
+        canEditOnboarding(row.status, row.retryBlockedUntil, new Date()));
     return {
       status: row?.status ?? 'DRAFT',
       revision: row?.draftRevision ?? 0,
@@ -78,8 +85,9 @@ export class EfiOnboardingService {
         canEdit: editable,
         canSubmit: editable && row?.status === 'DRAFT',
         canRetry:
-          row?.status === 'CORRECTION_REQUIRED' ||
-          (row?.status === 'REFUSED' && editable),
+          isEfiOpeningEnabled(this.config) &&
+          (row?.status === 'CORRECTION_REQUIRED' ||
+            (row?.status === 'REFUSED' && editable)),
       },
     };
   }
@@ -90,6 +98,9 @@ export class EfiOnboardingService {
     ip: string,
   ): Promise<unknown> {
     this.requireCompanyAdmin(user);
+    // Refused before anything is validated or written: during the manual
+    // phase there is no opening draft to keep (invoice drafts are unrelated).
+    assertEfiOpeningEnabled(this.config);
     this.validateDraft(dto);
     const now = new Date();
     await this.prisma.$transaction(

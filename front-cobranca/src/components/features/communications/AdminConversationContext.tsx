@@ -360,8 +360,10 @@ export function AdminConversationContext({
           )}
           {quoting && (
             <p className="flex justify-between gap-2 rounded bg-slate-100 p-2 text-xs">
-              <span>Citando: “{quoting.content.slice(0, 80)}”</span>
-              <button type="button" onClick={onCancelQuote}>
+              <span className="min-w-0 wrap-anywhere">
+                Citando: “{quoting.content.slice(0, 80)}”
+              </span>
+              <button type="button" className="shrink-0" onClick={onCancelQuote}>
                 Remover citação
               </button>
             </p>
@@ -549,7 +551,7 @@ function TemplateReplyForm({
       {selected?.previewBody && (
         <p
           aria-label="Prévia do template"
-          className="whitespace-pre-wrap rounded bg-slate-50 p-2 text-xs"
+          className="whitespace-pre-wrap wrap-anywhere rounded bg-slate-50 p-2 text-xs"
         >
           {selected.previewBody}
         </p>

@@ -118,3 +118,29 @@ describe("Sidebar", () => {
     },
   );
 });
+
+describe("financial activation entry", () => {
+  const value = (openingEnabled: boolean, canIssue: boolean) => ({
+    state: null,
+    profile: null,
+    openingEnabled,
+    canIssue,
+    loading: false,
+    error: null,
+    refresh: jest.fn(),
+  });
+  it.each([
+    ["pending company, opening disabled", false, false, false],
+    ["manually active company, opening disabled", false, true, false],
+    ["active company, opening enabled", true, true, false],
+    ["pending company, opening enabled", true, false, true],
+  ])("%s: menu entry shown = %s", (_case, openingEnabled, canIssue, shown) => {
+    mockRole = "COMPANY_ADMIN";
+    render(
+      <FinancialActivationContext.Provider value={value(openingEnabled, canIssue)}>
+        <Sidebar open={false} onClose={jest.fn()} />
+      </FinancialActivationContext.Provider>,
+    );
+    expect(Boolean(screen.queryByRole("link", { name: /Ativação financeira/ }))).toBe(shown);
+  });
+});

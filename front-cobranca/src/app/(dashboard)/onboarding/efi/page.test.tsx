@@ -67,3 +67,38 @@ it("shows only a status notice while the opening API is disabled", () => {
  expect(screen.getByText(/equipe CifraMais está configurando/)).toBeInTheDocument();
  expect(screen.queryByRole("button",{name:"Salvar e continuar"})).not.toBeInTheDocument();
 });
+
+describe("manual activation phase", () => {
+ const activeProfile = {openingEnabled:false,canIssue:true,status:"ACTIVE" as const,accountMode:"CUSTOMER_ACCOUNT",enabledMethods:["PIX","BOLIX"],activatedAt:"2026-09-01T00:00:00Z",issuerAccount:"••••1234"};
+ const noForm = () => {
+  expect(screen.queryByLabelText("Razão social (beneficiário)")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button",{name:/Salvar/})).not.toBeInTheDocument();
+  expect(screen.queryByRole("button",{name:/Solicitar/})).not.toBeInTheDocument();
+ };
+
+ it("tells a manually active company its account is active, without a false pending", () => {
+  mockContext={...mockContext,state:null,openingEnabled:false,canIssue:true,profile:activeProfile};
+  render(<Page />);
+  expect(screen.getByRole("status")).toHaveTextContent("Sua conta de recebimento está ativa (conta ••••1234).");
+  expect(screen.queryByText(/configurando/)).not.toBeInTheDocument();
+  expect(screen.getByRole("link",{name:"Voltar às cobranças"})).toHaveAttribute("href","/cobrancas");
+  noForm();
+ });
+
+ it("never offers the opening form to an active company, even with opening enabled", () => {
+  mockContext={...mockContext,openingEnabled:true,canIssue:true,profile:{...activeProfile,openingEnabled:true}};
+  render(<Page />);
+  expect(screen.getByRole("status")).toHaveTextContent("ativa");
+  noForm();
+ });
+
+ it.each([
+  ["while loading", {state:null,profile:null,loading:true,error:null}, /Carregando/],
+  ["on a failed check", {state:null,profile:null,loading:false,error:"Falha ao consultar."}, /Falha ao consultar/],
+ ])("shows no form %s", (_case, context, text) => {
+  mockContext={...mockContext,openingEnabled:false,canIssue:false,...context};
+  render(<Page />);
+  expect(screen.getByText(text)).toBeInTheDocument();
+  noForm();
+ });
+});

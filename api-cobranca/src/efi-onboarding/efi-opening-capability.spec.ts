@@ -2,7 +2,10 @@ import { HttpException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Job } from 'bullmq';
 import { EfiOpeningClient, EfiOpeningTransport } from './efi-opening.client';
-import { EfiOpeningWebhookController } from './efi-onboarding.controller';
+import {
+  EfiOnboardingController,
+  EfiOpeningWebhookController,
+} from './efi-onboarding.controller';
 import { EfiOnboardingService } from './efi-onboarding.service';
 import { OnboardingAdminService } from './onboarding-admin.service';
 import { OnboardingLifecycle } from './onboarding-lifecycle';
@@ -121,5 +124,61 @@ describe('EFI_OPENING_ENABLED=false', () => {
       expect(status(error)).toBe(503);
       expect(code(error)).toBe('EFI_OPENING_DISABLED');
     }
+  });
+
+  const companyAdmin = {
+    userId: 'u',
+    email: 'u@example.test',
+    companyId: 'c',
+    role: 'COMPANY_ADMIN' as const,
+    mustChangePassword: false,
+    tokenVersion: 0,
+  };
+
+  it('recusa salvar rascunho de abertura e repetir pela rota retry, sem gravar', async () => {
+    const service = new EfiOnboardingService(
+      untouchable as never,
+      untouchable as never,
+      config,
+      untouchable as never,
+    );
+    const controller = new EfiOnboardingController(service);
+    for (const attempt of [
+      () => service.saveDraft(companyAdmin, {} as never, '127.0.0.1'),
+      () =>
+        controller.draft(
+          companyAdmin,
+          {} as never,
+          {
+            ip: '127.0.0.1',
+            socket: {},
+          } as never,
+        ),
+      () => controller.retry(companyAdmin),
+    ]) {
+      const error: unknown = await attempt().catch((e: unknown) => e);
+      expect(status(error)).toBe(503);
+      expect(code(error)).toBe('EFI_OPENING_DISABLED');
+    }
+  });
+
+  it('a leitura mantém o histórico e não oferece nenhuma ação de abertura', async () => {
+    const prisma = {
+      efiOnboarding: {
+        findUnique: jest.fn().mockResolvedValue({ status: 'DRAFT' }),
+      },
+      company: { findUnique: jest.fn().mockResolvedValue({ document: 'x' }) },
+      auditLog: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new EfiOnboardingService(
+      prisma as never,
+      untouchable as never,
+      config,
+      untouchable as never,
+    );
+    await expect(service.get(companyAdmin)).resolves.toMatchObject({
+      status: 'DRAFT',
+      actions: { canEdit: false, canSubmit: false, canRetry: false },
+    });
   });
 });
