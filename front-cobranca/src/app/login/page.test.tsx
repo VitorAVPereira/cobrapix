@@ -27,6 +27,7 @@ describe("LoginPage", () => {
     jest.clearAllMocks();
     mockUseRouter.mockReturnValue({
       back: jest.fn(),
+      bfcacheId: "test",
       forward: jest.fn(),
       prefetch: jest.fn(),
       push: mockPush,
