@@ -24,6 +24,7 @@ describe("ResetPasswordPage", () => {
     mockPush.mockReset();
     mockUseRouter.mockReturnValue({
       back: jest.fn(),
+      bfcacheId: "test",
       forward: jest.fn(),
       prefetch: jest.fn(),
       push: mockPush,
