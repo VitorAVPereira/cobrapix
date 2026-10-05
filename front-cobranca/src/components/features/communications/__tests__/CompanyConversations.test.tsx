@@ -191,7 +191,7 @@ describe("Company conversations (read-only)", () => {
       screen.getByRole("searchbox", { name: "Buscar cliente" }),
       { target: { value: "  Maria  " } },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Buscar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Buscar cliente" }));
     expect(
       await screen.findByText("Nenhuma conversa encontrada para esta busca."),
     ).toBeInTheDocument();

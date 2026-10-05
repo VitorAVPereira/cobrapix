@@ -97,7 +97,7 @@ describe("CommunicationsHistory admin list", () => {
       screen.getByRole("searchbox", { name: "Buscar cliente ou telefone" }),
       { target: { value: " Maria " } },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Buscar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Buscar cliente ou telefone" }));
     await waitFor(() =>
       expect(lastQuery()).toEqual({
         page: 1,
@@ -120,7 +120,7 @@ describe("CommunicationsHistory admin list", () => {
       }),
       { target: { value: "ninguem" } },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Buscar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Buscar cliente ou telefone" }));
     expect(
       await screen.findByText("Nenhuma conversa encontrada para estes filtros."),
     ).toBeInTheDocument();

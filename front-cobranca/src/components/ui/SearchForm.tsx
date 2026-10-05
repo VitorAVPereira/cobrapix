@@ -37,7 +37,12 @@ export function SearchForm({
           if (!event.target.value) onSearch("");
         }}
       />
-      <button type="submit" className="rounded-lg border px-3 py-2 text-sm">
+      {/* Named after the field: a page may have more than one search. */}
+      <button
+        type="submit"
+        aria-label={label}
+        className="rounded-lg border px-3 py-2 text-sm"
+      >
         Buscar
       </button>
     </form>

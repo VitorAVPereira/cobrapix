@@ -53,6 +53,7 @@ beforeEach(() => {
       }),
     ],
     nextCursor: "tpl-2",
+    total: 12,
   });
   mockApi.getWhatsappTemplateSyncState.mockResolvedValue({
     providerAccountId: "waba",
@@ -105,22 +106,26 @@ describe("WhatsappCatalog", () => {
   it("filters unavailable templates and pages with the cursor", async () => {
     render(<WhatsappCatalog onConfigure={jest.fn()} />);
     await screen.findByRole("article", { name: "com_imagem" });
+    expect(screen.getByText("Página 1 de 2 · 12 templates")).toBeInTheDocument();
     mockApi.getAdminWhatsappTemplates.mockResolvedValueOnce({
       items: [adminTemplate({ id: "tpl-3", name: "terceiro" })],
       nextCursor: null,
+      total: 12,
     });
-    fireEvent.click(screen.getByRole("button", { name: "Carregar mais templates" }));
+    fireEvent.click(screen.getByRole("button", { name: "Próxima" }));
     expect(await screen.findByRole("article", { name: "terceiro" })).toBeInTheDocument();
     expect(mockApi.getAdminWhatsappTemplates).toHaveBeenLastCalledWith(
-      expect.objectContaining({ cursor: "tpl-2" }),
+      expect.objectContaining({ cursor: "tpl-2", limit: 10 }),
     );
-    expect(screen.getAllByRole("article")).toHaveLength(3);
+    expect(screen.getAllByRole("article")).toHaveLength(1);
+    expect(screen.getByText("Página 2 de 2 · 12 templates")).toBeInTheDocument();
 
     mockApi.getAdminWhatsappTemplates.mockResolvedValueOnce({
       items: [
         adminTemplate({ id: "old", name: "antigo", status: "PAUSED", archivedAt: null }),
       ],
       nextCursor: null,
+      total: 1,
     });
     fireEvent.change(screen.getByLabelText("Situação"), {
       target: { value: "UNAVAILABLE" },
@@ -132,6 +137,57 @@ describe("WhatsappCatalog", () => {
       expect.objectContaining({ status: "UNAVAILABLE", cursor: undefined }),
     );
     expect(screen.getAllByRole("article")).toHaveLength(1);
+  });
+
+  it("searches by name from the first page and says when nothing matches", async () => {
+    render(<WhatsappCatalog onConfigure={jest.fn()} />);
+    await screen.findByRole("article", { name: "com_imagem" });
+    fireEvent.click(screen.getByRole("button", { name: "Próxima" }));
+    await waitFor(() =>
+      expect(mockApi.getAdminWhatsappTemplates).toHaveBeenLastCalledWith(
+        expect.objectContaining({ cursor: "tpl-2" }),
+      ),
+    );
+    mockApi.getAdminWhatsappTemplates.mockResolvedValue({
+      items: [],
+      nextCursor: null,
+      total: 0,
+    });
+    fireEvent.change(screen.getByRole("searchbox", { name: "Buscar template" }), {
+      target: { value: " vencimento " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Buscar template" }));
+    expect(
+      await screen.findByText("Nenhum template encontrado com esse nome neste filtro."),
+    ).toBeInTheDocument();
+    expect(mockApi.getAdminWhatsappTemplates).toHaveBeenLastCalledWith({
+      status: "APPROVED",
+      supported: undefined,
+      search: "vencimento",
+      cursor: undefined,
+      limit: 10,
+    });
+  });
+
+  it("reloads the page being viewed after a mapping is saved", async () => {
+    const { rerender } = render(
+      <WhatsappCatalog onConfigure={jest.fn()} refreshKey={0} />,
+    );
+    await screen.findByRole("article", { name: "com_imagem" });
+    fireEvent.click(screen.getByRole("button", { name: "Próxima" }));
+    await waitFor(() =>
+      expect(mockApi.getAdminWhatsappTemplates).toHaveBeenLastCalledWith(
+        expect.objectContaining({ cursor: "tpl-2" }),
+      ),
+    );
+    const calls = mockApi.getAdminWhatsappTemplates.mock.calls.length;
+    rerender(<WhatsappCatalog onConfigure={jest.fn()} refreshKey={1} />);
+    await waitFor(() =>
+      expect(mockApi.getAdminWhatsappTemplates).toHaveBeenCalledTimes(calls + 1),
+    );
+    expect(mockApi.getAdminWhatsappTemplates).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cursor: "tpl-2" }),
+    );
   });
 
   it("syncs on demand and explains a sync already running", async () => {

@@ -29,6 +29,7 @@ import type {
   CatalogPage,
   CompanyTemplateAccess,
   CompanyWhatsappTemplate,
+  CountedCatalogPage,
   Readiness,
   ResumeItem,
   ResumeResult,
@@ -2000,9 +2001,9 @@ class ApiClient {
   // Templates
   /** WhatsApp templates granted to the session's company and usable now (read-only). */
   async getTemplates(
-    query: { cursor?: string; limit?: number } = {},
-  ): Promise<CatalogPage<CompanyWhatsappTemplate>> {
-    return this.fetch<CatalogPage<CompanyWhatsappTemplate>>(
+    query: { cursor?: string; limit?: number; search?: string } = {},
+  ): Promise<CountedCatalogPage<CompanyWhatsappTemplate>> {
+    return this.fetch<CountedCatalogPage<CompanyWhatsappTemplate>>(
       `/templates${this.buildQueryString(query)}`,
     );
   }
@@ -2066,12 +2067,13 @@ class ApiClient {
   // is never authored here; the admin maps variables and grants templates to companies.
   async getAdminWhatsappTemplates(
     query: AdminCatalogQuery = {},
-  ): Promise<CatalogPage<AdminWhatsappTemplate>> {
-    return this.fetch<CatalogPage<AdminWhatsappTemplate>>(
+  ): Promise<CountedCatalogPage<AdminWhatsappTemplate>> {
+    return this.fetch<CountedCatalogPage<AdminWhatsappTemplate>>(
       `/admin/whatsapp-templates${this.buildQueryString({
         status: query.status,
         supported:
           query.supported === undefined ? undefined : String(query.supported),
+        search: query.search,
         cursor: query.cursor,
         limit: query.limit,
       })}`,

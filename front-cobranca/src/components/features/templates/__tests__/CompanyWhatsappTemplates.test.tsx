@@ -66,6 +66,69 @@ describe("CompanyWhatsappTemplates", () => {
     );
   });
 
+  it("pages the granted templates with the server cursor and shows the total", async () => {
+    mockApi.getTemplates.mockImplementation(
+      (query: { cursor?: string }) =>
+        Promise.resolve(
+          query.cursor === "tpl-1"
+            ? { items: [template({ id: "tpl-2", name: "atraso" })], nextCursor: null, total: 11 }
+            : { items: [template()], nextCursor: "tpl-1", total: 11 },
+        ),
+    );
+    render(<CompanyWhatsappTemplates />);
+    expect(
+      await screen.findByText("Página 1 de 2 · 11 templates"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Próxima" }));
+    expect(
+      await screen.findByRole("button", { name: /atraso/ }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(mockApi.getTemplates).toHaveBeenLastCalledWith({
+      limit: 10,
+      search: undefined,
+      cursor: "tpl-1",
+    });
+    await waitFor(() =>
+      expect(mockApi.getTemplatePreview).toHaveBeenLastCalledWith("tpl-2"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Anterior" }));
+    expect(
+      await screen.findByRole("button", { name: /lembrete_vencimento/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("searches by name from the first page and keeps the search when nothing matches", async () => {
+    mockApi.getTemplates.mockImplementation(
+      (query: { search?: string }) =>
+        Promise.resolve(
+          query.search
+            ? { items: [], nextCursor: null, total: 0 }
+            : { items: [template()], nextCursor: "tpl-1", total: 11 },
+        ),
+    );
+    render(<CompanyWhatsappTemplates />);
+    fireEvent.click(await screen.findByRole("button", { name: "Próxima" }));
+    await waitFor(() =>
+      expect(mockApi.getTemplates).toHaveBeenLastCalledWith(
+        expect.objectContaining({ cursor: "tpl-1" }),
+      ),
+    );
+    fireEvent.change(screen.getByRole("searchbox", { name: "Buscar template" }), {
+      target: { value: " cobranca " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Buscar template" }));
+    expect(
+      await screen.findByText("Nenhum template encontrado com esse nome."),
+    ).toBeVisible();
+    expect(mockApi.getTemplates).toHaveBeenLastCalledWith({
+      limit: 10,
+      search: "cobranca",
+      cursor: undefined,
+    });
+    expect(screen.getByRole("searchbox", { name: "Buscar template" })).toBeVisible();
+    expect(screen.queryByText("Nenhum template liberado para sua empresa.")).toBeNull();
+  });
+
   it("says when nothing is granted", async () => {
     mockApi.getTemplates.mockResolvedValue({ items: [], nextCursor: null });
     render(<CompanyWhatsappTemplates />);
