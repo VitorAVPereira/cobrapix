@@ -182,7 +182,7 @@ module.exports = async ({ prisma, crypto, companyA, companyB }) => {
       await prisma.invoice.update({ where: { id: invoice.id }, data: { status: 'PAID' } });
       await assert.rejects(dispatcher.dispatch(paid.id), /COLLECTION_NO_LONGER_ELIGIBLE/);
       assert.equal((await intentOf(paid.id)).state, 'FAILED');
-      assert.deepEqual(await dispatcher.rejectedCollection(paid.id), { companyId: companyA, invoiceId: invoice.id, ruleStepId: undefined });
+      assert.deepEqual(await dispatcher.rejectedCollection(paid.id), { companyId: companyA, invoiceId: invoice.id, ruleStepId: undefined, emailFallback: true });
       assert.equal(await dispatcher.rejectedCollection(reservation.id), null, 'accepted intents are never reported as failed collections');
 
       const closedPhone = nextPhone(); await openWindow(closedPhone);
