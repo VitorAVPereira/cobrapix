@@ -247,3 +247,35 @@ Situação: não alterarei; muda o contrato.
 - Seletores de template da régua.
 - Histórico de envios.
 - Filtros de template além da busca por nome.
+
+---
+
+## Registro de execução (05/10/2026)
+
+Branch `feat/paginacao-filtros-inbox-templates`, uma etapa por commit:
+
+| Commit | Etapa |
+| --- | --- |
+| `878e3c9` | 1.1: busca por cliente e total no inbox (empresa e admin) |
+| `30ddf31` | 1.2 e 1.3: paginação numerada e busca no inbox (frontend) |
+| `7dfbda0` | 2.1: busca por nome e total no catálogo de templates |
+| `0f3a118` | 2.2 e 2.3: busca e paginação nas telas de templates (frontend) |
+| `f2b7f14`, `79604ea` | Ajustes de testes (abaixo) |
+
+**Desvios do plano e motivo:**
+- Criado também `front-cobranca/src/components/ui/SearchForm.tsx`, usado pelas 4 telas: o mesmo formulário de busca se repetiria 4 vezes.
+- O botão "Buscar" tem como nome acessível o rótulo do campo (por exemplo, "Buscar template"). A tela de templates do admin já tinha outra busca ("Disponibilidade por empresa"), e dois botões com o mesmo nome ficavam ambíguos.
+- **Escape do `LIKE` só na consulta SQL da empresa.** Lá os curingas `%`, `_` e `\` são escapados. A busca do admin e a de templates usam o `contains` do Prisma, como a busca de devedores já existente, sem escape manual.
+- O catálogo do admin relê o estado da sincronização a cada página carregada, e não só na primeira. Assim o estado continua correto depois de sincronizar estando na página N.
+- Novo teste unitário `template-catalog-query.service.spec.ts`; o serviço não tinha nenhum.
+- Os testes e2e que comparavam a resposta exata do catálogo passaram a incluir `total`.
+
+**Alterações fora do pedido:**
+- Corrigida a asserção em `test/outbound-dispatch-postgres.cjs:185`. O commit `0b37e11` passou a devolver `emailFallback` em `rejectedCollection`, mas o teste não foi atualizado, e isso interrompia o `test:communications:postgres` antes das etapas seguintes.
+
+**Verificação:**
+- **Backend:** 937 testes unitários, lint e build ok.
+- **PostgreSQL descartável:** `test:communications:postgres`, `test:e2e:templates` (18 testes), `test:template-catalog:postgres` e `test:template-pending:postgres` ok.
+- **Frontend:** 303 testes Jest e lint ok (só o aviso conhecido do `useReactTable`).
+- **`next build` local:** compila, mas a checagem de tipos falha em 3 testes de autenticação fora desta mudança. O `node_modules` local tem `next` 16.3.8, enquanto o `package.json` e o lockfile fixam 16.2.3.
+- **Não feita:** verificação visual no navegador. O `.env` local aponta para o Neon compartilhado, e não há banco local com conversas e templates.
