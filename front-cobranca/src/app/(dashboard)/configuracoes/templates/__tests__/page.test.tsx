@@ -45,7 +45,11 @@ describe("TemplatesPage", () => {
     ).toBeVisible();
     expect(screen.queryByLabelText("Saudação WhatsApp")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Saudação")).not.toBeInTheDocument();
-    expect(mockApi.getTemplates).toHaveBeenCalledWith({ limit: 25 });
+    expect(mockApi.getTemplates).toHaveBeenCalledWith({
+      limit: 10,
+      search: undefined,
+      cursor: undefined,
+    });
   });
 
   it("keeps bounded email personalization", async () => {

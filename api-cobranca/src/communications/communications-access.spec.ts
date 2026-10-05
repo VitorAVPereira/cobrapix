@@ -111,11 +111,24 @@ describe('Communications access boundaries', () => {
     [CompanyConversationsQueryDto, { companyId: 'company-b' }],
     [ConversationMessagesQueryDto, { companyId: 'company-b' }],
     [CompanyConversationsQueryDto, { limit: '101' }],
+    [CompanyConversationsQueryDto, { search: 'a'.repeat(101) }],
+    [AdminConversationsQueryDto, { search: 'a'.repeat(101) }],
   ])('refuses tenant or oversized query parameters', async (type, query) => {
     await expect(
       appPipe.transform(query, { type: 'query', metatype: type }),
     ).rejects.toMatchObject({ status: 400 });
   });
+
+  it.each([CompanyConversationsQueryDto, AdminConversationsQueryDto])(
+    'accepts a trimmed client search on %p',
+    async (type) => {
+      const parsed = (await appPipe.transform(
+        { search: `  Maria ${'a'.repeat(94)}  ` },
+        { type: 'query', metatype: type },
+      )) as { search?: string };
+      expect(parsed.search).toBe(`Maria ${'a'.repeat(94)}`);
+    },
+  );
 
   it.each([
     ['true', true],

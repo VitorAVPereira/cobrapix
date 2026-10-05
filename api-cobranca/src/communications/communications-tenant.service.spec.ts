@@ -120,6 +120,64 @@ describe('CommunicationsTenantService', () => {
     expect(JSON.stringify(result)).not.toContain('wamid');
   });
 
+  it('searches only the session company debtors, with literal wildcards, and counts the same set', async () => {
+    const { service, prisma } = setup();
+    prisma.$queryRaw
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ total: 3 }]);
+    const result = await service.listConversations(viewer, {
+      limit: 10,
+      search: ' 100%_ana ',
+    });
+    expect(result).toEqual({ items: [], nextCursor: null, total: 3 });
+    const [page, count] = prisma.$queryRaw.mock.calls.map(
+      ([sql]) => sql as { sql: string; values: unknown[] },
+    );
+    for (const query of [page, count]) {
+      expect(query?.sql).toContain('"Debtor" d');
+      expect(query?.values).toEqual(
+        expect.arrayContaining(['company-a', '%100\\%\\_ana%', '%100%']),
+      );
+      expect(query?.values).not.toContain('company-b');
+    }
+    expect(count?.sql).toContain('count(DISTINCT m."conversationId")');
+  });
+
+  it('rejects a cursor issued for another search', async () => {
+    const { service } = setup();
+    const cursor = tokens.encodeCursor(
+      {
+        route: 'company-conversations',
+        userId: 'user-a',
+        companyId: 'company-a',
+        filters: { channel: null, search: 'ana' },
+      },
+      { at: new Date(), id: 'conversation-1' },
+    );
+    await expect(
+      service.listConversations(viewer, { limit: 10, cursor, search: 'bia' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      service.listConversations(viewer, { limit: 10, cursor }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('keeps cursors issued without a search valid', async () => {
+    const { service } = setup();
+    const cursor = tokens.encodeCursor(
+      {
+        route: 'company-conversations',
+        userId: 'user-a',
+        companyId: 'company-a',
+        filters: { channel: null },
+      },
+      { at: new Date(), id: 'conversation-1' },
+    );
+    await expect(
+      service.listConversations(viewer, { limit: 10, cursor }),
+    ).resolves.toMatchObject({ items: [] });
+  });
+
   it('rejects a cursor issued to another company or conversation', async () => {
     const { service } = setup();
     const foreign = tokens.encodeCursor(
