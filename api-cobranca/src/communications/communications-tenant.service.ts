@@ -7,6 +7,11 @@ import {
   CursorPosition,
   CursorScope,
 } from './communication-token.service';
+import {
+  ConversationSearch,
+  containsPattern,
+  conversationSearch,
+} from './conversation-search';
 
 export interface TenantViewer {
   userId: string;
@@ -17,6 +22,7 @@ interface ConversationPageQuery {
   cursor?: string;
   limit: number;
   channel?: CommunicationChannel;
+  search?: string;
 }
 
 interface MessagePageQuery {
@@ -47,32 +53,38 @@ export class CommunicationsTenantService {
   async listConversations(
     viewer: TenantViewer,
     query: ConversationPageQuery,
-  ): Promise<{ items: unknown[]; nextCursor: string | null }> {
+  ): Promise<{ items: unknown[]; nextCursor: string | null; total: number }> {
+    const search = conversationSearch(query.search);
     const scope: CursorScope = {
       route: 'company-conversations',
       userId: viewer.userId,
       companyId: viewer.companyId,
-      filters: { channel: query.channel ?? null },
+      // An absent search keeps the scope of cursors issued before the filter existed.
+      filters: { channel: query.channel ?? null, search: search?.term },
     };
     const after = query.cursor
       ? this.tokens.decodeCursor(query.cursor, scope)
       : null;
-    const rows = await this.prisma.$queryRaw<
-      Array<{
-        id: string;
-        channel: CommunicationChannel;
-        lastAt: string;
-        count: number;
-      }>
-    >(Prisma.sql`
-      SELECT m."conversationId" AS "id", c."channel" AS "channel",
-        to_char(max(m."createdAt"), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "lastAt",
-        count(*)::int AS "count"
+    const visible = Prisma.sql`
       FROM "CommunicationMessage" m
       JOIN "CommunicationConversation" c ON c."id" = m."conversationId"
       WHERE m."companyId" = ${viewer.companyId}
         AND m."retentionExpiresAt" > now()
         ${query.channel ? Prisma.sql`AND c."channel" = ${query.channel}::"CommunicationChannel"` : Prisma.empty}
+        ${search ? searchCondition(viewer.companyId, search) : Prisma.empty}`;
+    const [rows, counted] = await Promise.all([
+      this.prisma.$queryRaw<
+        Array<{
+          id: string;
+          channel: CommunicationChannel;
+          lastAt: string;
+          count: number;
+        }>
+      >(Prisma.sql`
+      SELECT m."conversationId" AS "id", c."channel" AS "channel",
+        to_char(max(m."createdAt"), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "lastAt",
+        count(*)::int AS "count"
+      ${visible}
       GROUP BY m."conversationId", c."channel"
       ${
         after
@@ -80,7 +92,11 @@ export class CommunicationsTenantService {
           : Prisma.empty
       }
       ORDER BY max(m."createdAt") DESC, "id" DESC
-      LIMIT ${query.limit + 1}`);
+      LIMIT ${query.limit + 1}`),
+      this.prisma.$queryRaw<Array<{ total: number }>>(Prisma.sql`
+      SELECT count(DISTINCT m."conversationId")::int AS "total"
+      ${visible}`),
+    ]);
     // Timestamps are stored as UTC; text avoids any driver timezone interpretation of the cursor.
     const page = rows
       .slice(0, query.limit)
@@ -115,6 +131,7 @@ export class CommunicationsTenantService {
         rows.length > query.limit && tail
           ? this.tokens.encodeCursor(scope, { at: tail.lastAt, id: tail.id })
           : null,
+      total: counted[0]?.total ?? 0,
     };
   }
 
@@ -367,4 +384,29 @@ export function olderThan(
       { createdAt: position.at, id: { lt: position.id } },
     ],
   };
+}
+
+/**
+ * A conversation matches when one of the company's own visible messages names a matching
+ * debtor of that same company, or when its recipient is exactly the searched phone. The
+ * outer query already limits the recipient match to the company's projection.
+ */
+function searchCondition(
+  companyId: string,
+  search: ConversationSearch,
+): Prisma.Sql {
+  const text = containsPattern(search.term);
+  const digits = search.digits ? containsPattern(search.digits) : null;
+  return Prisma.sql`AND (
+    EXISTS (
+      SELECT 1 FROM "CommunicationMessage" sm
+      JOIN "Debtor" d ON d."id" = sm."debtorId" AND d."companyId" = sm."companyId"
+      WHERE sm."conversationId" = m."conversationId"
+        AND sm."companyId" = ${companyId}
+        AND sm."retentionExpiresAt" > now()
+        AND (d."name" ILIKE ${text} OR d."email" ILIKE ${text}
+          ${digits ? Prisma.sql`OR d."document" LIKE ${digits} OR d."phoneNumber" LIKE ${digits}` : Prisma.empty})
+    )
+    ${search.recipientHash ? Prisma.sql`OR c."recipientHash" = ${search.recipientHash}` : Prisma.empty}
+  )`;
 }

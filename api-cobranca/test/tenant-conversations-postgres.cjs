@@ -138,6 +138,39 @@ module.exports = async ({ prisma, crypto, companyA, companyB, adminId, userId })
   assert.deepEqual([after.status, after.unreadCount, after.lastMessagePreview], [before.status, before.unreadCount, before.lastMessagePreview], 'company reads never change global state');
   console.log('PASS cursor pagination, cursor bound to user/company/filters and 404 for foreign or unknown conversations');
 
+  // Client search: only the session company's debtors, literal wildcards, total = every page.
+  assert.equal(everyConversation.length, (await tenant.listConversations(viewerA, { limit: 1 })).total, 'total counts every visible conversation');
+  for (const [viewer, term] of [[viewerA, 'visto por B'], [viewerB, 'visto por A']]) {
+    const foreign = await tenant.listConversations(viewer, { limit: 10, search: term });
+    assert.deepEqual([foreign.items, foreign.total], [[], 0], `a debtor of the other company is never found (${term})`);
+  }
+  const byName = await tenant.listConversations(viewerA, { limit: 10, search: 'VISTO POR a' });
+  assert.deepEqual([byName.items.map(item => item.id), byName.total], [[conversation.id], 1], 'own debtor found by name, case-insensitive');
+  const byPhone = await tenant.listConversations(viewerA, { limit: 10, search: '(11) 97654-3210' });
+  assert.ok(byPhone.items.some(item => item.id === conversation.id), 'own debtor found by phone');
+  assert.ok(!byPhone.items.some(item => item.id === otherConversation.id));
+  const wildcard = await tenant.listConversations(viewerA, { limit: 10, search: '%' });
+  assert.equal(wildcard.total, 0, 'a % in the search is literal');
+  const searchFirst = await tenant.listConversations(viewerA, { limit: 1, search: 'pagador' });
+  const searched = []; let searchCursor;
+  do {
+    const page = await tenant.listConversations(viewerA, { limit: 1, search: 'pagador', ...(searchCursor ? { cursor: searchCursor } : {}) });
+    assert.equal(page.total, searchFirst.total, 'total is the same on every page');
+    searched.push(...page.items); searchCursor = page.nextCursor;
+  } while (searchCursor);
+  assert.equal(searched.length, searchFirst.total, 'total equals the conversations of every page');
+  assert.ok(searched.some(item => item.id === conversation.id));
+  if (searchFirst.nextCursor)
+    await assert.rejects(tenant.listConversations(viewerA, { limit: 1, search: 'visto', cursor: searchFirst.nextCursor }), error => error.getStatus() === 400);
+  const adminScoped = await admin.listAdminConversations({ page: 1, pageSize: 50, companyId: companyA, search: 'visto por B' });
+  assert.ok(!adminScoped.items.some(item => item.id === conversation.id), 'with a company selected, a debtor of another company does not match');
+  const adminAll = await admin.listAdminConversations({ page: 1, pageSize: 50, search: 'visto por B' });
+  assert.ok(adminAll.items.some(item => item.id === conversation.id));
+  const adminPhone = await admin.listAdminConversations({ page: 1, pageSize: 50, search: '+55 (11) 97654-3299' });
+  assert.ok(adminPhone.items.some(item => item.id === otherConversation.id), 'admin finds a conversation without debtor by its exact phone');
+  assert.ok(!adminPhone.items.some(item => item.id === conversation.id));
+  console.log('PASS client search scoped to the company, literal wildcards, total across pages and admin company/phone filters');
+
   // Server-issued button reference.
   const token = tokens.interactiveToken(outB, 0);
   await prisma.communicationInteractiveReference.create({ data: { tokenHash: interactiveTokenHash(token), messageId: outB, buttonIndex: 0 } });

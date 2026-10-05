@@ -9,6 +9,7 @@ import type { PaymentCryptoService } from '../payment/payment-crypto.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { WhatsappService } from '../whatsapp/whatsapp.service';
 import { CommunicationsService } from './communications.service';
+import { messageRecipient } from './message-context';
 import type { CommunicationAttributionService } from './communication-attribution.service';
 import type { CommunicationTokenService } from './communication-token.service';
 import type { TemplateSendPreparerService } from '../templates/template-send-preparer.service';
@@ -111,6 +112,66 @@ describe('CommunicationsService', () => {
         take: 10,
       }),
     );
+  });
+
+  it('searches debtors only inside the selected company and keeps the other filters', async () => {
+    const { service, prisma } = setup();
+    prisma.communicationConversation.findMany.mockResolvedValue([]);
+    prisma.communicationConversation.count.mockResolvedValue(0);
+    await service.listAdminConversations({
+      page: 1,
+      pageSize: 10,
+      companyId: 'company-a',
+      search: '(11) 97654-3210',
+    });
+    const [{ where }] = prisma.communicationConversation.findMany.mock
+      .calls[0] as [{ where: { AND: Array<Record<string, unknown>> } }];
+    expect(where.AND).toHaveLength(2);
+    expect(where.AND[0]).toEqual({
+      messages: { some: { companyId: 'company-a' } },
+    });
+    expect(where.AND[1]).toEqual({
+      OR: [
+        {
+          messages: {
+            some: {
+              companyId: 'company-a',
+              debtor: {
+                OR: [
+                  {
+                    name: { contains: '(11) 97654-3210', mode: 'insensitive' },
+                  },
+                  {
+                    email: { contains: '(11) 97654-3210', mode: 'insensitive' },
+                  },
+                  { document: { contains: '11976543210' } },
+                  { phoneNumber: { contains: '11976543210' } },
+                ],
+              },
+            },
+          },
+        },
+        {
+          recipientHash: messageRecipient({
+            type: 'PHONE',
+            value: '5511976543210',
+          }).hash,
+        },
+      ],
+    });
+    expect(prisma.communicationConversation.count).toHaveBeenCalledWith({
+      where,
+    });
+  });
+
+  it('does not filter by search when the term is blank', async () => {
+    const { service, prisma } = setup();
+    prisma.communicationConversation.findMany.mockResolvedValue([]);
+    prisma.communicationConversation.count.mockResolvedValue(0);
+    await service.listAdminConversations({ page: 1, pageSize: 10, search: '' });
+    expect(prisma.communicationConversation.count).toHaveBeenCalledWith({
+      where: {},
+    });
   });
 
   it('enqueues admin WhatsApp replies with their stable idempotency key', async () => {

@@ -31,6 +31,7 @@ import {
   CursorScope,
 } from './communication-token.service';
 import { olderThan } from './communications-tenant.service';
+import { conversationSearch, debtorMatch } from './conversation-search';
 import { AttributeMessageDto } from './dto/attribute-message.dto';
 import { ReplyConversationDto } from './dto/reply-conversation.dto';
 import {
@@ -63,6 +64,7 @@ interface AdminListQuery extends PageQuery {
   invoiceId?: string;
   status?: ConversationStatus;
   pendingClassification?: boolean;
+  search?: string;
 }
 
 @Injectable()
@@ -120,16 +122,30 @@ export class CommunicationsService {
     if (query.companyId) messageFilters.push({ companyId: query.companyId });
     if (query.invoiceId) messageFilters.push({ invoiceId: query.invoiceId });
     if (query.pendingClassification) messageFilters.push(UNCLASSIFIED_INBOUND);
+    const and: Prisma.CommunicationConversationWhereInput[] =
+      messageFilters.map((filter) => ({ messages: { some: filter } }));
+    const search = conversationSearch(query.search);
+    if (search)
+      and.push({
+        OR: [
+          // With a company selected, a namesake debtor of another company does not match.
+          {
+            messages: {
+              some: {
+                ...(query.companyId ? { companyId: query.companyId } : {}),
+                debtor: debtorMatch(search),
+              },
+            },
+          },
+          ...(search.recipientHash
+            ? [{ recipientHash: search.recipientHash }]
+            : []),
+        ],
+      });
     const where: Prisma.CommunicationConversationWhereInput = {
       ...(query.channel ? { channel: query.channel } : {}),
       ...(query.status ? { status: query.status } : {}),
-      ...(messageFilters.length
-        ? {
-            AND: messageFilters.map((filter) => ({
-              messages: { some: filter },
-            })),
-          }
-        : {}),
+      ...(and.length ? { AND: and } : {}),
     };
     const [records, total] = await Promise.all([
       this.prisma.communicationConversation.findMany({
