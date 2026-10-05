@@ -1811,9 +1811,14 @@ class ApiClient {
 
   // Conversations. Company routes are scoped by the session on the server.
   async listCompanyConversations(
-    params: { cursor?: string; limit?: number; channel?: CommunicationChannel },
+    params: {
+      cursor?: string;
+      limit?: number;
+      channel?: CommunicationChannel;
+      search?: string;
+    },
     signal?: AbortSignal,
-  ): Promise<CursorPage<CompanyConversation>> {
+  ): Promise<CursorPage<CompanyConversation> & { total: number }> {
     return this.fetch(`/communications/conversations${query(params)}`, {
       signal,
     });
@@ -1838,6 +1843,7 @@ class ApiClient {
       status?: ConversationStatus;
       companyId?: string;
       pendingClassification?: boolean;
+      search?: string;
     },
     signal?: AbortSignal,
   ): Promise<{ items: AdminConversationSummary[]; total: number }> {

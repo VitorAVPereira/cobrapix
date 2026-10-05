@@ -9,10 +9,13 @@ import type {
 } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 import { useVisiblePolling } from "@/lib/use-visible-polling";
+import { ListPagination } from "@/components/ui/ListPagination";
+import { SearchForm } from "@/components/ui/SearchForm";
 import { ConversationMessages } from "./ConversationMessages";
 import { errorMessage, formatDateTime, isAbort } from "./format";
 
-const PAGE_SIZE = 25;
+const LIST_PAGE_SIZE = 10;
+const MESSAGE_PAGE_SIZE = 25;
 
 /** Newest page merged into what is loaded, oldest first, without duplicates. */
 function mergeMessages(
@@ -34,10 +37,14 @@ function mergeMessages(
 export function CompanyConversations(): ReactNode {
   const api = useApiClient();
   const [channel, setChannel] = useState<CommunicationChannel | "">("");
+  const [search, setSearch] = useState("");
   const [conversations, setConversations] = useState<CompanyConversation[]>(
     [],
   );
-  const [listCursor, setListCursor] = useState<string | null>(null);
+  // Server cursors of pages 2..n: the signed cursor stays the only way to move forward.
+  const [cursors, setCursors] = useState<string[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [total, setTotal] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [header, setHeader] = useState<
     CompanyConversationMessages["conversation"] | null
@@ -47,8 +54,7 @@ export function CompanyConversations(): ReactNode {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
-  // Once older pages are loaded, polling only refreshes the newest page and keeps them.
-  const pagedList = useRef(false);
+  // Once older messages are loaded, polling only refreshes the newest page and keeps them.
   const pagedMessages = useRef(false);
 
   const refresh = useCallback(
@@ -56,14 +62,19 @@ export function CompanyConversations(): ReactNode {
       try {
         const [list, threadResult] = await Promise.all([
           api.listCompanyConversations(
-            { limit: PAGE_SIZE, channel: channel || undefined },
+            {
+              limit: LIST_PAGE_SIZE,
+              channel: channel || undefined,
+              search: search || undefined,
+              cursor: cursors.at(-1),
+            },
             signal,
           ),
           selectedId
             ? api
                 .listCompanyConversationMessages(
                   selectedId,
-                  { limit: PAGE_SIZE },
+                  { limit: MESSAGE_PAGE_SIZE },
                   signal,
                 )
                 .then(
@@ -81,14 +92,9 @@ export function CompanyConversations(): ReactNode {
           setMessages([]);
           setError(errorMessage(threadResult.failure, "Falha ao abrir conversa."));
         }
-        const fresh = new Set(list.items.map((item) => item.id));
-        setConversations((previous) => [
-          ...list.items,
-          ...(pagedList.current
-            ? previous.filter((item) => !fresh.has(item.id))
-            : []),
-        ]);
-        if (!pagedList.current) setListCursor(list.nextCursor);
+        setConversations(list.items);
+        setNextCursor(list.nextCursor);
+        setTotal(list.total);
         if (thread) {
           setHeader(thread.conversation);
           setMessages((previous) =>
@@ -104,7 +110,7 @@ export function CompanyConversations(): ReactNode {
         if (!signal.aborted) setLoaded(true);
       }
     },
-    [api, channel, selectedId],
+    [api, channel, search, cursors, selectedId],
   );
   useVisiblePolling(refresh);
 
@@ -117,23 +123,16 @@ export function CompanyConversations(): ReactNode {
     setOlderCursor(null);
   }
 
-  async function loadMoreConversations(): Promise<void> {
-    if (!listCursor) return;
-    try {
-      const page = await api.listCompanyConversations({
-        limit: PAGE_SIZE,
-        channel: channel || undefined,
-        cursor: listCursor,
-      });
-      pagedList.current = true;
-      setConversations((previous) => {
-        const known = new Set(previous.map((item) => item.id));
-        return [...previous, ...page.items.filter((item) => !known.has(item.id))];
-      });
-      setListCursor(page.nextCursor);
-    } catch (caught: unknown) {
-      setError(errorMessage(caught, "Falha ao carregar mais conversas."));
-    }
+  /** A new channel or search starts again from the first page, with nothing open. */
+  function restart(): void {
+    setCursors([]);
+    setConversations([]);
+    setNextCursor(null);
+    setTotal(0);
+    setLoaded(false);
+    setSelectedId(null);
+    setMessages([]);
+    setHeader(null);
   }
 
   async function loadOlder(): Promise<void> {
@@ -141,7 +140,7 @@ export function CompanyConversations(): ReactNode {
     setLoadingOlder(true);
     try {
       const page = await api.listCompanyConversationMessages(selectedId, {
-        limit: PAGE_SIZE,
+        limit: MESSAGE_PAGE_SIZE,
         cursor: olderCursor,
       });
       pagedMessages.current = true;
@@ -161,20 +160,23 @@ export function CompanyConversations(): ReactNode {
       <p className="text-sm text-slate-600">
         Somente leitura. As respostas são feitas pelo atendimento CifraMais.
       </p>
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <SearchForm
+          label="Buscar cliente"
+          placeholder="Buscar por nome, telefone, CPF/CNPJ ou e-mail do cliente"
+          onSearch={(term) => {
+            setSearch(term);
+            restart();
+          }}
+        />
         <label className="text-sm">
           Canal
           <select
             className="ml-2 rounded-lg border p-2"
             value={channel}
             onChange={(event) => {
-              pagedList.current = false;
               setChannel(event.target.value as CommunicationChannel | "");
-              setConversations([]);
-              setListCursor(null);
-              setSelectedId(null);
-              setMessages([]);
-              setHeader(null);
+              restart();
             }}
           >
             <option value="">Todos</option>
@@ -221,16 +223,23 @@ export function CompanyConversations(): ReactNode {
           ))}
           {loaded && conversations.length === 0 && !error && (
             <p className="rounded-xl border bg-white p-6 text-slate-500">
-              Nenhuma conversa com mensagens da sua empresa.
+              {search
+                ? "Nenhuma conversa encontrada para esta busca."
+                : "Nenhuma conversa com mensagens da sua empresa."}
             </p>
           )}
-          {listCursor && (
-            <button
-              className="w-full rounded-lg border px-3 py-2 text-sm"
-              onClick={() => void loadMoreConversations()}
-            >
-              Carregar mais conversas
-            </button>
+          {total > 0 && (
+            <ListPagination
+              page={cursors.length + 1}
+              pageSize={LIST_PAGE_SIZE}
+              total={total}
+              hasNext={Boolean(nextCursor)}
+              label={["conversa", "conversas"]}
+              onPrevious={() => setCursors((current) => current.slice(0, -1))}
+              onNext={() => {
+                if (nextCursor) setCursors((current) => [...current, nextCursor]);
+              }}
+            />
           )}
         </div>
         {selectedId && (

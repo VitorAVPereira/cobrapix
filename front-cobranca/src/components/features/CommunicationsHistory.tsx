@@ -5,12 +5,15 @@ import { useSession } from "next-auth/react";
 import { useApiClient } from "@/lib/use-api-client";
 import { useVisiblePolling } from "@/lib/use-visible-polling";
 import type {
+  AdminClient,
   AdminConversationDetail,
   AdminConversationMessage,
   AdminConversationSummary,
   CommunicationChannel,
   ConversationStatus,
 } from "@/lib/api-client";
+import { ListPagination } from "@/components/ui/ListPagination";
+import { SearchForm } from "@/components/ui/SearchForm";
 import { TemplatePendingSends } from "./templates/TemplatePendingSends";
 import { CompanyConversations } from "./communications/CompanyConversations";
 import { ConversationMessages } from "./communications/ConversationMessages";
@@ -27,6 +30,7 @@ import {
 } from "./communications/format";
 
 const PAGE_SIZE = 25;
+const INBOX_PAGE_SIZE = 10;
 
 interface OutboundMessage {
   id: string;
@@ -143,7 +147,17 @@ function AdminInbox(): ReactNode {
     channel: CommunicationChannel | "";
     status: ConversationStatus | "";
     pendingClassification: boolean;
-  }>({ channel: "", status: "", pendingClassification: false });
+    companyId: string;
+    search: string;
+  }>({
+    channel: "",
+    status: "",
+    pendingClassification: false,
+    companyId: "",
+    search: "",
+  });
+  const [companies, setCompanies] = useState<AdminClient[]>([]);
+  const [companiesError, setCompaniesError] = useState<string | null>(null);
   const [conversations, setConversations] = useState<
     AdminConversationSummary[]
   >([]);
@@ -166,10 +180,12 @@ function AdminInbox(): ReactNode {
           api.listAdminConversations(
             {
               page,
-              pageSize: PAGE_SIZE,
+              pageSize: INBOX_PAGE_SIZE,
               channel: filters.channel || undefined,
               status: filters.status || undefined,
               pendingClassification: filters.pendingClassification || undefined,
+              companyId: filters.companyId || undefined,
+              search: filters.search || undefined,
             },
             signal,
           ),
@@ -203,9 +219,46 @@ function AdminInbox(): ReactNode {
   );
   useVisiblePolling(refresh);
 
+  useEffect(() => {
+    let active = true;
+    api
+      .getAdminClients()
+      .then((list) => {
+        if (active)
+          setCompanies(
+            [...list].sort((a, b) =>
+              a.corporateName.localeCompare(b.corporateName, "pt-BR"),
+            ),
+          );
+      })
+      .catch((caught: unknown) => {
+        // The inbox keeps working; only the company filter is unavailable.
+        if (active)
+          setCompaniesError(
+            errorMessage(caught, "Falha ao carregar a lista de empresas."),
+          );
+      });
+    return () => {
+      active = false;
+    };
+  }, [api]);
+
   const reload = useCallback(async (): Promise<void> => {
     await refresh(new AbortController().signal);
   }, [refresh]);
+
+  /** Every filter change starts again from the first page. */
+  function filter(change: Partial<typeof filters>): void {
+    setFilters((current) => ({ ...current, ...change }));
+    setPage(1);
+  }
+  const filtered = Boolean(
+    filters.channel ||
+      filters.status ||
+      filters.pendingClassification ||
+      filters.companyId ||
+      filters.search,
+  );
 
   function select(id: string): void {
     pagedMessages.current = false;
@@ -250,18 +303,36 @@ function AdminInbox(): ReactNode {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
+        <SearchForm
+          label="Buscar cliente ou telefone"
+          placeholder="Buscar por cliente, telefone, CPF/CNPJ ou e-mail"
+          onSearch={(search) => filter({ search })}
+        />
+        <label className="text-sm">
+          Empresa
+          <select
+            className="ml-2 max-w-full rounded-lg border p-2"
+            value={filters.companyId}
+            onChange={(event) => filter({ companyId: event.target.value })}
+          >
+            <option value="">Todas</option>
+            {companies.map((company) => (
+              <option key={company.id} value={company.id}>
+                {company.corporateName}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="text-sm">
           Canal
           <select
             className="ml-2 rounded-lg border p-2"
             value={filters.channel}
-            onChange={(event) => {
-              setFilters((current) => ({
-                ...current,
+            onChange={(event) =>
+              filter({
                 channel: event.target.value as CommunicationChannel | "",
-              }));
-              setPage(1);
-            }}
+              })
+            }
           >
             <option value="">Todos</option>
             <option value="WHATSAPP">WhatsApp</option>
@@ -273,13 +344,9 @@ function AdminInbox(): ReactNode {
           <select
             className="ml-2 rounded-lg border p-2"
             value={filters.status}
-            onChange={(event) => {
-              setFilters((current) => ({
-                ...current,
-                status: event.target.value as ConversationStatus | "",
-              }));
-              setPage(1);
-            }}
+            onChange={(event) =>
+              filter({ status: event.target.value as ConversationStatus | "" })
+            }
           >
             <option value="">Todos</option>
             <option value="NEW">Novo</option>
@@ -291,13 +358,9 @@ function AdminInbox(): ReactNode {
           <input
             type="checkbox"
             checked={filters.pendingClassification}
-            onChange={(event) => {
-              setFilters((current) => ({
-                ...current,
-                pendingClassification: event.target.checked,
-              }));
-              setPage(1);
-            }}
+            onChange={(event) =>
+              filter({ pendingClassification: event.target.checked })
+            }
           />
           Somente com mensagens sem classificação
         </label>
@@ -311,6 +374,11 @@ function AdminInbox(): ReactNode {
       {error && (
         <p role="alert" className="bg-red-50 p-3 text-red-800">
           {error}
+        </p>
+      )}
+      {companiesError && (
+        <p role="alert" className="bg-amber-50 p-3 text-amber-800">
+          {companiesError}
         </p>
       )}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
@@ -342,26 +410,22 @@ function AdminInbox(): ReactNode {
           ))}
           {total === 0 && !error && (
             <p className="rounded-xl border bg-white p-6 text-slate-500">
-              Nenhuma comunicação encontrada.
+              {filtered
+                ? "Nenhuma conversa encontrada para estes filtros."
+                : "Nenhuma comunicação encontrada."}
             </p>
           )}
-          <div className="flex gap-4 text-sm">
-            <button
-              disabled={page === 1}
-              className="disabled:opacity-40"
-              onClick={() => setPage((value) => value - 1)}
-            >
-              Anterior
-            </button>
-            <span>Página {page}</span>
-            <button
-              disabled={page * PAGE_SIZE >= total}
-              className="disabled:opacity-40"
-              onClick={() => setPage((value) => value + 1)}
-            >
-              Próxima
-            </button>
-          </div>
+          {(total > 0 || page > 1) && (
+            <ListPagination
+              page={page}
+              pageSize={INBOX_PAGE_SIZE}
+              total={total}
+              hasNext={page * INBOX_PAGE_SIZE < total}
+              label={["conversa", "conversas"]}
+              onPrevious={() => setPage((value) => value - 1)}
+              onNext={() => setPage((value) => value + 1)}
+            />
+          )}
         </div>
         {selected && (
           <section

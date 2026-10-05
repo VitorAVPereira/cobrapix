@@ -88,6 +88,7 @@ beforeEach(() => {
   mockApi.listCompanyConversations.mockResolvedValue({
     items: [conversation("conversation-a", "Pagador A")],
     nextCursor: null,
+    total: 1,
   });
   mockApi.listCompanyConversationMessages.mockResolvedValue(thread);
   mockApi.financialAdmin.mockResolvedValue({ items: [], total: 0 });
@@ -127,28 +128,107 @@ describe("Company conversations (read-only)", () => {
     expect(screen.getByRole("button", { name: /Pagador A/ })).toBeInTheDocument();
   });
 
-  it("loads more conversations with the server cursor only", async () => {
-    mockApi.listCompanyConversations
-      .mockResolvedValueOnce({
-        items: [conversation("conversation-a", "Pagador A")],
-        nextCursor: "cursor-1",
-      })
-      .mockResolvedValueOnce({
-        items: [conversation("conversation-b", "Pagador C")],
-        nextCursor: null,
-      });
-    render(<CommunicationsHistory />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Carregar mais conversas" }),
+  it("pages with the server cursor and shows the total", async () => {
+    mockApi.listCompanyConversations.mockImplementation(
+      async (params: { cursor?: string }) =>
+        params.cursor === "cursor-1"
+          ? {
+              items: [conversation("conversation-b", "Pagador C")],
+              nextCursor: null,
+              total: 11,
+            }
+          : {
+              items: [conversation("conversation-a", "Pagador A")],
+              nextCursor: "cursor-1",
+              total: 11,
+            },
     );
+    render(<CommunicationsHistory />);
+    expect(
+      await screen.findByText("Página 1 de 2 · 11 conversas"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Anterior" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Próxima" }));
     expect(
       await screen.findByRole("button", { name: /Pagador C/ }),
     ).toBeInTheDocument();
-    expect(mockApi.listCompanyConversations).toHaveBeenLastCalledWith({
-      limit: 25,
+    expect(screen.getByText("Página 2 de 2 · 11 conversas")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Próxima" })).toBeDisabled();
+    expect(mockApi.listCompanyConversations.mock.lastCall?.[0]).toEqual({
+      limit: 10,
       channel: undefined,
+      search: undefined,
       cursor: "cursor-1",
     });
+    fireEvent.click(screen.getByRole("button", { name: "Anterior" }));
+    expect(
+      await screen.findByRole("button", { name: /Pagador A/ }),
+    ).toBeInTheDocument();
+    expect(mockApi.listCompanyConversations.mock.lastCall?.[0]).toMatchObject({
+      cursor: undefined,
+    });
+  });
+
+  it("searches clients from the first page and says when nothing matches", async () => {
+    mockApi.listCompanyConversations.mockImplementation(
+      async (params: { search?: string }) =>
+        params.search
+          ? { items: [], nextCursor: null, total: 0 }
+          : {
+              items: [conversation("conversation-a", "Pagador A")],
+              nextCursor: "cursor-1",
+              total: 11,
+            },
+    );
+    render(<CommunicationsHistory />);
+    fireEvent.click(await screen.findByRole("button", { name: "Próxima" }));
+    await waitFor(() =>
+      expect(mockApi.listCompanyConversations.mock.lastCall?.[0]).toMatchObject(
+        { cursor: "cursor-1" },
+      ),
+    );
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Buscar cliente" }),
+      { target: { value: "  Maria  " } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Buscar" }));
+    expect(
+      await screen.findByText("Nenhuma conversa encontrada para esta busca."),
+    ).toBeInTheDocument();
+    expect(mockApi.listCompanyConversations.mock.lastCall?.[0]).toEqual({
+      limit: 10,
+      channel: undefined,
+      search: "Maria",
+      cursor: undefined,
+    });
+    expect(
+      screen.queryByRole("navigation", { name: "Paginação" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("polls the page being viewed with its own cursor", async () => {
+    jest.useFakeTimers();
+    try {
+      mockApi.listCompanyConversations.mockResolvedValue({
+        items: [conversation("conversation-a", "Pagador A")],
+        nextCursor: "cursor-1",
+        total: 11,
+      });
+      render(<CommunicationsHistory />);
+      await act(async () => undefined);
+      fireEvent.click(screen.getByRole("button", { name: "Próxima" }));
+      await act(async () => undefined);
+      const calls = mockApi.listCompanyConversations.mock.calls.length;
+      await act(async () => {
+        jest.advanceTimersByTime(15_000);
+      });
+      expect(mockApi.listCompanyConversations).toHaveBeenCalledTimes(calls + 1);
+      expect(mockApi.listCompanyConversations.mock.lastCall?.[0]).toMatchObject({
+        cursor: "cursor-1",
+      });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it("polls every 15 seconds only while the page is visible", async () => {
@@ -194,7 +274,7 @@ describe("Company conversations (read-only)", () => {
       screen.queryByRole("button", { name: /Pagador A/ }),
     ).not.toBeInTheDocument();
     await act(async () => {
-      resolveNext({ items: [], nextCursor: null });
+      resolveNext({ items: [], nextCursor: null, total: 0 });
     });
     expect(
       await screen.findByText("Nenhuma conversa com mensagens da sua empresa."),
