@@ -295,7 +295,7 @@ describe('Template catalog access (HTTP)', () => {
     ids.templateOnlyA = supported.id as string;
     ids.unsupported = unsupported.id as string;
     const listA = await request(http).get('/templates').set(auth(tokens.a));
-    expect(listA.body).toEqual({ items: [], nextCursor: null });
+    expect(listA.body).toEqual({ items: [], nextCursor: null, total: 0 });
   });
 
   it('admin maps and grants only to A; B cannot list, preview or read it', async () => {
@@ -383,6 +383,61 @@ describe('Template catalog access (HTTP)', () => {
           .set(auth(tokens.a))
       ).body,
     ).toMatchObject({ ok: true });
+  });
+
+  it('searches templates by name only within what each audience may see', async () => {
+    const searchA = await request(http)
+      .get('/templates?search=%20COBRANCA_%20&limit=10')
+      .set(auth(tokens.a));
+    expect(searchA.body).toEqual({
+      items: [expect.objectContaining({ id: ids.templateOnlyA })],
+      nextCursor: null,
+      total: 1,
+    });
+    // B searching the exact name of a template granted only to A learns nothing.
+    for (const [token, term] of [
+      [tokens.b, 'cobranca_real'],
+      [tokens.a, 'inexistente'],
+    ] as const) {
+      const empty = await request(http)
+        .get(`/templates?search=${term}`)
+        .set(auth(token));
+      expect(empty.body).toEqual({ items: [], nextCursor: null, total: 0 });
+    }
+    expect(
+      (
+        await request(http)
+          .get(`/templates?search=${'a'.repeat(101)}`)
+          .set(auth(tokens.a))
+      ).status,
+    ).toBe(400);
+
+    const admin = (query: string) =>
+      request(http)
+        .get(`/admin/whatsapp-templates?${query}`)
+        .set(auth(tokens.admin));
+    expect((await admin('search=COM_IMAGEM')).body).toMatchObject({
+      items: [expect.objectContaining({ id: ids.unsupported })],
+      total: 1,
+    });
+    // Both filters apply: the search must not replace the UNAVAILABLE condition.
+    expect((await admin('status=UNAVAILABLE&search=com_imagem')).body).toEqual({
+      items: [],
+      nextCursor: null,
+      total: 0,
+    });
+    const first = (await admin('status=ALL&search=co&limit=1')).body as {
+      items: Array<{ id: string }>;
+      nextCursor: string | null;
+      total: number;
+    };
+    expect(first.items).toHaveLength(1);
+    expect(first.total).toBeGreaterThanOrEqual(2);
+    const second = (
+      await admin(`status=ALL&search=co&limit=1&cursor=${first.nextCursor}`)
+    ).body as { items: Array<{ id: string }>; total: number };
+    expect(second.total).toBe(first.total);
+    expect(second.items[0]?.id).not.toBe(first.items[0]?.id);
   });
 
   it('a company cannot grant, map, read the admin catalog or pick another company', async () => {

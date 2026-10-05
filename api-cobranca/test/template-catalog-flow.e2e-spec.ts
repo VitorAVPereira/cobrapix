@@ -153,7 +153,7 @@ describe('Template catalog flow with two companies (HTTP)', () => {
   it('only A is granted; A picks it in its rule and B is refused', async () => {
     await grant(true);
     const listB = await request(http).get('/templates').set(auth(tokens.b));
-    expect(listB.body).toEqual({ items: [], nextCursor: null });
+    expect(listB.body).toEqual({ items: [], nextCursor: null, total: 0 });
 
     const profileA = (await rules(tokens.a))[0]!;
     const stepA = profileA.steps.find((step) => step.channel === 'WHATSAPP')!;
@@ -225,7 +225,11 @@ describe('Template catalog flow with two companies (HTTP)', () => {
     const otherCompany = await request(http)
       .get('/communications/template-pending')
       .set(auth(tokens.b));
-    expect(otherCompany.body).toEqual({ items: [], nextCursor: null });
+    expect(otherCompany.body).toEqual({
+      items: [],
+      nextCursor: null,
+      total: 0,
+    });
 
     await grant(true);
     await app.get(OutboundDispatcherService).recover();
