@@ -225,11 +225,7 @@ describe('Template catalog flow with two companies (HTTP)', () => {
     const otherCompany = await request(http)
       .get('/communications/template-pending')
       .set(auth(tokens.b));
-    expect(otherCompany.body).toEqual({
-      items: [],
-      nextCursor: null,
-      total: 0,
-    });
+    expect(otherCompany.body).toEqual({ items: [], nextCursor: null });
 
     await grant(true);
     await app.get(OutboundDispatcherService).recover();
