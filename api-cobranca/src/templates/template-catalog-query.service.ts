@@ -18,7 +18,11 @@ import { TemplatePolicyService } from './template-policy.service';
 import { renderTemplate, syntheticValues } from './template-renderer';
 import { isRecord } from '../whatsapp/transport/whatsapp-transport.error';
 
-export type CatalogPage<T> = { items: T[]; nextCursor: string | null };
+export type CatalogPage<T> = {
+  items: T[];
+  nextCursor: string | null;
+  total: number;
+};
 
 export interface TemplateContentView {
   body: string;
@@ -71,6 +75,7 @@ export interface AdminTemplateView {
 export type AdminCatalogQuery = {
   status?: 'APPROVED' | 'UNAVAILABLE' | 'ALL';
   supported?: boolean;
+  search?: string;
   cursor?: string;
   limit?: number;
 };
@@ -88,6 +93,7 @@ export class TemplateCatalogQueryService {
   ): Promise<CatalogPage<AdminTemplateView>> {
     const limit = query.limit ?? 25;
     const status = query.status ?? 'APPROVED';
+    const search = query.search?.trim();
     const where: Prisma.GlobalMessageTemplateWhereInput = {
       origin: 'META_IMPORTED',
       ...(status === 'APPROVED'
@@ -105,22 +111,44 @@ export class TemplateCatalogQueryService {
         : query.supported
           ? { supportReason: null }
           : { supportReason: { not: null } }),
+      // Inside AND: the UNAVAILABLE filter above already uses the OR key.
+      ...(search
+        ? {
+            AND: [
+              {
+                OR: [
+                  {
+                    metaTemplateName: {
+                      contains: search,
+                      mode: 'insensitive',
+                    },
+                  },
+                  { name: { contains: search, mode: 'insensitive' } },
+                ],
+              },
+            ],
+          }
+        : {}),
     };
-    const rows = await this.prisma.globalMessageTemplate.findMany({
-      where,
-      orderBy: [{ name: 'asc' }, { id: 'asc' }],
-      take: limit + 1,
-      ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
-      include: {
-        _count: { select: { grants: { where: { enabled: true } } } },
-      },
-    });
+    const [rows, total] = await Promise.all([
+      this.prisma.globalMessageTemplate.findMany({
+        where,
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+        take: limit + 1,
+        ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
+        include: {
+          _count: { select: { grants: { where: { enabled: true } } } },
+        },
+      }),
+      this.prisma.globalMessageTemplate.count({ where }),
+    ]);
     const page = rows.slice(0, limit);
     const items: AdminTemplateView[] = [];
     for (const row of page) items.push(await this.adminView(row));
     return {
       items,
       nextCursor: rows.length > limit ? (page.at(-1)?.id ?? null) : null,
+      total,
     };
   }
 
@@ -250,13 +278,28 @@ export class TemplateCatalogQueryService {
   /** Templates the authenticated company may choose now; nothing else is revealed. */
   async companyCatalog(
     companyId: string,
-    query: { cursor?: string; limit?: number },
+    query: { cursor?: string; limit?: number; search?: string },
   ): Promise<CatalogPage<CompanyTemplateView>> {
     const limit = query.limit ?? 25;
+    const search = query.search?.trim();
     // Grants of one company are few (one shared WABA); filter first, then paginate.
+    // The name searched is the one the company sees (the approved Meta name).
     const grants = await this.prisma.companyWhatsappTemplateGrant.findMany({
-      where: { companyId, enabled: true },
-      orderBy: { templateId: 'asc' },
+      where: {
+        companyId,
+        enabled: true,
+        ...(search
+          ? {
+              template: {
+                metaTemplateName: { contains: search, mode: 'insensitive' },
+              },
+            }
+          : {}),
+      },
+      orderBy: [
+        { template: { metaTemplateName: 'asc' } },
+        { templateId: 'asc' },
+      ],
       select: { templateId: true },
     });
     const available: CompanyTemplateView[] = [];
@@ -275,6 +318,7 @@ export class TemplateCatalogQueryService {
       items,
       nextCursor:
         start + limit < available.length ? (items.at(-1)?.id ?? null) : null,
+      total: available.length,
     };
   }
 

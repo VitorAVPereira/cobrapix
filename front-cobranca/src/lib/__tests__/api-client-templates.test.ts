@@ -24,6 +24,7 @@ describe("ApiClient imported WhatsApp catalog", () => {
     await api.getAdminWhatsappTemplates({
       status: "UNAVAILABLE",
       supported: false,
+      search: "cobrança vencida",
       cursor: "11111111-1111-4111-8111-111111111111",
       limit: 25,
     });
@@ -32,13 +33,23 @@ describe("ApiClient imported WhatsApp catalog", () => {
     expect(new URL(url).pathname).toBe("/admin/whatsapp-templates");
     expect(query.get("status")).toBe("UNAVAILABLE");
     expect(query.get("supported")).toBe("false");
+    expect(query.get("search")).toBe("cobrança vencida");
     expect(query.get("cursor")).toBe("11111111-1111-4111-8111-111111111111");
     expect(query.get("limit")).toBe("25");
   });
 
   it("omits unset filters so the server applies the approved default", async () => {
     await api.getAdminWhatsappTemplates();
-    expect(call().url).toBe("http://api.test/admin/whatsapp-templates");
+    await api.getAdminWhatsappTemplates({ search: "" });
+    await api.getTemplates({ limit: 10, search: "" });
+    expect(call(0).url).toBe("http://api.test/admin/whatsapp-templates");
+    expect(call(1).url).toBe("http://api.test/admin/whatsapp-templates");
+    expect(call(2).url).toBe("http://api.test/templates?limit=10");
+  });
+
+  it("sends the company template search", async () => {
+    await api.getTemplates({ limit: 10, search: "atraso" });
+    expect(call().url).toBe("http://api.test/templates?limit=10&search=atraso");
   });
 
   it("saves a mapping with the revisions the admin saw", async () => {

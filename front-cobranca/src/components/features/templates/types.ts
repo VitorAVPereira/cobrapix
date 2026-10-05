@@ -113,11 +113,15 @@ export interface CatalogPage<T> {
   nextCursor: string | null;
 }
 
+/** Template lists also return how many items match, for numbered pages. */
+export type CountedCatalogPage<T> = CatalogPage<T> & { total: number };
+
 export type AdminCatalogStatus = "APPROVED" | "UNAVAILABLE" | "ALL";
 
 export interface AdminCatalogQuery {
   status?: AdminCatalogStatus;
   supported?: boolean;
+  search?: string;
   cursor?: string;
   limit?: number;
 }

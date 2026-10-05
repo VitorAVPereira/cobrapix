@@ -16,6 +16,8 @@ import { CommunicationsQueryDto } from './communications-query.dto';
 import { ToBoolean } from '../../common/to-boolean';
 
 const toInt = ({ value }: { value: string }): number => Number(value);
+const trim = ({ value }: { value: unknown }): unknown =>
+  typeof value === 'string' ? value.trim() : value;
 
 /** Company projection. The company always comes from the session, never from the query. */
 export class CompanyConversationsQueryDto {
@@ -34,6 +36,13 @@ export class CompanyConversationsQueryDto {
   @IsOptional()
   @IsIn(['WHATSAPP', 'EMAIL'])
   channel?: 'WHATSAPP' | 'EMAIL';
+
+  /** Debtor name, phone, document or e-mail, only among the session company's debtors. */
+  @IsOptional()
+  @Transform(trim)
+  @IsString()
+  @MaxLength(100)
+  search?: string;
 }
 
 export class ConversationMessagesQueryDto {
@@ -72,6 +81,13 @@ export class AdminConversationsQueryDto extends CommunicationsQueryDto {
   @IsOptional()
   @IsUUID()
   invoiceId?: string;
+
+  /** Debtor name, phone, document or e-mail; with companyId, only that company's debtors. */
+  @IsOptional()
+  @Transform(trim)
+  @IsString()
+  @MaxLength(100)
+  search?: string;
 
   @IsOptional()
   @IsEnum(ConversationStatus)

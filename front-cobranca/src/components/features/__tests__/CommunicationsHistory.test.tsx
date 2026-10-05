@@ -10,6 +10,7 @@ const mockApi = {
   listConversations: jest.fn(),
   getCompanyTemplatePending: jest.fn(),
   getAdminTemplatePending: jest.fn(),
+  getAdminClients: jest.fn(),
 };
 jest.mock("@/lib/use-api-client", () => ({
   useApiClient: () => mockApi,
@@ -59,6 +60,80 @@ beforeEach(() => {
   mockApi.getAdminConversation.mockResolvedValue(detail);
   mockApi.getConversationContextOptions.mockResolvedValue({ options: [] });
   mockApi.replyToAdminConversation.mockResolvedValue({ status: "pending" });
+  mockApi.getAdminClients.mockResolvedValue([
+    { id: "company-b", corporateName: "Empresa B" },
+    { id: "company-a", corporateName: "Empresa A" },
+  ]);
+});
+
+describe("CommunicationsHistory admin list", () => {
+  const lastQuery = () =>
+    mockApi.listAdminConversations.mock.lastCall?.[0] as Record<
+      string,
+      unknown
+    >;
+
+  it("filters by company and client from the first page, 10 per page", async () => {
+    mockApi.listAdminConversations.mockImplementation(async () => ({
+      items: [],
+      total: 25,
+    }));
+    render(<CommunicationsHistory admin />);
+    expect(
+      await screen.findByText("Página 1 de 3 · 25 conversas"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Próxima" }));
+    await waitFor(() => expect(lastQuery()).toMatchObject({ page: 2 }));
+    const company = screen.getByRole("combobox", { name: "Empresa" });
+    expect(
+      [...company.querySelectorAll("option")].map((option) => option.text),
+    ).toEqual(["Todas", "Empresa A", "Empresa B"]);
+    fireEvent.change(company, { target: { value: "company-b" } });
+    await waitFor(() =>
+      expect(lastQuery()).toMatchObject({ page: 1, companyId: "company-b" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Próxima" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Buscar cliente ou telefone" }),
+      { target: { value: " Maria " } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Buscar cliente ou telefone" }));
+    await waitFor(() =>
+      expect(lastQuery()).toEqual({
+        page: 1,
+        pageSize: 10,
+        channel: undefined,
+        status: undefined,
+        pendingClassification: undefined,
+        companyId: "company-b",
+        search: "Maria",
+      }),
+    );
+  });
+
+  it("says when the filters match nothing", async () => {
+    mockApi.listAdminConversations.mockResolvedValue({ items: [], total: 0 });
+    render(<CommunicationsHistory admin />);
+    fireEvent.change(
+      await screen.findByRole("searchbox", {
+        name: "Buscar cliente ou telefone",
+      }),
+      { target: { value: "ninguem" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Buscar cliente ou telefone" }));
+    expect(
+      await screen.findByText("Nenhuma conversa encontrada para estes filtros."),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the inbox working when the company list fails", async () => {
+    mockApi.getAdminClients.mockRejectedValue(new Error("falha"));
+    render(<CommunicationsHistory admin />);
+    expect(
+      await screen.findByRole("button", { name: /5511999999999/i }),
+    ).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent("falha");
+  });
 });
 
 describe("CommunicationsHistory admin replies", () => {
