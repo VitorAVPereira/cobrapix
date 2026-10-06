@@ -51,23 +51,45 @@ function renderTable(options?: {
   );
 }
 
-function getEnabledCancelButton(): HTMLButtonElement {
-  const buttons = screen.getAllByRole("button", {
-    name: /cancelar cobrança/i,
-  });
-  const enabledButton = buttons.find(
-    (button) => !button.hasAttribute("disabled"),
+// Each row renders twice (table and mobile card); either button opens the same menu.
+async function openActions(
+  user: ReturnType<typeof userEvent.setup>,
+  name: string,
+): Promise<void> {
+  await user.click(
+    screen.getAllByRole("button", {
+      name: `Abrir ações da cobrança de ${name}`,
+    })[0],
   );
-
-  if (!(enabledButton instanceof HTMLButtonElement)) {
-    throw new Error("Expected an enabled cancel button.");
-  }
-
-  return enabledButton;
 }
 
-describe("InvoiceTable cancel action", () => {
-  it("allows manual replacement when Efí expired the current charge", () => {
+describe("InvoiceTable row actions", () => {
+  it("keeps actions inside the row menu until it is opened", async () => {
+    const user = userEvent.setup();
+    renderTable();
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Cancelar cobrança" }),
+    ).not.toBeInTheDocument();
+
+    await openActions(user, "Cliente PENDING");
+
+    expect(
+      screen.getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual([
+      "Gerar cobrança",
+      "Reenviar cobrança",
+      "Consultar status",
+      "Adicionar fatura",
+      "Histórico de pagamentos",
+      "Editar devedor",
+      "Cancelar cobrança",
+    ]);
+  });
+
+  it("allows manual replacement when Efí expired the current charge", async () => {
+    const user = userEvent.setup();
     const invoice = buildInvoice("CANCELED");
     invoice.payment = {
       generated: true,
@@ -87,34 +109,38 @@ describe("InvoiceTable cancel action", () => {
       },
     };
     renderTable({ data: [invoice], canIssue: true });
-    const buttons = screen.getAllByRole("button", {
-      name: "Substituir cobrança vencida",
-    });
-    buttons.forEach((button) => expect(button).toBeEnabled());
     expect(screen.getAllByText(/Taxa:/)).toHaveLength(2);
+
+    await openActions(user, "Cliente CANCELED");
+
+    expect(
+      screen.getByRole("menuitem", { name: "Substituir cobrança vencida" }),
+    ).toBeEnabled();
   });
+
   it("calls cancel handler for a pending invoice", async () => {
     const user = userEvent.setup();
     const onCancelInvoice = jest.fn();
     renderTable({ onCancelInvoice });
 
-    await user.click(getEnabledCancelButton());
+    await openActions(user, "Cliente PENDING");
+    await user.click(screen.getByRole("menuitem", { name: "Cancelar cobrança" }));
 
     expect(onCancelInvoice).toHaveBeenCalledWith(
       expect.objectContaining({ invoiceId: "invoice-pending" }),
     );
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("disables cancel handler for paid and canceled invoices", () => {
+  it("disables cancel for paid and canceled invoices", async () => {
+    const user = userEvent.setup();
     renderTable({ data: [buildInvoice("PAID"), buildInvoice("CANCELED")] });
 
-    const buttons = screen.getAllByRole("button", {
-      name: /cancelar cobrança/i,
-    });
-
-    expect(buttons).toHaveLength(4);
-    buttons.forEach((button) => {
-      expect(button).toBeDisabled();
-    });
+    for (const name of ["Cliente PAID", "Cliente CANCELED"]) {
+      await openActions(user, name);
+      expect(
+        screen.getByRole("menuitem", { name: "Cancelar cobrança" }),
+      ).toBeDisabled();
+    }
   });
 });

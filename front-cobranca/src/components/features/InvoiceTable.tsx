@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -10,6 +10,10 @@ import {
   type ColumnDef,
 } from "@tanstack/react-table";
 import type { ParsedDebtor } from "./UploadCSV";
+import {
+  DebtorActionsMenu,
+  type DebtorAction,
+} from "./debtors/DebtorActionsMenu";
 import { formatWhatsAppNumber } from "@/lib/whatsapp-number";
 import {
   CalendarDays,
@@ -26,6 +30,7 @@ import {
   History,
   Loader2,
   Mail,
+  MoreVertical,
   PlusCircle,
   RefreshCcw,
   SearchCheck,
@@ -72,12 +77,6 @@ const PROFILE_COLORS: Record<string, string> = {
   BAD: "border-red-200 bg-red-50 text-red-700",
 };
 
-const TABLE_ICON_BUTTON_BASE =
-  "inline-flex h-8 w-8 items-center justify-center rounded-md border transition disabled:cursor-not-allowed disabled:opacity-45";
-
-const MOBILE_ACTION_BUTTON_BASE =
-  "inline-flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-45";
-
 function getInvoiceId(invoice: ParsedDebtor): string | null {
   return invoice.invoiceId ?? invoice.id ?? null;
 }
@@ -123,6 +122,16 @@ export function InvoiceTable({
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<Set<string>>(
     () => new Set(),
   );
+  // Row whose actions menu is open, with the button it is anchored to.
+  const [openAction, setOpenAction] = useState<{
+    invoice: ParsedDebtor;
+    anchor: HTMLButtonElement;
+  } | null>(null);
+  const closeActions = useCallback(() => setOpenAction(null), []);
+  // A reloaded list brings new rows: the menu of an old row closes instead of
+  // acting on stale data.
+  const actionInvoice =
+    openAction && data.includes(openAction.invoice) ? openAction.invoice : null;
 
   const selectableInvoiceIds = useMemo(
     () =>
@@ -473,10 +482,14 @@ export function InvoiceTable({
     );
   }
 
-  function renderRowActions(
-    invoice: ParsedDebtor,
-    variant: "table" | "mobile",
-  ): ReactNode {
+  function isRowBusy(invoice: ParsedDebtor): boolean {
+    return (
+      runningInvoiceAction !== null &&
+      runningInvoiceAction.invoiceId === getInvoiceId(invoice)
+    );
+  }
+
+  function getRowActions(invoice: ParsedDebtor): DebtorAction[] {
     const invoiceId = getInvoiceId(invoice);
     const isClosed = invoice.status === "PAID" || invoice.status === "CANCELED";
     const chargeStatus = invoice.payment?.financialSummary?.status;
@@ -487,127 +500,83 @@ export function InvoiceTable({
       (chargeStatus === "EXPIRED" || (chargeStatus === "ACTIVE" && !isClosed)),
     );
     const canCancel = invoice.status === "PENDING";
-    const activeAction =
-      runningInvoiceAction?.invoiceId === invoiceId
-        ? runningInvoiceAction.action
-        : null;
-    const isBusy = activeAction !== null;
-    const buttonBase =
-      variant === "table" ? TABLE_ICON_BUTTON_BASE : MOBILE_ACTION_BUTTON_BASE;
-    const hideTextClass = variant === "table" ? "sr-only" : "";
+    const isBusy = isRowBusy(invoice);
 
+    return [
+      {
+        id: "generate",
+        label: replacing ? "Substituir cobrança vencida" : "Gerar cobrança",
+        icon: <CreditCard size={15} />,
+        disabled:
+          !canIssue || !invoiceId || (isClosed && !replacing) || isBusy,
+        onSelect: () => onGeneratePayment(invoice),
+      },
+      {
+        id: "resend",
+        label: "Reenviar cobrança",
+        icon: <RefreshCcw size={15} />,
+        disabled: !canIssue || !invoiceId || isClosed || isBusy,
+        onSelect: () => onResendInvoice(invoice),
+      },
+      {
+        id: "status",
+        label: "Consultar status",
+        icon: <SearchCheck size={15} />,
+        disabled: !invoiceId || isBusy,
+        onSelect: () => onCheckPaymentStatus(invoice),
+      },
+      {
+        id: "add-invoice",
+        label: "Adicionar fatura",
+        icon: <PlusCircle size={15} />,
+        disabled: !invoice.debtorId,
+        onSelect: () => onAddInvoice(invoice),
+      },
+      {
+        id: "history",
+        label: "Histórico de pagamentos",
+        icon: <History size={15} />,
+        disabled: !invoice.debtorId,
+        onSelect: () => onViewPaymentHistory(invoice),
+      },
+      {
+        id: "configure",
+        label: "Editar devedor",
+        icon: <SlidersHorizontal size={15} />,
+        disabled: !invoice.debtorId,
+        onSelect: () => onConfigureDebtor(invoice),
+      },
+      {
+        id: "cancel",
+        label: "Cancelar cobrança",
+        icon: <Ban size={15} />,
+        disabled: !invoiceId || !canCancel || isBusy,
+        onSelect: () => onCancelInvoice(invoice),
+      },
+    ];
+  }
+
+  function renderActionsButton(invoice: ParsedDebtor): ReactNode {
     return (
-      <div
-        className={
-          variant === "table"
-            ? "flex min-w-[15.75rem] items-center justify-end gap-1"
-            : "grid grid-cols-2 gap-2 sm:grid-cols-3"
-        }
+      <button
+        type="button"
+        aria-label={`Abrir ações da cobrança de ${invoice.name}`}
+        aria-haspopup="menu"
+        aria-expanded={openAction?.invoice === invoice}
+        onClick={(event) => {
+          const anchor = event.currentTarget;
+          setOpenAction((current) =>
+            current?.invoice === invoice ? null : { invoice, anchor },
+          );
+        }}
+        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100"
       >
-        <button
-          type="button"
-          onClick={() => onGeneratePayment(invoice)}
-          disabled={
-            !canIssue || !invoiceId || (isClosed && !replacing) || isBusy
-          }
-          className={`${buttonBase} border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100`}
-          title={
-            replacing
-              ? "Substituir cobrança vencida"
-              : "Gerar cobrança no gateway"
-          }
-          aria-label={
-            replacing ? "Substituir cobrança vencida" : "Gerar cobrança"
-          }
-        >
-          {activeAction === "generate" ? (
-            <Loader2 size={14} className="animate-spin" />
-          ) : (
-            <CreditCard size={14} />
-          )}
-          <span className={hideTextClass}>
-            {replacing ? "Substituir" : "Gerar"}
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => onResendInvoice(invoice)}
-          disabled={!canIssue || !invoiceId || isClosed || isBusy}
-          className={`${buttonBase} border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100`}
-          title="Reenviar cobrança"
-          aria-label="Reenviar cobrança"
-        >
-          {activeAction === "resend" ? (
-            <Loader2 size={14} className="animate-spin" />
-          ) : (
-            <RefreshCcw size={14} />
-          )}
-          <span className={hideTextClass}>Reenviar</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => onCheckPaymentStatus(invoice)}
-          disabled={!invoiceId || isBusy}
-          className={`${buttonBase} border-slate-200 bg-white text-slate-700 hover:bg-slate-100`}
-          title="Consultar status da fatura"
-          aria-label="Consultar status"
-        >
-          {activeAction === "status" ? (
-            <Loader2 size={14} className="animate-spin" />
-          ) : (
-            <SearchCheck size={14} />
-          )}
-          <span className={hideTextClass}>Status</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => onCancelInvoice(invoice)}
-          disabled={!invoiceId || !canCancel || isBusy}
-          className={`${buttonBase} border-red-200 bg-red-50 text-red-700 hover:bg-red-100`}
-          title="Cancelar cobrança"
-          aria-label="Cancelar cobrança"
-        >
-          {activeAction === "cancel" ? (
-            <Loader2 size={14} className="animate-spin" />
-          ) : (
-            <Ban size={14} />
-          )}
-          <span className={hideTextClass}>Cancelar</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => onAddInvoice(invoice)}
-          disabled={!invoice.debtorId}
-          className={`${buttonBase} border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50`}
-          title="Adicionar fatura"
-          aria-label="Adicionar fatura"
-        >
-          <PlusCircle size={14} />
-          <span className={hideTextClass}>Fatura</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => onViewPaymentHistory(invoice)}
-          disabled={!invoice.debtorId}
-          className={`${buttonBase} border-sky-200 bg-white text-sky-700 hover:bg-sky-50`}
-          title="Ver histórico"
-          aria-label="Ver histórico"
-        >
-          <History size={14} />
-          <span className={hideTextClass}>Histórico</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => onConfigureDebtor(invoice)}
-          disabled={!invoice.debtorId}
-          className={`${buttonBase} border-slate-200 bg-white text-slate-700 hover:bg-slate-100`}
-          title="Editar devedor"
-          aria-label="Editar devedor"
-        >
-          <SlidersHorizontal size={14} />
-          <span className={hideTextClass}>Editar</span>
-        </button>
-      </div>
+        {isRowBusy(invoice) ? (
+          <Loader2 size={17} className="animate-spin" />
+        ) : (
+          <MoreVertical size={17} />
+        )}
+      </button>
     );
   }
 
@@ -668,8 +637,12 @@ export function InvoiceTable({
     },
     {
       id: "actions",
-      header: () => <span className="block text-center">Ações</span>,
-      cell: (info) => renderRowActions(info.row.original, "table"),
+      header: () => <span className="block text-right">Ações</span>,
+      cell: (info) => (
+        <div className="flex justify-end">
+          {renderActionsButton(info.row.original)}
+        </div>
+      ),
     },
   ];
 
@@ -723,12 +696,12 @@ export function InvoiceTable({
         <table className="w-full min-w-[1200px] table-fixed text-left text-sm">
           <colgroup>
             <col className="w-[4%]" />
-            <col className="w-[21%]" />
-            <col className="w-[20%]" />
-            <col className="w-[12%]" />
-            <col className="w-[13%]" />
-            <col className="w-[10%]" />
-            <col className="w-[20%]" />
+            <col className="w-[25%]" />
+            <col className="w-[24%]" />
+            <col className="w-[15%]" />
+            <col className="w-[15%]" />
+            <col className="w-[11%]" />
+            <col className="w-[6%]" />
           </colgroup>
           <thead className="border-b border-slate-200 bg-slate-50/80">
             {table.getHeaderGroups().map((headerGroup) => (
@@ -753,11 +726,19 @@ export function InvoiceTable({
                 key={row.id}
                 className="align-middle transition-colors hover:bg-slate-50/70"
               >
-                {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id} className="px-4 py-4">
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                ))}
+                {row.getVisibleCells().map((cell) => {
+                  // Called, not mounted: flexRender mounts each inline cell
+                  // function as a new component on every render, replacing the
+                  // row's DOM and the button an open actions menu is anchored to.
+                  const content = cell.column.columnDef.cell;
+                  return (
+                    <td key={cell.id} className="px-4 py-4">
+                      {typeof content === "function"
+                        ? content(cell.getContext())
+                        : content}
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>
@@ -809,11 +790,8 @@ export function InvoiceTable({
                       {renderPayment(invoice)}
                     </div>
                   </div>
-
-                  <div className="mt-4">
-                    {renderRowActions(invoice, "mobile")}
-                  </div>
                 </div>
+                {renderActionsButton(invoice)}
               </div>
             </article>
           );
@@ -872,6 +850,18 @@ export function InvoiceTable({
           </button>
         </div>
       </div>
+
+      <DebtorActionsMenu
+        open={Boolean(actionInvoice)}
+        anchor={openAction?.anchor ?? null}
+        onClose={closeActions}
+        label={
+          actionInvoice
+            ? `Ações da cobrança de ${actionInvoice.name}`
+            : "Ações da cobrança"
+        }
+        actions={actionInvoice ? getRowActions(actionInvoice) : []}
+      />
     </div>
   );
 }
