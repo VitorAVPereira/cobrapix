@@ -184,7 +184,6 @@ export interface UpdateBillingSettingsInput {
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue: number | null;
   autoDiscountPercentage: number | null;
-  businessSegment?: BusinessSegment;
   paymentNotificationEnabled?: boolean;
   paymentNotificationEmails?: string[];
   lateFinePercentage?: number;
@@ -1035,6 +1034,7 @@ export interface CreateAdminClientInput {
     email: string;
     phoneNumber: string;
     status?: CompanyStatus;
+    businessSegment?: BusinessSegment;
   };
   firstUser: {
     name: string;

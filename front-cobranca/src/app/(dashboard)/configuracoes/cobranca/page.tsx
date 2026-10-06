@@ -6,10 +6,8 @@ import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   BellRing,
-  Building2,
   CheckCircle2,
   CreditCard,
-  GraduationCap,
   Loader2,
   Mail,
   MessageCircle,
@@ -22,7 +20,6 @@ import type {
   BillingMethod,
   BillingRunSummary,
   BillingSettings,
-  BusinessSegment,
 } from "@/lib/api-client";
 import {
   formatPlatformRateSummary,
@@ -94,8 +91,6 @@ export default function BillingSettingsPage() {
   const [autoDiscountPercentage, setAutoDiscountPercentage] = useState("");
   const [lateTerms, setLateTerms] =
     useState<LateTermsFormValues>(EMPTY_LATE_TERMS);
-  const [businessSegment, setBusinessSegment] =
-    useState<BusinessSegment>("GENERAL");
   const [paymentNotificationEnabled, setPaymentNotificationEnabled] =
     useState(true);
   const [paymentNotificationEmails, setPaymentNotificationEmails] =
@@ -141,7 +136,6 @@ export default function BillingSettingsPage() {
           response.autoDiscountPercentage?.toString() ?? "",
         );
         setLateTerms(lateTermsFromSettings(response));
-        setBusinessSegment(response.businessSegment);
         setPaymentNotificationEnabled(response.paymentNotificationEnabled);
         setPaymentNotificationEmails(
           response.paymentNotificationEmails.join("\n"),
@@ -223,7 +217,6 @@ export default function BillingSettingsPage() {
         autoDiscountPercentage: autoDiscountEnabled
           ? Number(parsedDiscountPercentage.toFixed(2))
           : null,
-        businessSegment,
         paymentNotificationEnabled,
         paymentNotificationEmails: parsedEmails.emails,
         lateFinePercentage: parsedLateTerms.terms.fine ?? 0,
@@ -242,7 +235,6 @@ export default function BillingSettingsPage() {
       setAutoDiscountDaysAfterDue(String(saved.autoDiscountDaysAfterDue ?? 0));
       setAutoDiscountPercentage(saved.autoDiscountPercentage?.toString() ?? "");
       setLateTerms(lateTermsFromSettings(saved));
-      setBusinessSegment(saved.businessSegment);
       setPaymentNotificationEnabled(saved.paymentNotificationEnabled);
       setPaymentNotificationEmails(saved.paymentNotificationEmails.join("\n"));
       setSuccess("Configuracoes de cobranca salvas.");
@@ -322,67 +314,6 @@ export default function BillingSettingsPage() {
             {success}
           </div>
         )}
-
-        <section className="rounded-md border border-slate-200 bg-white">
-          <div className="flex items-center gap-2 border-b border-slate-200 px-5 py-4">
-            <Building2 size={20} className="text-emerald-600" />
-            <div>
-              <h2 className="text-sm font-semibold text-slate-900">
-                Perfil da empresa
-              </h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Empresas de educacao liberam os campos de aluno, matricula e
-                turma nas faturas.
-              </p>
-            </div>
-          </div>
-
-          <div className="grid gap-4 p-5 md:grid-cols-2">
-            {[
-              {
-                value: "GENERAL" as const,
-                title: "Geral",
-                description: "Cliente, devedor e fatura no fluxo principal.",
-                icon: Building2,
-              },
-              {
-                value: "EDUCATION" as const,
-                title: "Educacao",
-                description: "Campos opcionais para aluno, matricula e turma.",
-                icon: GraduationCap,
-              },
-            ].map((segment) => {
-              const Icon = segment.icon;
-              const active = businessSegment === segment.value;
-
-              return (
-                <button
-                  key={segment.value}
-                  type="button"
-                  onClick={() => {
-                    setBusinessSegment(segment.value);
-                    setSuccess(null);
-                  }}
-                  className={`rounded-md border px-4 py-4 text-left transition ${
-                    active
-                      ? "border-emerald-300 bg-emerald-50"
-                      : "border-slate-200 bg-white hover:bg-slate-50"
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <Icon size={18} className="text-emerald-700" />
-                    <p className="text-sm font-semibold text-slate-900">
-                      {segment.title}
-                    </p>
-                  </div>
-                  <p className="mt-2 text-sm text-slate-500">
-                    {segment.description}
-                  </p>
-                </button>
-              );
-            })}
-          </div>
-        </section>
 
         <section className="rounded-md border border-slate-200 bg-white">
           <div className="flex items-center gap-2 border-b border-slate-200 px-5 py-4">
