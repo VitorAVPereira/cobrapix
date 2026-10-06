@@ -196,6 +196,7 @@ export class AdminService {
         email: dto.company.email,
         phoneNumber: this.onlyDigits(dto.company.phoneNumber),
         status: dto.company.status ?? 'ACTIVE',
+        businessSegment: dto.company.businessSegment ?? 'GENERAL',
         enabledBillingMethods: dto.billing.enabledBillingMethods,
         preferredBillingMethod: dto.billing.preferredBillingMethod,
         ...integrationData,

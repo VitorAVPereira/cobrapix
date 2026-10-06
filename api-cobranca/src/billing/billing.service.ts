@@ -102,7 +102,6 @@ interface BillingSettingsInput {
   autoDiscountEnabled: boolean;
   autoDiscountDaysAfterDue?: number | null;
   autoDiscountPercentage?: number | null;
-  businessSegment?: BusinessSegment;
   paymentNotificationEnabled?: boolean;
   paymentNotificationEmails?: string[];
   lateFinePercentage?: number;
@@ -534,12 +533,6 @@ export class BillingService {
       autoDiscountDaysAfterDue: normalizedSettings.autoDiscountDaysAfterDue,
       autoDiscountPercentage: normalizedSettings.autoDiscountPercentage,
     };
-
-    if (settings.businessSegment !== undefined) {
-      updateData.businessSegment = this.normalizeBusinessSegment(
-        settings.businessSegment,
-      );
-    }
 
     if (settings.paymentNotificationEnabled !== undefined) {
       updateData.paymentNotificationEnabled =

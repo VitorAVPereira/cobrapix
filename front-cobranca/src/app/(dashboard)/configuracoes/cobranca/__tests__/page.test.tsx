@@ -37,6 +37,26 @@ const settings: BillingSettings = {
   },
 };
 
+describe("company profile", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetBillingSettings.mockResolvedValue({ ...settings, businessSegment: "EDUCATION" });
+    mockUpdateBillingSettings.mockImplementation(async (input) => ({ ...settings, ...input }));
+  });
+
+  it("does not let the company change its segment: only the admin sets it", async () => {
+    const user = userEvent.setup();
+    render(<BillingSettingsPage />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^salvar$/i })).toBeEnabled());
+    expect(screen.queryByText("Perfil da empresa")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /educacao/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^salvar$/i }));
+    await waitFor(() => expect(mockUpdateBillingSettings).toHaveBeenCalledTimes(1));
+    expect(mockUpdateBillingSettings.mock.calls[0]?.[0]).not.toHaveProperty("businessSegment");
+  });
+});
+
 describe("automatic discounts after login", () => {
   beforeEach(() => {
     jest.clearAllMocks();

@@ -99,6 +99,10 @@ function methodLabel(method: BillingMethod): string {
   return "Pix";
 }
 
+function segmentLabel(segment: BusinessSegment): string {
+  return segment === "EDUCATION" ? "Educação" : "Geral";
+}
+
 function joinNumberList(values: number[] | undefined): string {
   return values?.join(", ") ?? "";
 }
@@ -329,6 +333,11 @@ export default function AdminClientsPage() {
       client.paymentNotificationEmails?.join(", ") ?? "",
       parseEmailList(form.paymentNotificationEmails).join(", "),
     );
+    addChange(
+      "Segmento",
+      segmentLabel(client.businessSegment ?? "GENERAL"),
+      segmentLabel(form.businessSegment),
+    );
     addChange("Responsavel legal", client.legalRepresentative, form.legalRepresentative);
     addChange("CPF responsavel", client.legalRepresentativeCpf, form.legalRepresentativeCpf);
     addChange("CEP", client.addressPostalCode, form.postalCode);
@@ -398,6 +407,7 @@ export default function AdminClientsPage() {
         email: form.email,
         phoneNumber: form.phoneNumber,
         status: form.status,
+        businessSegment: form.businessSegment,
       },
       firstUser: {
         name: form.userName,
@@ -686,6 +696,28 @@ export default function AdminClientsPage() {
                     ))}
                   </select>
                 </label>
+
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-semibold uppercase text-slate-500">
+                    Segmento
+                  </span>
+                  <select
+                    value={form.businessSegment}
+                    onChange={(event) =>
+                      updateField(
+                        "businessSegment",
+                        event.target.value as BusinessSegment,
+                      )
+                    }
+                    className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  >
+                    {businessSegmentOptions.map((segment) => (
+                      <option key={segment} value={segment}>
+                        {segmentLabel(segment)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
 
               {isEditing && (
@@ -721,27 +753,6 @@ export default function AdminClientsPage() {
                   </div>
 
                   <div className="grid gap-3 md:grid-cols-2">
-                    <label className="flex flex-col gap-1.5">
-                      <span className="text-xs font-semibold uppercase text-slate-500">
-                        Segmento
-                      </span>
-                      <select
-                        value={form.businessSegment}
-                        onChange={(event) =>
-                          updateField(
-                            "businessSegment",
-                            event.target.value as BusinessSegment,
-                          )
-                        }
-                        className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                      >
-                        {businessSegmentOptions.map((segment) => (
-                          <option key={segment} value={segment}>
-                            {segment}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
                     <Input label="Emails notificacao pagamento" value={form.paymentNotificationEmails} onChange={(value) => updateField("paymentNotificationEmails", value)} />
                   </div>
 

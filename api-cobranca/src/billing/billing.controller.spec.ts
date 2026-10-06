@@ -73,3 +73,32 @@ describe('BillingController: envio selecionado pelo canal central', () => {
     expect(enqueueSelectedInvoices).not.toHaveBeenCalled();
   });
 });
+
+describe('BillingController: configuracoes da empresa', () => {
+  it('ignora o segmento enviado pela empresa: so o admin define', async () => {
+    const updateSettings = jest.fn().mockResolvedValue({});
+    const controller = new BillingController(
+      { updateSettings } as unknown as BillingService,
+      {} as CollectionProfileService,
+      {} as PrismaService,
+    );
+
+    await controller.updateSettings(
+      { companyId: 'company-1' },
+      {
+        preferredBillingMethod: 'PIX',
+        collectionReminderDays: [0],
+        autoGenerateFirstCharge: true,
+        autoDiscountEnabled: false,
+        businessSegment: 'EDUCATION',
+      },
+    );
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      'company-1',
+      expect.not.objectContaining({
+        businessSegment: expect.anything() as unknown,
+      }),
+    );
+  });
+});
