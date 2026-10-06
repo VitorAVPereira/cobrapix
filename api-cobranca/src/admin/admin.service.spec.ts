@@ -145,6 +145,20 @@ describe('AdminService financial onboarding', () => {
       'encrypted-client-secret',
     );
   });
+  it('stores the business segment chosen by the admin at creation', async () => {
+    const { service, prisma } = fixture();
+    await service.createClient({
+      ...input,
+      company: { ...input.company, businessSegment: 'EDUCATION' },
+    });
+    expect(prisma.company.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          businessSegment: 'EDUCATION',
+        }) as unknown,
+      }),
+    );
+  });
   it('rejects a case-insensitive duplicate login', async () => {
     const { service, prisma } = fixture(true);
     await expect(service.createClient(input)).rejects.toMatchObject({

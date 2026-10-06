@@ -53,6 +53,10 @@ export class UpdateBillingSettingsDto {
   @Max(100)
   autoDiscountPercentage?: number | null;
 
+  /**
+   * @deprecated Ignored: the segment is set by the platform admin. Still
+   * validated so older company screens keep saving during the rollout.
+   */
   @IsOptional()
   @IsIn(['GENERAL', 'EDUCATION'])
   businessSegment?: 'GENERAL' | 'EDUCATION';

@@ -164,10 +164,42 @@ describe("AdminClientsPage", () => {
       company: {
         corporateName: "Empresa Certificada", document: "12345678000190",
         email: "financeiro@empresa.com", phoneNumber: "11999999999", status: "ACTIVE",
+        businessSegment: "GENERAL",
       },
       firstUser: { name: "Admin Empresa", email: "admin@empresa.com" },
       billing: { enabledBillingMethods: ["PIX", "BOLIX"], preferredBillingMethod: "PIX" },
     });
+  });
+
+  it("sets the company segment when creating a client", async () => {
+    const user = userEvent.setup();
+    render(<AdminClientsPage />);
+
+    await fillRequiredClientFields();
+    await user.selectOptions(screen.getByLabelText("Segmento"), "EDUCATION");
+    await user.click(screen.getByRole("button", { name: /cadastrar cliente/i }));
+
+    await waitFor(() => expect(mockCreateAdminClient).toHaveBeenCalledTimes(1));
+    expect(mockCreateAdminClient.mock.calls[0]?.[0].company.businessSegment).toBe("EDUCATION");
+  });
+
+  it("confirms a segment-only change when editing a client", async () => {
+    const user = userEvent.setup();
+    mockGetAdminClients.mockResolvedValue([
+      { ...createAdminClientFixture(), addressState: "SP", businessSegment: "GENERAL" },
+    ]);
+    render(<AdminClientsPage />);
+
+    await user.click(await screen.findByRole("button", { name: /editar empresa certificada/i }));
+    await user.selectOptions(screen.getByLabelText("Segmento"), "EDUCATION");
+    await user.click(screen.getByRole("button", { name: /salvar alteracoes/i }));
+
+    expect(await screen.findByText("Confirmar alteracoes")).toBeInTheDocument();
+    const modalRows = screen.getAllByRole("row").map((row) => row.textContent);
+    expect(modalRows).toContain("SegmentoGeralEducação");
+    await user.click(screen.getByRole("button", { name: /^confirmar$/i }));
+    await waitFor(() => expect(mockUpdateAdminClient).toHaveBeenCalledTimes(1));
+    expect(mockUpdateAdminClient.mock.calls[0]?.[1].notifications?.businessSegment).toBe("EDUCATION");
   });
 
   it("keeps persisted billing settings in editing without tenant WhatsApp controls", async () => {

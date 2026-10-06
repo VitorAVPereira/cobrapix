@@ -55,6 +55,10 @@ export class AdminCompanyDto {
   @IsOptional()
   @IsIn(COMPANY_STATUSES)
   status?: (typeof COMPANY_STATUSES)[number];
+
+  @IsOptional()
+  @IsIn(BUSINESS_SEGMENTS)
+  businessSegment?: (typeof BUSINESS_SEGMENTS)[number];
 }
 
 export class AdminFirstUserDto {
