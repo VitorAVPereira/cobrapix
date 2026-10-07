@@ -169,6 +169,7 @@ function isValidEmail(value: string): boolean {
 }
 
 function getPaymentMethodLabel(method: PaymentMethod): string {
+  if (method === "CREDIT_CARD") return "Cartão de crédito";
   if (method === "BOLIX") {
     return "Bolix";
   }

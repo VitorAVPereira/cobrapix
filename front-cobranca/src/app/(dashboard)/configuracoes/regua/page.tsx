@@ -104,8 +104,9 @@ interface StepChoice {
   whatsappIncompatibleMethods?: BillingMethod[] | null;
 }
 
-const BILLING_METHODS: readonly BillingMethod[] = ["PIX", "BOLETO", "BOLIX"];
+const BILLING_METHODS: readonly BillingMethod[] = ["PIX", "BOLETO", "BOLIX", "CREDIT_CARD"];
 const METHOD_LABELS: Record<BillingMethod, string> = {
+  CREDIT_CARD: "Cartão de crédito",
   PIX: "Pix",
   BOLETO: "Boleto",
   BOLIX: "BOLIX",
@@ -116,6 +117,7 @@ function fitsMethod(
   template: CompanyWhatsappTemplate,
   method: BillingMethod,
 ): boolean {
+  if (method === "CREDIT_CARD") return !template.content.pixButton && !template.content.boletoButton;
   if (method === "PIX") return !template.content.boletoButton;
   if (method === "BOLETO") return !template.content.pixButton;
   return true;

@@ -72,7 +72,7 @@ describe("parseInvoiceCsvRows", () => {
 });
 
 it("rejeita boleto tradicional em novas importações", () => {
-  expect(() => parseInvoiceCsvRows([{Nome: "Maria Silva", cpf_cnpj: "12345678909", WhatsApp: "+5511999999999", Email: "maria@email.com", Valor: "150", Vencimento: "2026-12-01", "Forma de Pagamento": "BOLETO"}])).toThrow("Use PIX ou BOLIX");
+  expect(() => parseInvoiceCsvRows([{Nome: "Maria Silva", cpf_cnpj: "12345678909", WhatsApp: "+5511999999999", Email: "maria@email.com", Valor: "150", Vencimento: "2026-12-01", "Forma de Pagamento": "BOLETO"}])).toThrow("Use PIX, BOLIX ou CREDIT_CARD");
 });
 
 describe("parseInvoiceCsvRows late terms", () => {

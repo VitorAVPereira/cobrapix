@@ -1,6 +1,7 @@
 import type { BillingMethod, BillingSettings } from "./api-client";
 
 export function getBillingMethodLabel(method: BillingMethod): string {
+  if (method === "CREDIT_CARD") return "Cartão de crédito";
   if (method === "BOLETO") return "Boleto";
   if (method === "BOLIX") return "Bolix";
   return "Pix";
