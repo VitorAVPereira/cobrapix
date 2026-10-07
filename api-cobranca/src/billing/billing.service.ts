@@ -916,6 +916,9 @@ export class BillingService {
         billingType,
       );
 
+      if (billingType === 'CREDIT_CARD')
+        return this.buildPaymentMessageData(invoice, billingType);
+
       const updatedInvoice = await this.prisma.invoice.findFirst({
         where: { id: invoice.id, companyId: company.id },
         select: {
@@ -997,7 +1000,12 @@ export class BillingService {
   }
 
   private isBillingMethod(value: unknown): value is BillingMethod {
-    return value === 'PIX' || value === 'BOLETO' || value === 'BOLIX';
+    return (
+      value === 'PIX' ||
+      value === 'BOLETO' ||
+      value === 'BOLIX' ||
+      value === 'CREDIT_CARD'
+    );
   }
 
   private normalizeEnabledBillingMethods(
@@ -1108,6 +1116,7 @@ export class BillingService {
 
   private getBillingMethodLabel(billingType: BillingMethod): string {
     const labels: Record<BillingMethod, string> = {
+      CREDIT_CARD: 'Cartão de crédito',
       PIX: 'PIX',
       BOLETO: 'Boleto',
       BOLIX: 'Bolix',
@@ -1217,7 +1226,12 @@ export class BillingService {
   private normalizeBillingMethod(
     value: BillingMethod | null | undefined,
   ): BillingMethod {
-    if (value === 'PIX' || value === 'BOLETO' || value === 'BOLIX') {
+    if (
+      value === 'PIX' ||
+      value === 'BOLETO' ||
+      value === 'BOLIX' ||
+      value === 'CREDIT_CARD'
+    ) {
       return value;
     }
 
@@ -1452,12 +1466,13 @@ export class BillingService {
         return { method, combinedLabel: 'Não configurada', configured: false };
       }
     };
-    const [PIX, BOLETO, BOLIX] = await Promise.all([
+    const [PIX, BOLETO, BOLIX, CREDIT_CARD] = await Promise.all([
       resolve('PIX'),
       resolve('BOLETO'),
       resolve('BOLIX'),
+      resolve('CREDIT_CARD'),
     ]);
-    return { PIX, BOLETO, BOLIX };
+    return { PIX, BOLETO, BOLIX, CREDIT_CARD };
   }
 
   private getTemplateSlugsForOffsets(offsets: number[]): string[] {

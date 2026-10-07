@@ -1,3 +1,4 @@
+import { PublicPaymentLinkService } from '../payment/payment-link.service';
 import { assertNewBillingMethod } from '../payment/billing-method-policy';
 import type { PaymentCharge } from '@prisma/client';
 import { Optional } from '@nestjs/common';
@@ -61,7 +62,7 @@ interface ImportRow {
   email?: string;
   original_amount: number;
   due_date: string;
-  billing_type: 'PIX' | 'BOLETO' | 'BOLIX';
+  billing_type: 'PIX' | 'BOLETO' | 'BOLIX' | 'CREDIT_CARD';
   whatsapp_opt_in?: boolean;
   studentName?: string;
   studentEnrollment?: string;
@@ -249,6 +250,7 @@ interface DebtorIdentity {
 }
 
 interface InvoiceWithRelations {
+  companyId: string;
   paymentCharges?: FinancialCharge[];
   id: string;
   debtor: {
@@ -473,6 +475,7 @@ export class InvoicesService {
     private readonly messageQueue: MessageQueueService,
     private readonly paymentService: PaymentService,
     @Optional() private readonly fees?: PaymentFeeService,
+    @Optional() private readonly paymentLinks?: PublicPaymentLinkService,
   ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
@@ -1023,6 +1026,22 @@ export class InvoicesService {
     });
 
     await this.prisma.$transaction(async (tx) => {
+      if (invoice.billingType === 'CREDIT_CARD') {
+        // Use the same lock order as checkout so cancellation cannot race a debit.
+        await tx.$queryRaw`SELECT id FROM "Invoice" WHERE id=${invoiceId} AND "companyId"=${companyId} FOR UPDATE`;
+        const attempt = await tx.cardPaymentAttempt.findFirst({
+          where: {
+            companyId,
+            invoiceId,
+            status: { in: ['SUBMITTING', 'UNCERTAIN', 'APPROVED', 'PAID'] },
+          },
+        });
+        if (attempt)
+          throw new ConflictException({
+            code: 'CARD_PAYMENT_PROCESSING',
+            message: 'Concilie o pagamento por cartão antes de cancelar.',
+          });
+      }
       const updateResult = await tx.invoice.updateMany({
         where: { id: invoice.id, companyId, status: 'PENDING' },
         data: {
@@ -1037,15 +1056,21 @@ export class InvoicesService {
         );
       }
 
-      if (invoice.efiTxid || invoice.efiChargeId) {
+      if (
+        invoice.efiTxid ||
+        invoice.efiChargeId ||
+        invoice.billingType === 'CREDIT_CARD'
+      ) {
         // The invoice UPDATE above holds its row lock before touching the charge.
         const charge = await tx.paymentCharge.findFirst({
           where: {
             companyId,
             invoiceId,
-            ...(invoice.efiTxid
-              ? { efiTxid: invoice.efiTxid }
-              : { efiChargeId: invoice.efiChargeId }),
+            ...(invoice.billingType === 'CREDIT_CARD'
+              ? { billingMethod: 'CREDIT_CARD' }
+              : invoice.efiTxid
+                ? { efiTxid: invoice.efiTxid }
+                : { efiChargeId: invoice.efiChargeId }),
           },
         });
         if (
@@ -1972,12 +1997,15 @@ export class InvoicesService {
     const method = this.normalizeBillingMethod(invoice.billingType);
     const pixCopyPaste = invoice.efiPixCopiaECola ?? invoice.pixPayload;
     const boletoUrl = invoice.boletoLink ?? invoice.boletoPdf;
-    const generated = this.hasUsablePaymentData({
-      method,
-      pixCopyPaste,
-      boletoLine: invoice.boletoLinhaDigitavel,
-      boletoUrl,
-    });
+    const generated =
+      method === 'CREDIT_CARD'
+        ? invoice.paymentCharges?.[0]?.status === 'ACTIVE'
+        : this.hasUsablePaymentData({
+            method,
+            pixCopyPaste,
+            boletoLine: invoice.boletoLinhaDigitavel,
+            boletoUrl,
+          });
 
     const charge = invoice.paymentCharges?.[0];
     const totalFeeCents = charge
@@ -2002,13 +2030,19 @@ export class InvoicesService {
       boletoLine: invoice.boletoLinhaDigitavel,
       boletoUrl,
       boletoPdf: invoice.boletoPdf,
-      paymentLink: this.resolveInvoicePaymentLink({
-        method,
-        pixCopyPaste,
-        boletoLine: invoice.boletoLinhaDigitavel,
-        boletoUrl,
-        boletoPdf: invoice.boletoPdf,
-      }),
+      paymentLink:
+        method === 'CREDIT_CARD' && generated
+          ? (this.paymentLinks?.createInvoicePaymentPage({
+              companyId: invoice.companyId,
+              invoiceId: invoice.id,
+            }).url ?? null)
+          : this.resolveInvoicePaymentLink({
+              method,
+              pixCopyPaste,
+              boletoLine: invoice.boletoLinhaDigitavel,
+              boletoUrl,
+              boletoPdf: invoice.boletoPdf,
+            }),
       expiresAt: invoice.pixExpiresAt
         ? invoice.pixExpiresAt.toISOString()
         : null,
@@ -2376,7 +2410,12 @@ export class InvoicesService {
   }
 
   private normalizeBillingMethod(value: unknown): BillingMethod {
-    if (value === 'PIX' || value === 'BOLETO' || value === 'BOLIX') {
+    if (
+      value === 'PIX' ||
+      value === 'BOLETO' ||
+      value === 'BOLIX' ||
+      value === 'CREDIT_CARD'
+    ) {
       return value;
     }
 
@@ -2504,28 +2543,30 @@ export class InvoicesService {
     companyId: string,
   ): Promise<BillingSettingsSnapshot['tariffs']> {
     const entries = await Promise.all(
-      (['PIX', 'BOLETO', 'BOLIX'] as const).map(async (method) => {
-        try {
-          if (!this.fees) throw new Error('FEE_CONFIGURATION_MISSING');
-          const version = await this.fees.resolveActiveVersion(
-            companyId,
-            method,
-          );
-          return [
-            method,
-            {
+      (['PIX', 'BOLETO', 'BOLIX', 'CREDIT_CARD'] as const).map(
+        async (method) => {
+          try {
+            if (!this.fees) throw new Error('FEE_CONFIGURATION_MISSING');
+            const version = await this.fees.resolveActiveVersion(
+              companyId,
               method,
-              combinedLabel: this.fees.formatCombinedLabel(version),
-              configured: true,
-            },
-          ] as const;
-        } catch {
-          return [
-            method,
-            { method, combinedLabel: 'Não configurada', configured: false },
-          ] as const;
-        }
-      }),
+            );
+            return [
+              method,
+              {
+                method,
+                combinedLabel: this.fees.formatCombinedLabel(version),
+                configured: true,
+              },
+            ] as const;
+          } catch {
+            return [
+              method,
+              { method, combinedLabel: 'Não configurada', configured: false },
+            ] as const;
+          }
+        },
+      ),
     );
     return Object.fromEntries(entries) as BillingSettingsSnapshot['tariffs'];
   }

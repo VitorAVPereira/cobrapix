@@ -21,8 +21,8 @@ import {
 } from '../../invoices/late-terms';
 
 export class UpdateBillingSettingsDto {
-  @IsIn(['PIX', 'BOLIX'])
-  preferredBillingMethod!: 'PIX' | 'BOLETO' | 'BOLIX';
+  @IsIn(['PIX', 'BOLIX', 'CREDIT_CARD'])
+  preferredBillingMethod!: 'PIX' | 'BOLETO' | 'BOLIX' | 'CREDIT_CARD';
 
   @IsArray()
   @ArrayMinSize(1)

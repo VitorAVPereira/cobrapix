@@ -240,6 +240,16 @@ declare module 'sdk-node-apis-efi' {
       body: CreateOneStepChargeBody,
     ): Promise<CreateOneStepChargeResponse>;
 
+    createOneStepCharge(
+      params: EmptyParams,
+      body: {
+        items: Array<{ name: string; value: number; amount: number }>;
+        payment: { credit_card: object };
+        metadata?: object;
+      },
+    ): Promise<unknown>;
+    getInstallments(params: { total: number; brand: string }): Promise<unknown>;
+
     cancelCharge(params: {
       id: string | number;
     }): Promise<CancelChargeResponse>;

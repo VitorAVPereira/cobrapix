@@ -165,6 +165,7 @@ export function methodCanFill(
   method: BillingMethod,
   needs: { pix: boolean; boleto: boolean },
 ): boolean {
+  if (method === 'CREDIT_CARD') return !needs.pix && !needs.boleto;
   if (method === 'PIX') return !needs.boleto;
   if (method === 'BOLETO') return !needs.pix;
   return true;

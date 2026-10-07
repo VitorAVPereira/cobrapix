@@ -608,15 +608,17 @@ export class PaymentChargeService {
         const paid = paidAmountCents ?? current.paidAmountCents ?? null;
         // The CifraMais fee is charged on the amount actually paid.
         const effectivePlatformFeeCents =
-          paid !== null
-            ? this.fees.calculateQuote(
-                paid,
-                await tx.paymentFeeVersion.findUniqueOrThrow({
-                  where: { id: current.feeVersionId },
-                }),
-              ).estimatedPlatformFeeCents
-            : (current.effectivePlatformFeeCents ??
-              current.estimatedPlatformFeeCents);
+          current.billingMethod === 'CREDIT_CARD'
+            ? current.estimatedPlatformFeeCents
+            : paid !== null
+              ? this.fees.calculateQuote(
+                  paid,
+                  await tx.paymentFeeVersion.findUniqueOrThrow({
+                    where: { id: current.feeVersionId },
+                  }),
+                ).estimatedPlatformFeeCents
+              : (current.effectivePlatformFeeCents ??
+                current.estimatedPlatformFeeCents);
         const gatewayStatusRaw =
           current.gatewayStatusRaw === 'partially_refunded'
             ? current.gatewayStatusRaw

@@ -975,6 +975,9 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         billingType,
       );
 
+      if (billingType === 'CREDIT_CARD')
+        return this.buildPaymentMessageData(invoice, billingType);
+
       const updatedInvoice = await this.prisma.invoice.findFirst({
         where: { id: invoice.id, companyId: invoice.companyId },
         select: {
@@ -1123,6 +1126,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
 
   private getBillingMethodLabel(billingType: BillingMethod): string {
     const labels: Record<BillingMethod, string> = {
+      CREDIT_CARD: 'Cartão de crédito',
       PIX: 'PIX',
       BOLETO: 'Boleto',
       BOLIX: 'Bolix',
@@ -1356,7 +1360,12 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private isBillingMethod(value: unknown): value is BillingMethod {
-    return value === 'PIX' || value === 'BOLETO' || value === 'BOLIX';
+    return (
+      value === 'PIX' ||
+      value === 'BOLETO' ||
+      value === 'BOLIX' ||
+      value === 'CREDIT_CARD'
+    );
   }
 
   private isInitialChargeJob(value: unknown): value is InitialChargeJob {

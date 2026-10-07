@@ -1,3 +1,12 @@
+import { CardReconciliationWorker } from './card-reconciliation.worker';
+import { CardPaymentService } from './card-payment.service';
+import { EfiCardClient } from './efi-card.client';
+import {
+  CardPublicPaymentController,
+  CardAdminPaymentController,
+} from './card-payment.controller';
+import { CardCheckoutGuard } from './card-checkout.guard';
+import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { Module } from '@nestjs/common';
 import { PaymentService } from './payment.service';
 import { PaymentController } from './payment.controller';
@@ -24,6 +33,8 @@ import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
 @Module({
   imports: [PrismaModule],
   controllers: [
+    CardPublicPaymentController,
+    CardAdminPaymentController,
     PaymentFeeController,
     AdminPaymentFeeController,
     PaymentController,
@@ -32,6 +43,11 @@ import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
     PublicPaymentController,
   ],
   providers: [
+    CardReconciliationWorker,
+    CardPaymentService,
+    EfiCardClient,
+    CardCheckoutGuard,
+    ThrottleGuard,
     PaymentFeeService,
     PaymentChargeService,
     PlatformAdminGuard,
@@ -46,6 +62,7 @@ import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
     FinancialEligibilityService,
   ],
   exports: [
+    CardPaymentService,
     PaymentFeeService,
     PaymentChargeService,
     PaymentService,

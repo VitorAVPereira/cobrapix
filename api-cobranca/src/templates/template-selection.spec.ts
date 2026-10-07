@@ -14,6 +14,17 @@ const step = {
 };
 
 describe('ruleStepSelection by billing method', () => {
+  it('uses the explicit card template while preserving Pix/Bolix choices', () => {
+    expect(
+      ruleStepSelection(
+        { ...step, cardTemplateId: 'card-template' },
+        'CREDIT_CARD',
+      ),
+    ).toEqual({ mode: 'EXPLICIT', templateId: 'card-template' });
+    expect(
+      ruleStepSelection({ ...step, cardTemplateId: 'card-template' }, 'BOLIX'),
+    ).toEqual({ mode: 'EXPLICIT', templateId: 'template-bolix' });
+  });
   it('uses the template of the charge method, else the step choice', () => {
     expect(ruleStepSelection(step, 'BOLIX')).toEqual({
       mode: 'EXPLICIT',

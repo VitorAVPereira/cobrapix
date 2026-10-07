@@ -1,9 +1,11 @@
+import { CardPaymentService } from './card-payment.service';
 import { assertNewBillingMethod } from '../payment/billing-method-policy';
 import {
   HttpException,
   HttpStatus,
   Inject,
   Injectable,
+  Optional,
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -40,7 +42,7 @@ import {
 } from './efi-charge-normalizer';
 
 type EfiEnvironment = 'homologation' | 'production';
-type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
+type BillingType = 'PIX' | 'BOLETO' | 'BOLIX' | 'CREDIT_CARD';
 type PixCreateDueChargeBody = Parameters<EfiPay['pixCreateDueCharge']>[1];
 
 interface EfiCredentials {
@@ -256,6 +258,7 @@ export class EfiService {
     @Inject(GatewayHealthService)
     private readonly gatewayHealth: GatewayHealthService | null,
     private readonly charges: PaymentChargeService,
+    @Optional() private readonly cards?: CardPaymentService,
   ) {}
 
   async upsertManualGatewayAccount(
@@ -300,6 +303,8 @@ export class EfiService {
     const progress: { stage: IssuanceStage } = { stage: 'PRE_SUBMISSION' };
     try {
       assertNewBillingMethod(billingType);
+      if (billingType === 'CREDIT_CARD')
+        throw new HttpException('Use o checkout público para cartão.', 409);
       const invoice = await this.prisma.invoice.findFirst({
         where: { id: invoiceId, companyId },
         include: { debtor: true, company: true },
@@ -399,6 +404,22 @@ export class EfiService {
         retentionExpiresAt: new Date(Date.now() + 5 * 365.25 * 86400_000),
       },
     });
+    if (charge.billingMethod === 'CREDIT_CARD' && this.cards) {
+      const attempt = await this.prisma.cardPaymentAttempt.findFirst({
+        where: { paymentChargeId: charge.id },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!attempt) return { status: 'ACTIVE', recommendedAction: 'NONE' };
+      const reconciled = await this.cards.reconcileAttempt(
+        attempt.id,
+        companyId,
+      );
+      return {
+        status: reconciled.state === 'PAID' ? 'PAID' : 'REVIEW_REQUIRED',
+        recommendedAction:
+          reconciled.state === 'PAID' ? 'NONE' : 'CHECK_EFI_PANEL',
+      };
+    }
     const open = charge.status === 'DRAFT' || charge.status === 'PENDING';
     if (
       !charge.efiTxid &&
@@ -981,6 +1002,17 @@ export class EfiService {
     }
 
     // The charge must have been issued by the account that was queried.
+    if (
+      account.issuerIdentityId &&
+      this.cards &&
+      (await this.cards.handleEvent(
+        account.issuerIdentityId,
+        event.custom_id ?? undefined,
+        event.identifiers?.charge_id?.toString(),
+      ))
+    )
+      return { processed: true };
+
     const scope = account.issuerIdentityId
       ? { issuerIdentityId: account.issuerIdentityId }
       : { companyId: legacyCompanyId ?? '', financialProfileId: null };
