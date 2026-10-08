@@ -35,7 +35,7 @@ import {
   type LateTermsFormValues,
 } from "@/lib/late-terms";
 
-const BILLING_METHODS: BillingMethod[] = ["PIX", "BOLIX"];
+const BILLING_METHODS: BillingMethod[] = ["PIX", "BOLIX", "CREDIT_CARD"];
 
 function getMethodDescription(method: BillingMethod): string {
   if (method === "PIX") {

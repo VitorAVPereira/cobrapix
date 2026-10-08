@@ -241,8 +241,8 @@ describe('First message by the rule "Inicial" step and billing method (HTTP)', (
       whatsappStatus: { ready: true, code: null },
       whatsappMethodTemplates: { PIX: null, BOLETO: null, BOLIX: ids.bolix },
       whatsappMethodStatus: { BOLIX: { ready: true, code: null } },
-      // The Pix template has no boleto data: pure boleto charges would wait.
-      whatsappIncompatibleMethods: ['BOLETO'],
+      // A Pix button cannot serve pure boleto or card charges.
+      whatsappIncompatibleMethods: ['BOLETO', 'CREDIT_CARD'],
     });
     ids.inicial = inicial.id as string;
     await prisma.debtor.update({

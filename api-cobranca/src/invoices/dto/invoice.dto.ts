@@ -24,7 +24,7 @@ import {
   PAYMENT_DAYS_AFTER_DUE_MAX,
 } from '../late-terms';
 
-export type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
+export type BillingType = 'PIX' | 'BOLETO' | 'BOLIX' | 'CREDIT_CARD';
 
 export class CreateInvoiceDto {
   @IsOptional()
@@ -62,7 +62,7 @@ export class CreateInvoiceDto {
   @IsString()
   due_date?: string;
 
-  @IsIn(['PIX', 'BOLIX'])
+  @IsIn(['PIX', 'BOLIX', 'CREDIT_CARD'])
   billing_type!: BillingType;
 
   @IsOptional()
@@ -121,7 +121,7 @@ export class CreateDebtorInvoiceDto {
   @IsString()
   due_date?: string;
 
-  @IsIn(['PIX', 'BOLIX'])
+  @IsIn(['PIX', 'BOLIX', 'CREDIT_CARD'])
   billing_type!: BillingType;
 
   @IsOptional()
@@ -229,7 +229,7 @@ export class UpdateRecurringInvoiceDto {
   @Max(999999.99)
   amount!: number;
 
-  @IsIn(['PIX', 'BOLIX'])
+  @IsIn(['PIX', 'BOLIX', 'CREDIT_CARD'])
   billingType!: BillingType;
 
   @IsInt()
@@ -273,7 +273,7 @@ export class UpdateDebtorSettingsDto {
   whatsappOptIn?: boolean;
 
   @IsOptional()
-  @IsIn(['PIX', 'BOLIX'])
+  @IsIn(['PIX', 'BOLIX', 'CREDIT_CARD'])
   preferredBillingMethod?: BillingType;
 
   @IsOptional()

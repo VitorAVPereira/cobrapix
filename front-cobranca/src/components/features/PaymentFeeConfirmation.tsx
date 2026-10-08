@@ -52,7 +52,7 @@ export function PaymentFeeConfirmation({
           {replacing ? "Substituir cobrança vencida" : "Confirmar emissão"}
         </h2>
         <p className="text-sm text-slate-600">
-          {quote.billingMethod === "PIX"
+          {quote.billingMethod === "CREDIT_CARD" ? "Cartão de crédito" : quote.billingMethod === "PIX"
             ? "Pix"
             : quote.billingMethod === "BOLIX"
               ? "Bolix"
@@ -77,6 +77,7 @@ export function PaymentFeeConfirmation({
             <dd>{money(quote.netAmountCents)}</dd>
           </div>
         </dl>
+        {quote.billingMethod === "CREDIT_CARD" && <p className="text-sm text-slate-600">Estimativa Cifra+ antes dos descontos e do atraso. O valor definitivo será calculado na confirmação do pagador; o custo Efí do cartão será acrescido ao valor pago pelo cliente, conforme as parcelas escolhidas. A emissão gera o link sem debitar o cartão.</p>}
         {replacing && (
           <>
             <p className="text-sm text-slate-600">

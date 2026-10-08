@@ -225,6 +225,7 @@ enum WhatsAppTemplateCategory {
 }
 
 enum BillingMethod {
+  CREDIT_CARD
   PIX
   BOLETO
   BOLIX
@@ -305,6 +306,7 @@ enum MessageTemplateCopyCodeSource {
 }
 
 model Company {
+  cardPaymentSettings CardPaymentSettings[]
   id                                    String                   @id @default(uuid())
   corporateName                         String
   tradeName                             String?
@@ -635,6 +637,9 @@ model PaymentFeeVersion {
 }
 
 model PaymentCharge {
+  cardQuotes CardPaymentQuote[]
+  cardAttempts CardPaymentAttempt[]
+  platformFeeBaseCents Int?
   id                             String                       @id @default(uuid())
   companyId                      String
   company                        Company                      @relation(fields: [companyId], references: [id])
@@ -728,6 +733,7 @@ model PaymentWebhookAnomaly {
 // Stable identity of an Efí bank account in one environment. A PLATFORM
 // identity is shared by reference; a COMPANY identity belongs to one tenant.
 model EfiAccountIdentity {
+  cardPaymentSettings CardPaymentSettings?
   id                  String                  @id @default(uuid())
   ownership           EfiAccountOwnership
   companyId           String?
@@ -1398,6 +1404,7 @@ model GlobalMessageTemplate {
   ruleSteps             CollectionRuleStep[]              @relation("RuleStepTemplate")
   pixRuleSteps          CollectionRuleStep[]              @relation("RuleStepPixTemplate")
   boletoRuleSteps       CollectionRuleStep[]              @relation("RuleStepBoletoTemplate")
+  cardRuleSteps         CollectionRuleStep[]              @relation("RuleStepCardTemplate")
   bolixRuleSteps        CollectionRuleStep[]              @relation("RuleStepBolixTemplate")
   mappingRevisions      WhatsappTemplateMappingRevision[]
   grants                CompanyWhatsappTemplateGrant[]
@@ -1617,6 +1624,8 @@ model CollectionRuleStep {
   pixTemplate           GlobalMessageTemplate?   @relation("RuleStepPixTemplate", fields: [pixTemplateId], references: [id], onDelete: Restrict)
   boletoTemplateId      String?
   boletoTemplate        GlobalMessageTemplate?   @relation("RuleStepBoletoTemplate", fields: [boletoTemplateId], references: [id], onDelete: Restrict)
+  cardTemplateId        String?
+  cardTemplate          GlobalMessageTemplate?   @relation("RuleStepCardTemplate", fields: [cardTemplateId], references: [id], onDelete: Restrict)
   bolixTemplateId       String?
   bolixTemplate         GlobalMessageTemplate?   @relation("RuleStepBolixTemplate", fields: [bolixTemplateId], references: [id], onDelete: Restrict)
   /// EMAIL only; null keeps the email default.
@@ -1639,6 +1648,7 @@ model CollectionRuleStep {
   @@index([pixTemplateId])
   @@index([boletoTemplateId])
   @@index([bolixTemplateId])
+  @@index([cardTemplateId])
 }
 
 model CollectionAttempt {
@@ -1857,5 +1867,84 @@ model SettlementDivergence {
   detectedAt             DateTime                   @default(now())
 
   @@unique([settlementId, code, reference])
+  @@index([companyId, status])
+}
+
+
+// All card settings are account-bound. Enablement requires operator evidence
+// of contractual rates and card/split capability; existing accounts stay off.
+model CardPaymentSettings {
+  id String @id @default(uuid())
+  companyId String
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  issuerIdentityId String @unique
+  issuerIdentity EfiAccountIdentity @relation(fields: [issuerIdentityId, companyId], references: [id, companyId], onDelete: Restrict)
+  enabled Boolean @default(false)
+  version Int @default(1)
+  onTimeBasisPoints Int
+  overdueBasisPoints Int
+  processingRates Json
+  validationReference String
+  validatedByUserId String
+  updatedAt DateTime @updatedAt
+  quotes CardPaymentQuote[]
+  @@unique([issuerIdentityId, companyId])
+  @@unique([id, companyId])
+  @@index([companyId])
+}
+
+model CardPaymentQuote {
+  id String @id @default(uuid())
+  companyId String
+  invoiceId String
+  paymentChargeId String
+  paymentCharge PaymentCharge @relation(fields: [paymentChargeId, companyId, invoiceId], references: [id, companyId, invoiceId], onDelete: Restrict)
+  settingsId String
+  settings CardPaymentSettings @relation(fields: [settingsId, companyId], references: [id, companyId], onDelete: Restrict)
+  settingsVersion Int
+  brand String
+  fingerprint String
+  amounts Json
+  options Json
+  validUntil DateTime
+  createdAt DateTime @default(now())
+  attempts CardPaymentAttempt[]
+  @@unique([id, companyId, invoiceId])
+  @@index([paymentChargeId, validUntil])
+}
+
+enum CardAttemptStatus {
+  SUBMITTING
+  UNCERTAIN
+  DECLINED
+  APPROVED
+  PAID
+  CANCELED
+}
+
+model CardPaymentAttempt {
+  id String @id @default(uuid())
+  companyId String
+  invoiceId String
+  paymentChargeId String
+  paymentCharge PaymentCharge @relation(fields: [paymentChargeId, companyId, invoiceId], references: [id, companyId, invoiceId], onDelete: Restrict)
+  quoteId String
+  quote CardPaymentQuote @relation(fields: [quoteId, companyId, invoiceId], references: [id, companyId, invoiceId], onDelete: Restrict)
+  idempotencyKey String
+  requestHash String
+  status CardAttemptStatus @default(SUBMITTING)
+  installments Int
+  submissionCents Int
+  totalCents Int
+  efiFeeCents Int
+  platformFeeBaseCents Int
+  platformFeeCents Int
+  platformFeeBasisPoints Int
+  efiChargeId String? @unique
+  providerStatus String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([paymentChargeId, idempotencyKey])
+  @@index([paymentChargeId, status])
   @@index([companyId, status])
 }

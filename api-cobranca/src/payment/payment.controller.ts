@@ -36,7 +36,7 @@ class CreatePaymentDto {
 
   @IsOptional()
   @IsString()
-  billingType?: 'PIX' | 'BOLETO' | 'BOLIX';
+  billingType?: 'PIX' | 'BOLETO' | 'BOLIX' | 'CREDIT_CARD';
 }
 
 class CreateBatchPaymentDto {
@@ -46,7 +46,7 @@ class CreateBatchPaymentDto {
 
   @IsOptional()
   @IsString()
-  billingType?: 'PIX' | 'BOLETO' | 'BOLIX';
+  billingType?: 'PIX' | 'BOLETO' | 'BOLIX' | 'CREDIT_CARD';
 }
 
 class InvoiceStatusDto {

@@ -272,7 +272,7 @@ describe('CollectionProfileService templates by billing method', () => {
         BOLETO: { ready: true, code: null },
         BOLIX: { ready: true, code: null },
       },
-      whatsappIncompatibleMethods: [],
+      whatsappIncompatibleMethods: ['CREDIT_CARD'],
     });
   });
 
@@ -282,7 +282,10 @@ describe('CollectionProfileService templates by billing method', () => {
       whatsappStep,
     ]);
     // The base template reads the Pix code: a boleto charge would stay pending.
-    expect(presented?.whatsappIncompatibleMethods).toEqual(['BOLETO']);
+    expect(presented?.whatsappIncompatibleMethods).toEqual([
+      'BOLETO',
+      'CREDIT_CARD',
+    ]);
   });
 
   it('refuses a template that reads data the billing method never has', async () => {

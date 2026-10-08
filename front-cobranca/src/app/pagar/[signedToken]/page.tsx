@@ -22,5 +22,5 @@ interface PaymentPageProps {
 
 export default async function PaymentPage({ params }: PaymentPageProps) {
   const { signedToken } = await params;
-  return <PaymentPageClient payment={await loadPayment(signedToken)} />;
+  return <PaymentPageClient signedToken={signedToken} payment={await loadPayment(signedToken)} />;
 }

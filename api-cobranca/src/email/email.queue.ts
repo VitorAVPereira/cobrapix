@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { createHash } from 'node:crypto';
 import { SendEmailJob } from './email.processor';
 
 @Injectable()
@@ -51,7 +52,13 @@ export class EmailQueueService {
   private buildJobId(job: SendEmailJob): string {
     const stepKey = job.ruleStepId ?? 'test';
 
-    return `email:${job.companyId}:${job.invoiceId}:${stepKey}:${job.email}`;
+    const key = JSON.stringify([
+      job.companyId,
+      job.invoiceId,
+      stepKey,
+      job.email,
+    ]);
+    return `email-${createHash('sha256').update(key).digest('hex')}`;
   }
 
   private randomBetween(min: number, max: number): number {

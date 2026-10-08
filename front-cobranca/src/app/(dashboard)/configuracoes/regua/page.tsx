@@ -104,8 +104,9 @@ interface StepChoice {
   whatsappIncompatibleMethods?: BillingMethod[] | null;
 }
 
-const BILLING_METHODS: readonly BillingMethod[] = ["PIX", "BOLETO", "BOLIX"];
+const BILLING_METHODS: readonly BillingMethod[] = ["PIX", "BOLIX", "CREDIT_CARD"];
 const METHOD_LABELS: Record<BillingMethod, string> = {
+  CREDIT_CARD: "Cartão de crédito",
   PIX: "Pix",
   BOLETO: "Boleto",
   BOLIX: "BOLIX",
@@ -116,6 +117,7 @@ function fitsMethod(
   template: CompanyWhatsappTemplate,
   method: BillingMethod,
 ): boolean {
+  if (method === "CREDIT_CARD") return !template.content.pixButton && !template.content.boletoButton;
   if (method === "PIX") return !template.content.boletoButton;
   if (method === "BOLETO") return !template.content.pixButton;
   return true;
@@ -612,6 +614,10 @@ function StepTemplateSelect({
           : UNAVAILABLE
         : "";
   const status = step.whatsappStatus;
+  const incompatibleMethods =
+    step.whatsappIncompatibleMethods?.filter((method) =>
+      BILLING_METHODS.includes(method),
+    ) ?? [];
 
   return (
     <>
@@ -678,10 +684,10 @@ function StepTemplateSelect({
             : "O padrão da finalidade é definido pela CifraMais entre os templates liberados para sua empresa."}
         </span>
       )}
-      {step.whatsappIncompatibleMethods?.length ? (
+      {incompatibleMethods.length ? (
         <span role="note" className="text-xs font-medium text-amber-700">
           Cobranças{" "}
-          {step.whatsappIncompatibleMethods
+          {incompatibleMethods
             .map((method) => METHOD_LABELS[method])
             .join(" e ")}{" "}
           não têm os dados que este template usa e ficarão pendentes. Escolha um
@@ -738,7 +744,7 @@ function MethodTemplatesPicker({
             setExpanded(event.target.checked);
             if (!event.target.checked)
               onChange({
-                whatsappMethodTemplates: { PIX: null, BOLETO: null, BOLIX: null },
+                whatsappMethodTemplates: { PIX: null, BOLIX: null, CREDIT_CARD: null },
                 whatsappMethodStatus: undefined,
                 whatsappIncompatibleMethods: undefined,
               });

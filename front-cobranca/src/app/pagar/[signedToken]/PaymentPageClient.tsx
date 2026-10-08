@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, Copy, ExternalLink, FileText, RefreshCw } from "lucide-react";
+import CardCheckout from "./CardCheckout";
 import { BrandLogo } from "@/components/ui/BrandLogo";
 import type { LoadedPayment, PublicPaymentData, PublicPaymentState } from "./load-payment";
 
@@ -10,11 +11,13 @@ export type { PublicPaymentData } from "./load-payment";
 
 interface PaymentPageClientProps {
   payment: LoadedPayment;
+  signedToken?: string;
 }
 
 type CopyTarget = "pix" | "boleto";
 
 const METHOD_LABELS: Record<string, string> = {
+  CREDIT_CARD: "Cartão de crédito",
   PIX: "Pix",
   BOLIX: "Boleto com Pix",
   BOLETO: "Boleto",
@@ -24,6 +27,7 @@ const STATE_VIEW: Record<
   PublicPaymentState,
   { title: string; badge: string; badgeClass: string; message?: (company: string) => string }
 > = {
+  PROCESSING: { title: "Pagamento em processamento", badge: "Processando", badgeClass: "bg-sky-50 text-sky-700", message: () => "Estamos verificando seu pagamento. Aguarde a confirmação antes de tentar pagar novamente." },
   PAYABLE: {
     title: "Pagamento de cobrança",
     badge: "Pendente",
@@ -177,7 +181,7 @@ function ExternalButton({ href, icon, label }: { href: string; icon: React.React
   );
 }
 
-function PaymentDetails({ data, onRefresh }: { data: PublicPaymentData; onRefresh: () => void }) {
+function PaymentDetails({ data, onRefresh, signedToken }: { data: PublicPaymentData; onRefresh: () => void; signedToken?: string }) {
   const [copied, setCopied] = useState<CopyTarget | null>(null);
   const [copyError, setCopyError] = useState(false);
   const view = STATE_VIEW[data.state];
@@ -187,7 +191,7 @@ function PaymentDetails({ data, onRefresh }: { data: PublicPaymentData; onRefres
   const boletoLine = payable ? data.boletoLine : null;
   const boletoLink = payable ? safeExternalUrl(data.boletoLink) : null;
   const boletoPdf = payable ? safeExternalUrl(data.boletoPdf) : null;
-  const hasInstrument = Boolean(pix || boletoLine || boletoLink || boletoPdf);
+  const hasInstrument = Boolean(pix || boletoLine || boletoLink || boletoPdf || (data.billingType === "CREDIT_CARD" && signedToken));
   const message = payable
     ? hasInstrument
       ? null
@@ -238,6 +242,7 @@ function PaymentDetails({ data, onRefresh }: { data: PublicPaymentData; onRefres
             {data.state === "PAID" && data.paidAt ? ` Confirmado em ${formatInstant(data.paidAt)}.` : ""}
           </p>
         )}
+        {payable && data.billingType === "CREDIT_CARD" && signedToken && <CardCheckout signedToken={signedToken} onRefresh={onRefresh} />}
         {pix && (
           <CopyCode
             label="Copiar Pix copia e cola"
@@ -263,7 +268,7 @@ function PaymentDetails({ data, onRefresh }: { data: PublicPaymentData; onRefres
         )}
         {boletoLink && <ExternalButton href={boletoLink} icon={<ExternalLink size={17} />} label="Abrir boleto" />}
         {boletoPdf && <ExternalButton href={boletoPdf} icon={<FileText size={17} />} label="Abrir PDF" />}
-        {(payable || data.state === "UNAVAILABLE") && <RefreshButton onRefresh={onRefresh} />}
+        {(payable || data.state === "UNAVAILABLE" || data.state === "PROCESSING") && <RefreshButton onRefresh={onRefresh} />}
         {payable && (
           <p className="text-xs text-slate-500">
             Depois de pagar, a confirmação pode levar alguns minutos para aparecer aqui.
@@ -274,7 +279,7 @@ function PaymentDetails({ data, onRefresh }: { data: PublicPaymentData; onRefres
   );
 }
 
-export default function PaymentPageClient({ payment }: PaymentPageClientProps) {
+export default function PaymentPageClient({ payment, signedToken }: PaymentPageClientProps) {
   const router = useRouter();
   const refresh = () => router.refresh();
 
@@ -288,6 +293,12 @@ export default function PaymentPageClient({ payment }: PaymentPageClientProps) {
     return () => window.removeEventListener("pageshow", onPageShow);
   }, [router]);
 
+  useEffect(() => {
+    if (payment.kind !== "ok" || payment.data.state !== "PROCESSING") return;
+    const timer = window.setInterval(() => router.refresh(), 10000);
+    return () => window.clearInterval(timer);
+  }, [payment, router]);
+
   if (payment.kind === "invalid")
     return <Notice title="Link indisponível" message="Link de pagamento inválido ou expirado." />;
   if (payment.kind === "unavailable")
@@ -298,5 +309,5 @@ export default function PaymentPageClient({ payment }: PaymentPageClientProps) {
         onRefresh={refresh}
       />
     );
-  return <PaymentDetails data={payment.data} onRefresh={refresh} />;
+  return <PaymentDetails signedToken={signedToken} data={payment.data} onRefresh={refresh} />;
 }

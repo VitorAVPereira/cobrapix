@@ -17,6 +17,7 @@ const TOKEN_ID = /^[A-Za-z0-9-]{1,64}$/;
 const INVALID_LINK = 'Link de pagamento invalido ou expirado.';
 
 export type PublicPaymentState =
+  | 'PROCESSING'
   | 'PAYABLE'
   | 'PAID'
   | 'CANCELED'
@@ -24,6 +25,9 @@ export type PublicPaymentState =
   | 'UNAVAILABLE';
 
 interface PublicCharge {
+  id?: string;
+  paymentDaysAfterDue?: number | null;
+  cardAttempts?: Array<{ status: string }>;
   status: PaymentChargeStatus;
   billingMethod: BillingMethod;
   gatewayId: string | null;
@@ -125,6 +129,13 @@ export class PublicPaymentLinkService {
           orderBy: { createdAt: 'desc' },
           take: 10,
           select: {
+            id: true,
+            paymentDaysAfterDue: true,
+            cardAttempts: {
+              orderBy: { createdAt: 'desc' },
+              take: 1,
+              select: { status: true },
+            },
             status: true,
             billingMethod: true,
             gatewayId: true,
@@ -175,6 +186,40 @@ export class PublicPaymentLinkService {
           : 'CANCELED',
         latest,
       );
+
+    if (latest?.billingMethod === 'CREDIT_CARD') {
+      if (latest.status !== 'ACTIVE') return closed('UNAVAILABLE', latest);
+      const today = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Sao_Paulo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date());
+      const days =
+        (Date.parse(today) -
+          Date.parse(invoice.dueDate.toISOString().slice(0, 10))) /
+        86400000;
+      if (days > (latest.paymentDaysAfterDue ?? 30))
+        return closed('EXPIRED', latest);
+      const state = latest.cardAttempts?.[0]?.status;
+      if (
+        state &&
+        ['SUBMITTING', 'UNCERTAIN', 'APPROVED', 'PAID'].includes(state)
+      )
+        return closed('PROCESSING', latest);
+      return {
+        ...summary,
+        billingType: 'CREDIT_CARD',
+        state: 'PAYABLE',
+        canPay: true,
+        paidAt: null,
+        pixCopyPaste: null,
+        boletoLine: null,
+        boletoLink: null,
+        boletoPdf: null,
+        expiresAt: null,
+      };
+    }
 
     // Only a confirmed issuance (ACTIVE) is payable; a pending or uncertain
     // one exposes nothing, even if the invoice already carries data.
@@ -237,7 +282,7 @@ export class PublicPaymentLinkService {
   // Exactly "<payload>.<signature>" in base64url, signed for this purpose,
   // with non-empty ids and an expiration still in the future. The error never
   // carries the token.
-  private verifyToken(token: string): PaymentTokenPayload {
+  verifyToken(token: string): PaymentTokenPayload {
     const parts =
       typeof token === 'string' && token.length <= PAYMENT_TOKEN_MAX_LENGTH
         ? token.split('.')
@@ -335,7 +380,12 @@ export class PublicPaymentLinkService {
   }
 
   private normalizeBillingMethod(value: unknown): BillingMethod {
-    if (value === 'PIX' || value === 'BOLETO' || value === 'BOLIX') {
+    if (
+      value === 'PIX' ||
+      value === 'BOLETO' ||
+      value === 'BOLIX' ||
+      value === 'CREDIT_CARD'
+    ) {
       return value;
     }
 
