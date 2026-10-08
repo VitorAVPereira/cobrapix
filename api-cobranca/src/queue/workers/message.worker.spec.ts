@@ -75,6 +75,7 @@ function setup() {
   };
   const template = (subject: string) => ({
     subject,
+    isActive: true,
     content: '{{saudacao}}, {{nome_devedor}}.',
     greeting: 'Olá',
     instructions: '',

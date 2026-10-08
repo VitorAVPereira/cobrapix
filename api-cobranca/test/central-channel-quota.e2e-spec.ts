@@ -149,6 +149,11 @@ describe('Central channel capacity (PostgreSQL + Redis)', () => {
   });
 
   afterAll(async () => {
+    // Quota-only fixtures have no dispatch payload. Keep them out of subsequent
+    // suites' recovery batches when they share the disposable infrastructure.
+    await prisma.communicationOutboundIntent.deleteMany({
+      where: { companyId: { in: [companyA, companyB] } },
+    });
     for (const { prisma: own, limits } of instances) {
       await limits.onModuleDestroy();
       await own.onModuleDestroy();

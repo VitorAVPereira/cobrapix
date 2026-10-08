@@ -789,7 +789,7 @@ export class BillingService {
           const emailTemplate = await this.emailTemplatesService
             .resolveForRule(company.id, emailTemplateId)
             .catch(() => null);
-          if (!emailTemplate) {
+          if (!emailTemplate || !emailTemplate.isActive) {
             skippedCount++;
             continue;
           }

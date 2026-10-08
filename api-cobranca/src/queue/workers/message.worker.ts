@@ -119,6 +119,7 @@ type InitialRuleStep = Pick<
   | 'pixTemplateId'
   | 'boletoTemplateId'
   | 'bolixTemplateId'
+  | 'cardTemplateId'
 >;
 
 interface InitialChargePaymentInvoice {
@@ -661,7 +662,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
           invoice.companyId,
           null,
         );
-    if (!emailTemplate) {
+    if (!emailTemplate || !emailTemplate.isActive) {
       await this.createCollectionLog(
         invoice.companyId,
         invoice.id,
@@ -923,6 +924,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
                     pixTemplateId: true,
                     boletoTemplateId: true,
                     bolixTemplateId: true,
+                    cardTemplateId: true,
                   },
                 },
               },

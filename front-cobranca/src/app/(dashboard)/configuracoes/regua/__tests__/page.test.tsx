@@ -363,12 +363,12 @@ describe("ReguaPage", () => {
         .getAllByRole("option")
         .map((option) => option.textContent),
     ).not.toContain("Pix: emissao_bolix");
-    expect(
-      within(screen.getByLabelText(`${label} para Boleto`))
-        .getAllByRole("option")
-        .map((option) => option.textContent),
-    ).toEqual(["Boleto: igual à etapa", "Boleto: Cobranca na emissao"]);
+    expect(screen.queryByLabelText(`${label} para Boleto`)).toBeNull();
+    const card = screen.getByLabelText(`${label} para Cartão de crédito`);
+    expect(within(card).getAllByRole("option").map((option) => option.textContent))
+      .toEqual(["Cartão de crédito: igual à etapa", "Cartão de crédito: Cobranca na emissao"]);
     await user.selectOptions(bolix, "template-bolix");
+    await user.selectOptions(card, "template-emissao");
     await user.click(screen.getByRole("button", { name: /salvar/i }));
 
     await waitFor(() => expect(mockSetRuleSteps).toHaveBeenCalledTimes(1));
@@ -377,10 +377,12 @@ describe("ReguaPage", () => {
       whatsappSelection: { mode: "DEFAULT", purpose: "EMISSION" },
       whatsappMethodTemplates: {
         PIX: null,
-        BOLETO: null,
         BOLIX: "template-bolix",
+        CREDIT_CARD: "template-emissao",
       },
     });
+    expect(mockSetRuleSteps.mock.calls[0]![1][0])
+      .not.toHaveProperty("whatsappMethodTemplates.BOLETO");
   });
 
   it("mostra as escolhas salvas, o aviso de compatibilidade e limpa ao desmarcar", async () => {
@@ -388,9 +390,9 @@ describe("ReguaPage", () => {
     const profile = createProfileFixture();
     profile.steps[0] = whatsappStep({
       ...profile.steps[0],
-      whatsappMethodTemplates: { PIX: null, BOLETO: null, BOLIX: "template-emissao" },
-      whatsappMethodStatus: { BOLIX: { ready: false, code: "NOT_GRANTED" } },
-      whatsappIncompatibleMethods: ["BOLETO"],
+      whatsappMethodTemplates: { PIX: null, BOLETO: null, BOLIX: "template-emissao", CREDIT_CARD: "template-vencimento" },
+      whatsappMethodStatus: { BOLIX: { ready: false, code: "NOT_GRANTED" }, CREDIT_CARD: { ready: false, code: "NOT_GRANTED" } },
+      whatsappIncompatibleMethods: ["BOLETO", "PIX"],
     });
     mockGetRules.mockResolvedValue([profile]);
     render(<ReguaPage />);
@@ -402,9 +404,12 @@ describe("ReguaPage", () => {
     expect(
       screen.getByText(/Envios BOLIX pendentes: Não liberado para a empresa/),
     ).toBeInTheDocument();
+    expect(screen.getByLabelText(`${label} para Cartão de crédito`)).toHaveValue("template-vencimento");
+    expect(screen.getByText(/Envios Cartão de crédito pendentes: Não liberado para a empresa/)).toBeInTheDocument();
     expect(
-      screen.getByText(/Cobranças Boleto não têm os dados que este template usa/),
+      screen.getByText(/Cobranças Pix não têm os dados que este template usa/),
     ).toBeInTheDocument();
+    expect(screen.queryByText(/Cobranças Boleto/)).toBeNull();
     await user.click(
       screen.getByLabelText(`${label}: templates diferentes por forma de pagamento`),
     );
@@ -412,8 +417,33 @@ describe("ReguaPage", () => {
     await user.click(screen.getByRole("button", { name: /salvar/i }));
     await waitFor(() => expect(mockSetRuleSteps).toHaveBeenCalledTimes(1));
     expect(mockSetRuleSteps.mock.calls[0]![1][0]).toMatchObject({
-      whatsappMethodTemplates: { PIX: null, BOLETO: null, BOLIX: null },
+      whatsappMethodTemplates: { PIX: null, BOLIX: null, CREDIT_CARD: null },
     });
+    expect(mockSetRuleSteps.mock.calls[0]![1][0])
+      .not.toHaveProperty("whatsappMethodTemplates.BOLETO");
+  });
+
+  it("não oferece boleto legado ao editar templates por forma de pagamento", async () => {
+    const user = userEvent.setup();
+    const profile = createProfileFixture();
+    profile.steps[0].whatsappMethodTemplates = {
+      BOLETO: "template-emissao", PIX: null, BOLIX: null, CREDIT_CARD: null,
+    };
+    mockGetRules.mockResolvedValue([profile]);
+    render(<ReguaPage />);
+    const label = "Template do contato inicial por WhatsApp";
+    await screen.findByLabelText(label);
+    await user.click(screen.getByLabelText(`${label}: templates diferentes por forma de pagamento`));
+    expect(screen.queryByLabelText(`${label} para Boleto`)).toBeNull();
+    expect(screen.getByLabelText(`${label} para Pix`)).toBeInTheDocument();
+    expect(screen.getByLabelText(`${label} para BOLIX`)).toBeInTheDocument();
+    expect(screen.getByLabelText(`${label} para Cartão de crédito`)).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText(`${label} para Cartão de crédito`), "template-emissao");
+    await user.click(screen.getByRole("button", { name: /salvar/i }));
+    await waitFor(() => expect(mockSetRuleSteps).toHaveBeenCalledTimes(1));
+    // An absent legacy field is preserved by the API instead of overwritten silently.
+    expect(mockSetRuleSteps.mock.calls[0]![1][0])
+      .toHaveProperty("whatsappMethodTemplates", { PIX: null, BOLIX: null, CREDIT_CARD: "template-emissao" });
   });
 
   it("avisa antes de descartar alterações ao trocar de perfil", async () => {
