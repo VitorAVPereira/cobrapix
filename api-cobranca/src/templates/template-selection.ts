@@ -35,11 +35,13 @@ export function stepMethodTemplates(step: {
   pixTemplateId?: string | null;
   boletoTemplateId?: string | null;
   bolixTemplateId?: string | null;
+  cardTemplateId?: string | null;
 }): MethodTemplates {
   return {
     PIX: step.pixTemplateId ?? null,
     BOLETO: step.boletoTemplateId ?? null,
     BOLIX: step.bolixTemplateId ?? null,
+    CREDIT_CARD: step.cardTemplateId ?? null,
   };
 }
 
@@ -62,6 +64,7 @@ export function ruleStepSelection(
     pixTemplateId?: string | null;
     boletoTemplateId?: string | null;
     bolixTemplateId?: string | null;
+    cardTemplateId?: string | null;
   },
   billingMethod?: BillingMethod | null,
 ): TemplateSelection {

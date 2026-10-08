@@ -65,8 +65,14 @@ export type PresentedStep = CollectionRuleStep & {
   whatsappIncompatibleMethods: BillingMethod[] | null;
 };
 
-const BILLING_METHODS: readonly BillingMethod[] = ['PIX', 'BOLETO', 'BOLIX'];
+const BILLING_METHODS: readonly BillingMethod[] = [
+  'PIX',
+  'BOLETO',
+  'BOLIX',
+  'CREDIT_CARD',
+];
 const METHOD_LABELS: Record<BillingMethod, string> = {
+  CREDIT_CARD: 'Cartão de crédito',
   PIX: 'Pix',
   BOLETO: 'Boleto',
   BOLIX: 'BOLIX',
@@ -526,6 +532,7 @@ export class CollectionProfileService {
     | 'pixTemplateId'
     | 'boletoTemplateId'
     | 'bolixTemplateId'
+    | 'cardTemplateId'
   > {
     if (step.channel === 'EMAIL')
       return {
@@ -536,6 +543,7 @@ export class CollectionProfileService {
         pixTemplateId: null,
         boletoTemplateId: null,
         bolixTemplateId: null,
+        cardTemplateId: null,
       };
     const previous = existing.find((item) => item.id === step.id);
     // Absent keeps the current template (clients that do not know the field); null clears.
@@ -547,6 +555,7 @@ export class CollectionProfileService {
       pixTemplateId: method('PIX', previous?.pixTemplateId),
       boletoTemplateId: method('BOLETO', previous?.boletoTemplateId),
       bolixTemplateId: method('BOLIX', previous?.bolixTemplateId),
+      cardTemplateId: method('CREDIT_CARD', previous?.cardTemplateId),
     };
     const selection = step.whatsappSelection ?? { mode: 'UNCONFIGURED' };
     if (selection.mode === 'EXPLICIT')

@@ -9,7 +9,7 @@ import { normalizeRequiredDebtorDocument } from "@/lib/debtor-document";
 import { normalizeWhatsAppNumber } from "@/lib/whatsapp-number";
 import { parseLateTermsForm } from "@/lib/late-terms";
 
-export type PaymentMethod = "PIX" | "BOLETO" | "BOLIX";
+export type PaymentMethod = "PIX" | "BOLETO" | "BOLIX" | "CREDIT_CARD";
 
 export interface ParsedDebtor {
   id?: string;
@@ -58,6 +58,7 @@ function normalizePaymentMethod(value: string): PaymentMethod | null {
     .trim()
     .toUpperCase();
 
+  if (["CREDIT_CARD", "CARTAO", "CARTAO DE CREDITO"].includes(normalized)) return "CREDIT_CARD";
   if (normalized === "PIX") {
     return "PIX";
   }
@@ -194,7 +195,7 @@ export function parseInvoiceCsvRows(
     const formaPagamento = normalizePaymentMethod(formaPagamentoRaw);
     if (!formaPagamento) {
       throw new Error(
-        `Linha ${index + 2}: Forma de pagamento invalida. Use PIX ou BOLIX.`,
+        `Linha ${index + 2}: Forma de pagamento invalida. Use PIX, BOLIX ou CREDIT_CARD.`,
       );
     }
 

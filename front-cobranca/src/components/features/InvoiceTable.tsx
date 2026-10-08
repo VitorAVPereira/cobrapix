@@ -256,6 +256,7 @@ export function InvoiceTable({
   };
 
   const getPaymentMethodLabel = (billingType?: string): string => {
+    if (billingType === "CREDIT_CARD") return "Cartão de crédito";
     if (billingType === "BOLIX") {
       return "Bolix";
     }
@@ -422,6 +423,7 @@ export function InvoiceTable({
           </span>
         </div>
 
+        {isGenerated && payment?.method === "CREDIT_CARD" && payment.paymentLink && <a href={payment.paymentLink} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold"><ExternalLink size={13} />Abrir pagamento</a>}
         {(pixCopyPaste || boletoUrl || boletoLine) && (
           <div className="flex flex-wrap items-center gap-1.5">
             {pixCopyPaste && (

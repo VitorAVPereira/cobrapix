@@ -22,9 +22,10 @@ import {
 } from './efi-issuance-error';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentChargeService } from './payment-charge.service';
+import { CardPaymentService } from './card-payment.service';
 import { FinancialEligibilityService } from '../financial-activation/financial-eligibility.service';
 
-type BillingType = 'PIX' | 'BOLETO' | 'BOLIX';
+type BillingType = 'PIX' | 'BOLETO' | 'BOLIX' | 'CREDIT_CARD';
 
 interface CancelablePaymentInvoice {
   id: string;
@@ -49,6 +50,7 @@ export class PaymentService {
     private readonly charges: PaymentChargeService | null,
     @Optional()
     private readonly eligibility?: FinancialEligibilityService,
+    @Optional() private readonly cards?: CardPaymentService,
   ) {}
 
   // Collection rule and first-charge scheduling run only for companies with a
@@ -64,6 +66,15 @@ export class PaymentService {
     companyId: string,
     billingType: BillingType = 'BOLIX',
   ): Promise<EfiPaymentResult> {
+    if (billingType === 'CREDIT_CARD') {
+      if (!this.cards) throw new HttpException('Cartão indisponível.', 503);
+      const link = await this.cards.prepareCharge(companyId, invoiceId);
+      return {
+        gatewayId: '',
+        paymentLink: link.url,
+        expiresAt: new Date(Date.now() + 90 * 86400000),
+      };
+    }
     if (
       billingType !== 'PIX' &&
       billingType !== 'BOLETO' &&
@@ -202,6 +213,8 @@ export class PaymentService {
   async cancelPaymentForInvoice(
     invoice: CancelablePaymentInvoice,
   ): Promise<CancelPaymentResult> {
+    if (this.cards)
+      await this.cards.assertCancelable(invoice.companyId, invoice.id);
     if (invoice.efiTxid) {
       const gatewayStatusRaw = await this.efiService.cancelPixDueCharge(
         invoice.companyId,

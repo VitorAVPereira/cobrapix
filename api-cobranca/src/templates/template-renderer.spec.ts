@@ -1,6 +1,7 @@
 import { parseTemplate } from './template-components';
 import type { ParsedTemplate, TemplateMapping } from './template-contracts';
 import {
+  methodCanFill,
   formatAmount,
   formatCivilDate,
   mappingSources,
@@ -334,5 +335,19 @@ describe('Brazilian formatting', () => {
     );
     expect(formatAmount(150)).toBe('R$ 150,00');
     expect(formatAmount(1234.5)).toBe('R$ 1.234,50');
+  });
+});
+
+describe('card templates', () => {
+  it('can use a payment link but never Pix or boleto instruments', () => {
+    expect(methodCanFill('CREDIT_CARD', { pix: false, boleto: false })).toBe(
+      true,
+    );
+    expect(methodCanFill('CREDIT_CARD', { pix: true, boleto: false })).toBe(
+      false,
+    );
+    expect(methodCanFill('CREDIT_CARD', { pix: false, boleto: true })).toBe(
+      false,
+    );
   });
 });

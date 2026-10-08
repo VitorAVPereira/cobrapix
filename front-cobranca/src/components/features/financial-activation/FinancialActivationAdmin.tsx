@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import Link from "next/link";
+import CardPaymentSettings from "./CardPaymentSettings";
 import { useApiClient } from "@/lib/use-api-client";
 import type { ApiError } from "@/lib/api-client";
 import {
@@ -450,6 +451,8 @@ export function FinancialActivationAdmin({
           </p>
         </Section>
       )}
+
+      {overview.active && <CardPaymentSettings companyId={companyId} />}
 
       {!hasCandidate && (
         <Section title={overview.active ? "Nova versão" : "Iniciar ativação"}>

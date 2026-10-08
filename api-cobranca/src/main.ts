@@ -25,6 +25,7 @@ async function bootstrap(): Promise<void> {
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: [
       'Content-Type',
+      'Idempotency-Key',
       'Authorization',
       'X-Hub-Signature-256',
       'svix-id',

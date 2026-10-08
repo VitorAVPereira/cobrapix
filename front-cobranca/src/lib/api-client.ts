@@ -167,14 +167,14 @@ export interface BillingSettings {
   lateFinePercentage: number;
   lateInterestMonthlyPercentage: number;
   paymentDaysAfterDue: number;
-  tariffs: Record<
+  tariffs: Partial<Record<
     BillingMethod,
     {
       method: BillingMethod;
       combinedLabel: string;
       configured: boolean;
     }
-  >;
+  >>;
 }
 
 export interface UpdateBillingSettingsInput {
@@ -197,7 +197,13 @@ export interface LateTerms {
   payment_days_after_due: number;
 }
 
-export type BillingMethod = "PIX" | "BOLETO" | "BOLIX";
+export interface CardSettings {
+  issuerIdentityId: string; version: number; enabled: boolean; onTimeBasisPoints: number; overdueBasisPoints: number;
+  validationReference: string; processingRates: { brand: string; installments: number; basisPoints: number; fixedCents: number }[];
+}
+export interface CardSettingsOverview { activeIssuerIdentityId: string | null; settings: CardSettings[] }
+export interface CardAttempt { reviewRequired?: boolean; id: string; invoiceId: string; status: string; totalCents: number; installments: number; createdAt: string }
+export type BillingMethod = "PIX" | "BOLETO" | "BOLIX" | "CREDIT_CARD";
 export type UserRole = "PLATFORM_ADMIN" | "COMPANY_ADMIN";
 export type CompanyStatus = "ACTIVE" | "INACTIVE" | "SUSPENDED";
 export type BusinessSegment = "GENERAL" | "EDUCATION";
@@ -1385,6 +1391,17 @@ class ApiClient {
 
     const query = searchParams.toString();
     return query ? `?${query}` : "";
+  }
+
+  getCardPaymentSettings(companyId: string): Promise<CardSettingsOverview> {
+    return this.fetch(`/admin/card-payments/${companyId}/settings`);
+  }
+  configureCardPayments(companyId: string, body: Omit<CardSettings, "version"> & { expectedVersion: number }): Promise<CardSettings> {
+    return this.fetch(`/admin/card-payments/${companyId}/settings`, { method: "POST", body: JSON.stringify(body) });
+  }
+  getCardPaymentAttempts(companyId: string): Promise<CardAttempt[]> { return this.fetch(`/admin/card-payments/${companyId}/attempts`); }
+  reconcileCardPayment(companyId: string, attemptId: string): Promise<{ state: string; reviewRequired: boolean }> {
+    return this.fetch(`/admin/card-payments/${companyId}/attempts/${attemptId}/reconcile`, { method: "POST" });
   }
 
   private buildMissingAuthError(): ApiError {

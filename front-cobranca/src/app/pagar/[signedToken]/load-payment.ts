@@ -1,4 +1,4 @@
-export type PublicPaymentState = "PAYABLE" | "PAID" | "CANCELED" | "EXPIRED" | "UNAVAILABLE";
+export type PublicPaymentState = "PROCESSING" | "PAYABLE" | "PAID" | "CANCELED" | "EXPIRED" | "UNAVAILABLE";
 
 export interface PublicPaymentData {
   invoiceId: string;
@@ -27,7 +27,7 @@ export type LoadedPayment =
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 const TIMEOUT_MS = 8_000;
-const STATES: readonly PublicPaymentState[] = ["PAYABLE", "PAID", "CANCELED", "EXPIRED", "UNAVAILABLE"];
+const STATES: readonly PublicPaymentState[] = ["PROCESSING", "PAYABLE", "PAID", "CANCELED", "EXPIRED", "UNAVAILABLE"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

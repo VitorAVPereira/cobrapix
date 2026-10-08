@@ -172,6 +172,10 @@ class WhatsappMethodTemplatesDto {
   @IsOptional()
   @IsUUID()
   BOLIX?: string | null;
+
+  @IsOptional()
+  @IsUUID()
+  CREDIT_CARD?: string | null;
 }
 
 /** Explicit, default or pending choice; fields of other modes are never accepted. */
@@ -470,6 +474,7 @@ export class BillingController {
                   PIX: whatsappMethodTemplates.PIX,
                   BOLETO: whatsappMethodTemplates.BOLETO,
                   BOLIX: whatsappMethodTemplates.BOLIX,
+                  CREDIT_CARD: whatsappMethodTemplates.CREDIT_CARD,
                 },
               }
             : {}),

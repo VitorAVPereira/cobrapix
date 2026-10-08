@@ -394,3 +394,57 @@ describe('PublicPaymentLinkService', () => {
     });
   });
 });
+
+describe('public card-only links', () => {
+  it('makes a ready local card charge payable without Pix or boleto instruments', async () => {
+    const { service, token } = createService(
+      invoiceRow({
+        billingType: 'CREDIT_CARD',
+        gatewayId: null,
+        efiChargeId: null,
+        efiPixCopiaECola: null,
+        boletoLinhaDigitavel: null,
+        boletoLink: null,
+        boletoPdf: null,
+        paymentCharges: [
+          {
+            ...activeBolix,
+            billingMethod: 'CREDIT_CARD',
+            gatewayId: null,
+            efiChargeId: null,
+            cardAttempts: [],
+            paymentDaysAfterDue: 365,
+          },
+        ],
+      }),
+    );
+    await expect(service.getPublicPayment(token)).resolves.toMatchObject({
+      billingType: 'CREDIT_CARD',
+      state: 'PAYABLE',
+      canPay: true,
+      pixCopyPaste: null,
+      boletoLine: null,
+    });
+  });
+  it('shows processing and suppresses checkout while a card attempt is uncertain', async () => {
+    const { service, token } = createService(
+      invoiceRow({
+        billingType: 'CREDIT_CARD',
+        paymentCharges: [
+          {
+            ...activeBolix,
+            billingMethod: 'CREDIT_CARD',
+            cardAttempts: [{ status: 'UNCERTAIN' }],
+            paymentDaysAfterDue: 365,
+          },
+        ],
+      }),
+    );
+    await expect(service.getPublicPayment(token)).resolves.toMatchObject({
+      state: 'PROCESSING',
+      canPay: false,
+      pixCopyPaste: null,
+      boletoLine: null,
+    });
+  });
+});

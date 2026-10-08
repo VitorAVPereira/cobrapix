@@ -46,7 +46,9 @@ describe('AdminService payment method policy', () => {
       service.updateClient('company-1', {
         billing: { enabledBillingMethods: ['BOLETO' as 'BOLIX'] },
       }),
-    ).rejects.toThrow('Novas cobranças devem usar Pix ou Bolix.');
+    ).rejects.toThrow(
+      'Novas cobranças devem usar Pix, Bolix ou cartão de crédito.',
+    );
     expect(resolveActiveVersion).not.toHaveBeenCalled();
     expect(companyUpdate).not.toHaveBeenCalled();
   });

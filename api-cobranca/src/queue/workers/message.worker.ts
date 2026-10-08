@@ -119,6 +119,7 @@ type InitialRuleStep = Pick<
   | 'pixTemplateId'
   | 'boletoTemplateId'
   | 'bolixTemplateId'
+  | 'cardTemplateId'
 >;
 
 interface InitialChargePaymentInvoice {
@@ -661,7 +662,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
           invoice.companyId,
           null,
         );
-    if (!emailTemplate) {
+    if (!emailTemplate || !emailTemplate.isActive) {
       await this.createCollectionLog(
         invoice.companyId,
         invoice.id,
@@ -923,6 +924,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
                     pixTemplateId: true,
                     boletoTemplateId: true,
                     bolixTemplateId: true,
+                    cardTemplateId: true,
                   },
                 },
               },
@@ -974,6 +976,9 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         invoice.companyId,
         billingType,
       );
+
+      if (billingType === 'CREDIT_CARD')
+        return this.buildPaymentMessageData(invoice, billingType);
 
       const updatedInvoice = await this.prisma.invoice.findFirst({
         where: { id: invoice.id, companyId: invoice.companyId },
@@ -1123,6 +1128,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
 
   private getBillingMethodLabel(billingType: BillingMethod): string {
     const labels: Record<BillingMethod, string> = {
+      CREDIT_CARD: 'Cartão de crédito',
       PIX: 'PIX',
       BOLETO: 'Boleto',
       BOLIX: 'Bolix',
@@ -1356,7 +1362,12 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private isBillingMethod(value: unknown): value is BillingMethod {
-    return value === 'PIX' || value === 'BOLETO' || value === 'BOLIX';
+    return (
+      value === 'PIX' ||
+      value === 'BOLETO' ||
+      value === 'BOLIX' ||
+      value === 'CREDIT_CARD'
+    );
   }
 
   private isInitialChargeJob(value: unknown): value is InitialChargeJob {
