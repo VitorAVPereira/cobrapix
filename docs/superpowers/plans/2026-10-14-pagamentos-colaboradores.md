@@ -68,7 +68,7 @@ a verificação e a expiração. O resultado chega pelo ramo novo do webhook Pix
 - `src/templates/template-contracts.ts`, `template-context.service.ts` e `template-renderer.ts`:
   finalidades, origem, fontes e botões de decisão.
 - `src/app.module.ts`.
-- Teste novo `test/disbursements.e2e-spec.ts` e script `test:disbursements:postgres`.
+- Teste novo `test/disbursements.e2e-spec.ts` e script `test:e2e:disbursements`.
 
 **Frontend:**
 
@@ -140,10 +140,34 @@ conclusões, sem credenciais nem dados pessoais.
 **Desligar** cancela, na mesma transação: lotes `AWAITING_APPROVAL` (pedido `INVALIDATED`) e itens
 `PENDING`. Itens `SENDING`, `IN_PROCESSING` e `UNCERTAIN` continuam em verificação.
 
-- [ ] Testes: ligar sem prontidão gera 409 com o item faltante; versão divergente gera 409; nova
+- [x] Testes: ligar sem prontidão gera 409 com o item faltante; versão divergente gera 409; nova
   versão não apaga a anterior; telefone inválido é recusado; desligar cancela só o que não foi
   enviado; usuário da empresa recebe 403 ou 404.
-- [ ] Implementar e aplicar a migration só em PostgreSQL descartável. Rodar specs e lint. Commit.
+- [x] Implementar e aplicar a migration só em PostgreSQL descartável. Rodar specs e lint. Commit.
+
+**Registro de execução (15/10/2026):**
+
+- Migration `20261015120000_add_employee_disbursements` gerada por `prisma migrate diff` a partir do
+  schema anterior. Só aditiva: 4 enums e 5 tabelas, sem alterar as existentes.
+- Testes:
+  - `disbursement-settings.service.spec.ts`: 8 testes;
+  - `disbursements-admin.controller.spec.ts`: 6 testes (guardas do admin e formato do celular);
+  - `test/disbursements.e2e-spec.ts` em PostgreSQL descartável: 4 testes (migration, prontidão,
+    dois admins simultâneos, desligamento e item repetido);
+  - suíte completa do backend: 123 suítes e 982 testes passando.
+- Lint e build sem erros.
+
+**Desvios do plano:**
+
+- A prontidão de templates entra na tarefa 5, porque as finalidades ainda não existem.
+- O lote guarda o contador `approvalRequests` em vez de `currentApprovalId`: o pedido atual é o de
+  `requestNumber` igual ao contador, sem referência circular.
+- O item nasce `PENDING`, sem estado de rascunho. Só são enviados itens de lote `PROCESSING`.
+- A troca do celular do aprovador devolve a `DRAFT` os lotes aguardando aprovação e invalida o pedido.
+  Desligar continua cancelando.
+- O script se chama `test:e2e:disbursements`, no padrão dos demais testes que usam
+  `e2e-disposable.cjs`.
+- A validação do telefone no DTO só aceita celular brasileiro (`55` + DDD + número).
 
 ## Tarefa 3 — colaboradores
 
@@ -244,8 +268,9 @@ Template retido ou recusa definitiva marcam o pedido `HELD`, devolvem o lote a `
 
 Decidir numa transação com o lote travado, gravando só se o pedido ainda estiver `AWAITING`, se for o
 atual do lote, se o hash for igual, se a funcionalidade estiver ligada e se o celular do pedido for o
-do aprovador atual. Aprovar move o lote para `PROCESSING` e os itens para `PENDING`; recusar move o
-lote para `REJECTED`. Vale a primeira resposta válida.
+do aprovador atual. Aprovar move o lote para `PROCESSING` (os itens já estão `PENDING`); recusar move
+o lote para `REJECTED` e os itens para `CANCELED`. Vale a primeira resposta válida. Ordem de trava:
+empresa e depois lote, a mesma da configuração do admin, para evitar deadlock.
 
 **Confirmação ao aprovador:** texto livre pelo `OutboundDispatcherService` (janela de 24 h aberta
 pelo toque), com chave `disbursement-ack:<approvalId>`. Toque em pedido expirado, invalidado ou já

@@ -397,6 +397,9 @@ model Company {
   whatsappTemplateGrants   CompanyWhatsappTemplateGrant[]
   whatsappTemplateDefaults CompanyWhatsappTemplateDefault[]
   whatsappTemplatePending  WhatsappTemplatePendingSend[]
+  disbursementSettings     DisbursementSettings[]
+  disbursementRecipients   DisbursementRecipient[]
+  disbursementBatches      DisbursementBatch[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -734,6 +737,7 @@ model PaymentWebhookAnomaly {
 // identity is shared by reference; a COMPANY identity belongs to one tenant.
 model EfiAccountIdentity {
   cardPaymentSettings CardPaymentSettings?
+  disbursementBatches DisbursementBatch[]
   id                  String                  @id @default(uuid())
   ownership           EfiAccountOwnership
   companyId           String?
@@ -1947,4 +1951,171 @@ model CardPaymentAttempt {
   @@unique([paymentChargeId, idempotencyKey])
   @@index([paymentChargeId, status])
   @@index([companyId, status])
+}
+
+// Payments from a company's own Efí account to its collaborators (Pix send).
+// Enabled per company by the platform admin; nothing is sent without an approval
+// recorded on WhatsApp for the exact batch content.
+
+enum DisbursementDocumentType {
+  CPF
+  CNPJ
+}
+
+enum DisbursementBatchStatus {
+  DRAFT
+  AWAITING_APPROVAL
+  PROCESSING
+  COMPLETED
+  COMPLETED_WITH_FAILURES
+  REJECTED
+  EXPIRED
+  CANCELED
+}
+
+enum DisbursementItemStatus {
+  PENDING
+  SENDING
+  IN_PROCESSING
+  PAID
+  FAILED
+  UNCERTAIN
+  CANCELED
+}
+
+enum DisbursementApprovalState {
+  AWAITING
+  APPROVED
+  REJECTED
+  EXPIRED
+  INVALIDATED
+  HELD
+}
+
+// Append-only: each admin change is a new version; the highest one is current.
+model DisbursementSettings {
+  id String @id @default(uuid())
+  companyId String
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  version Int
+  enabled Boolean @default(false)
+  approverName String
+  approverPhone String
+  changedByUserId String
+  createdAt DateTime @default(now())
+  @@unique([companyId, version])
+}
+
+model DisbursementRecipient {
+  id String @id @default(uuid())
+  companyId String
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  name String
+  documentType DisbursementDocumentType
+  document String
+  pixKey String?
+  bankIspb String?
+  bankAgency String?
+  bankAccount String?
+  bankAccountType String?
+  active Boolean @default(true)
+  version Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  items DisbursementItem[]
+  @@unique([companyId, document])
+  @@unique([id, companyId])
+  @@index([companyId, active, name])
+}
+
+model DisbursementBatch {
+  id String @id @default(uuid())
+  companyId String
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  reference String
+  status DisbursementBatchStatus @default(DRAFT)
+  totalCents Int @default(0)
+  itemCount Int @default(0)
+  // Frozen at the approval request: items, amounts, reference and issuer account.
+  contentHash String?
+  issuerIdentityId String?
+  issuerIdentity EfiAccountIdentity? @relation(fields: [issuerIdentityId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  // Number of the current approval request; older requests never authorize a send.
+  approvalRequests Int @default(0)
+  sendPausedUntil DateTime?
+  version Int @default(1)
+  createdByUserId String
+  completedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  items DisbursementItem[]
+  approvals DisbursementApproval[]
+  @@unique([id, companyId])
+  @@index([companyId, createdAt])
+  @@index([status])
+}
+
+model DisbursementItem {
+  id String @id @default(uuid())
+  batchId String
+  companyId String
+  batch DisbursementBatch @relation(fields: [batchId, companyId], references: [id, companyId], onDelete: Restrict)
+  recipientId String
+  recipient DisbursementRecipient @relation(fields: [recipientId, companyId], references: [id, companyId], onDelete: Restrict)
+  // Snapshot of the recipient when the item was written; later edits do not move money.
+  recipientName String
+  documentType DisbursementDocumentType
+  document String
+  pixKey String?
+  bankIspb String?
+  bankAgency String?
+  bankAccount String?
+  bankAccountType String?
+  amountCents Int
+  status DisbursementItemStatus @default(PENDING)
+  // Our idempotency key at Efí: repeating it never debits twice.
+  idEnvio String @unique
+  e2eId String?
+  failureCode String?
+  failureReason String?
+  sendingAt DateTime?
+  sentAt DateTime?
+  settledAt DateTime?
+  lastCheckedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([batchId, recipientId])
+  @@index([companyId, status])
+  @@index([status, updatedAt])
+}
+
+// Request sent to the approver and the decision taken on WhatsApp. The decision is
+// written once and kept here because conversation messages expire.
+model DisbursementApproval {
+  id String @id @default(uuid())
+  batchId String
+  companyId String
+  batch DisbursementBatch @relation(fields: [batchId, companyId], references: [id, companyId], onDelete: Restrict)
+  requestNumber Int
+  contentHash String
+  totalCents Int
+  itemCount Int
+  settingsVersion Int
+  approverPhoneHash String
+  approveLabel String?
+  rejectLabel String?
+  intentId String? @unique
+  state DisbursementApprovalState @default(AWAITING)
+  expiresAt DateTime
+  decidedAt DateTime?
+  decisionMessageId String? @unique
+  decisionExternalMessageId String?
+  requestedByUserId String
+  ackSentAt DateTime?
+  noticeSentAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([batchId, requestNumber])
+  @@index([state, expiresAt])
+  @@index([companyId, createdAt])
 }
