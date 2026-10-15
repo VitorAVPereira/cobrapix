@@ -1,0 +1,380 @@
+# Pagamentos a colaboradores — plano de desenvolvimento para revisão
+
+> **Para execução por agente:** executar por tarefa, na ordem, com testes antes da implementação e um
+> commit por tarefa. A tarefa 1 bloqueia as tarefas financeiras (7 e 8). Nenhuma chamada financeira
+> real; homologação Efí só como ação operacional autorizada. Testes de banco e Redis só em
+> infraestrutura descartável.
+
+**Objetivo:** a empresa, com a funcionalidade liberada pelo admin, paga colaboradores por Pix a partir
+da própria conta Efí, depois da aprovação registrada no WhatsApp do aprovador.
+
+**Arquitetura:** módulo novo `api-cobranca/src/disbursements/`. Envio de Pix pela identidade emissora
+do perfil financeiro ativo. Pedido de aprovação por template do catálogo com respostas rápidas
+estáticas. Decisão lida das mensagens `button` já gravadas. Um worker `@Cron` faz a decisão, o envio,
+a verificação e a expiração. O resultado chega pelo ramo novo do webhook Pix.
+
+**Especificação:** [Pagamentos a colaboradores](../specs/2026-10-12-pagamentos-colaboradores-design.md).
+
+## Restrições globais
+
+- **Sem cálculo de folha.** Valores líquidos informados pela empresa.
+- **Nenhum Pix sem aprovação válida.** Precisa ser decisão `APPROVED` gravada para o pedido atual,
+  com o hash do lote igual ao hash do pedido.
+- **Envio só pela conta emissora fotografada no pedido.** Conta mudou, item falha sem envio.
+- **Envio em dúvida** (`UNCERTAIN`) nunca é reenviado automaticamente nem dado como falha sem prova.
+- **Funcionalidade desligada:** 404 nas rotas da empresa, e o worker não envia.
+- **Celular do aprovador** só pelo admin, com versões imutáveis.
+- **Migrations aditivas.** Nada muda em cobranças, régua, Pix recebido ou split.
+- **Logs** sem CPF, CNPJ, chave, conta, valor individual, telefone ou corpo de mensagem.
+- **Erros de negócio** com `code` estável; edição concorrente com versão esperada e `409`.
+
+## Foco da revisão
+
+1. **Toque forjado ou fora de contexto.** Outro número, mensagem antiga, texto livre, lote editado
+   depois do pedido, pedido expirado ou aprovador trocado: nenhum envio (tarefa 6).
+2. **Duplicidade.** Toque repetido, webhook reentregue, dois ticks do worker ou duas instâncias:
+   uma decisão e um `pixSend` por item (tarefas 6 e 7).
+3. **Resposta perdida da Efí.** O item fica `UNCERTAIN`, é consultado pelo `idEnvio` e só muda com
+   prova (tarefas 7 e 8).
+4. **Isolamento entre empresas** em colaboradores, lotes, itens e comprovantes (tarefas 3 e 4).
+5. **Webhook Pix existente.** Pix recebido continua igual, e Pix enviado não vira baixa de cobrança
+   (tarefa 8).
+
+## Mapa de arquivos
+
+**Backend novo** (`api-cobranca/src/disbursements/`):
+
+| Arquivo | Responsabilidade |
+| --- | --- |
+| `disbursements.module.ts` | Registro do módulo |
+| `disbursement-settings.service.ts` | Liberação, versões, prontidão e desligamento |
+| `disbursement-recipients.service.ts` | Cadastro e importação de colaboradores |
+| `disbursement-batches.service.ts` | Lotes, itens, hash e novo lote a partir de falhas |
+| `disbursement-approval.service.ts` | Pedido, decisão, expiração e avisos |
+| `efi-disbursement.client.ts` | `pixSend`, consulta por `idEnvio`, saldo e comprovante, com respostas normalizadas |
+| `disbursement-sender.service.ts` | Envio, verificação e conclusão do lote |
+| `disbursement.worker.ts` | `@Cron` a cada 30 s |
+| `disbursements.controller.ts` | Rotas da empresa |
+| `disbursements-admin.controller.ts` | Rotas do admin |
+| `dto/*.ts` | DTOs |
+| `disbursement-reasons.ts` | Códigos da Efí → motivo em PT-BR |
+| specs | Testes de cada serviço |
+
+**Backend alterado:**
+
+- `prisma/schema.prisma` e migration `add_employee_disbursements`.
+- `src/types/sdk-node-apis-efi.d.ts`: tipos dos métodos usados.
+- `src/payment/efi.service.ts`: ramo `SOLICITACAO` no webhook Pix.
+- `src/templates/template-contracts.ts`, `template-context.service.ts` e `template-renderer.ts`:
+  finalidades, origem, fontes e botões de decisão.
+- `src/app.module.ts`.
+- Teste novo `test/disbursements.e2e-spec.ts` e script `test:disbursements:postgres`.
+
+**Frontend:**
+
+- Painel admin `src/components/features/financial-activation/DisbursementSettings.tsx`, ao lado de
+  `CardPaymentSettings.tsx`.
+- Rota da empresa `src/app/(dashboard)/pagamentos-colaboradores/`.
+- Item condicional em `src/components/ui/Sidebar.tsx`.
+- Tipos e listas de `src/components/features/templates/types.ts`.
+- Métodos em `src/lib/api-client.ts`.
+
+**Documentação:**
+
+- Runbook `docs/operations/pagamentos-colaboradores.md`.
+- Tabela de módulos do `AGENTS.md`.
+
+## Tarefa 1 — validar a Efí em homologação
+
+**Criar:** `docs/implementation/efi-disbursement-validation.md`, com cenários, respostas resumidas e
+conclusões, sem credenciais nem dados pessoais.
+
+- [ ] Confirmar o formato aceito de `idEnvio`; proposta: id do item sem hífens (32 caracteres).
+- [ ] Enviar por chave com `favorecido.cpf`, por chave com `favorecido.cnpj` e por `contaBanco`.
+  Registrar o formato de `codigoBanco`, `agencia`, `conta` e `tipoConta`.
+- [ ] Capturar o payload real do webhook de envio na URL atual (`/webhooks/efi/pix?ignorar=`):
+  `REALIZADO`, `NAO_REALIZADO` e devoluções simuladas (R$ 4,00 e R$ 5,00). Conferir qual chave vem
+  em `chave`.
+- [ ] Registrar as respostas de `pixSend` para 400, 403 (escopo ausente), 404, 409
+  `id_envio_duplicado`, 422 e 429 (`Retry-After`), além de `pixSendDetailId` para id inexistente.
+- [ ] Verificar se o token OAuth informa os escopos concedidos (`pix.send`) e o nome do escopo de
+  saldo. Se não informar, o admin confirma manualmente na liberação.
+- [ ] Registrar o formato de `getAccountBalance` e de `pixGetReceipt`.
+- [ ] Commit documental.
+
+## Tarefa 2 — schema e configuração do admin
+
+**Modificar:** `prisma/schema.prisma`. **Criar:** migration `add_employee_disbursements`, módulo,
+`disbursement-settings.service.ts`, `disbursements-admin.controller.ts` e DTOs.
+
+**Modelos:**
+
+- `DisbursementSettings`: `companyId`, `version`, `enabled`, `approverName`, `approverPhone`,
+  `changedByUserId`, `createdAt`. Uma linha por versão, sem update; vale a de maior `version`.
+- `DisbursementRecipient`: `companyId`, `name`, `documentType` (`CPF`/`CNPJ`), `document`,
+  `pixKey?`, `bankIspb?`, `bankAgency?`, `bankAccount?`, `bankAccountType?`, `active`, `version`.
+  Único por `[companyId, document]`.
+- `DisbursementBatch`: `companyId`, `reference`, `status`, `totalCents`, `itemCount`,
+  `contentHash?`, `issuerIdentityId?`, `currentApprovalId?`, `version`, `createdByUserId`.
+- `DisbursementItem`: `batchId`, `companyId`, `recipientId`, foto do favorecido, `amountCents`,
+  `status`, `idEnvio` único, `e2eId?`, `failureCode?`, `failureReason?`, `sentAt?`, `settledAt?`.
+  Único por `[batchId, recipientId]`.
+- `DisbursementApproval`: `batchId`, `companyId`, `requestNumber`, `contentHash`,
+  `settingsVersion`, `approverPhoneHash`, `approveLabel`, `rejectLabel`, `intentId?`, `expiresAt`,
+  `state` (`AWAITING`/`APPROVED`/`REJECTED`/`EXPIRED`/`INVALIDATED`/`HELD`), `decidedAt?`,
+  `decisionMessageId?`, `decisionExternalMessageId?`, `requestedByUserId`, `ackSentAt?`,
+  `noticeSentAt?`.
+
+**Rotas** (`JwtAuthGuard` + `PlatformAdminGuard`):
+
+- `GET /admin/disbursements/:companyId/settings`: versão atual, histórico e prontidão.
+- `POST /admin/disbursements/:companyId/settings` (`expectedVersion`).
+
+**Prontidão para ligar:**
+
+- perfil financeiro ativo em Fase A, com identidade da empresa, credencial `ACTIVE` não vencida e
+  `pixKey`;
+- as três finalidades resolvidas pela política de templates;
+- botões de decisão mapeados (tarefa 5).
+
+**Desligar** cancela, na mesma transação: lotes `AWAITING_APPROVAL` (pedido `INVALIDATED`) e itens
+`PENDING`. Itens `SENDING`, `IN_PROCESSING` e `UNCERTAIN` continuam em verificação.
+
+- [ ] Testes: ligar sem prontidão gera 409 com o item faltante; versão divergente gera 409; nova
+  versão não apaga a anterior; telefone inválido é recusado; desligar cancela só o que não foi
+  enviado; usuário da empresa recebe 403 ou 404.
+- [ ] Implementar e aplicar a migration só em PostgreSQL descartável. Rodar specs e lint. Commit.
+
+## Tarefa 3 — colaboradores
+
+**Criar:** `disbursement-recipients.service.ts`, rotas em `disbursements.controller.ts`, DTOs.
+
+**Rotas da empresa** (todas com 404 se desligada ou de outra empresa):
+
+- `GET /disbursements/status`: sempre 200, com `{ enabled, approverName, approverPhoneMasked }`.
+- `GET /disbursements/recipients` e `POST /disbursements/recipients`.
+- `PATCH /disbursements/recipients/:id` (`expectedVersion`).
+- `POST /disbursements/recipients/import`: até 500 linhas, numa transação, com erro por linha e sem
+  gravação parcial.
+
+**Validação:** CPF e CNPJ com dígito verificador (reutilizar helper existente, se houver). Exatamente
+um destino: chave Pix (CPF, CNPJ, e-mail, telefone `+55` ou aleatória) ou dados bancários completos.
+
+- [ ] Testes: isolamento A/B (lista, edição e importação); documento duplicado gera 409; importação
+  com uma linha inválida não grava nada; desativado não entra em lote novo; funcionalidade desligada
+  gera 404.
+- [ ] Implementar. Rodar specs e lint. Commit.
+
+## Tarefa 4 — lotes
+
+**Criar:** `disbursement-batches.service.ts`, rotas e DTOs.
+
+**Rotas:**
+
+- `GET /disbursements/batches` (paginado) e `GET /disbursements/batches/:id`, com itens e motivos.
+- `POST /disbursements/batches`: referência e itens `{ recipientId, amountCents }`.
+- `PUT /disbursements/batches/:id`: só `DRAFT`, com `expectedVersion`.
+- `POST /disbursements/batches/:id/cancel`: só `DRAFT` ou `AWAITING_APPROVAL`; o pedido vira
+  `INVALIDATED`.
+- `POST /disbursements/batches/:id/retry-failed`: novo `DRAFT` com os itens `FAILED` e os dados
+  atuais do colaborador.
+
+**Regras:**
+
+- Itens de 1 a 500, sem colaborador repetido, valor maior que zero, total dentro de `Int`.
+- Foto do favorecido gravada no item.
+- `contentHash` = SHA-256 de referência, conta emissora, total e itens ordenados (destino, documento
+  e valor).
+
+- [ ] Testes: isolamento A/B; lote fora de `DRAFT` gera 409 na edição; colaborador repetido; hash
+  estável na ordem e diferente com qualquer valor alterado; `retry-failed` só com itens `FAILED`.
+- [ ] Implementar. Rodar specs e lint. Commit.
+
+## Tarefa 5 — templates de pagamento
+
+**Modificar:**
+
+- `template-contracts.ts`: finalidades `DISBURSEMENT_APPROVAL`, `DISBURSEMENT_EXPIRED` e
+  `DISBURSEMENT_FAILED`; origem `DISBURSEMENT`; `disbursementApprovalId` em `TemplateContext`;
+  fontes `APPROVER_NAME`, `DISBURSEMENT_REFERENCE`, `DISBURSEMENT_COUNT`, `DISBURSEMENT_TOTAL`,
+  `DISBURSEMENT_EXPIRES_AT`, `DISBURSEMENT_FAILURE_COUNT` e `DISBURSEMENT_FAILURES`;
+  `decisionButtons?: { approve: number; reject: number }` em `TemplateMapping`.
+- `template-context.service.ts`, `template-renderer.ts`, validação do mapeamento e tela de
+  mapeamento no frontend.
+
+**Regras:**
+
+- O contexto carrega pedido e lote pelo `companyId`.
+- O destinatário é o celular da versão de configuração do pedido. Os avisos usam o aprovador atual.
+- `decisionButtons` aponta para dois botões `QUICK_REPLY` distintos do template.
+- `DISBURSEMENT_FAILURES` fica numa linha, com limite de tamanho e "e mais N; veja no painel".
+- Datas no fuso de São Paulo.
+- Finalidades de pagamento não aparecem na régua (`COLLECTION_PURPOSES` inalterado).
+
+- [ ] Testes: renderização de cada fonte; contexto de outra empresa recusado; mapeamento com índice
+  que não é resposta rápida recusado; régua e ativação inalteradas.
+- [ ] Implementar. Rodar specs de templates, `npm run test:template-catalog:postgres` e
+  `npm run test:template-pending:postgres`. Commit.
+
+## Tarefa 6 — pedido de aprovação, decisão e expiração
+
+**Criar:** `disbursement-approval.service.ts` e a parte de decisão e expiração do worker.
+
+**Pedido** (`POST /disbursements/batches/:id/request-approval`, `expectedVersion`):
+
+1. Numa transação com o lote travado:
+   - exige `DRAFT`, funcionalidade ligada e prontidão;
+   - fotografa a conta emissora;
+   - calcula o hash;
+   - cria `DisbursementApproval` (`AWAITING`, 24 h, rótulos dos botões do template fixado);
+   - move o lote para `AWAITING_APPROVAL`.
+2. `prepare` com logicalKey `disbursement-approval:<approvalId>`.
+3. `dispatchIntent`.
+
+Template retido ou recusa definitiva marcam o pedido `HELD`, devolvem o lote a `DRAFT` e respondem 409
+`DISBURSEMENT_APPROVAL_NOT_SENT`. Resultado incerto mantém o pedido aguardando.
+
+**Decisão:** a cada tick, para pedidos `AWAITING`, procurar `CommunicationMessage` com:
+
+- `direction INBOUND` e `messageType 'button'`;
+- `replyToExternalMessageId` igual ao `externalMessageId` da mensagem do pedido;
+- mesma conversa e canal;
+- `providerTimestamp` anterior a `expiresAt`;
+- `content` igual a `approveLabel` ou `rejectLabel`.
+
+Decidir numa transação com o lote travado, gravando só se o pedido ainda estiver `AWAITING`, se for o
+atual do lote, se o hash for igual, se a funcionalidade estiver ligada e se o celular do pedido for o
+do aprovador atual. Aprovar move o lote para `PROCESSING` e os itens para `PENDING`; recusar move o
+lote para `REJECTED`. Vale a primeira resposta válida.
+
+**Confirmação ao aprovador:** texto livre pelo `OutboundDispatcherService` (janela de 24 h aberta
+pelo toque), com chave `disbursement-ack:<approvalId>`. Toque em pedido expirado, invalidado ou já
+decidido recebe uma única resposta de "pedido não vale mais".
+
+**Expiração:** pedido `AWAITING` vencido vira `EXPIRED`, e o lote também. Template
+`DISBURSEMENT_EXPIRED` com chave `disbursement-expired:<approvalId>`.
+
+- [ ] Testes de recusa (nenhum envio):
+  - outra conversa;
+  - mensagem `text` com "Aprovar pagamento";
+  - citação de pedido anterior;
+  - rótulo diferente;
+  - toque depois de `expiresAt`;
+  - lote editado ou cancelado;
+  - aprovador trocado;
+  - funcionalidade desligada.
+- [ ] Testes de aceitação: toque duplo e dois ticks concorrentes geram uma decisão e uma confirmação;
+  expiração gera um aviso; template retido devolve o lote a `DRAFT`.
+- [ ] Implementar. Concorrência em `test/disbursements.e2e-spec.ts` (PostgreSQL descartável). Commit.
+
+## Tarefa 7 — envio Pix
+
+**Criar:** `efi-disbursement.client.ts`, `disbursement-sender.service.ts`, `disbursement-reasons.ts`
+e a parte de envio do worker. **Modificar:** `src/types/sdk-node-apis-efi.d.ts`.
+
+**Cliente Efí:** SDK com certificado da credencial `ACTIVE` da identidade fotografada (padrão
+`EfiService.accountForIdentity` e `EfiGatewayClient`). Valor em texto `"123.45"`.
+`pagador.chave` = `pixKey` da identidade; `infoPagador` = referência cortada. `favorecido` = chave e
+documento, ou `contaBanco`.
+
+**Envio do lote `PROCESSING`:**
+
+1. Conferir que a identidade ativa é a fotografada. Se não for, todos os itens `PENDING` ficam
+   `FAILED` com `ISSUER_CHANGED`.
+2. Antes do primeiro item, consultar o saldo. Se não cobrir o total, todos ficam `FAILED` com
+   `INSUFFICIENT_BALANCE` e os valores no motivo.
+3. Por item, em sequência:
+   - reservar `PENDING` → `SENDING` com update condicional;
+   - chamar `pixSend`, sem transação aberta.
+
+**Resultados do `pixSend`:**
+
+| Resposta | Item | Observação |
+| --- | --- | --- |
+| 201 | `IN_PROCESSING` | Com `e2eId` |
+| 400, 403, 404 ou 422 | `FAILED` | Motivo traduzido; nada debitado |
+| 409 `id_envio_duplicado` | `UNCERTAIN` | |
+| 429 | Volta a `PENDING` | Pausa o lote até `Retry-After` |
+| 5xx, timeout ou rede | `UNCERTAIN` | |
+| `SENDING` há mais de 2 min | `UNCERTAIN` | |
+
+**Verificação de `UNCERTAIN`:** `pixSendDetailId` a cada tick, com recuo. `REALIZADO` vira `PAID`;
+`NAO_REALIZADO` vira `FAILED`; não encontrado continua `UNCERTAIN`. Rota admin
+`POST /admin/disbursements/:companyId/items/:itemId/reconcile` só consulta. Marcar como não processado
+exige ação explícita do admin, mais de 24 h sem registro na Efí e auditoria.
+
+**Comprovante:** `GET /disbursements/items/:id/receipt` (só `PAID`, isolado por empresa), via
+`pixGetReceipt`.
+
+- [ ] Testes: cada linha da tabela; identidade trocada; saldo insuficiente (nenhum `pixSend`); worker
+  desligado no meio (itens restantes `CANCELED`); duas instâncias geram um `pixSend` por item;
+  nenhum dado pessoal em log.
+- [ ] Implementar. Specs, e2e descartável e lint. Commit.
+
+## Tarefa 8 — webhook de Pix enviado e conclusão do lote
+
+**Modificar:** `src/payment/efi.service.ts` (`handlePixWebhook` e `extractPixEvents`) e
+`disbursement-sender.service.ts`.
+
+**Ramo novo:**
+
+- Itens com `tipo === 'SOLICITACAO'` e `gnExtras.idEnvio` vão para
+  `DisbursementSenderService.applySendResult`.
+- `chave` precisa ser a `pixKey` da identidade fotografada; se não for, `recordWebhookAnomaly`.
+- `idEnvio` desconhecido (envio feito fora do CifraMais na mesma conta) vira anomalia e responde 200.
+- Transições monotônicas; reentrega é idempotente.
+- `PAID` nunca volta. Devolução fica anomalia até a tarefa 1 definir o formato.
+
+**Conclusão:** lote sem itens `PENDING`, `SENDING` ou `IN_PROCESSING` vira `COMPLETED` ou
+`COMPLETED_WITH_FAILURES`. Com falhas, template `DISBURSEMENT_FAILED` com chave
+`disbursement-failed:<batchId>`. Itens `UNCERTAIN` não entram na lista e aparecem no painel como "em
+verificação — não pague manualmente".
+
+- [ ] Testes: payload de cobrança Pix inalterado (specs atuais passando); `REALIZADO` e
+  `NAO_REALIZADO` com motivo; reentrega; chave errada; `idEnvio` desconhecido; aviso enviado uma
+  vez; lote sem falhas não envia aviso.
+- [ ] Implementar. Rodar specs de `payment`, `webhooks` e `disbursements`. Commit.
+
+## Tarefa 9 — telas
+
+**Admin:**
+
+- `DisbursementSettings.tsx`: prontidão com o que falta, aprovador, ligar/desligar com confirmação
+  e histórico de versões.
+- Lista de itens `UNCERTAIN` com "Consultar na Efí".
+
+**Empresa** (`/pagamentos-colaboradores`; menu só com `GET /disbursements/status` `enabled`):
+
+- **Colaboradores:** lista, cadastro e importação de planilha (CSV com documento, nome e chave),
+  com pré-visualização e erro por linha.
+- **Lotes:** lista e detalhe.
+  - Criar lote digitando ou importando CSV (documento e valor).
+  - "Pedir aprovação", com o nome e o celular mascarado do aprovador.
+  - Situação de cada item em português e motivos.
+  - "Novo lote com os itens que falharam" e comprovante.
+
+Carregando, erro e vazio distintos; 409 recarrega; requisições antigas descartadas.
+
+**Textos:** "Aguardando aprovação no WhatsApp de <nome> até <data>"; "Expirado: faça o pagamento
+manualmente"; "Em verificação: não pague manualmente".
+
+- [ ] Testes de componentes (estados, 409, importação com linha inválida, menu oculto quando
+  desligado). `npm run lint`, `npx jest --runInBand` e `npm run build`. Commit.
+
+## Tarefa 10 — documentação e fechamento
+
+- [ ] Runbook `docs/operations/pagamentos-colaboradores.md`:
+  - cliente inclui os escopos na aplicação Efí e aumenta o limite Pix;
+  - admin valida as credenciais de novo;
+  - admin cria, importa, mapeia (com botões de decisão), libera e define como padrão os três templates;
+  - admin cadastra o aprovador e liga a funcionalidade;
+  - admin trata itens em verificação e desliga a funcionalidade.
+- [ ] `AGENTS.md`: módulo `disbursements/` na tabela e regra "nenhum Pix sem aprovação válida" na
+  seção 4.2.
+- [ ] Rodar tudo:
+  - backend: `npm test -- --runInBand`, `npx eslint "src/**/*.ts" "test/**/*.ts"`, `npm run build`
+    e e2e descartáveis afetados;
+  - frontend: lint, jest e build.
+
+  Registrar resultados e pendências: homologação, publicação, templates na Meta, CLT e tarifa Efí.
+  Commit.
