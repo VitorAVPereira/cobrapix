@@ -10,6 +10,18 @@ CREATE TYPE "DisbursementItemStatus" AS ENUM ('PENDING', 'SENDING', 'IN_PROCESSI
 -- CreateEnum
 CREATE TYPE "DisbursementApprovalState" AS ENUM ('AWAITING', 'APPROVED', 'REJECTED', 'EXPIRED', 'INVALIDATED', 'HELD');
 
+-- AlterEnum
+-- This migration adds more than one value to an enum.
+-- With PostgreSQL versions 11 and earlier, this is not possible
+-- in a single migration. This can be worked around by creating
+-- multiple migrations, each migration adding only one value to
+-- the enum.
+
+
+ALTER TYPE "WhatsappTemplatePurpose" ADD VALUE 'DISBURSEMENT_APPROVAL';
+ALTER TYPE "WhatsappTemplatePurpose" ADD VALUE 'DISBURSEMENT_EXPIRED';
+ALTER TYPE "WhatsappTemplatePurpose" ADD VALUE 'DISBURSEMENT_FAILED';
+
 -- CreateTable
 CREATE TABLE "DisbursementSettings" (
     "id" TEXT NOT NULL,

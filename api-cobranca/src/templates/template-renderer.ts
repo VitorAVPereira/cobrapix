@@ -49,6 +49,7 @@ export function validateMapping(
     'paymentButton',
     'pixButton',
     'boletoButton',
+    'decisionButtons',
   ]);
   const extra = Object.keys(mapping).find((key) => !allowedKeys.has(key));
   if (extra) return fail(extra, 'Campo não suportado.');
@@ -126,7 +127,39 @@ export function validateMapping(
       'boletoButton',
       'O template aprovado não tem botão de código do boleto.',
     );
+  const decision = mapping.decisionButtons;
+  if (
+    decision !== undefined &&
+    (!isRecord(decision) ||
+      Object.keys(decision).length !== 2 ||
+      !decisionLabels(parsed, decision as TemplateMapping['decisionButtons']))
+  )
+    return fail(
+      'decisionButtons',
+      'Escolha duas respostas rápidas diferentes do template: uma para aprovar e outra para recusar.',
+    );
   return { ok: true };
+}
+
+/**
+ * Labels of the approve and refuse quick replies. A tap is recognized by the exact label
+ * WhatsApp returns, so both must exist and differ.
+ */
+export function decisionLabels(
+  parsed: ParsedTemplate,
+  decision: TemplateMapping['decisionButtons'],
+): { approve: string; reject: string } | null {
+  if (
+    !decision ||
+    !Number.isInteger(decision.approve) ||
+    !Number.isInteger(decision.reject)
+  )
+    return null;
+  const approve = parsed.quickReplies[decision.approve];
+  const reject = parsed.quickReplies[decision.reject];
+  return approve !== undefined && reject !== undefined && approve !== reject
+    ? { approve, reject }
+    : null;
 }
 
 /** Sources a mapping reads; the context loader fetches only these. */
@@ -256,6 +289,44 @@ export function formatCivilDate(date: Date): string {
   return `${day}/${month}/${date.getUTCFullYear()}`;
 }
 
+/** A moment shown to people in Brazil: "16/10/2026 às 14:30", São Paulo time. */
+export function formatDateTime(date: Date): string {
+  const parts = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? '';
+  return `${part('day')}/${part('month')}/${part('year')} às ${part('hour')}:${part('minute')}`;
+}
+
+/**
+ * One-line list of failed payments with their reasons. Template parameters accept no
+ * line breaks, so long lists are cut and point to the panel.
+ */
+export function disbursementFailureSummary(
+  failures: { recipientName: string; failureReason: string | null }[],
+  maxLength = 600,
+): string {
+  const clean = (value: string) => value.replace(/\s+/g, ' ').trim();
+  const parts = failures.map(
+    (failure) =>
+      `${clean(failure.recipientName)} (${clean(failure.failureReason ?? '') || 'motivo não informado'})`,
+  );
+  for (let shown = parts.length; shown > 0; shown--) {
+    const hidden = parts.length - shown;
+    const text = parts.slice(0, shown).join('; ');
+    const full = hidden ? `${text}; e mais ${hidden}, veja no painel` : text;
+    if (full.length <= maxLength) return full;
+  }
+  return `${parts.length} pagamentos, veja os motivos no painel`;
+}
+
 export function formatAmount(value: number): string {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
     .format(value)
@@ -281,6 +352,14 @@ export function syntheticValues(paymentBaseUrl: string): {
       BOLETO_LINK: 'https://boleto.exemplo/cobranca',
       BOLETO_PDF: 'https://boleto.exemplo/cobranca.pdf',
       REPRESENTATIVE_NAME: 'Ana Representante',
+      APPROVER_NAME: 'Carlos Aprovador',
+      DISBURSEMENT_REFERENCE: 'Folha 10/2026',
+      DISBURSEMENT_COUNT: '12',
+      DISBURSEMENT_TOTAL: formatAmount(18450),
+      DISBURSEMENT_EXPIRES_AT: '06/10/2026 às 14:30',
+      DISBURSEMENT_FAILURE_COUNT: '2',
+      DISBURSEMENT_FAILURES:
+        'João Exemplo (chave Pix não encontrada); Paula Exemplo (conta inexistente)',
     },
   };
 }

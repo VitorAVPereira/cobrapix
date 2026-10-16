@@ -60,6 +60,6 @@ describe('DisbursementsController', () => {
       recipients.import,
       ...Object.values(batches),
     ])
-      expect((call.mock.calls as unknown[][])[0][0]).toBe('session-company');
+      expect((call.mock.calls as unknown[][])[0]?.[0]).toBe('session-company');
   });
 });

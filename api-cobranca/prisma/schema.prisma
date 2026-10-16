@@ -1441,6 +1441,9 @@ enum WhatsappTemplatePurpose {
   CRITICAL_OVERDUE
   ACTIVATION_NOTICE
   ACTIVATION_REMINDER
+  DISBURSEMENT_APPROVAL
+  DISBURSEMENT_EXPIRED
+  DISBURSEMENT_FAILED
 }
 
 /// Immutable admin mapping of one provider revision of a template.

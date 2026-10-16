@@ -135,17 +135,28 @@ validação em homologação: até lá, vira anomalia para o admin.
 
 1. **Pedido de aprovação** (`DISBURSEMENT_APPROVAL`), botões "Aprovar pagamento" e "Recusar":
    "Olá, {{1}}. A {{2}} pediu sua aprovação para o lote de pagamentos {{3}}: {{4}} pagamentos, total
-   de R$ {{5}}. Ao aprovar, os Pix são enviados na hora. O pedido vale até {{6}}; sem resposta, nada
+   de {{5}}. Ao aprovar, os Pix são enviados na hora. O pedido vale até {{6}}; sem resposta, nada
    será pago."
 2. **Lote expirado** (`DISBURSEMENT_EXPIRED`): "Olá, {{1}}. O lote de pagamentos {{2}} da {{3}}
-   ({{4}} pagamentos, total de R$ {{5}}) não foi aprovado em 24 horas. O CifraMais não fará esses
+   ({{4}} pagamentos, total de {{5}}) não foi aprovado em 24 horas. O CifraMais não fará esses
    pagamentos. Se ainda forem devidos, faça-os manualmente pela sua conta."
 3. **Falhas no lote** (`DISBURSEMENT_FAILED`): "Olá, {{1}}. No lote de pagamentos {{2}} da {{3}}, {{4}}
    pagamento(s) não foram concluídos: {{5}}. Esses valores não foram pagos. Para pagá-los, crie um novo
    lote no painel CifraMais."
 
 A lista de falhas fica numa linha só (a Meta não aceita quebra de linha em variável) e é cortada
-com "e mais N; veja no painel" quando passa do limite.
+com "e mais N, veja no painel" quando passa de 600 caracteres.
+
+**Formato das fontes:**
+
+| Fonte | Exemplo | Observação |
+| --- | --- | --- |
+| Total | `R$ 18.450,00` | Já vem com "R$"; por isso o texto não repete o símbolo |
+| Validade | `16/10/2026 às 14:30` | Horário de São Paulo |
+| Falhas | `Ana Souza (Chave Pix não encontrada); Bruno Lima (conta inexistente)` | |
+
+**Botões de decisão:** no mapeamento do template de pedido, o admin escolhe qual resposta rápida
+aprova e qual recusa (posições entre as respostas rápidas).
 
 ## Dados (migration aditiva)
 

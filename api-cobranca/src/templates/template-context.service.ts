@@ -10,6 +10,7 @@ import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { PublicPaymentLinkService } from '../payment/payment-link.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  DISBURSEMENT_SOURCES,
   INVOICE_SOURCES,
   RenderValues,
   TemplateContext,
@@ -18,8 +19,10 @@ import {
   TemplateSource,
 } from './template-contracts';
 import {
+  disbursementFailureSummary,
   formatAmount,
   formatCivilDate,
+  formatDateTime,
   mappingSources,
 } from './template-renderer';
 
@@ -60,6 +63,14 @@ export class TemplateContextService {
       throw new BadRequestException({
         code: 'VALUE_MISSING',
         message: 'O template exige a cobrança de contexto.',
+      });
+    const needsDisbursement =
+      origin === 'DISBURSEMENT' ||
+      sources.some((source) => DISBURSEMENT_SOURCES.includes(source));
+    if (needsDisbursement && !context.disbursementApprovalId)
+      throw new BadRequestException({
+        code: 'VALUE_MISSING',
+        message: 'O template exige o pedido de pagamento de contexto.',
       });
     const company = await client.company.findUnique({
       where: { id: context.companyId },
@@ -103,6 +114,9 @@ export class TemplateContextService {
       origin === 'ACTIVATION' || sources.includes('REPRESENTATIVE_NAME')
         ? await this.activation(client, context)
         : null;
+    const disbursement = needsDisbursement
+      ? await this.disbursement(client, context, sources)
+      : null;
 
     const values: RenderValues = {};
     const set = (source: TemplateSource, value: string | null | undefined) => {
@@ -111,6 +125,19 @@ export class TemplateContextService {
     set('COMPANY_NAME', company.tradeName ?? company.corporateName);
     set('DEBTOR_NAME', debtor?.name);
     set('REPRESENTATIVE_NAME', activation?.name);
+    if (disbursement) {
+      set('APPROVER_NAME', disbursement.approverName);
+      set('DISBURSEMENT_REFERENCE', disbursement.reference);
+      set('DISBURSEMENT_COUNT', String(disbursement.itemCount));
+      set('DISBURSEMENT_TOTAL', formatAmount(disbursement.totalCents / 100));
+      set('DISBURSEMENT_EXPIRES_AT', formatDateTime(disbursement.expiresAt));
+      set('DISBURSEMENT_FAILURE_COUNT', String(disbursement.failures.length));
+      if (disbursement.failures.length)
+        set(
+          'DISBURSEMENT_FAILURES',
+          disbursementFailureSummary(disbursement.failures),
+        );
+    }
     let paymentUrl: string | undefined;
     if (invoice) {
       set('AMOUNT', formatAmount(Number(invoice.originalAmount)));
@@ -131,9 +158,11 @@ export class TemplateContextService {
     const recipient =
       origin === 'ACTIVATION'
         ? (activation?.phone ?? null)
-        : debtor
-          ? this.phone(debtor.phoneNumber)
-          : null;
+        : origin === 'DISBURSEMENT'
+          ? (disbursement?.phone ?? null)
+          : debtor
+            ? this.phone(debtor.phoneNumber)
+            : null;
     const stableValues = {
       ...values,
       ...(values.PAYMENT_LINK
@@ -148,6 +177,7 @@ export class TemplateContextService {
           debtorId: debtor?.id ?? null,
           invoiceId: invoice?.id ?? null,
           activationId: activation?.id ?? null,
+          disbursementApprovalId: disbursement?.id ?? null,
           recipient: recipient
             ? createHash('sha256').update(recipient).digest('hex')
             : null,
@@ -195,6 +225,65 @@ export class TemplateContextService {
       id: row.id,
       name: decrypt(row.representativeNameEncrypted),
       phone: phone ? this.phone(phone) : null,
+    };
+  }
+
+  /**
+   * The payment request of this company and its current approver. The approver is always
+   * the latest admin configuration: a request sent to a replaced approver is invalidated.
+   */
+  private async disbursement(
+    client: Client,
+    context: TemplateContext,
+    sources: TemplateSource[],
+  ) {
+    const approval = context.disbursementApprovalId
+      ? await client.disbursementApproval.findFirst({
+          where: {
+            id: context.disbursementApprovalId,
+            companyId: context.companyId,
+          },
+          select: {
+            id: true,
+            batchId: true,
+            totalCents: true,
+            itemCount: true,
+            expiresAt: true,
+            batch: { select: { reference: true } },
+          },
+        })
+      : null;
+    if (!approval)
+      throw new NotFoundException(
+        'Pedido de pagamento não encontrado para a empresa.',
+      );
+    const settings = await client.disbursementSettings.findFirst({
+      where: { companyId: context.companyId },
+      orderBy: { version: 'desc' },
+      select: { approverName: true, approverPhone: true },
+    });
+    const failures =
+      sources.includes('DISBURSEMENT_FAILURES') ||
+      sources.includes('DISBURSEMENT_FAILURE_COUNT')
+        ? await client.disbursementItem.findMany({
+            where: {
+              batchId: approval.batchId,
+              companyId: context.companyId,
+              status: 'FAILED',
+            },
+            select: { recipientName: true, failureReason: true },
+            orderBy: [{ recipientName: 'asc' }, { id: 'asc' }],
+          })
+        : [];
+    return {
+      id: approval.id,
+      reference: approval.batch.reference,
+      totalCents: approval.totalCents,
+      itemCount: approval.itemCount,
+      expiresAt: approval.expiresAt,
+      approverName: settings?.approverName ?? null,
+      phone: settings ? this.phone(settings.approverPhone) : null,
+      failures,
     };
   }
 

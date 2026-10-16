@@ -7,7 +7,27 @@ import {
 import { DisbursementSettings, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FinancialEligibilityService } from '../financial-activation/financial-eligibility.service';
+import { TemplatePolicyService } from '../templates/template-policy.service';
+import {
+  DISBURSEMENT_PURPOSES,
+  TemplateBlockCode,
+} from '../templates/template-contracts';
+import { decisionLabels } from '../templates/template-renderer';
 import { DisbursementSettingsDto } from './dto/disbursement-settings.dto';
+
+const TEMPLATE_LABELS: Record<(typeof DISBURSEMENT_PURPOSES)[number], string> =
+  {
+    DISBURSEMENT_APPROVAL: 'Pedido de aprovação',
+    DISBURSEMENT_EXPIRED: 'Lote expirado',
+    DISBURSEMENT_FAILED: 'Falhas no lote',
+  };
+const BLOCK_REASONS: Partial<Record<TemplateBlockCode, string>> = {
+  DEFAULT_MISSING: 'sem template padrão definido para a empresa',
+  NOT_GRANTED: 'template não liberado para a empresa',
+  NOT_APPROVED: 'template não aprovado na Meta',
+  UNSUPPORTED: 'template com formato não suportado',
+  REVIEW_REQUIRED: 'mapeamento pendente de revisão',
+};
 
 type Client = Prisma.TransactionClient | PrismaService;
 export interface ReadinessItem {
@@ -28,6 +48,7 @@ export class DisbursementSettingsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eligibility: FinancialEligibilityService,
+    private readonly policy: TemplatePolicyService,
   ) {}
 
   /** The highest version is the current one; older versions are the change history. */
@@ -113,6 +134,29 @@ export class DisbursementSettingsService {
         code: response.code ?? 'FINANCIAL_PROFILE_NOT_READY',
         message: response.message ?? 'Ativação financeira indisponível.',
       });
+    }
+    // Without these messages nothing could be approved, expired or reported.
+    for (const purpose of DISBURSEMENT_PURPOSES) {
+      const decision = await this.prisma.$transaction((tx) =>
+        this.policy.resolve(tx, companyId, { mode: 'DEFAULT', purpose }),
+      );
+      if (!decision.allowed)
+        missing.push({
+          code: 'TEMPLATE_UNAVAILABLE',
+          message: `Template "${TEMPLATE_LABELS[purpose]}": ${BLOCK_REASONS[decision.code] ?? decision.code}.`,
+        });
+      else if (
+        purpose === 'DISBURSEMENT_APPROVAL' &&
+        !decisionLabels(
+          decision.template.parsed,
+          decision.template.mapping.decisionButtons,
+        )
+      )
+        missing.push({
+          code: 'TEMPLATE_DECISION_BUTTONS',
+          message:
+            'O template de pedido de aprovação precisa dos botões de aprovar e recusar mapeados.',
+        });
     }
     return { ready: missing.length === 0, missing };
   }

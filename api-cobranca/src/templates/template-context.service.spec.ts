@@ -51,6 +51,37 @@ function setup() {
       ),
     },
     efiOnboarding: { findFirst: jest.fn() },
+    disbursementApproval: {
+      findFirst: jest.fn(({ where }: { where: { companyId: string } }) =>
+        Promise.resolve(
+          where.companyId === 'company-a'
+            ? {
+                id: 'approval-a',
+                batchId: 'batch-a',
+                totalCents: 1845000,
+                itemCount: 12,
+                expiresAt: new Date('2026-10-16T17:30:00.000Z'),
+                batch: { reference: 'Folha 10/2026' },
+              }
+            : null,
+        ),
+      ),
+    },
+    disbursementSettings: {
+      findFirst: jest.fn().mockResolvedValue({
+        approverName: 'Carlos Aprovador',
+        approverPhone: '5511988887777',
+      }),
+    },
+    disbursementItem: {
+      findMany: jest.fn().mockResolvedValue([
+        {
+          recipientName: 'Ana Souza',
+          failureReason: 'Chave Pix não encontrada',
+        },
+        { recipientName: 'Bruno Lima', failureReason: null },
+      ]),
+    },
   };
   let token = 0;
   const links = {
@@ -193,5 +224,78 @@ describe('TemplateContextService', () => {
         where: { id: 'activation-a', companyId: 'company-a' },
       }),
     );
+  });
+
+  const disbursementMapping: TemplateMapping = {
+    body: {
+      '1': { kind: 'SOURCE', source: 'APPROVER_NAME' },
+      '2': { kind: 'SOURCE', source: 'COMPANY_NAME' },
+      '3': { kind: 'SOURCE', source: 'DISBURSEMENT_REFERENCE' },
+      '4': { kind: 'SOURCE', source: 'DISBURSEMENT_COUNT' },
+      '5': { kind: 'SOURCE', source: 'DISBURSEMENT_TOTAL' },
+      '6': { kind: 'SOURCE', source: 'DISBURSEMENT_EXPIRES_AT' },
+      '7': { kind: 'SOURCE', source: 'DISBURSEMENT_FAILURE_COUNT' },
+      '8': { kind: 'SOURCE', source: 'DISBURSEMENT_FAILURES' },
+    },
+  };
+
+  it('collaborator payment messages go to the current approver with the request values', async () => {
+    const { service, prisma } = setup();
+    const loaded = await service.load(
+      { companyId: 'company-a', disbursementApprovalId: 'approval-a' },
+      'DISBURSEMENT',
+      disbursementMapping,
+    );
+    expect(loaded.values).toEqual({
+      APPROVER_NAME: 'Carlos Aprovador',
+      COMPANY_NAME: 'Empresa A',
+      DISBURSEMENT_REFERENCE: 'Folha 10/2026',
+      DISBURSEMENT_COUNT: '12',
+      DISBURSEMENT_TOTAL: 'R$ 18.450,00',
+      DISBURSEMENT_EXPIRES_AT: '16/10/2026 às 14:30',
+      DISBURSEMENT_FAILURE_COUNT: '2',
+      DISBURSEMENT_FAILURES:
+        'Ana Souza (Chave Pix não encontrada); Bruno Lima (motivo não informado)',
+    });
+    expect(loaded.recipient).toBe('5511988887777');
+    expect(prisma.disbursementItem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { batchId: 'batch-a', companyId: 'company-a', status: 'FAILED' },
+      }),
+    );
+  });
+
+  it('never loads a payment request of another company nor sends without one', async () => {
+    const { service, prisma } = setup();
+    prisma.company.findUnique.mockResolvedValue({
+      id: 'company-b',
+      corporateName: 'B',
+      tradeName: null,
+    });
+    await expect(
+      service.load(
+        { companyId: 'company-b', disbursementApprovalId: 'approval-a' },
+        'DISBURSEMENT',
+        disbursementMapping,
+      ),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    await expect(
+      service.load({ companyId: 'company-a' }, 'DISBURSEMENT', {
+        body: { '1': { kind: 'SOURCE', source: 'COMPANY_NAME' } },
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('a payment source in a collection message is never filled from the debtor', async () => {
+    const { service } = setup();
+    await expect(
+      service.load(
+        { companyId: 'company-a', invoiceId: 'invoice-a' },
+        'COLLECTION',
+        {
+          body: { '1': { kind: 'SOURCE', source: 'DISBURSEMENT_TOTAL' } },
+        },
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 });

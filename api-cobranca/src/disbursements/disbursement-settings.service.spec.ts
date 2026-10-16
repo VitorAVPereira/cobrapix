@@ -40,13 +40,24 @@ describe('disbursement settings (admin)', () => {
         payoutMode: 'DIRECT_TO_CUSTOMER',
       }),
     };
+    const policy = {
+      resolve: jest.fn().mockResolvedValue({
+        allowed: true,
+        template: {
+          parsed: { quickReplies: ['Aprovar pagamento', 'Recusar'] },
+          mapping: { body: {}, decisionButtons: { approve: 0, reject: 1 } },
+        },
+      }),
+    };
     return {
       tx,
       prisma,
       eligibility,
+      policy,
       service: new DisbursementSettingsService(
         prisma as never,
         eligibility as never,
+        policy as never,
       ),
     };
   }
@@ -105,7 +116,40 @@ describe('disbursement settings (admin)', () => {
         expect.objectContaining({ code: 'FINANCIAL_PROFILE_NOT_READY' }),
       ],
     });
-    expect(f.prisma.$transaction).not.toHaveBeenCalled();
+    expect(f.tx.disbursementSettings.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses to enable while a payment template is unavailable or lacks decision buttons', async () => {
+    const f = fixture();
+    f.policy.resolve.mockImplementation(
+      (_tx: unknown, _company: string, selection: { purpose: string }) =>
+        selection.purpose === 'DISBURSEMENT_FAILED'
+          ? { allowed: false, code: 'DEFAULT_MISSING' }
+          : {
+              allowed: true,
+              template: {
+                parsed: { quickReplies: ['Ok'] },
+                mapping: { body: {} },
+              },
+            },
+    );
+    const error = await failure(f.service.configure('company', 'admin', dto));
+    expect(error.getResponse()).toMatchObject({
+      code: 'DISBURSEMENT_NOT_READY',
+      missing: [
+        {
+          code: 'TEMPLATE_DECISION_BUTTONS',
+          message: expect.stringContaining('aprovar e recusar') as unknown,
+        },
+        {
+          code: 'TEMPLATE_UNAVAILABLE',
+          message:
+            'Template "Falhas no lote": sem template padrão definido para a empresa.',
+        },
+      ],
+    });
+    expect(f.policy.resolve).toHaveBeenCalledTimes(3);
+    expect(f.tx.disbursementSettings.create).not.toHaveBeenCalled();
   });
 
   it('refuses to enable on the platform account or without a Pix key', async () => {

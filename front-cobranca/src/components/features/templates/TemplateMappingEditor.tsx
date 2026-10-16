@@ -16,6 +16,14 @@ import {
 
 const LITERAL = "LITERAL";
 
+/** Positions among the quick replies; both chosen or neither. */
+type Decision = { approve: number | null; reject: number | null };
+
+function initialDecision(template: AdminWhatsappTemplate): Decision {
+  const saved = template.mapping?.decisionButtons;
+  return { approve: saved?.approve ?? null, reject: saved?.reject ?? null };
+}
+
 function initialBody(
   template: AdminWhatsappTemplate,
 ): Record<string, TemplateBinding | undefined> {
@@ -50,6 +58,10 @@ export function TemplateMappingEditor({
   const [body, setBody] = useState<Record<string, TemplateBinding | undefined>>(
     {},
   );
+  const [decision, setDecision] = useState<Decision>({
+    approve: null,
+    reject: null,
+  });
   const [preview, setPreview] = useState<TemplateRenderResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +71,7 @@ export function TemplateMappingEditor({
     const loaded = await api.getAdminWhatsappTemplate(templateId);
     setTemplate(loaded);
     setBody(initialBody(loaded));
+    setDecision(initialDecision(loaded));
     setPreview(null);
   }, [api, templateId]);
 
@@ -87,10 +100,18 @@ export function TemplateMappingEditor({
       </section>
     );
 
-  const complete = template.variables.every((variable) => {
-    const binding = body[variable];
-    return binding && (binding.kind === "SOURCE" || binding.value.trim());
-  });
+  const quickReplies = template.content.quickReplies ?? [];
+  const decisionValid =
+    (decision.approve === null && decision.reject === null) ||
+    (decision.approve !== null &&
+      decision.reject !== null &&
+      decision.approve !== decision.reject);
+  const complete =
+    decisionValid &&
+    template.variables.every((variable) => {
+      const binding = body[variable];
+      return binding && (binding.kind === "SOURCE" || binding.value.trim());
+    });
   const mapping = (): TemplateMapping => ({
     body: Object.fromEntries(
       Object.entries(body).filter((entry): entry is [string, TemplateBinding] =>
@@ -121,7 +142,21 @@ export function TemplateMappingEditor({
           },
         }
       : {}),
+    ...(decision.approve !== null && decision.reject !== null
+      ? {
+          decisionButtons: {
+            approve: decision.approve,
+            reject: decision.reject,
+          },
+        }
+      : {}),
   });
+
+  function changeDecision(key: keyof Decision, index: number | null): void {
+    setPreview(null);
+    setNotice(null);
+    setDecision((current) => ({ ...current, [key]: index }));
+  }
 
   function change(
     variable: string,
@@ -299,6 +334,48 @@ export function TemplateMappingEditor({
               {template.content.quickReplies.join(", ")}.
             </p>
           ) : null}
+          {quickReplies.length >= 2 && (
+            <fieldset className="space-y-2 rounded-lg border p-3">
+              <legend className="px-1 text-sm font-medium">
+                Aprovação de pagamento a colaboradores (opcional)
+              </legend>
+              <p className="text-xs text-slate-500">
+                Use só no template de pedido de aprovação. O toque na resposta
+                escolhida aprova ou recusa o lote de pagamentos.
+              </p>
+              {(["approve", "reject"] as const).map((key) => (
+                <label key={key} className="block text-sm">
+                  {key === "approve"
+                    ? "Resposta que aprova"
+                    : "Resposta que recusa"}
+                  <select
+                    className="mt-1 w-full rounded-lg border p-2"
+                    value={decision[key] ?? ""}
+                    onChange={(event) =>
+                      changeDecision(
+                        key,
+                        event.target.value === ""
+                          ? null
+                          : Number(event.target.value),
+                      )
+                    }
+                  >
+                    <option value="">Nenhuma</option>
+                    {quickReplies.map((label, index) => (
+                      <option key={`${index}-${label}`} value={index}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+              {!decisionValid && (
+                <p className="text-xs text-amber-800">
+                  Escolha as duas respostas, diferentes entre si, ou nenhuma.
+                </p>
+              )}
+            </fieldset>
+          )}
           {preview && (
             <div aria-label="Prévia fictícia" className="rounded-lg border p-3">
               {preview.ok ? (

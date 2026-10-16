@@ -12,8 +12,18 @@ export const TEMPLATE_PURPOSES = [
   'CRITICAL_OVERDUE',
   'ACTIVATION_NOTICE',
   'ACTIVATION_REMINDER',
+  'DISBURSEMENT_APPROVAL',
+  'DISBURSEMENT_EXPIRED',
+  'DISBURSEMENT_FAILED',
 ] as const;
 export type TemplatePurpose = (typeof TEMPLATE_PURPOSES)[number];
+
+/** Messages to the company's approver about collaborator payments; never collection. */
+export const DISBURSEMENT_PURPOSES = [
+  'DISBURSEMENT_APPROVAL',
+  'DISBURSEMENT_EXPIRED',
+  'DISBURSEMENT_FAILED',
+] as const satisfies readonly TemplatePurpose[];
 
 /** Collection purposes a rule step may use; activation notices have their own. */
 export const COLLECTION_PURPOSES: readonly TemplatePurpose[] = [
@@ -35,6 +45,7 @@ export type TemplateContext = {
   debtorId?: string;
   invoiceId?: string;
   activationId?: string;
+  disbursementApprovalId?: string;
 };
 
 export const TEMPLATE_SOURCES = [
@@ -48,8 +59,26 @@ export const TEMPLATE_SOURCES = [
   'BOLETO_LINK',
   'BOLETO_PDF',
   'REPRESENTATIVE_NAME',
+  'APPROVER_NAME',
+  'DISBURSEMENT_REFERENCE',
+  'DISBURSEMENT_COUNT',
+  'DISBURSEMENT_TOTAL',
+  'DISBURSEMENT_EXPIRES_AT',
+  'DISBURSEMENT_FAILURE_COUNT',
+  'DISBURSEMENT_FAILURES',
 ] as const;
 export type TemplateSource = (typeof TEMPLATE_SOURCES)[number];
+
+/** Sources read from a collaborator payment request: they need its context. */
+export const DISBURSEMENT_SOURCES: readonly TemplateSource[] = [
+  'APPROVER_NAME',
+  'DISBURSEMENT_REFERENCE',
+  'DISBURSEMENT_COUNT',
+  'DISBURSEMENT_TOTAL',
+  'DISBURSEMENT_EXPIRES_AT',
+  'DISBURSEMENT_FAILURE_COUNT',
+  'DISBURSEMENT_FAILURES',
+];
 
 /** Sources read from an invoice: a template using any of them needs the invoice context. */
 export const INVOICE_SOURCES: readonly TemplateSource[] = [
@@ -78,6 +107,11 @@ export type TemplateMapping = {
   pixButton?: { index: number; source: 'PIX_COPY_PASTE' };
   /** "Copy Boleto code" button: always the digitable line of the invoice sent. */
   boletoButton?: { index: number; source: 'BOLETO_LINE' };
+  /**
+   * Approval of a collaborator payment: positions among the template's quick replies
+   * (not among all buttons) of the button that approves and the one that refuses.
+   */
+  decisionButtons?: { approve: number; reject: number };
 };
 
 export type TemplateSnapshot = {
@@ -153,7 +187,11 @@ export type RenderResult =
     }
   | { ok: false; code: 'VALUE_MISSING' | 'UNSUPPORTED'; field: string };
 
-export type TemplateSendOrigin = 'COLLECTION' | 'ADMIN_REPLY' | 'ACTIVATION';
+export type TemplateSendOrigin =
+  | 'COLLECTION'
+  | 'ADMIN_REPLY'
+  | 'ACTIVATION'
+  | 'DISBURSEMENT';
 
 export type TemplateSendRequest = {
   logicalKey: string;

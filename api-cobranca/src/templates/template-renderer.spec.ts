@@ -2,8 +2,11 @@ import { parseTemplate } from './template-components';
 import type { ParsedTemplate, TemplateMapping } from './template-contracts';
 import {
   methodCanFill,
+  decisionLabels,
+  disbursementFailureSummary,
   formatAmount,
   formatCivilDate,
+  formatDateTime,
   mappingSources,
   renderTemplate,
   validateMapping,
@@ -348,6 +351,91 @@ describe('card templates', () => {
     );
     expect(methodCanFill('CREDIT_CARD', { pix: false, boleto: true })).toBe(
       false,
+    );
+  });
+});
+
+describe('collaborator payment templates', () => {
+  const approval = (buttons: string[]) => {
+    const result = parseTemplate({
+      parameterFormat: 'POSITIONAL',
+      components: [
+        { type: 'BODY', text: 'Olá {{1}}, aprove o lote {{2}}.' },
+        {
+          type: 'BUTTONS',
+          buttons: buttons.map((text) => ({ type: 'QUICK_REPLY', text })),
+        },
+      ],
+      language: 'pt_BR',
+      category: 'UTILITY',
+      paymentBaseUrl: BASE,
+    });
+    if (!result.supported) throw new Error(result.reason);
+    return result.template;
+  };
+  const body = {
+    '1': { kind: 'SOURCE', source: 'APPROVER_NAME' },
+    '2': { kind: 'SOURCE', source: 'DISBURSEMENT_REFERENCE' },
+  } as const;
+
+  it('maps the approve and refuse quick replies by their position among quick replies', () => {
+    const template = approval(['Aprovar pagamento', 'Recusar']);
+    expect(
+      validateMapping(template, {
+        body,
+        decisionButtons: { approve: 0, reject: 1 },
+      }),
+    ).toEqual({ ok: true });
+    expect(decisionLabels(template, { approve: 0, reject: 1 })).toEqual({
+      approve: 'Aprovar pagamento',
+      reject: 'Recusar',
+    });
+  });
+
+  it.each([
+    [{ approve: 0, reject: 0 }],
+    [{ approve: 0, reject: 2 }],
+    [{ approve: -1, reject: 1 }],
+    [{ approve: 0, reject: 1, extra: 2 }],
+    [{ approve: '0', reject: 1 }],
+  ])('refuses decision buttons %o', (decisionButtons) => {
+    expect(
+      validateMapping(approval(['Aprovar pagamento', 'Recusar']), {
+        body,
+        decisionButtons,
+      }),
+    ).toMatchObject({ ok: false, field: 'decisionButtons' });
+  });
+
+  it('a template whose two quick replies have the same label cannot decide', () => {
+    expect(
+      decisionLabels(approval(['Ok', 'Ok']), { approve: 0, reject: 1 }),
+    ).toBeNull();
+  });
+
+  it('lists failures on one line and points to the panel when too long', () => {
+    expect(
+      disbursementFailureSummary([
+        { recipientName: 'Ana\nSouza', failureReason: 'Chave   Pix\tinválida' },
+        { recipientName: 'Bruno', failureReason: '' },
+      ]),
+    ).toBe('Ana Souza (Chave Pix inválida); Bruno (motivo não informado)');
+    const many = Array.from({ length: 30 }, (_, index) => ({
+      recipientName: `Colaborador ${index + 1}`,
+      failureReason: 'Conta inexistente no banco do recebedor',
+    }));
+    const summary = disbursementFailureSummary(many);
+    expect(summary.length).toBeLessThanOrEqual(600);
+    expect(summary).toMatch(/; e mais \d+, veja no painel$/);
+    expect(summary.startsWith('Colaborador 1 (')).toBe(true);
+  });
+
+  it('shows the request deadline in São Paulo time', () => {
+    expect(formatDateTime(new Date('2026-10-16T17:30:00.000Z'))).toBe(
+      '16/10/2026 às 14:30',
+    );
+    expect(formatDateTime(new Date('2026-12-31T02:05:00.000Z'))).toBe(
+      '30/12/2026 às 23:05',
     );
   });
 });

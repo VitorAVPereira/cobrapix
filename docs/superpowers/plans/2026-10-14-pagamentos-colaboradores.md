@@ -306,10 +306,53 @@ um destino: chave Pix (CPF, CNPJ, e-mail, telefone `+55` ou aleatória) ou dados
 - Datas no fuso de São Paulo.
 - Finalidades de pagamento não aparecem na régua (`COLLECTION_PURPOSES` inalterado).
 
-- [ ] Testes: renderização de cada fonte; contexto de outra empresa recusado; mapeamento com índice
+- [x] Testes: renderização de cada fonte; contexto de outra empresa recusado; mapeamento com índice
   que não é resposta rápida recusado; régua e ativação inalteradas.
-- [ ] Implementar. Rodar specs de templates, `npm run test:template-catalog:postgres` e
+- [x] Implementar. Rodar specs de templates, `npm run test:template-catalog:postgres` e
   `npm run test:template-pending:postgres`. Commit.
+
+**Registro de execução (16/10/2026):**
+
+- Finalidades, fontes, origem `DISBURSEMENT` e `decisionButtons` no backend e no frontend.
+- Enum `WhatsappTemplatePurpose` com três valores novos, na migration ainda não publicada.
+  PostgreSQL 16 em produção aceita os três `ADD VALUE` na mesma migration.
+- Prontidão da tarefa 2 completada: ligar exige os três padrões de template resolvidos para a
+  empresa e o pedido de aprovação com os botões de decisão mapeados.
+- Editor de mapeamento: escolha opcional de "Resposta que aprova" e "Resposta que recusa" quando o
+  template tem duas respostas rápidas ou mais.
+- Testes:
+  - backend unitário: 127 suítes e 1.036 testes (novos em renderer, contexto e configuração);
+  - PostgreSQL descartável:
+    - `disbursements.e2e-spec.ts`: 16 (ligar sem templates recusado com motivo);
+    - `test:template-catalog:postgres` e `test:template-pending:postgres`: todos passando;
+    - `test:e2e:templates`: 5 suítes, 38 testes;
+  - frontend:
+    - templates: 34 testes (2 novos do editor);
+    - suíte completa: 310 testes passando, mas `CardCheckout.test.tsx` não carrega porque
+      `payment-token-efi` não está instalado no `node_modules` local (dependência do cartão já
+      declarada no `package.json` e no lock);
+    - `tsc` acusa só essa ausência.
+- Lint do backend e do frontend (templates) e build do backend sem erros. Build do frontend não
+  executado pela mesma dependência ausente.
+
+**Desvios e decisões:**
+
+- **`decisionButtons`:** aponta posições **entre as respostas rápidas** (`parsed.quickReplies`), não
+  entre todos os botões. O parser só guarda os textos, e o toque é reconhecido pelo texto exato.
+  `ParsedTemplate` não mudou.
+- **Destinatário:** sempre o aprovador da versão mais recente da configuração. A troca de aprovador
+  já invalida pedidos pendentes (tarefa 2), então pedido e avisos usam o mesmo celular.
+- **Total:** sai formatado com "R$" (igual a `AMOUNT`). Os textos sugeridos na especificação foram
+  corrigidos para não repetir o símbolo.
+- **Lista de falhas:** limite de 600 caracteres, com o restante como "e mais N, veja no painel".
+- **Para a tarefa 6:**
+  - em `template-resume.service.ts`, uma pendência de pedido de aprovação (`origin: 'DISBURSEMENT'`,
+    finalidade `DISBURSEMENT_APPROVAL`) deve ser encerrada, não retomada, quando o pedido não
+    estiver mais `AWAITING`;
+  - avisos de expiração e falha podem ser retomados normalmente.
+- **Observado, fora do escopo:** o catálogo da empresa mostra todos os templates liberados a ela.
+  A empresa poderia escolher um template de pagamento numa etapa da régua. O envio ficaria pendente
+  por falta de contexto (sem dano), mas a lista poderia esconder esses templates.
 
 ## Tarefa 6 — pedido de aprovação, decisão e expiração
 

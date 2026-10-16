@@ -10,6 +10,7 @@ import { FinancialEligibilityService } from '../src/financial-activation/financi
 import { DisbursementSettingsService } from '../src/disbursements/disbursement-settings.service';
 import { DisbursementRecipientsService } from '../src/disbursements/disbursement-recipients.service';
 import { DisbursementBatchesService } from '../src/disbursements/disbursement-batches.service';
+import { TemplatePolicyService } from '../src/templates/template-policy.service';
 
 if (
   !process.env.CIFRAMAIS_DISPOSABLE_E2E ||
@@ -25,6 +26,7 @@ describe('Disbursements (disposable PostgreSQL)', () => {
   const settings = new DisbursementSettingsService(
     prisma,
     new FinancialEligibilityService(prisma),
+    new TemplatePolicyService(new ConfigService({ ...process.env })),
   );
   const approver = {
     approverName: 'Maria Souza',
@@ -96,7 +98,7 @@ describe('Disbursements (disposable PostgreSQL)', () => {
     return { batchId: created.id, itemId: item.id };
   }
 
-  it('enabling without an active financial profile is refused', async () => {
+  it('enabling without an active financial profile or payment templates is refused', async () => {
     await expect(
       settings.configure(companyId, 'admin', {
         expectedVersion: 1,
@@ -108,6 +110,13 @@ describe('Disbursements (disposable PostgreSQL)', () => {
         code: 'DISBURSEMENT_NOT_READY',
         missing: [
           expect.objectContaining({ code: 'FINANCIAL_PROFILE_NOT_READY' }),
+          {
+            code: 'TEMPLATE_UNAVAILABLE',
+            message:
+              'Template "Pedido de aprovação": sem template padrão definido para a empresa.',
+          },
+          expect.objectContaining({ code: 'TEMPLATE_UNAVAILABLE' }),
+          expect.objectContaining({ code: 'TEMPLATE_UNAVAILABLE' }),
         ],
       },
     });
@@ -225,6 +234,7 @@ describe('Collaborators isolated by company (disposable PostgreSQL)', () => {
   const settings = new DisbursementSettingsService(
     prisma,
     new FinancialEligibilityService(prisma),
+    new TemplatePolicyService(new ConfigService({ ...process.env })),
   );
   const recipients = new DisbursementRecipientsService(prisma, settings);
   const ana = {
@@ -359,6 +369,7 @@ describe('Batches (disposable PostgreSQL)', () => {
   const settings = new DisbursementSettingsService(
     prisma,
     new FinancialEligibilityService(prisma),
+    new TemplatePolicyService(new ConfigService({ ...process.env })),
   );
   const recipients = new DisbursementRecipientsService(prisma, settings);
   const batches = new DisbursementBatchesService(prisma, settings);
