@@ -2043,6 +2043,8 @@ model DisbursementBatch {
   // Number of the current approval request; older requests never authorize a send.
   approvalRequests Int @default(0)
   sendPausedUntil DateTime?
+  // Batch whose failed items this one pays again; a double click reuses the open retry.
+  retryOfBatchId String?
   version Int @default(1)
   createdByUserId String
   completedAt DateTime?
@@ -2052,6 +2054,7 @@ model DisbursementBatch {
   approvals DisbursementApproval[]
   @@unique([id, companyId])
   @@index([companyId, createdAt])
+  @@index([companyId, retryOfBatchId])
   @@index([status])
 }
 

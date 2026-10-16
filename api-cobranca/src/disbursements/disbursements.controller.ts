@@ -20,6 +20,12 @@ import {
   ImportDisbursementRecipientsDto,
   UpdateDisbursementRecipientDto,
 } from './dto/disbursement-recipient.dto';
+import { DisbursementBatchesService } from './disbursement-batches.service';
+import {
+  CreateDisbursementBatchDto,
+  DisbursementBatchesQueryDto,
+  UpdateDisbursementBatchDto,
+} from './dto/disbursement-batch.dto';
 
 /** The company always comes from the session; another company's IDs answer 404. */
 @Controller('disbursements')
@@ -28,6 +34,7 @@ export class DisbursementsController {
   constructor(
     private readonly settings: DisbursementSettingsService,
     private readonly recipients: DisbursementRecipientsService,
+    private readonly batches: DisbursementBatchesService,
   ) {}
 
   @Get('status') status(@GetUser() user: AuthenticatedUser) {
@@ -61,5 +68,48 @@ export class DisbursementsController {
     @Body() dto: ImportDisbursementRecipientsDto,
   ) {
     return this.recipients.import(user.companyId, dto.rows);
+  }
+
+  @Get('batches') listBatches(
+    @GetUser() user: AuthenticatedUser,
+    @Query() query: DisbursementBatchesQueryDto,
+  ) {
+    return this.batches.list(user.companyId, query);
+  }
+
+  @Get('batches/:id') getBatch(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.batches.get(user.companyId, id);
+  }
+
+  @Post('batches') createBatch(
+    @GetUser() user: AuthenticatedUser,
+    @Body() dto: CreateDisbursementBatchDto,
+  ) {
+    return this.batches.create(user.companyId, user.userId, dto);
+  }
+
+  @Put('batches/:id') updateBatch(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateDisbursementBatchDto,
+  ) {
+    return this.batches.update(user.companyId, id, dto);
+  }
+
+  @Post('batches/:id/cancel') cancelBatch(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.batches.cancel(user.companyId, id);
+  }
+
+  @Post('batches/:id/retry-failed') retryFailed(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.batches.retryFailed(user.companyId, user.userId, id);
   }
 }

@@ -56,6 +56,7 @@ CREATE TABLE "DisbursementBatch" (
     "issuerIdentityId" TEXT,
     "approvalRequests" INTEGER NOT NULL DEFAULT 0,
     "sendPausedUntil" TIMESTAMP(3),
+    "retryOfBatchId" TEXT,
     "version" INTEGER NOT NULL DEFAULT 1,
     "createdByUserId" TEXT NOT NULL,
     "completedAt" TIMESTAMP(3),
@@ -137,6 +138,9 @@ CREATE UNIQUE INDEX "DisbursementRecipient_id_companyId_key" ON "DisbursementRec
 
 -- CreateIndex
 CREATE INDEX "DisbursementBatch_companyId_createdAt_idx" ON "DisbursementBatch"("companyId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "DisbursementBatch_companyId_retryOfBatchId_idx" ON "DisbursementBatch"("companyId", "retryOfBatchId");
 
 -- CreateIndex
 CREATE INDEX "DisbursementBatch_status_idx" ON "DisbursementBatch"("status");

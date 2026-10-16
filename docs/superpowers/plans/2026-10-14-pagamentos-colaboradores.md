@@ -240,9 +240,48 @@ um destino: chave Pix (CPF, CNPJ, e-mail, telefone `+55` ou aleatória) ou dados
 - `contentHash` = SHA-256 de referência, conta emissora, total e itens ordenados (destino, documento
   e valor).
 
-- [ ] Testes: isolamento A/B; lote fora de `DRAFT` gera 409 na edição; colaborador repetido; hash
+- [x] Testes: isolamento A/B; lote fora de `DRAFT` gera 409 na edição; colaborador repetido; hash
   estável na ordem e diferente com qualquer valor alterado; `retry-failed` só com itens `FAILED`.
-- [ ] Implementar. Rodar specs e lint. Commit.
+- [x] Implementar. Rodar specs e lint. Commit.
+
+**Registro de execução (16/10/2026):**
+
+- Serviço `disbursement-batches.service.ts`; `batchContentHash` e `itemSnapshot` ficam exportados
+  para a tarefa 6.
+- Testes:
+  - unitários do módulo: 55 (11 novos: hash e validação dos itens; controller ampliado);
+  - PostgreSQL descartável: 16 (7 novos):
+    - foto do favorecido não muda com edição posterior do colaborador;
+    - outra empresa não vê nem usa lote ou colaborador (404);
+    - duas edições simultâneas: 1 vence, 1 recebe 409;
+    - lote aguardando aprovação não é editável, e cancelar invalida o pedido;
+    - lote em envio não é cancelável;
+    - duplo clique em "novo lote com falhas" gera um rascunho, e após um reenvio pago não há segundo;
+    - reenvio cancelado libera outro;
+  - suíte completa do backend: 127 suítes e 1.023 testes passando.
+- Lint e build sem erros.
+
+**Desvios e decisões:**
+
+- **Coluna `retryOfBatchId`:** entrou na migration da tarefa 2, ainda não publicada, em vez de criar
+  uma segunda migration.
+- **"Novo lote com os itens que falharam":**
+  - só a partir de lote `COMPLETED_WITH_FAILURES`;
+  - usa os dados atuais do colaborador e deixa de fora os desativados (`skippedInactive`);
+  - com um reenvio do mesmo lote ainda aberto, devolve esse rascunho (duplo clique);
+  - um reenvio que pode ter pago (`PROCESSING`, `COMPLETED`, `COMPLETED_WITH_FAILURES`) bloqueia
+    outro com `BATCH_ALREADY_RETRIED`;
+  - só reenvio cancelado, expirado ou recusado libera um novo.
+- **Cancelar** não exige versão: a trava do lote e o status (`DRAFT` ou `AWAITING_APPROVAL`) bastam.
+- **Itens:**
+  - a edição do rascunho substitui todos os itens, com novos ids e `idEnvio` (nunca enviados);
+  - colaborador desativado gera 409 `RECIPIENT_INACTIVE`;
+  - colaborador de outra empresa gera 404.
+- **Hash:** inclui destino, documento e valor de cada item, a referência, a conta emissora e o total.
+  O nome do colaborador fica de fora: mudar o nome não muda para onde o dinheiro vai.
+- **Para a tarefa 6:** ao pedir aprovação, refazer a foto de cada item com o cadastro atual (todos
+  ativos; senão 409). Assim o aprovador autoriza o que está cadastrado naquele momento, e a partir
+  dali tudo fica congelado.
 
 ## Tarefa 5 — templates de pagamento
 

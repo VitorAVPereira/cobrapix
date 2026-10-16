@@ -9,6 +9,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { FinancialEligibilityService } from '../src/financial-activation/financial-eligibility.service';
 import { DisbursementSettingsService } from '../src/disbursements/disbursement-settings.service';
 import { DisbursementRecipientsService } from '../src/disbursements/disbursement-recipients.service';
+import { DisbursementBatchesService } from '../src/disbursements/disbursement-batches.service';
 
 if (
   !process.env.CIFRAMAIS_DISPOSABLE_E2E ||
@@ -350,5 +351,245 @@ describe('Collaborators isolated by company (disposable PostgreSQL)', () => {
     await expect(settings.companyStatus(disabled)).resolves.toMatchObject({
       enabled: false,
     });
+  });
+});
+
+describe('Batches (disposable PostgreSQL)', () => {
+  const prisma = new PrismaService(new ConfigService({ ...process.env }));
+  const settings = new DisbursementSettingsService(
+    prisma,
+    new FinancialEligibilityService(prisma),
+  );
+  const recipients = new DisbursementRecipientsService(prisma, settings);
+  const batches = new DisbursementBatchesService(prisma, settings);
+  let companyA: string, companyB: string, ana: string, bruno: string;
+
+  async function company(): Promise<string> {
+    const id = (
+      await prisma.company.create({
+        data: {
+          corporateName: 'Tenant LTDA',
+          document: randomUUID().replace(/\D/g, '').slice(0, 14),
+          email: `${randomUUID()}@example.test`,
+          phoneNumber: '5511999990000',
+        },
+      })
+    ).id;
+    await prisma.disbursementSettings.create({
+      data: {
+        companyId: id,
+        version: 1,
+        enabled: true,
+        approverName: 'Maria',
+        approverPhone: '5511988887777',
+        changedByUserId: 'admin',
+      },
+    });
+    return id;
+  }
+  const draft = (companyId: string, amountCents = 150000) =>
+    batches.create(companyId, 'user', {
+      reference: 'Folha 10/2026',
+      items: [
+        { recipientId: ana, amountCents },
+        { recipientId: bruno, amountCents: 98000 },
+      ],
+    });
+
+  beforeAll(async () => {
+    await prisma.onModuleInit();
+    companyA = await company();
+    companyB = await company();
+    ana = (
+      await recipients.create(companyA, {
+        name: 'Ana Souza',
+        document: '52998224725',
+        pixKey: '52998224725',
+      })
+    ).id;
+    bruno = (
+      await recipients.create(companyA, {
+        name: 'Bruno Lima',
+        document: '11144477735',
+        bankIspb: '09089356',
+        bankAgency: '1',
+        bankAccount: '123453',
+        bankAccountType: 'cacc',
+      })
+    ).id;
+  });
+  afterAll(() => prisma.$disconnect());
+
+  it('creates a draft with a snapshot that later edits of the collaborator do not change', async () => {
+    const batch = await draft(companyA);
+    expect(batch).toMatchObject({
+      status: 'DRAFT',
+      totalCents: 248000,
+      itemCount: 2,
+      approval: null,
+    });
+    const current = await prisma.disbursementRecipient.findUniqueOrThrow({
+      where: { id: ana },
+    });
+    await recipients.update(companyA, ana, {
+      name: 'Ana Souza',
+      document: '52998224725',
+      pixKey: 'ana@example.com',
+      expectedVersion: current.version,
+      active: true,
+    });
+    const item = (await batches.get(companyA, batch.id)).items.find(
+      (i) => i.recipientId === ana,
+    );
+    expect(item?.pixKey).toBe('52998224725');
+  });
+
+  it('another company can neither see nor use this company batches or collaborators', async () => {
+    const batch = await draft(companyA);
+    await expect(batches.get(companyB, batch.id)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    await expect(
+      batches.update(companyB, batch.id, {
+        reference: 'x',
+        items: [{ recipientId: ana, amountCents: 1 }],
+        expectedVersion: batch.version,
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    await expect(batches.cancel(companyB, batch.id)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    await expect(
+      batches.retryFailed(companyB, 'user', batch.id),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    await expect(
+      batches.create(companyB, 'user', {
+        reference: 'Roubo',
+        items: [{ recipientId: ana, amountCents: 1 }],
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(
+      (await batches.list(companyB, { page: 1, pageSize: 20 })).total,
+    ).toBe(0);
+  });
+
+  it('two edits of the same version: one wins, the other gets 409', async () => {
+    const batch = await draft(companyA);
+    const edits = await Promise.allSettled(
+      [100, 200].map((amountCents) =>
+        batches.update(companyA, batch.id, {
+          reference: 'Folha',
+          items: [{ recipientId: ana, amountCents }],
+          expectedVersion: batch.version,
+        }),
+      ),
+    );
+    expect(edits.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(
+      (edits.find((r) => r.status === 'rejected') as PromiseRejectedResult)
+        .reason,
+    ).toBeInstanceOf(ConflictException);
+    const after = await batches.get(companyA, batch.id);
+    expect(after.items).toHaveLength(1);
+    expect(after.version).toBe(batch.version + 1);
+  });
+
+  it('a batch awaiting approval cannot be edited; canceling invalidates its request', async () => {
+    const batch = await draft(companyA);
+    await prisma.disbursementBatch.update({
+      where: { id: batch.id },
+      data: { status: 'AWAITING_APPROVAL', approvalRequests: 1 },
+    });
+    await prisma.disbursementApproval.create({
+      data: {
+        batchId: batch.id,
+        companyId: companyA,
+        requestNumber: 1,
+        contentHash: 'hash',
+        totalCents: batch.totalCents,
+        itemCount: batch.itemCount,
+        settingsVersion: 1,
+        approverPhoneHash: 'phone',
+        expiresAt: new Date(Date.now() + 86_400_000),
+        requestedByUserId: 'user',
+      },
+    });
+    await expect(
+      batches.update(companyA, batch.id, {
+        reference: 'Folha',
+        items: [{ recipientId: ana, amountCents: 1 }],
+        expectedVersion: batch.version,
+      }),
+    ).rejects.toMatchObject({ response: { code: 'BATCH_NOT_EDITABLE' } });
+    const canceled = await batches.cancel(companyA, batch.id);
+    expect(canceled.status).toBe('CANCELED');
+    expect(canceled.approval?.state).toBe('INVALIDATED');
+    expect(canceled.items.every((i) => i.status === 'CANCELED')).toBe(true);
+  });
+
+  it('a batch being paid cannot be canceled by the company', async () => {
+    const batch = await draft(companyA);
+    await prisma.disbursementBatch.update({
+      where: { id: batch.id },
+      data: { status: 'PROCESSING' },
+    });
+    await expect(batches.cancel(companyA, batch.id)).rejects.toMatchObject({
+      response: { code: 'BATCH_NOT_CANCELABLE' },
+    });
+  });
+
+  it('failed items: a double click opens one retry; after it may have paid, no second one', async () => {
+    const source = await draft(companyA);
+    await prisma.disbursementBatch.update({
+      where: { id: source.id },
+      data: { status: 'COMPLETED_WITH_FAILURES' },
+    });
+    await prisma.disbursementItem.updateMany({
+      where: { batchId: source.id, recipientId: ana },
+      data: { status: 'PAID' },
+    });
+    await prisma.disbursementItem.updateMany({
+      where: { batchId: source.id, recipientId: bruno },
+      data: { status: 'FAILED', failureReason: 'Conta inexistente' },
+    });
+    const clicks = await Promise.all([
+      batches.retryFailed(companyA, 'user', source.id),
+      batches.retryFailed(companyA, 'user', source.id),
+    ]);
+    expect(clicks[0].id).toBe(clicks[1].id);
+    expect(clicks[0]).toMatchObject({
+      status: 'DRAFT',
+      retryOfBatchId: source.id,
+      totalCents: 98000,
+      itemCount: 1,
+    });
+    expect(clicks[0].items.map((i) => i.recipientId)).toEqual([bruno]);
+
+    await prisma.disbursementBatch.update({
+      where: { id: clicks[0].id },
+      data: { status: 'COMPLETED' },
+    });
+    await expect(
+      batches.retryFailed(companyA, 'user', source.id),
+    ).rejects.toMatchObject({ response: { code: 'BATCH_ALREADY_RETRIED' } });
+  });
+
+  it('a retry that paid nothing (canceled) allows a new one', async () => {
+    const source = await draft(companyA);
+    await prisma.disbursementBatch.update({
+      where: { id: source.id },
+      data: { status: 'COMPLETED_WITH_FAILURES' },
+    });
+    await prisma.disbursementItem.updateMany({
+      where: { batchId: source.id },
+      data: { status: 'FAILED' },
+    });
+    const first = await batches.retryFailed(companyA, 'user', source.id);
+    await batches.cancel(companyA, first.id);
+    const second = await batches.retryFailed(companyA, 'user', source.id);
+    expect(second.id).not.toBe(first.id);
+    await expect(
+      batches.retryFailed(companyA, 'user', (await draft(companyA)).id),
+    ).rejects.toMatchObject({ response: { code: 'BATCH_HAS_NO_FAILURES' } });
   });
 });
