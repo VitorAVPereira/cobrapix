@@ -20,9 +20,22 @@ function isAllowedPlatformAdminPath(pathname: string): boolean {
   );
 }
 
-const protectedRoutes = auth((req) => {
+// The presentation page answers on "/" for visitors without a session. It
+// lives on an internal route so the dashboard keeps "/" for signed-in users.
+// The internal route stays outside the matcher: Next runs this middleware again
+// on the rewrite target, and the page itself declares "/" as canonical.
+const LANDING_PATH = "/apresentacao";
+
+// Auth.js rebuilds the request with the AUTH_URL origin, so the rewrite takes
+// the URL the visitor actually reached; otherwise a different port or domain
+// would turn the internal rewrite into a proxy to the AUTH_URL host.
+const routesFor = (requestUrl: string) => auth((req) => {
   const pathname = req.nextUrl.pathname;
   const isApiRoute = pathname.startsWith("/api/");
+
+  if (pathname === "/" && !req.auth) {
+    return NextResponse.rewrite(new URL(LANDING_PATH, requestUrl));
+  }
 
   if (!req.auth) {
     if (isApiRoute) {
@@ -80,15 +93,15 @@ const protectedRoutes = auth((req) => {
 // (another company, admin, expired, first access): it is decided before the
 // session is even read, so none of the dashboard rules can redirect it.
 export default function middleware(
-  ...args: Parameters<typeof protectedRoutes>
-): ReturnType<typeof protectedRoutes> {
+  ...args: Parameters<ReturnType<typeof routesFor>>
+): ReturnType<ReturnType<typeof routesFor>> {
   const [req] = args;
   if (isPublicPaymentPath(req.nextUrl.pathname)) return NextResponse.next();
-  return protectedRoutes(...args);
+  return routesFor(req.url)(...args);
 }
 
 export const config = {
   matcher: [
-    "/((?!login|esqueci-senha|redefinir-senha|api/auth|api/webhooks|_next/static|_next/image|brand/|favicon.ico).*)",
+    "/((?!apresentacao|login|esqueci-senha|redefinir-senha|api/auth|api/webhooks|_next/static|_next/image|brand/|favicon.ico).*)",
   ],
 };
