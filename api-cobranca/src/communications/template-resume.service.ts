@@ -340,6 +340,24 @@ export class TemplateResumeService {
       if (!activation || activation.sensitiveDataDeletedAt)
         return close('ACTIVATION_UNAVAILABLE');
     }
+    // A late approval request would carry buttons for a request that no longer counts.
+    if (
+      stored.origin === 'DISBURSEMENT' &&
+      stored.selection.mode === 'DEFAULT' &&
+      stored.selection.purpose === 'DISBURSEMENT_APPROVAL'
+    ) {
+      const approval = stored.context.disbursementApprovalId
+        ? await tx.disbursementApproval.findFirst({
+            where: {
+              id: stored.context.disbursementApprovalId,
+              companyId: pending.companyId,
+            },
+            select: { state: true },
+          })
+        : null;
+      if (approval?.state !== 'AWAITING')
+        return close('DISBURSEMENT_REQUEST_CLOSED');
+    }
     const selection = await this.selectionFor(
       tx,
       stored,

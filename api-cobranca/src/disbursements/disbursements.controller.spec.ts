@@ -19,10 +19,12 @@ describe('DisbursementsController', () => {
     cancel: jest.fn(),
     retryFailed: jest.fn(),
   };
+  const approvals = { request: jest.fn() };
   const controller = new DisbursementsController(
     settings as never,
     recipients as never,
     batches as never,
+    approvals as never,
   );
   const row = { name: 'Ana', document: '52998224725', pixKey: '52998224725' };
 
@@ -52,6 +54,7 @@ describe('DisbursementsController', () => {
     await controller.updateBatch(user, 'id', { ...batch, expectedVersion: 1 });
     await controller.cancelBatch(user, 'id');
     await controller.retryFailed(user, 'id');
+    await controller.requestApproval(user, 'id', { expectedVersion: 1 });
     for (const call of [
       settings.companyStatus,
       recipients.list,
@@ -59,6 +62,7 @@ describe('DisbursementsController', () => {
       recipients.update,
       recipients.import,
       ...Object.values(batches),
+      approvals.request,
     ])
       expect((call.mock.calls as unknown[][])[0]?.[0]).toBe('session-company');
   });

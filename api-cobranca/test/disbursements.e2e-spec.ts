@@ -11,6 +11,8 @@ import { DisbursementSettingsService } from '../src/disbursements/disbursement-s
 import { DisbursementRecipientsService } from '../src/disbursements/disbursement-recipients.service';
 import { DisbursementBatchesService } from '../src/disbursements/disbursement-batches.service';
 import { TemplatePolicyService } from '../src/templates/template-policy.service';
+import { DisbursementApprovalService } from '../src/disbursements/disbursement-approval.service';
+import { messageRecipient } from '../src/communications/message-context';
 
 if (
   !process.env.CIFRAMAIS_DISPOSABLE_E2E ||
@@ -328,9 +330,8 @@ describe('Collaborators isolated by company (disposable PostgreSQL)', () => {
   });
 
   it('two edits with the same version: one wins, the other gets 409', async () => {
-    const [current] = (
-      await recipients.list(companyA, { page: 1, pageSize: 20 })
-    ).items;
+    const current = (await recipients.list(companyA, { page: 1, pageSize: 20 }))
+      .items[0]!;
     const edits = await Promise.allSettled(
       ['ana1@example.com', 'ana2@example.com'].map((pixKey) =>
         recipients.update(companyA, current.id, {
@@ -602,5 +603,558 @@ describe('Batches (disposable PostgreSQL)', () => {
     await expect(
       batches.retryFailed(companyA, 'user', (await draft(companyA)).id),
     ).rejects.toMatchObject({ response: { code: 'BATCH_HAS_NO_FAILURES' } });
+  });
+});
+
+describe('Approval on WhatsApp (disposable PostgreSQL, simulated transport)', () => {
+  const prisma = new PrismaService(new ConfigService({ ...process.env }));
+  const identities = new Map<string, string>();
+  const eligibility = {
+    resolveIssuance: jest.fn((companyId: string) =>
+      Promise.resolve({
+        issuerIdentityId: identities.get(companyId),
+        accountMode: 'CUSTOMER_ACCOUNT',
+        payoutMode: 'DIRECT_TO_CUSTOMER',
+      }),
+    ),
+  };
+  const policy = {
+    resolve: jest.fn().mockResolvedValue({
+      allowed: true,
+      template: {
+        parsed: { quickReplies: ['Aprovar pagamento', 'Recusar'] },
+        mapping: { body: {}, decisionButtons: { approve: 0, reject: 1 } },
+      },
+    }),
+  };
+  const settings = new DisbursementSettingsService(
+    prisma,
+    eligibility as never,
+    policy as never,
+  );
+  const recipients = new DisbursementRecipientsService(prisma, settings);
+  const batches = new DisbursementBatchesService(prisma, settings);
+  const templateSender = { prepare: jest.fn() };
+  const whatsapp = {
+    dispatchIntent: jest.fn(),
+    enqueueAdminReply: jest.fn().mockResolvedValue({}),
+    enqueuePreparedTemplate: jest.fn().mockResolvedValue({}),
+  };
+  const approvals = new DisbursementApprovalService(
+    prisma,
+    settings,
+    batches,
+    eligibility as never,
+    policy as never,
+    templateSender as never,
+    whatsapp as never,
+    { decrypt: (value: string) => value } as never,
+  );
+  const CHANNEL = '123456789012345';
+  const PHONE = '5511988887777';
+  const future = new Date(Date.now() + 365 * 86_400_000);
+
+  async function conversation(phone: string) {
+    const recipient = messageRecipient({ type: 'PHONE', value: phone });
+    return prisma.communicationConversation.upsert({
+      where: {
+        channel_recipientHash: {
+          channel: 'WHATSAPP',
+          recipientHash: recipient.hash,
+        },
+      },
+      create: {
+        channel: 'WHATSAPP',
+        recipientHash: recipient.hash,
+        recipientType: 'PHONE',
+        recipientEncrypted: recipient.value,
+        retentionExpiresAt: future,
+      },
+      update: {},
+    });
+  }
+  // What the template preparer persists: the outbound message and its intent.
+  async function outbound(logicalKey: string): Promise<string> {
+    const recipient = messageRecipient({ type: 'PHONE', value: PHONE });
+    const message = await prisma.communicationMessage.create({
+      data: {
+        conversationId: (await conversation(PHONE)).id,
+        direction: 'OUTBOUND',
+        content: 'Pedido de aprovação',
+        transportChannelId: CHANNEL,
+        recipientType: 'PHONE',
+        messageType: 'template',
+        retentionExpiresAt: future,
+      },
+    });
+    return (
+      await prisma.communicationOutboundIntent.create({
+        data: {
+          idempotencyKey: logicalKey,
+          logicalKey,
+          messageId: message.id,
+          transport: 'DATAFY',
+          transportChannelId: CHANNEL,
+          recipientType: 'PHONE',
+          recipientHash: recipient.hash,
+          recipientEncrypted: recipient.value,
+          requestHash: 'a'.repeat(64),
+          retentionExpiresAt: future,
+        },
+      })
+    ).id;
+  }
+  async function accept(intentId: string) {
+    const wamid = `wamid.out.${randomUUID()}`;
+    const intent = await prisma.communicationOutboundIntent.update({
+      where: { id: intentId },
+      data: { state: 'ACCEPTED', externalMessageId: wamid },
+    });
+    await prisma.communicationMessage.update({
+      where: { id: intent.messageId },
+      data: { externalMessageId: wamid },
+    });
+    return { messageId: wamid, status: 'accepted' };
+  }
+  // What the Datafy webhook persists when someone answers on WhatsApp.
+  async function tap(
+    approvalId: string,
+    content: string,
+    options: { phone?: string; type?: string; cite?: string; at?: Date } = {},
+  ) {
+    const approval = await prisma.disbursementApproval.findUniqueOrThrow({
+      where: { id: approvalId },
+    });
+    const intent = await prisma.communicationOutboundIntent.findUniqueOrThrow({
+      where: { id: approval.intentId! },
+    });
+    const at = options.at ?? new Date();
+    return prisma.communicationMessage.create({
+      data: {
+        conversationId: (await conversation(options.phone ?? PHONE)).id,
+        direction: 'INBOUND',
+        content,
+        externalMessageId: `wamid.in.${randomUUID()}`,
+        transportChannelId: CHANNEL,
+        recipientType: 'PHONE',
+        replyToExternalMessageId: options.cite ?? intent.externalMessageId,
+        messageType: options.type ?? 'button',
+        providerTimestamp: at,
+        createdAt: at,
+        retentionExpiresAt: future,
+      },
+    });
+  }
+  async function tenant() {
+    const companyId = (
+      await prisma.company.create({
+        data: {
+          corporateName: 'Tenant LTDA',
+          document: randomUUID().replace(/\D/g, '').slice(0, 14),
+          email: `${randomUUID()}@example.test`,
+          phoneNumber: '5511999990000',
+        },
+      })
+    ).id;
+    identities.set(
+      companyId,
+      (
+        await prisma.efiAccountIdentity.create({
+          data: {
+            ownership: 'COMPANY',
+            companyId,
+            environment: 'HOMOLOGATION',
+            holderDocument: '11222333000181',
+            efiAccountNumber: randomUUID().replace(/\D/g, '').slice(0, 10),
+            pixKey: 'chave-da-empresa@example.com',
+          },
+        })
+      ).id,
+    );
+    await prisma.disbursementSettings.create({
+      data: {
+        companyId,
+        version: 1,
+        enabled: true,
+        approverName: 'Maria',
+        approverPhone: PHONE,
+        changedByUserId: 'admin',
+      },
+    });
+    const ana = await recipients.create(companyId, {
+      name: 'Ana Souza',
+      document: '52998224725',
+      pixKey: '52998224725',
+    });
+    const bruno = await recipients.create(companyId, {
+      name: 'Bruno Lima',
+      document: '11144477735',
+      pixKey: 'bruno@example.com',
+    });
+    return { companyId, ana, bruno };
+  }
+  async function requested() {
+    const t = await tenant();
+    const draft = await batches.create(t.companyId, 'user', {
+      reference: 'Folha 10/2026',
+      items: [
+        { recipientId: t.ana.id, amountCents: 150000 },
+        { recipientId: t.bruno.id, amountCents: 98000 },
+      ],
+    });
+    const batch = await approvals.request(
+      t.companyId,
+      'user',
+      draft.id,
+      draft.version,
+    );
+    const approval = await prisma.disbursementApproval.findFirstOrThrow({
+      where: { batchId: draft.id },
+      orderBy: { requestNumber: 'desc' },
+    });
+    return { ...t, batch, approval };
+  }
+  const statusOf = async (batchId: string) =>
+    (
+      await prisma.disbursementBatch.findUniqueOrThrow({
+        where: { id: batchId },
+      })
+    ).status;
+  const stateOf = async (approvalId: string) =>
+    (
+      await prisma.disbursementApproval.findUniqueOrThrow({
+        where: { id: approvalId },
+      })
+    ).state;
+
+  beforeAll(() => prisma.onModuleInit());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    templateSender.prepare.mockImplementation(
+      async (request: { logicalKey: string }) => ({
+        status: 'QUEUED',
+        intentId: await outbound(request.logicalKey),
+      }),
+    );
+    whatsapp.dispatchIntent.mockImplementation(accept);
+  });
+  afterAll(() => prisma.$disconnect());
+
+  it('requests approval with a frozen batch, the current registration and a 24 h deadline', async () => {
+    const t = await tenant();
+    const draft = await batches.create(t.companyId, 'user', {
+      reference: 'Folha 10/2026',
+      items: [{ recipientId: t.ana.id, amountCents: 150000 }],
+    });
+    // Edited after the draft: the request authorizes what is registered now.
+    await recipients.update(t.companyId, t.ana.id, {
+      name: 'Ana Souza',
+      document: '52998224725',
+      pixKey: 'ana@example.com',
+      expectedVersion: t.ana.version,
+      active: true,
+    });
+    const before = Date.now();
+    const batch = await approvals.request(
+      t.companyId,
+      'user',
+      draft.id,
+      draft.version,
+    );
+    expect(batch.status).toBe('AWAITING_APPROVAL');
+    expect(batch.items[0]?.pixKey).toBe('ana@example.com');
+    const approval = await prisma.disbursementApproval.findFirstOrThrow({
+      where: { batchId: draft.id },
+    });
+    expect(approval).toMatchObject({
+      state: 'AWAITING',
+      requestNumber: 1,
+      totalCents: 150000,
+      itemCount: 1,
+      approveLabel: 'Aprovar pagamento',
+      rejectLabel: 'Recusar',
+      approverPhoneHash: messageRecipient({ type: 'PHONE', value: PHONE }).hash,
+    });
+    expect(approval.expiresAt.getTime() - before).toBeGreaterThanOrEqual(
+      86_400_000 - 1000,
+    );
+    expect(templateSender.prepare).toHaveBeenCalledWith({
+      logicalKey: `disbursement-approval:${approval.id}`,
+      origin: 'DISBURSEMENT',
+      context: { companyId: t.companyId, disbursementApprovalId: approval.id },
+      selection: { mode: 'DEFAULT', purpose: 'DISBURSEMENT_APPROVAL' },
+    });
+    expect(whatsapp.dispatchIntent).toHaveBeenCalledWith(approval.intentId);
+    await expect(
+      batches.update(t.companyId, draft.id, {
+        reference: 'x',
+        items: [{ recipientId: t.ana.id, amountCents: 1 }],
+        expectedVersion: batch.version,
+      }),
+    ).rejects.toMatchObject({ response: { code: 'BATCH_NOT_EDITABLE' } });
+  });
+
+  it('refuses a request for a batch of another company, an old version or an inactive collaborator', async () => {
+    const a = await tenant();
+    const b = await tenant();
+    const draft = await batches.create(a.companyId, 'user', {
+      reference: 'Folha',
+      items: [{ recipientId: a.ana.id, amountCents: 100 }],
+    });
+    await expect(
+      approvals.request(b.companyId, 'user', draft.id, draft.version),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    await expect(
+      approvals.request(a.companyId, 'user', draft.id, draft.version + 1),
+    ).rejects.toMatchObject({ response: { code: 'VERSION_CHANGED' } });
+    await recipients.update(a.companyId, a.ana.id, {
+      name: 'Ana Souza',
+      document: '52998224725',
+      pixKey: '52998224725',
+      expectedVersion: a.ana.version,
+      active: false,
+    });
+    await expect(
+      approvals.request(a.companyId, 'user', draft.id, draft.version),
+    ).rejects.toMatchObject({ response: { code: 'RECIPIENT_INACTIVE' } });
+    expect(templateSender.prepare).not.toHaveBeenCalled();
+  });
+
+  it('a held template or a refused send returns the batch to draft', async () => {
+    const t = await tenant();
+    const items = [{ recipientId: t.ana.id, amountCents: 100 }];
+    const held = await batches.create(t.companyId, 'user', {
+      reference: 'A',
+      items,
+    });
+    templateSender.prepare.mockResolvedValueOnce({
+      status: 'BLOCKED',
+      pendingId: 'hold',
+      code: 'NOT_GRANTED',
+    });
+    await expect(
+      approvals.request(t.companyId, 'user', held.id, held.version),
+    ).rejects.toMatchObject({
+      response: { code: 'DISBURSEMENT_APPROVAL_NOT_SENT' },
+    });
+    expect(await statusOf(held.id)).toBe('DRAFT');
+    const failed = await batches.create(t.companyId, 'user', {
+      reference: 'B',
+      items,
+    });
+    whatsapp.dispatchIntent.mockImplementationOnce(async (id: string) => {
+      await prisma.communicationOutboundIntent.update({
+        where: { id },
+        data: { state: 'FAILED' },
+      });
+      throw new Error('REJECTED');
+    });
+    await expect(
+      approvals.request(t.companyId, 'user', failed.id, failed.version),
+    ).rejects.toMatchObject({
+      response: { code: 'DISBURSEMENT_APPROVAL_NOT_SENT' },
+    });
+    expect(await statusOf(failed.id)).toBe('DRAFT');
+    const states = await prisma.disbursementApproval.findMany({
+      where: { batchId: { in: [held.id, failed.id] } },
+    });
+    expect(states.map((s) => s.state)).toEqual(['HELD', 'HELD']);
+    // Waiting for the channel limit may still reach the approver: the request stays open.
+    const waiting = await batches.create(t.companyId, 'user', {
+      reference: 'C',
+      items,
+    });
+    whatsapp.dispatchIntent.mockRejectedValueOnce(new Error('RATE_LIMIT'));
+    await approvals.request(t.companyId, 'user', waiting.id, waiting.version);
+    expect(await statusOf(waiting.id)).toBe('AWAITING_APPROVAL');
+  });
+
+  it('the approve button pays; one decision and one confirmation even with concurrent ticks', async () => {
+    const r = await requested();
+    await tap(r.approval.id, 'Aprovar pagamento');
+    await Promise.all([
+      approvals.decideAwaiting(),
+      approvals.decideAwaiting(),
+      approvals.decide(r.approval.id),
+    ]);
+    const approval = await prisma.disbursementApproval.findUniqueOrThrow({
+      where: { id: r.approval.id },
+    });
+    expect(approval.state).toBe('APPROVED');
+    expect(approval.decisionMessageId).not.toBeNull();
+    const batch = await prisma.disbursementBatch.findUniqueOrThrow({
+      where: { id: r.batch.id },
+    });
+    expect(batch.status).toBe('PROCESSING');
+    expect(batch.version).toBe(r.batch.version + 1);
+    await approvals.sendAcks();
+    await approvals.sendAcks();
+    expect(whatsapp.enqueueAdminReply).toHaveBeenCalledTimes(1);
+    expect(whatsapp.enqueueAdminReply).toHaveBeenCalledWith(
+      PHONE,
+      'Aprovação registrada. Os 2 pagamentos do lote Folha 10/2026 (total de R$ 2.480,00) estão sendo enviados por Pix.',
+      `disbursement-ack:${r.approval.id}`,
+      expect.objectContaining({ context: { companyId: r.companyId } }),
+    );
+  });
+
+  it('the refuse button cancels the batch and confirms it', async () => {
+    const r = await requested();
+    await tap(r.approval.id, 'Recusar');
+    await approvals.decideAwaiting();
+    expect(await stateOf(r.approval.id)).toBe('REJECTED');
+    expect(await statusOf(r.batch.id)).toBe('REJECTED');
+    const items = await prisma.disbursementItem.findMany({
+      where: { batchId: r.batch.id },
+    });
+    expect(items.every((item) => item.status === 'CANCELED')).toBe(true);
+    await approvals.sendAcks();
+    expect(whatsapp.enqueueAdminReply).toHaveBeenCalledWith(
+      PHONE,
+      'Recusa registrada. Nenhum pagamento do lote Folha 10/2026 será feito.',
+      expect.any(String),
+      expect.any(Object),
+    );
+  });
+
+  it.each([
+    ['typed text with the button label', { type: 'text' }, 'Aprovar pagamento'],
+    [
+      'a tap citing another message',
+      { cite: 'wamid.other' },
+      'Aprovar pagamento',
+    ],
+    ['another phone', { phone: '5521977776666' }, 'Aprovar pagamento'],
+    ['another quick reply', {}, 'Preciso de ajuda'],
+    [
+      'a tap after the deadline',
+      { at: new Date(Date.now() + 2 * 86_400_000) },
+      'Aprovar pagamento',
+    ],
+  ])('%s authorizes nothing', async (_, options, content) => {
+    const r = await requested();
+    await tap(r.approval.id, content, options);
+    await approvals.decideAwaiting();
+    expect(await stateOf(r.approval.id)).toBe('AWAITING');
+    expect(await statusOf(r.batch.id)).toBe('AWAITING_APPROVAL');
+  });
+
+  it('accepts the approver number as WhatsApp reports it without the ninth digit', async () => {
+    const r = await requested();
+    await tap(r.approval.id, 'Aprovar pagamento', { phone: '551188887777' });
+    await approvals.decideAwaiting();
+    expect(await stateOf(r.approval.id)).toBe('APPROVED');
+    await approvals.sendAcks();
+    // The confirmation goes to the chat the tap came from.
+    expect((whatsapp.enqueueAdminReply.mock.calls as unknown[][])[0]?.[0]).toBe(
+      '551188887777',
+    );
+  });
+
+  it('a canceled batch, a new approver or the feature turned off: the tap pays nothing and gets one notice', async () => {
+    const canceled = await requested();
+    await batches.cancel(canceled.companyId, canceled.batch.id);
+    const replaced = await requested();
+    await settings.configure(replaced.companyId, 'admin', {
+      expectedVersion: 1,
+      enabled: true,
+      approverName: 'Outro aprovador',
+      approverPhone: '5521977776666',
+    });
+    const disabled = await requested();
+    await settings.configure(disabled.companyId, 'admin', {
+      expectedVersion: 1,
+      enabled: false,
+      approverName: 'Maria',
+      approverPhone: PHONE,
+    });
+    for (const r of [canceled, replaced, disabled])
+      await tap(r.approval.id, 'Aprovar pagamento');
+    await approvals.decideAwaiting();
+    expect(await stateOf(canceled.approval.id)).toBe('INVALIDATED');
+    expect(await statusOf(canceled.batch.id)).toBe('CANCELED');
+    expect(await stateOf(replaced.approval.id)).toBe('INVALIDATED');
+    expect(await statusOf(replaced.batch.id)).toBe('DRAFT');
+    expect(await stateOf(disabled.approval.id)).toBe('INVALIDATED');
+    expect(await statusOf(disabled.batch.id)).toBe('CANCELED');
+    await approvals.sendAcks();
+    await approvals.sendAcks();
+    expect(whatsapp.enqueueAdminReply).toHaveBeenCalledTimes(3);
+    for (const call of whatsapp.enqueueAdminReply.mock.calls as unknown[][])
+      expect(call[1]).toBe(
+        'Este pedido de aprovação não vale mais. Nenhum pagamento foi feito por ele.',
+      );
+  });
+
+  it('a batch changed behind the request is never paid', async () => {
+    const r = await requested();
+    await prisma.disbursementItem.updateMany({
+      where: { batchId: r.batch.id, recipientId: r.ana.id },
+      data: { pixKey: 'golpe@example.com' },
+    });
+    await tap(r.approval.id, 'Aprovar pagamento');
+    await approvals.decideAwaiting();
+    expect(await stateOf(r.approval.id)).toBe('INVALIDATED');
+    expect(await statusOf(r.batch.id)).toBe('DRAFT');
+  });
+
+  it('without an answer in 24 h the batch expires and the approver is told once to pay manually', async () => {
+    const r = await requested();
+    await prisma.disbursementApproval.update({
+      where: { id: r.approval.id },
+      data: { expiresAt: new Date(Date.now() - 3 * 60_000) },
+    });
+    await approvals.expireOverdue();
+    expect(await stateOf(r.approval.id)).toBe('EXPIRED');
+    expect(await statusOf(r.batch.id)).toBe('EXPIRED');
+    const items = await prisma.disbursementItem.findMany({
+      where: { batchId: r.batch.id },
+    });
+    expect(items.every((item) => item.status === 'CANCELED')).toBe(true);
+    await approvals.notifyExpired();
+    await approvals.notifyExpired();
+    const notices = (
+      templateSender.prepare.mock.calls as [{ logicalKey: string }][]
+    ).filter(
+      ([request]) =>
+        request.logicalKey === `disbursement-expired:${r.approval.id}`,
+    );
+    expect(notices).toEqual([
+      [
+        {
+          logicalKey: `disbursement-expired:${r.approval.id}`,
+          origin: 'DISBURSEMENT',
+          context: {
+            companyId: r.companyId,
+            disbursementApprovalId: r.approval.id,
+          },
+          selection: { mode: 'DEFAULT', purpose: 'DISBURSEMENT_EXPIRED' },
+        },
+      ],
+    ]);
+    expect(whatsapp.enqueuePreparedTemplate).toHaveBeenCalledTimes(1);
+    // A tap now pays nothing.
+    await tap(r.approval.id, 'Aprovar pagamento');
+    await approvals.decideAwaiting();
+    expect(await statusOf(r.batch.id)).toBe('EXPIRED');
+  });
+
+  it('a request whose message was never prepared returns to draft', async () => {
+    const t = await tenant();
+    const draft = await batches.create(t.companyId, 'user', {
+      reference: 'Folha',
+      items: [{ recipientId: t.ana.id, amountCents: 100 }],
+    });
+    templateSender.prepare.mockRejectedValueOnce(new Error('process lost'));
+    await expect(
+      approvals.request(t.companyId, 'user', draft.id, draft.version),
+    ).rejects.toThrow('process lost');
+    expect(await statusOf(draft.id)).toBe('AWAITING_APPROVAL');
+    await prisma.disbursementApproval.updateMany({
+      where: { batchId: draft.id },
+      data: { createdAt: new Date(Date.now() - 10 * 60_000) },
+    });
+    await approvals.releaseUnsent();
+    expect(await statusOf(draft.id)).toBe('DRAFT');
   });
 });

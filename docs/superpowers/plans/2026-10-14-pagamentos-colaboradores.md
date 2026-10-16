@@ -393,7 +393,7 @@ decidido recebe uma única resposta de "pedido não vale mais".
 **Expiração:** pedido `AWAITING` vencido vira `EXPIRED`, e o lote também. Template
 `DISBURSEMENT_EXPIRED` com chave `disbursement-expired:<approvalId>`.
 
-- [ ] Testes de recusa (nenhum envio):
+- [x] Testes de recusa (nenhum envio):
   - outra conversa;
   - mensagem `text` com "Aprovar pagamento";
   - citação de pedido anterior;
@@ -402,9 +402,64 @@ decidido recebe uma única resposta de "pedido não vale mais".
   - lote editado ou cancelado;
   - aprovador trocado;
   - funcionalidade desligada.
-- [ ] Testes de aceitação: toque duplo e dois ticks concorrentes geram uma decisão e uma confirmação;
+- [x] Testes de aceitação: toque duplo e dois ticks concorrentes geram uma decisão e uma confirmação;
   expiração gera um aviso; template retido devolve o lote a `DRAFT`.
-- [ ] Implementar. Concorrência em `test/disbursements.e2e-spec.ts` (PostgreSQL descartável). Commit.
+- [x] Implementar. Concorrência em `test/disbursements.e2e-spec.ts` (PostgreSQL descartável). Commit.
+
+**Registro de execução (16/10/2026):**
+
+- `disbursement-approval.service.ts`, `disbursement.worker.ts` (`@Cron` a cada 30 s) e rota
+  `POST /disbursements/batches/:id/request-approval`.
+- **Ordem de cada tick:** decisão, expiração, pedido perdido, confirmação, aviso de expiração.
+  Decidir antes de expirar garante que um toque feito a tempo nunca é expirado.
+- Testes no PostgreSQL descartável, com transporte simulado: 31 em `disbursements.e2e-spec.ts`
+  (13 novos de aprovação, além dos casos da lista acima):
+  - foto refeita ao pedir;
+  - outra empresa, versão antiga e colaborador desativado;
+  - template retido e envio recusado voltam a rascunho; espera de limite mantém o pedido;
+  - aprovar e recusar com uma confirmação;
+  - número sem o nono dígito aceito;
+  - lote alterado por trás do pedido não paga;
+  - expiração com um aviso;
+  - pedido sem mensagem volta a rascunho.
+
+  Mais um caso em `template-resume.e2e-spec.ts`: pendência de pedido que não vale mais é encerrada.
+- Também rodados e passando: templates de ponta a ponta (4 suítes, 34 testes), catálogo e pendências
+  de templates em PostgreSQL, suíte unitária completa (127 suítes, 1.036 testes), lint, tipos e build.
+
+**Defeito encontrado e corrigido:**
+
+- O banco só aceitava pendências de template com origem `COLLECTION`, `ADMIN_REPLY` ou `ACTIVATION`
+  (`WhatsappTemplatePendingSend_origin_check`). Um pedido de aprovação retido daria erro 500 em vez de
+  virar pendência para o admin.
+- Correção na migration nova `20261016120000_disbursement_template_pending_origin`, que amplia a
+  regra para `DISBURSEMENT`. As linhas existentes continuam válidas. Ficou separada da migration
+  gerada pelo Prisma, porque o Prisma não conhece regras `CHECK`.
+
+**Desvios e decisões:**
+
+- **Validação do toque:**
+  - citação da mensagem do pedido, mesmo canal e celular do aprovador da versão de configuração do
+    pedido, em vez de "mesma conversa";
+  - o celular é aceito com ou sem o nono dígito. O WhatsApp devolve alguns números brasileiros antigos
+    sem ele, e o toque cairia em outra conversa, deixando o pedido expirar à toa;
+  - a confirmação vai para a conversa de onde veio o toque.
+- **Rótulos dos botões:** vêm do template resolvido no pedido. Se o admin trocar o mapeamento
+  exatamente entre o pedido e o envio, nenhum toque corresponde, e o pedido expira com o aviso de
+  pagamento manual. Nada é pago por engano.
+- **Folgas de tempo:**
+  - expiração com 2 minutos de folga, para um toque feito antes do prazo e entregue depois pelo
+    webhook;
+  - pedido sem mensagem preparada (processo perdido no meio) volta a `DRAFT` após 5 minutos.
+- **Resultado do envio do pedido:**
+  - aguardando limite do canal ou incerto: o pedido continua aberto, porque ainda pode chegar;
+  - recusa definitiva ou template retido: `HELD`, e o lote volta a `DRAFT` com 409
+    `DISBURSEMENT_APPROVAL_NOT_SENT`.
+- **Confirmação:** texto livre via `WhatsappService.enqueueAdminReply`, uma por pedido
+  (`ackSentAt` e chave `disbursement-ack:<id>`). É mensagem da plataforma, sem contar uso comercial
+  da empresa.
+- **Empresa sem prontidão:** recebe "temporariamente indisponível" sem o detalhe técnico. O admin vê
+  o detalhe na configuração.
 
 ## Tarefa 7 — envio Pix
 

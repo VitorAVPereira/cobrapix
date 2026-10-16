@@ -287,4 +287,62 @@ describe('Template resume (HTTP)', () => {
       ).state,
     ).toBe('UNCERTAIN');
   });
+
+  it('collaborator_payment_request_that_no_longer_counts_closes', async () => {
+    const batch = await prisma.disbursementBatch.create({
+      data: {
+        companyId: companyA,
+        reference: 'Folha',
+        createdByUserId: 'user',
+      },
+    });
+    const approval = (requestNumber: number, state: 'HELD' | 'AWAITING') =>
+      prisma.disbursementApproval.create({
+        data: {
+          batchId: batch.id,
+          companyId: companyA,
+          requestNumber,
+          contentHash: 'hash',
+          totalCents: 100,
+          itemCount: 1,
+          settingsVersion: 1,
+          approverPhoneHash: 'phone',
+          expiresAt: new Date(Date.now() + 86_400_000),
+          requestedByUserId: 'user',
+          state,
+        },
+      });
+    // Prepared without a company default: held, never queued.
+    const heldRequest = async (approvalId: string) => {
+      const request_: TemplateSendRequest = {
+        logicalKey: `disbursement-approval:${approvalId}`,
+        origin: 'DISBURSEMENT',
+        context: { companyId: companyA, disbursementApprovalId: approvalId },
+        selection: { mode: 'DEFAULT', purpose: 'DISBURSEMENT_APPROVAL' },
+      };
+      const prepared = await app
+        .get(TemplateSendPreparerService, { strict: false })
+        .prepare(request_);
+      expect(prepared.status).toBe('BLOCKED');
+      return (
+        await prisma.whatsappTemplatePendingSend.findUniqueOrThrow({
+          where: { logicalKey: request_.logicalKey },
+        })
+      ).id;
+    };
+    const closed = await heldRequest((await approval(1, 'HELD')).id);
+    const kept = await heldRequest((await approval(2, 'AWAITING')).id);
+    const review = (await preview([closed, kept])).body as Review;
+    expect(
+      Object.fromEntries(
+        review.items.map((item) => [
+          item.pendingId,
+          [item.action, item.reason],
+        ]),
+      ),
+    ).toEqual({
+      [closed]: ['CLOSE', 'DISBURSEMENT_REQUEST_CLOSED'],
+      [kept]: ['KEEP_BLOCKED', 'DEFAULT_MISSING'],
+    });
+  });
 });

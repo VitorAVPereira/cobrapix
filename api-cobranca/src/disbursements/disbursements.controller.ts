@@ -21,9 +21,11 @@ import {
   UpdateDisbursementRecipientDto,
 } from './dto/disbursement-recipient.dto';
 import { DisbursementBatchesService } from './disbursement-batches.service';
+import { DisbursementApprovalService } from './disbursement-approval.service';
 import {
   CreateDisbursementBatchDto,
   DisbursementBatchesQueryDto,
+  RequestDisbursementApprovalDto,
   UpdateDisbursementBatchDto,
 } from './dto/disbursement-batch.dto';
 
@@ -35,6 +37,7 @@ export class DisbursementsController {
     private readonly settings: DisbursementSettingsService,
     private readonly recipients: DisbursementRecipientsService,
     private readonly batches: DisbursementBatchesService,
+    private readonly approvals: DisbursementApprovalService,
   ) {}
 
   @Get('status') status(@GetUser() user: AuthenticatedUser) {
@@ -111,5 +114,18 @@ export class DisbursementsController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.batches.retryFailed(user.companyId, user.userId, id);
+  }
+
+  @Post('batches/:id/request-approval') requestApproval(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RequestDisbursementApprovalDto,
+  ) {
+    return this.approvals.request(
+      user.companyId,
+      user.userId,
+      id,
+      dto.expectedVersion,
+    );
   }
 }

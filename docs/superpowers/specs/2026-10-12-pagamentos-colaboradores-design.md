@@ -101,12 +101,13 @@ Seguem padrões do código ou são a opção mais conservadora com dinheiro. Pod
    emissora), grava o pedido com validade de 24 horas e envia o template ao aprovador. Template
    retido ou envio recusado devolvem o lote a rascunho, com o motivo na tela.
 5. **Aprovador toca em um botão.** O toque vale só se for uma mensagem `button`:
-   - citando a mensagem do pedido atual do lote;
-   - na mesma conversa e canal;
+   - citando a mensagem do pedido atual do lote (só quem a recebeu consegue citá-la);
+   - no mesmo canal;
+   - vinda do celular do aprovador gravado no pedido, igual ao atual. O número é aceito com ou sem
+     o nono dígito, porque o WhatsApp devolve alguns números brasileiros antigos sem ele;
    - com o texto exato de um dos botões gravados no pedido;
-   - recebida dentro das 24 horas;
-   - com o lote inalterado e a funcionalidade ligada;
-   - vinda do celular do aprovador gravado no pedido, igual ao atual.
+   - enviada dentro das 24 horas (horário do WhatsApp);
+   - com o lote inalterado e a funcionalidade ligada.
 
    A decisão é gravada uma única vez (horário do WhatsApp, ids das mensagens, botão, hash), e o
    aprovador recebe em texto livre a confirmação: aprovação registrada, recusa registrada ou pedido

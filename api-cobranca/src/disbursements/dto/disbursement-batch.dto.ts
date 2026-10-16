@@ -36,6 +36,10 @@ export class UpdateDisbursementBatchDto extends CreateDisbursementBatchDto {
   @IsInt() @Min(1) expectedVersion!: number;
 }
 
+export class RequestDisbursementApprovalDto {
+  @IsInt() @Min(1) expectedVersion!: number;
+}
+
 export class DisbursementBatchesQueryDto {
   @IsOptional()
   @IsIn(Object.values(DisbursementBatchStatus))
