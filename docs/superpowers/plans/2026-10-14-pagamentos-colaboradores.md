@@ -177,17 +177,47 @@ conclusões, sem credenciais nem dados pessoais.
 
 - `GET /disbursements/status`: sempre 200, com `{ enabled, approverName, approverPhoneMasked }`.
 - `GET /disbursements/recipients` e `POST /disbursements/recipients`.
-- `PATCH /disbursements/recipients/:id` (`expectedVersion`).
+- `PUT /disbursements/recipients/:id` (`expectedVersion`).
 - `POST /disbursements/recipients/import`: até 500 linhas, numa transação, com erro por linha e sem
   gravação parcial.
 
 **Validação:** CPF e CNPJ com dígito verificador (reutilizar helper existente, se houver). Exatamente
 um destino: chave Pix (CPF, CNPJ, e-mail, telefone `+55` ou aleatória) ou dados bancários completos.
 
-- [ ] Testes: isolamento A/B (lista, edição e importação); documento duplicado gera 409; importação
-  com uma linha inválida não grava nada; desativado não entra em lote novo; funcionalidade desligada
-  gera 404.
-- [ ] Implementar. Rodar specs e lint. Commit.
+- [x] Testes: isolamento A/B (lista, edição e importação); documento duplicado gera 409; importação
+  com uma linha inválida não grava nada; funcionalidade desligada gera 404. "Desativado não entra em
+  lote novo" é regra do lote e passa para a tarefa 4.
+- [x] Implementar. Rodar specs e lint. Commit.
+
+**Registro de execução (15/10/2026):**
+
+- Regras em `disbursement-recipient-rules.ts`, reutilizando `common/debtor-document.ts` para CPF e
+  CNPJ.
+- Testes:
+  - unitários do módulo: 44 (regras 19, serviço 6, controller 2 e configuração ampliada com status e
+    404);
+  - `test/disbursements.e2e-spec.ts` em PostgreSQL descartável: 9 (4 da tarefa 2 e 5 novos: mesma
+    pessoa em duas empresas, edição por outra empresa gera 404, documento duplicado gera 409,
+    importação tudo ou nada sem tocar outra empresa, duas edições simultâneas com 409, empresa sem a
+    funcionalidade);
+  - suíte completa do backend: 126 suítes e 1.011 testes passando.
+- Lint e build sem erros.
+
+**Desvios e decisões:**
+
+- A edição usa `PUT /disbursements/recipients/:id` com o cadastro completo, em vez de `PATCH`. A tela
+  sempre envia o formulário inteiro, e trocar de chave para conta (ou o contrário) fica sem ambiguidade.
+- Importação:
+  - linha igual a um colaborador já cadastrado é ignorada e contada como `skipped`;
+  - linha com o mesmo documento e outros dados é erro, para a planilha nunca trocar em silêncio onde
+    alguém recebe;
+  - documento repetido no arquivo também é erro.
+- Chave Pix:
+  - telefone exige `+55`, para não ser confundido com CPF;
+  - chave CPF/CNPJ precisa ser o documento do próprio colaborador.
+- Dados bancários: ISPB com 8 dígitos, agência com até 4 dígitos, conta só com números (com o dígito)
+  e tipos `cacc`, `svgs`, `slry`, `tran`. Confirmar na homologação (tarefa 1).
+- `GET /disbursements/status` mostra o celular mascarado (`(11) •••••-7777`), nunca o número.
 
 ## Tarefa 4 — lotes
 

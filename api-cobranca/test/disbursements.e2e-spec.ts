@@ -1,9 +1,14 @@
 import { ConfigService } from '@nestjs/config';
-import { ConflictException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { FinancialEligibilityService } from '../src/financial-activation/financial-eligibility.service';
 import { DisbursementSettingsService } from '../src/disbursements/disbursement-settings.service';
+import { DisbursementRecipientsService } from '../src/disbursements/disbursement-recipients.service';
 
 if (
   !process.env.CIFRAMAIS_DISPOSABLE_E2E ||
@@ -211,5 +216,139 @@ describe('Disbursements (disposable PostgreSQL)', () => {
         },
       }),
     ).rejects.toThrow();
+  });
+});
+
+describe('Collaborators isolated by company (disposable PostgreSQL)', () => {
+  const prisma = new PrismaService(new ConfigService({ ...process.env }));
+  const settings = new DisbursementSettingsService(
+    prisma,
+    new FinancialEligibilityService(prisma),
+  );
+  const recipients = new DisbursementRecipientsService(prisma, settings);
+  const ana = {
+    name: 'Ana Souza',
+    document: '52998224725',
+    pixKey: '52998224725',
+  };
+  let companyA: string, companyB: string, disabled: string;
+
+  async function company(enabled: boolean | null): Promise<string> {
+    const id = (
+      await prisma.company.create({
+        data: {
+          corporateName: 'Tenant LTDA',
+          document: randomUUID().replace(/\D/g, '').slice(0, 14),
+          email: `${randomUUID()}@example.test`,
+          phoneNumber: '5511999990000',
+        },
+      })
+    ).id;
+    if (enabled !== null)
+      await prisma.disbursementSettings.create({
+        data: {
+          companyId: id,
+          version: 1,
+          enabled,
+          approverName: 'Maria',
+          approverPhone: '5511988887777',
+          changedByUserId: 'admin',
+        },
+      });
+    return id;
+  }
+
+  beforeAll(async () => {
+    await prisma.onModuleInit();
+    companyA = await company(true);
+    companyB = await company(true);
+    disabled = await company(false);
+  });
+  afterAll(() => prisma.$disconnect());
+
+  it('the same person may be a collaborator of two companies, each seeing only its own', async () => {
+    const a = await recipients.create(companyA, ana);
+    await recipients.create(companyB, { ...ana, name: 'Ana B' });
+    const listA = await recipients.list(companyA, { page: 1, pageSize: 20 });
+    expect(listA.items.map((r) => r.name)).toEqual(['Ana Souza']);
+    await expect(
+      recipients.update(companyB, a.id, {
+        ...ana,
+        pixKey: 'golpe@example.com',
+        expectedVersion: 1,
+        active: true,
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(
+      (
+        await prisma.disbursementRecipient.findUniqueOrThrow({
+          where: { id: a.id },
+        })
+      ).pixKey,
+    ).toBe('52998224725');
+  });
+
+  it('a second registration with the same document answers 409', async () => {
+    await expect(
+      recipients.create(companyA, { ...ana, name: 'Outra Ana' }),
+    ).rejects.toMatchObject({ response: { code: 'RECIPIENT_DUPLICATE' } });
+  });
+
+  it('import is all or nothing and never touches another company', async () => {
+    const before = await prisma.disbursementRecipient.count();
+    await expect(
+      recipients.import(companyB, [
+        { name: 'Carla', document: '11144477735', pixKey: 'carla@example.com' },
+        { name: 'Davi', document: '123', pixKey: 'davi@example.com' },
+      ]),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(await prisma.disbursementRecipient.count()).toBe(before);
+    await expect(
+      recipients.import(companyB, [
+        { name: 'Carla', document: '11144477735', pixKey: 'carla@example.com' },
+        { ...ana, name: 'Ana B' },
+      ]),
+    ).resolves.toEqual({ created: 1, skipped: 1 });
+    expect(
+      await prisma.disbursementRecipient.count({
+        where: { companyId: companyA },
+      }),
+    ).toBe(1);
+  });
+
+  it('two edits with the same version: one wins, the other gets 409', async () => {
+    const [current] = (
+      await recipients.list(companyA, { page: 1, pageSize: 20 })
+    ).items;
+    const edits = await Promise.allSettled(
+      ['ana1@example.com', 'ana2@example.com'].map((pixKey) =>
+        recipients.update(companyA, current.id, {
+          ...ana,
+          pixKey,
+          expectedVersion: current.version,
+          active: true,
+        }),
+      ),
+    );
+    expect(edits.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(
+      (edits.find((r) => r.status === 'rejected') as PromiseRejectedResult)
+        .reason,
+    ).toBeInstanceOf(ConflictException);
+  });
+
+  it('a company without the feature gets 404 everywhere', async () => {
+    await expect(
+      recipients.list(disabled, { page: 1, pageSize: 20 }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    await expect(recipients.create(disabled, ana)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    await expect(recipients.import(disabled, [ana])).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    await expect(settings.companyStatus(disabled)).resolves.toMatchObject({
+      enabled: false,
+    });
   });
 });

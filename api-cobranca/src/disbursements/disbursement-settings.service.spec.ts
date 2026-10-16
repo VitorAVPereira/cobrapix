@@ -199,4 +199,41 @@ describe('disbursement settings (admin)', () => {
     expect(error.getStatus()).toBe(404);
     expect(f.prisma.$transaction).not.toHaveBeenCalled();
   });
+
+  it('the company sees the approver name and a masked phone only', async () => {
+    const f = fixture({
+      version: 1,
+      enabled: true,
+      approverName: 'Maria Souza',
+      approverPhone: '5511988887777',
+    });
+    await expect(f.service.companyStatus('company')).resolves.toEqual({
+      enabled: true,
+      approverName: 'Maria Souza',
+      approverPhoneMasked: '(11) •••••-7777',
+    });
+    await expect(f.service.assertEnabled('company')).resolves.toBeDefined();
+  });
+
+  it('disabled or never configured: status says so and company routes answer 404', async () => {
+    for (const current of [
+      null,
+      {
+        version: 2,
+        enabled: false,
+        approverName: 'Maria',
+        approverPhone: '5511988887777',
+      },
+    ]) {
+      const f = fixture(current);
+      await expect(f.service.companyStatus('company')).resolves.toEqual({
+        enabled: false,
+        approverName: null,
+        approverPhoneMasked: null,
+      });
+      expect(
+        (await failure(f.service.assertEnabled('company'))).getStatus(),
+      ).toBe(404);
+    }
+  });
 });

@@ -41,6 +41,29 @@ export class DisbursementSettingsService {
     });
   }
 
+  /** Company routes answer as if the feature did not exist while it is not enabled. */
+  async assertEnabled(companyId: string): Promise<DisbursementSettings> {
+    const current = await this.current(companyId);
+    if (!current?.enabled)
+      throw new NotFoundException(
+        'Pagamentos a colaboradores não estão disponíveis.',
+      );
+    return current;
+  }
+
+  /** What the company may see: the approver's name and a masked phone, never the number. */
+  async companyStatus(companyId: string) {
+    const current = await this.current(companyId);
+    if (!current?.enabled)
+      return { enabled: false, approverName: null, approverPhoneMasked: null };
+    const phone = current.approverPhone;
+    return {
+      enabled: true,
+      approverName: current.approverName,
+      approverPhoneMasked: `(${phone.slice(2, 4)}) •••••-${phone.slice(-4)}`,
+    };
+  }
+
   async view(companyId: string) {
     await this.assertCompany(companyId);
     const [history, readiness] = await Promise.all([
