@@ -34,6 +34,14 @@ Pronto quando:
 9. O cliente que contratar aumenta o limite de Pix na própria conta Efí.
 10. Mensalidade fixa, **cobrada fora do sistema** (contrato e fatura manual).
 11. Textos dos templates aprovados conforme a seção "Templates".
+12. **O CifraMais nunca duplica um pagamento por conta própria:**
+    - `idEnvio` único por item;
+    - decisão gravada uma única vez;
+    - reenvio de falhas único por lote;
+    - envio em dúvida nunca é repetido.
+
+    Lotes iguais criados pela empresa são permitidos, sem alerta, porque pagamentos repetidos de mesmo
+    valor são legítimos (confirmado em 16/10/2026).
 
 ## Decisões técnicas tomadas na especificação
 

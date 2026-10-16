@@ -282,6 +282,8 @@ um destino: chave Pix (CPF, CNPJ, e-mail, telefone `+55` ou aleatória) ou dados
 - **Para a tarefa 6:** ao pedir aprovação, refazer a foto de cada item com o cadastro atual (todos
   ativos; senão 409). Assim o aprovador autoriza o que está cadastrado naquele momento, e a partir
   dali tudo fica congelado.
+- **Lotes iguais criados pela empresa:** sem alerta de duplicidade (decisão do usuário em
+  16/10/2026). A proteção é só contra duplicação causada pelo sistema.
 
 ## Tarefa 5 — templates de pagamento
 
