@@ -164,13 +164,41 @@ const FAQ: FaqItem[] = [
   },
   {
     question: "Meus clientes precisam criar conta?",
-    answer:
-      "Não. Eles recebem um link e pagam sem login. O link mostra só aquela cobrança.",
+    answer: (
+      <>
+        <p>Não. Seu cliente não precisa de cadastro, senha nem aplicativo:</p>
+        <ul>
+          <li>Recebe o link da cobrança pelo WhatsApp ou por e-mail.</li>
+          <li>
+            Abre o link e paga ali mesmo, pela forma de pagamento da cobrança: Pix, boleto ou
+            cartão de crédito.
+          </li>
+          <li>O link é seguro e mostra só aquela cobrança, sem acesso a nenhum outro dado.</li>
+        </ul>
+      </>
+    ),
   },
   {
     question: "Como eu acesso o sistema?",
-    answer:
-      "Pelo botão Entrar, no topo da página, com o acesso criado pela nossa equipe.",
+    answer: (
+      <>
+        <p>
+          Depois da contratação, nossa equipe cria o acesso da sua empresa e passa uma senha
+          temporária. Então:
+        </p>
+        <ol>
+          <li>
+            Clique em <strong>Entrar</strong>, no topo desta página.
+          </li>
+          <li>Informe seu e-mail e a senha temporária.</li>
+          <li>No primeiro acesso, crie a sua própria senha.</li>
+        </ol>
+        <p>
+          Esqueceu a senha? Use <strong>Esqueci minha senha</strong> na tela de entrada e receba
+          as instruções por e-mail.
+        </p>
+      </>
+    ),
   },
   {
     question: "Quanto custa?",
