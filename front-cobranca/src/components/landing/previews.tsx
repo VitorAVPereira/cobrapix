@@ -1,13 +1,12 @@
-﻿import {
-  CheckCheck,
+import {
   ChevronDown,
   CircleCheck,
   Copy,
   CreditCard,
-  ExternalLink,
   Mail,
   MessageCircle,
   QrCode,
+  Reply,
 } from "lucide-react";
 import styles from "./landing.module.css";
 
@@ -19,22 +18,30 @@ export function ChargeMessagePreview() {
     <div
       className={styles.msgPreview}
       role="img"
-      aria-label="Mensagem de cobrança no WhatsApp com botões para copiar o código Pix e ver a cobrança"
+      aria-label="Mensagem de emissão da cobrança Pix no WhatsApp, com os botões Copiar código Pix e Preciso de ajuda"
     >
       <div className={styles.msgHeader}>
         <MessageCircle size={14} aria-hidden />
         Cifra+ · WhatsApp
       </div>
+      {/* Same text as the approved Pix emission template; only the variables are examples. */}
       <div className={styles.msgBubble} data-hero="bubble">
-        <p>Olá, Ana! Sua fatura de R$ 350,00 vence em 20/11.</p>
-        <span className={styles.msgTime}>
-          09:12 <CheckCheck size={14} aria-hidden />
-        </span>
+        <p>Olá, Ana Souza, tudo bem?</p>
+        <p>
+          <em>Este é um aviso automático do setor de cobranças da Cifra+.</em>
+        </p>
+        <p>
+          Passando para avisar que seu valor em aberto de R$&nbsp;350,00, referente à empresa Sua
+          Empresa Ltda., está disponível para pagamento e vence no dia 20/11.
+        </p>
+        <p>Estamos à disposição!</p>
+        <p className={styles.msgFooter}>Caso já tenha realizado o pagamento, desconsidere!</p>
+        <span className={styles.msgTime}>09:12</span>
         <span className={styles.msgAction}>
           <Copy size={14} aria-hidden /> Copiar código Pix
         </span>
         <span className={styles.msgAction}>
-          <ExternalLink size={14} aria-hidden /> Ver cobrança
+          <Reply size={14} aria-hidden /> Preciso de ajuda
         </span>
       </div>
     </div>

@@ -443,15 +443,14 @@
 
 .heroStackWrap {
   width: 100%;
-  height: clamp(250px, 26vw, 380px);
+  height: clamp(420px, 38vw, 560px);
   margin-top: clamp(48px, 7vh, 80px);
   overflow: hidden;
 }
 
 .heroStack {
   position: relative;
-  width: clamp(270px, 24vw, 360px);
-  aspect-ratio: 0.72;
+  width: clamp(300px, 26vw, 380px);
   margin: 28px auto 0;
 }
 
@@ -475,7 +474,6 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  height: 100%;
   overflow: hidden;
   border: 8px solid var(--surface);
   border-radius: 24px;
@@ -485,13 +483,13 @@
 }
 
 .heroCardMedia {
-  flex: 0 0 66%;
+  flex: none;
   background: var(--mint);
   color: var(--text);
 }
 
 .heroCardBand {
-  flex: 1;
+  flex: none;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -508,9 +506,8 @@
 .msgPreview {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  height: 100%;
-  padding: 20px 18px;
+  gap: 12px;
+  padding: 18px 16px 22px;
 }
 
 .msgHeader {
@@ -525,13 +522,19 @@
 .msgBubble {
   display: flex;
   flex-direction: column;
-  width: 88%;
+  gap: 10px;
+  width: 94%;
   padding: 12px 14px 0;
   border-radius: 4px 16px 16px 16px;
   background: var(--surface);
   box-shadow: 0 6px 18px -12px rgba(8, 39, 34, 0.45);
-  font-size: 14px;
+  font-size: 13.5px;
   line-height: 1.4;
+}
+
+.msgFooter {
+  color: var(--muted-2);
+  font-size: 12.5px;
 }
 
 .msgTime {
