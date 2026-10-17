@@ -2,8 +2,9 @@ import { DisbursementDocumentType } from '@prisma/client';
 import { validateDebtorDocument } from '../common/debtor-document';
 
 export type PixKeyType = 'CPF' | 'CNPJ' | 'PHONE' | 'EMAIL' | 'EVP';
-// ISO 20022 account types accepted by Efí's contaBanco.tipoConta.
-export const BANK_ACCOUNT_TYPES = ['cacc', 'svgs', 'slry', 'tran'] as const;
+// contaBanco.tipoConta accepted by Efí in homologation: checking, savings and payment
+// accounts. A salary account (slry) is refused: it does not receive Pix transfers.
+export const BANK_ACCOUNT_TYPES = ['cacc', 'svgs', 'tran'] as const;
 
 export interface RecipientInput {
   name: string;

@@ -89,18 +89,31 @@ a verificação e a expiração. O resultado chega pelo ramo novo do webhook Pix
 **Criar:** `docs/implementation/efi-disbursement-validation.md`, com cenários, respostas resumidas e
 conclusões, sem credenciais nem dados pessoais.
 
-- [ ] Confirmar o formato aceito de `idEnvio`; proposta: id do item sem hífens (32 caracteres).
-- [ ] Enviar por chave com `favorecido.cpf`, por chave com `favorecido.cnpj` e por `contaBanco`.
+- [x] Confirmar o formato aceito de `idEnvio`; proposta: id do item sem hífens (32 caracteres).
+- [x] Enviar por chave com `favorecido.cpf`, por chave com `favorecido.cnpj` e por `contaBanco`.
   Registrar o formato de `codigoBanco`, `agencia`, `conta` e `tipoConta`.
-- [ ] Capturar o payload real do webhook de envio na URL atual (`/webhooks/efi/pix?ignorar=`):
+- [x] Capturar o payload real do webhook de envio na URL atual (`/webhooks/efi/pix?ignorar=`):
   `REALIZADO`, `NAO_REALIZADO` e devoluções simuladas (R$ 4,00 e R$ 5,00). Conferir qual chave vem
   em `chave`.
-- [ ] Registrar as respostas de `pixSend` para 400, 403 (escopo ausente), 404, 409
-  `id_envio_duplicado`, 422 e 429 (`Retry-After`), além de `pixSendDetailId` para id inexistente.
-- [ ] Verificar se o token OAuth informa os escopos concedidos (`pix.send`) e o nome do escopo de
-  saldo. Se não informar, o admin confirma manualmente na liberação.
-- [ ] Registrar o formato de `getAccountBalance` e de `pixGetReceipt`.
-- [ ] Commit documental.
+- [x] Registrar as respostas de `pixSend` (registradas no documento), além de `pixSendDetailId`
+  para id inexistente. Não reproduzíveis no sandbox, cobertos com a Efí simulada: 403 por escopo
+  ausente, 429 com `Retry-After` e 5xx.
+- [x] Verificar se o token OAuth informa os escopos concedidos (`pix.send`) e o nome do escopo de
+  saldo. **Informa** (`scope`); o escopo de saldo é `gn.balance.read`.
+- [x] Registrar o formato de `getAccountBalance` e de `pixGetReceipt`. O comprovante fica
+  desabilitado em homologação.
+- [x] Commit documental.
+
+**Registro de execução (17/10/2026):** resultados completos em
+[validação na homologação Efí](../../implementation/efi-disbursement-validation.md).
+
+**Consequências para as próximas tarefas:**
+
+- conta salário (`slry`) é recusada pela Efí e saiu dos tipos aceitos (correção na tarefa 3);
+- 201 com `NAO_REALIZADO` é falha imediata;
+- saldo sempre zero em homologação: não conferir saldo nesse ambiente;
+- devoluções chegam como novos avisos do mesmo Pix, que continua `REALIZADO`;
+- a consulta por `idEnvio` não traz o motivo de recusa.
 
 ## Tarefa 2 — schema e configuração do admin
 
@@ -216,7 +229,8 @@ um destino: chave Pix (CPF, CNPJ, e-mail, telefone `+55` ou aleatória) ou dados
   - telefone exige `+55`, para não ser confundido com CPF;
   - chave CPF/CNPJ precisa ser o documento do próprio colaborador.
 - Dados bancários: ISPB com 8 dígitos, agência com até 4 dígitos, conta só com números (com o dígito)
-  e tipos `cacc`, `svgs`, `slry`, `tran`. Confirmar na homologação (tarefa 1).
+  e tipos `cacc`, `svgs`, `tran`. A homologação (tarefa 1) mostrou que a Efí recusa `slry` (conta
+  salário).
 - `GET /disbursements/status` mostra o celular mascarado (`(11) •••••-7777`), nunca o número.
 
 ## Tarefa 4 — lotes

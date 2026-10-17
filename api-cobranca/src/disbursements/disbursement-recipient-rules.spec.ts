@@ -86,6 +86,7 @@ describe('collaborator rules', () => {
     [{}, 'completos'],
     [{ ...bank, bankIspb: '123' }, 'ISPB'],
     [{ ...bank, bankAccountType: 'corrente' }, 'Tipo de conta'],
+    [{ ...bank, bankAccountType: 'slry' }, 'Tipo de conta'],
   ])(
     'requires exactly one complete destination (%o)',
     (destination, message) => {
