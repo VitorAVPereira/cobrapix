@@ -129,8 +129,10 @@ Seguem padrões do código ou são a opção mais conservadora com dinheiro. Pod
 - **Pedido de aprovação:** aguardando, aprovado, recusado, expirado ou invalidado (lote editado,
   cancelado ou funcionalidade desligada).
 
-Aprovado não é enviado, enviado não é pago. Devolução posterior de um Pix pago fica para depois da
-validação em homologação: até lá, vira anomalia para o admin.
+Aprovado não é enviado, enviado não é pago.
+
+**Devolução posterior de um Pix pago fica sem tratamento nesta versão** (decisão do usuário em
+17/10/2026). O aviso de devolução é ignorado, e o pagamento continua "pago" no sistema.
 
 ## Templates (criados na Meta pelo admin, categoria utilidade)
 

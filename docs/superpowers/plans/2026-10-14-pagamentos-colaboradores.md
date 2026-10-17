@@ -514,10 +514,40 @@ exige ação explícita do admin, mais de 24 h sem registro na Efí e auditoria.
 **Comprovante:** `GET /disbursements/items/:id/receipt` (só `PAID`, isolado por empresa), via
 `pixGetReceipt`.
 
-- [ ] Testes: cada linha da tabela; identidade trocada; saldo insuficiente (nenhum `pixSend`); worker
-  desligado no meio (itens restantes `CANCELED`); duas instâncias geram um `pixSend` por item;
-  nenhum dado pessoal em log.
-- [ ] Implementar. Specs, e2e descartável e lint. Commit.
+- [x] Testes: cada linha da tabela; identidade trocada; saldo insuficiente (nenhum `pixSend`); worker
+  desligado no meio (itens restantes `CANCELED`); duas instâncias geram um `pixSend` por item.
+  "Nenhum dado pessoal em log" foi garantido por revisão: os logs só têm ids internos.
+- [x] Implementar. Specs, e2e descartável e lint. Commit.
+
+**Registro de execução (17/10/2026):**
+
+- **Arquivos:** `efi-disbursement.client.ts`, `disbursement-sender.service.ts`,
+  `disbursement-reasons.ts` e os tipos do SDK (`pixSend`, `pixSendDetailId`, `getAccountBalance`,
+  `pixGetReceipt`).
+- **Worker:** envio logo depois da decisão no mesmo tick, seguido da verificação.
+- **Rotas:**
+  - empresa: `GET /disbursements/items/:id/receipt`;
+  - admin: `GET /admin/disbursements/:companyId/items/under-verification` e
+    `POST /admin/disbursements/:companyId/items/:itemId/check`.
+- **Testes:**
+  - `efi-disbursement.client.spec.ts`: 14, com respostas e erros reais da homologação;
+  - PostgreSQL descartável: 39 no total, 8 novos de envio. Cobrem um envio por item com duas
+    execuções simultâneas, cada resposta da Efí, pausa por limite, conta trocada, saldo insuficiente,
+    homologação sem conferência de saldo, funcionalidade desligada no meio, verificação de envio
+    perdido e comprovante isolado por empresa;
+  - suíte completa: 129 suítes e 1.058 testes. Lint, tipos e build sem erros.
+
+**Desvios e decisões:**
+
+- **`Retry-After` do limite de envios:** o SDK não expõe o cabeçalho. O lote pausa 60 segundos e
+  tenta de novo.
+- **Conta Efí indisponível no envio** (credencial ou certificado vencido): os itens pendentes falham
+  com motivo explícito e nada é enviado.
+- **Envio em andamento há mais de 10 minutos sem aviso:** é consultado pelo `idEnvio`, caso o
+  webhook se perca.
+- **"Marcar como não processado" pelo admin:** não foi feito. O admin só consulta a Efí, pela rota
+  `check`. O `idEnvio` é idempotente, então um item ainda incerto continua visível até a Efí
+  responder. Fica para decisão futura, caso apareça na operação.
 
 ## Tarefa 8 — webhook de Pix enviado e conclusão do lote
 
@@ -531,7 +561,9 @@ exige ação explícita do admin, mais de 24 h sem registro na Efí e auditoria.
 - `chave` precisa ser a `pixKey` da identidade fotografada; se não for, `recordWebhookAnomaly`.
 - `idEnvio` desconhecido (envio feito fora do CifraMais na mesma conta) vira anomalia e responde 200.
 - Transições monotônicas; reentrega é idempotente.
-- `PAID` nunca volta. Devolução fica anomalia até a tarefa 1 definir o formato.
+- `PAID` nunca volta.
+- **Devoluções ficam sem tratamento nesta versão** (decisão do usuário em 17/10/2026). Avisos com
+  `devolucoes` são ignorados: respondem 200 e não mudam o item.
 
 **Conclusão:** lote sem itens `PENDING`, `SENDING` ou `IN_PROCESSING` vira `COMPLETED` ou
 `COMPLETED_WITH_FAILURES`. Com falhas, template `DISBURSEMENT_FAILED` com chave

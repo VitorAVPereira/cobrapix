@@ -10,6 +10,8 @@ import { DisbursementSettingsService } from './disbursement-settings.service';
 import { DisbursementRecipientsService } from './disbursement-recipients.service';
 import { DisbursementBatchesService } from './disbursement-batches.service';
 import { DisbursementApprovalService } from './disbursement-approval.service';
+import { DisbursementSenderService } from './disbursement-sender.service';
+import { EfiDisbursementClient } from './efi-disbursement.client';
 import { DisbursementWorker } from './disbursement.worker';
 import { DisbursementsAdminController } from './disbursements-admin.controller';
 import { DisbursementsController } from './disbursements.controller';
@@ -28,6 +30,8 @@ import { DisbursementsController } from './disbursements.controller';
     DisbursementRecipientsService,
     DisbursementBatchesService,
     DisbursementApprovalService,
+    DisbursementSenderService,
+    EfiDisbursementClient,
     DisbursementWorker,
     FinancialEligibilityService,
     PlatformAdminGuard,

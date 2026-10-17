@@ -4,7 +4,7 @@ import {
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
-import { randomUUID } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { FinancialEligibilityService } from '../src/financial-activation/financial-eligibility.service';
 import { DisbursementSettingsService } from '../src/disbursements/disbursement-settings.service';
@@ -13,6 +13,8 @@ import { DisbursementBatchesService } from '../src/disbursements/disbursement-ba
 import { TemplatePolicyService } from '../src/templates/template-policy.service';
 import { DisbursementApprovalService } from '../src/disbursements/disbursement-approval.service';
 import { messageRecipient } from '../src/communications/message-context';
+import { DisbursementSenderService } from '../src/disbursements/disbursement-sender.service';
+import type { SendOutcome } from '../src/disbursements/efi-disbursement.client';
 
 if (
   !process.env.CIFRAMAIS_DISPOSABLE_E2E ||
@@ -1156,5 +1158,380 @@ describe('Approval on WhatsApp (disposable PostgreSQL, simulated transport)', ()
     });
     await approvals.releaseUnsent();
     expect(await statusOf(draft.id)).toBe('DRAFT');
+  });
+});
+
+describe('Pix send of approved batches (disposable PostgreSQL, simulated Efí)', () => {
+  const prisma = new PrismaService(new ConfigService({ ...process.env }));
+  const policy = { resolve: jest.fn() };
+  const settings = new DisbursementSettingsService(
+    prisma,
+    {} as never,
+    policy as never,
+  );
+  const environments = new Map<string, 'HOMOLOGATION' | 'PRODUCTION'>();
+  const client = {
+    account: jest.fn((identityId: string) =>
+      Promise.resolve({
+        identityId,
+        pixKey: 'chave-da-empresa',
+        environment: environments.get(identityId) ?? 'PRODUCTION',
+        sdk: {},
+      }),
+    ),
+    send: jest.fn(),
+    status: jest.fn(),
+    balanceCents: jest.fn().mockResolvedValue(10_000_000),
+    receipt: jest.fn(),
+  };
+  const sender = new DisbursementSenderService(
+    prisma,
+    settings,
+    client as never,
+  );
+
+  // An approved batch: what the approval leaves behind for the sender.
+  async function approved(
+    amounts: number[],
+    environment: 'HOMOLOGATION' | 'PRODUCTION' = 'PRODUCTION',
+  ) {
+    const companyId = (
+      await prisma.company.create({
+        data: {
+          corporateName: 'Tenant LTDA',
+          document: randomUUID().replace(/\D/g, '').slice(0, 14),
+          email: `${randomUUID()}@example.test`,
+          phoneNumber: '5511999990000',
+        },
+      })
+    ).id;
+    const identityId = (
+      await prisma.efiAccountIdentity.create({
+        data: {
+          ownership: 'COMPANY',
+          companyId,
+          environment,
+          holderDocument: '11222333000181',
+          efiAccountNumber: randomUUID().replace(/\D/g, '').slice(0, 10),
+          pixKey: 'chave-da-empresa',
+        },
+      })
+    ).id;
+    environments.set(identityId, environment);
+    const credential = await prisma.efiCredentialVersion.create({
+      data: {
+        identityId,
+        version: 1,
+        status: 'ACTIVE',
+        encryptedClientId: 'cifrado',
+        encryptedClientSecret: 'cifrado',
+        encryptedCertificate: 'cifrado',
+        credentialKeyVersion: 'v1',
+        certificateFingerprint: randomBytes(32)
+          .toString('hex')
+          .toUpperCase()
+          .match(/../g)!
+          .join(':'),
+        certificateExpiresAt: new Date(Date.now() + 365 * 86_400_000),
+      },
+    });
+    // The active profile and the company pointer are checked together by the database.
+    await prisma.$transaction(async (tx) => {
+      const profile = await tx.financialProfileVersion.create({
+        data: {
+          companyId,
+          version: 1,
+          status: 'ACTIVE',
+          origin: 'MANUAL_ADMIN',
+          accountMode: 'CUSTOMER_ACCOUNT',
+          payoutMode: 'DIRECT_TO_CUSTOMER',
+          environment,
+          enabledMethods: ['PIX'],
+          issuerIdentityId: identityId,
+          issuerCredentialVersionId: credential.id,
+          authorizationKind: 'ACCOUNT_INTEGRATION_AUTHORIZATION',
+          authorizationReference: 'contrato',
+          ownershipVerifiedAt: new Date(),
+          validatedAt: new Date(),
+          validationHash: 'hash',
+          activatedAt: new Date(),
+          activationIdempotencyKey: randomUUID(),
+          creationIdempotencyKey: randomUUID(),
+        },
+      });
+      await tx.company.update({
+        where: { id: companyId },
+        data: { activeFinancialProfileId: profile.id },
+      });
+    });
+    await prisma.disbursementSettings.create({
+      data: {
+        companyId,
+        version: 1,
+        enabled: true,
+        approverName: 'Maria',
+        approverPhone: '5511988887777',
+        changedByUserId: 'admin',
+      },
+    });
+    const batch = await prisma.disbursementBatch.create({
+      data: {
+        companyId,
+        reference: 'Folha 10/2026',
+        status: 'PROCESSING',
+        issuerIdentityId: identityId,
+        totalCents: amounts.reduce((a, b) => a + b, 0),
+        itemCount: amounts.length,
+        createdByUserId: 'user',
+      },
+    });
+    const items = [];
+    for (const [index, amountCents] of amounts.entries()) {
+      const document = String(10_000_000_000 + index);
+      const recipient = await prisma.disbursementRecipient.create({
+        data: {
+          companyId,
+          name: `Colaborador ${index}`,
+          documentType: 'CPF',
+          document,
+          pixKey: `c${index}@example.com`,
+        },
+      });
+      const id = randomUUID();
+      items.push(
+        await prisma.disbursementItem.create({
+          data: {
+            id,
+            idEnvio: id.replace(/-/g, ''),
+            batchId: batch.id,
+            companyId,
+            recipientId: recipient.id,
+            recipientName: recipient.name,
+            documentType: 'CPF',
+            document,
+            pixKey: recipient.pixKey,
+            amountCents,
+          },
+        }),
+      );
+    }
+    return { companyId, identityId, batchId: batch.id, items };
+  }
+  const itemsOf = (batchId: string) =>
+    prisma.disbursementItem.findMany({
+      where: { batchId },
+      orderBy: { recipientName: 'asc' },
+    });
+
+  beforeAll(() => prisma.onModuleInit());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    client.balanceCents.mockResolvedValue(10_000_000);
+  });
+  afterAll(() => prisma.$disconnect());
+
+  it('sends each item once, by its own send id, even with two workers at the same time', async () => {
+    const b = await approved([100, 200, 300]);
+    client.send.mockImplementation(
+      async (_account: unknown, input: { idEnvio: string }) => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { kind: 'IN_PROCESSING', e2eId: `E-${input.idEnvio}` };
+      },
+    );
+    await Promise.all([
+      sender.sendBatch(b.batchId),
+      sender.sendBatch(b.batchId),
+    ]);
+    expect(client.send).toHaveBeenCalledTimes(3);
+    const sentIds = client.send.mock.calls.map(
+      (call) => (call as [unknown, { idEnvio: string }])[1].idEnvio,
+    );
+    expect(new Set(sentIds)).toEqual(new Set(b.items.map((i) => i.idEnvio)));
+    const items = await itemsOf(b.batchId);
+    expect(items.map((i) => i.status)).toEqual([
+      'IN_PROCESSING',
+      'IN_PROCESSING',
+      'IN_PROCESSING',
+    ]);
+    expect(items.every((i) => i.e2eId === `E-${i.idEnvio}`)).toBe(true);
+  });
+
+  it('records each answer of Efí; a possibly processed send is never a failure', async () => {
+    const b = await approved([100, 200, 300, 400, 500]);
+    const outcomes: SendOutcome[] = [
+      { kind: 'PAID', e2eId: 'E-paid' },
+      {
+        kind: 'REFUSED',
+        code: 'chave_favorecido_nao_encontrada',
+        reason: 'Chave Pix do colaborador não encontrada',
+      },
+      { kind: 'DUPLICATE' },
+      { kind: 'UNCERTAIN' },
+    ];
+    client.send.mockImplementation(() =>
+      outcomes.length
+        ? Promise.resolve(outcomes.shift())
+        : Promise.reject(new Error('socket hang up')),
+    );
+    await sender.sendBatch(b.batchId);
+    const items = await itemsOf(b.batchId);
+    expect(items.map((i) => [i.status, i.failureReason])).toEqual([
+      ['PAID', null],
+      ['FAILED', 'Chave Pix do colaborador não encontrada'],
+      ['UNCERTAIN', null],
+      ['UNCERTAIN', null],
+      ['UNCERTAIN', null],
+    ]);
+  });
+
+  it('the channel limit pauses the batch and keeps the item to send later', async () => {
+    const b = await approved([100, 200]);
+    client.send.mockResolvedValue({ kind: 'RATE_LIMITED' });
+    await sender.sendBatch(b.batchId);
+    expect(client.send).toHaveBeenCalledTimes(1);
+    expect((await itemsOf(b.batchId)).map((i) => i.status)).toEqual([
+      'PENDING',
+      'PENDING',
+    ]);
+    const batch = await prisma.disbursementBatch.findUniqueOrThrow({
+      where: { id: b.batchId },
+    });
+    expect(batch.sendPausedUntil!.getTime()).toBeGreaterThan(Date.now());
+    await sender.sendApproved();
+    expect(client.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('a changed paying account or a batch not covered by the balance sends nothing', async () => {
+    const moved = await approved([100]);
+    const other = await prisma.efiAccountIdentity.create({
+      data: {
+        ownership: 'COMPANY',
+        companyId: moved.companyId,
+        environment: 'PRODUCTION',
+        holderDocument: '11222333000181',
+        efiAccountNumber: randomUUID().replace(/\D/g, '').slice(0, 10),
+        pixKey: 'outra-chave',
+      },
+    });
+    // Approved for another account than the one active now (profiles are immutable).
+    await prisma.disbursementBatch.update({
+      where: { id: moved.batchId },
+      data: { issuerIdentityId: other.id },
+    });
+    await sender.sendBatch(moved.batchId);
+    const poor = await approved([60_000, 50_000]);
+    client.balanceCents.mockResolvedValue(100_000);
+    await sender.sendBatch(poor.batchId);
+    expect(client.send).not.toHaveBeenCalled();
+    expect((await itemsOf(moved.batchId))[0]).toMatchObject({
+      status: 'FAILED',
+      failureCode: 'ISSUER_CHANGED',
+    });
+    expect(
+      (await itemsOf(poor.batchId)).map((i) => [i.status, i.failureReason]),
+    ).toEqual([
+      [
+        'FAILED',
+        'Saldo insuficiente na conta Efí: disponível R$ 1.000,00, necessário R$ 1.100,00; nada foi enviado',
+      ],
+      [
+        'FAILED',
+        'Saldo insuficiente na conta Efí: disponível R$ 1.000,00, necessário R$ 1.100,00; nada foi enviado',
+      ],
+    ]);
+  });
+
+  it('homologation never checks the balance (always zero there)', async () => {
+    const b = await approved([100], 'HOMOLOGATION');
+    client.balanceCents.mockResolvedValue(0);
+    client.send.mockResolvedValue({ kind: 'IN_PROCESSING', e2eId: 'E1' });
+    await sender.sendBatch(b.batchId);
+    expect(client.balanceCents).not.toHaveBeenCalled();
+    expect((await itemsOf(b.batchId))[0]?.status).toBe('IN_PROCESSING');
+  });
+
+  it('turning the feature off stops the next items; batches not approved never send', async () => {
+    const b = await approved([100, 200]);
+    client.send.mockImplementation(async () => {
+      await settings.configure(b.companyId, 'admin', {
+        expectedVersion: 1,
+        enabled: false,
+        approverName: 'Maria',
+        approverPhone: '5511988887777',
+      });
+      return { kind: 'IN_PROCESSING', e2eId: 'E1' };
+    });
+    await sender.sendBatch(b.batchId);
+    expect(client.send).toHaveBeenCalledTimes(1);
+    expect((await itemsOf(b.batchId)).map((i) => i.status)).toEqual([
+      'IN_PROCESSING',
+      'CANCELED',
+    ]);
+    const waiting = await approved([100]);
+    await prisma.disbursementBatch.update({
+      where: { id: waiting.batchId },
+      data: { status: 'AWAITING_APPROVAL' },
+    });
+    client.send.mockClear();
+    await sender.sendBatch(waiting.batchId);
+    expect(client.send).not.toHaveBeenCalled();
+  });
+
+  it('a lost send is checked by its id: paid, refused, or kept under verification', async () => {
+    const b = await approved([100, 200, 300]);
+    const [paid, refused, unknown] = b.items;
+    await prisma.disbursementItem.updateMany({
+      where: { batchId: b.batchId },
+      data: { status: 'SENDING', sendingAt: new Date(Date.now() - 5 * 60_000) },
+    });
+    client.status.mockImplementation((_account: unknown, idEnvio: string) =>
+      idEnvio === paid!.idEnvio
+        ? {
+            kind: 'FOUND',
+            status: 'REALIZADO',
+            e2eId: 'E-p',
+            settledAt: new Date(),
+          }
+        : idEnvio === refused!.idEnvio
+          ? {
+              kind: 'FOUND',
+              status: 'NAO_REALIZADO',
+              e2eId: 'E-r',
+              settledAt: null,
+            }
+          : { kind: 'NOT_FOUND' },
+    );
+    await sender.reconcile();
+    const items = new Map((await itemsOf(b.batchId)).map((i) => [i.id, i]));
+    expect(items.get(paid!.id)).toMatchObject({ status: 'PAID', e2eId: 'E-p' });
+    expect(items.get(refused!.id)).toMatchObject({
+      status: 'FAILED',
+      failureReason: 'Recusado pelo banco (motivo não informado)',
+    });
+    expect(items.get(unknown!.id)?.status).toBe('UNCERTAIN');
+    // Checked again only after a minute.
+    client.status.mockClear();
+    await sender.reconcile();
+    expect(client.status).not.toHaveBeenCalled();
+    expect(client.send).not.toHaveBeenCalled();
+  });
+
+  it('the receipt is only for a paid item of the same company', async () => {
+    const a = await approved([100, 200]);
+    const b = await approved([100]);
+    await prisma.disbursementItem.update({
+      where: { id: a.items[0]!.id },
+      data: { status: 'PAID' },
+    });
+    client.receipt.mockResolvedValue(Buffer.from('%PDF-1.4'));
+    await expect(sender.receipt(a.companyId, a.items[0]!.id)).resolves.toEqual(
+      Buffer.from('%PDF-1.4'),
+    );
+    await expect(
+      sender.receipt(b.companyId, a.items[0]!.id),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    await expect(
+      sender.receipt(a.companyId, a.items[1]!.id),
+    ).rejects.toMatchObject({ response: { code: 'RECEIPT_UNAVAILABLE' } });
   });
 });
