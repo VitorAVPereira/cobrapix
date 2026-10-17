@@ -630,8 +630,45 @@ Carregando, erro e vazio distintos; 409 recarrega; requisições antigas descart
 **Textos:** "Aguardando aprovação no WhatsApp de <nome> até <data>"; "Expirado: faça o pagamento
 manualmente"; "Em verificação: não pague manualmente".
 
-- [ ] Testes de componentes (estados, 409, importação com linha inválida, menu oculto quando
+- [x] Testes de componentes (estados, 409, importação com linha inválida, menu oculto quando
   desligado). `npm run lint`, `npx jest --runInBand` e `npm run build`. Commit.
+
+**Registro de execução (17/10/2026):**
+
+- **Admin:** `DisbursementSettings.tsx` no painel de ativação financeira. Mostra a situação, o que
+  falta para liberar, o aprovador (nome e celular), ligar ou desligar (confirmação ao desligar), o
+  histórico de versões e os pagamentos em verificação com "Consultar Efí". Em 409, recarrega os
+  dados.
+- **Empresa:** página `/pagamentos-colaboradores`, com as abas Lotes e Colaboradores.
+  - Componentes em `components/features/disbursements/`: `RecipientsPanel`, `BatchesPanel`,
+    `BatchEditor` e `BatchDetail`.
+  - O menu lateral mostra o item só com `GET /disbursements/status` `enabled`.
+  - Apoio em `lib/disbursements.ts`: rótulos, moeda, data de São Paulo e leitura das planilhas
+    com `papaparse`, já usado no projeto.
+- **Textos:**
+  - "Aguardando aprovação no WhatsApp de <nome> até <data>";
+  - "Expirado: o aprovador não respondeu em 24 horas. Nada foi pago pelo CifraMais; faça o
+    pagamento manualmente";
+  - "Em verificação: não pague manualmente".
+- **Testes:**
+  - novos: funções de apoio (6), admin (6), telas da empresa (12), página (3) e menu lateral (3);
+  - suíte completa do frontend: 61 suítes e 361 testes;
+  - `tsc` sem erros. O lint só tem o aviso conhecido de `useReactTable`.
+- **Não executados:**
+  - `npm run build`: havia um servidor de desenvolvimento de outra sessão na mesma pasta, e o
+    build poderia atrapalhá-lo;
+  - verificação visual no navegador: exige a API local com as migrations aplicadas no banco de
+    desenvolvimento do usuário.
+
+**Desvios e decisões:**
+
+- **Botão do admin:** "Salvar pagamentos a colaboradores", porque a página de ativação já tem um
+  "Salvar".
+- **Teste existente ajustado:** `FinancialActivationAdmin.test.tsx` passou a simular os dois
+  métodos novos. O bloco novo aparece na mesma página.
+- **Planilha do lote:** só preenche valores de colaboradores **ativos já cadastrados**, por
+  CPF/CNPJ. Nada é preenchido se alguma linha tiver problema, e cada problema é listado.
+- **Valor:** aceita "1.500,00", "1500,50" ou "1500.50".
 
 ## Tarefa 10 — documentação e fechamento
 

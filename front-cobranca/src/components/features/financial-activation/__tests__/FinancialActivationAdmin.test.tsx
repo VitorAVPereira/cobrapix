@@ -8,6 +8,8 @@ import type {
 
 const mockApi = {
   getFinancialOverview: jest.fn(),
+  getDisbursementSettings: jest.fn(),
+  getDisbursementsUnderVerification: jest.fn(),
   createFinancialActivation: jest.fn(),
   uploadFinancialCredentials: jest.fn(),
   updateFinancialConfiguration: jest.fn(),
@@ -56,6 +58,13 @@ function overview(
 beforeEach(() => {
   jest.clearAllMocks();
   for (const fn of Object.values(mockApi)) fn.mockResolvedValue({});
+  // The collaborator payments block of the same page, turned off.
+  mockApi.getDisbursementSettings.mockResolvedValue({
+    current: null,
+    history: [],
+    readiness: { ready: false, missing: [] },
+  });
+  mockApi.getDisbursementsUnderVerification.mockResolvedValue([]);
 });
 
 it("starts an activation with the customer's own Efí account", async () => {
