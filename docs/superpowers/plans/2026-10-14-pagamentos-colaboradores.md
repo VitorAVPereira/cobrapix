@@ -570,10 +570,42 @@ exige ação explícita do admin, mais de 24 h sem registro na Efí e auditoria.
 `disbursement-failed:<batchId>`. Itens `UNCERTAIN` não entram na lista e aparecem no painel como "em
 verificação — não pague manualmente".
 
-- [ ] Testes: payload de cobrança Pix inalterado (specs atuais passando); `REALIZADO` e
+- [x] Testes: payload de cobrança Pix inalterado (specs atuais passando); `REALIZADO` e
   `NAO_REALIZADO` com motivo; reentrega; chave errada; `idEnvio` desconhecido; aviso enviado uma
   vez; lote sem falhas não envia aviso.
-- [ ] Implementar. Rodar specs de `payment`, `webhooks` e `disbursements`. Commit.
+- [x] Implementar. Rodar specs de `payment`, `webhooks` e `disbursements`. Commit.
+
+**Registro de execução (17/10/2026):**
+
+- **Arquivos:**
+  - `disbursement-webhook.service.ts`, que só depende do banco. Fica registrado no
+    `PaymentModule` e chega ao `EfiService` como último parâmetro opcional, sem ciclo de módulos;
+  - ramo `applySentPix` em `EfiService.handlePixWebhook`;
+  - `completeFinished` no envio e `notifyFailures` na aprovação;
+  - passos `complete` e `failures` no worker.
+- **Testes:**
+  - `efi-sent-pix-webhook.spec.ts`: 6. Pix enviado não procura cobrança; anomalias respondem 200;
+    Pix recebido segue igual; o aviso de teste do cadastro não é pagamento;
+  - PostgreSQL descartável: 43 (4 novos). Cobrem pago e falho com o motivo da Efí (AC03), reentrega,
+    conflito de estado, outra chave, `idEnvio` desconhecido, devolução ignorada, aviso antes da
+    resposta do envio, conclusão só com tudo conhecido e aviso de falhas uma vez;
+  - também passando: `payment-postgres.cjs`, `payment-issuance-recovery` e `card-checkout`
+    (19 testes), retomada de templates e a suíte unitária completa (130 suítes, 1.064 testes).
+    Lint e build sem erros.
+
+**Desvios e decisões:**
+
+- **Conclusão do lote:** espera também os itens `UNCERTAIN`, não só `PENDING`, `SENDING` e
+  `IN_PROCESSING`. Um item em verificação pode ter sido pago, e o aviso de falhas sai uma única vez,
+  já com a lista final.
+- **Status final:** `COMPLETED` só com todos pagos. `FAILED` ou `CANCELED` (funcionalidade
+  desligada) levam a `COMPLETED_WITH_FAILURES`.
+- **Aviso de falhas:** só quando há itens `FAILED`. Chave `disbursement-failed:<approvalId>`
+  (contexto do template), marcada em `noticeSentAt`.
+- **Anomalias (`PaymentWebhookAnomaly`, origem `PIX`):** `UNKNOWN_SEND_ID` (envio feito fora do
+  CifraMais na mesma conta), `SEND_KEY_MISMATCH` e `SEND_STATUS_CONFLICT`. Todas respondem 200, sem
+  reentrega da Efí.
+- **Devoluções:** ignoradas, conforme decisão do usuário. O item continua `PAID`.
 
 ## Tarefa 9 — telas
 

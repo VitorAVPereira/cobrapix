@@ -20,10 +20,12 @@ export class DisbursementWorker {
     await this.step('decide', () => this.approvals.decideAwaiting());
     await this.step('send', () => this.sender.sendApproved());
     await this.step('reconcile', () => this.sender.reconcile());
+    await this.step('complete', () => this.sender.completeFinished());
     await this.step('expire', () => this.approvals.expireOverdue());
     await this.step('release', () => this.approvals.releaseUnsent());
     await this.step('acks', () => this.approvals.sendAcks());
     await this.step('notices', () => this.approvals.notifyExpired());
+    await this.step('failures', () => this.approvals.notifyFailures());
   }
 
   private async step(name: string, run: () => Promise<void>): Promise<void> {

@@ -320,27 +320,56 @@ export class DisbursementApprovalService {
       take: 50,
       select: { id: true, companyId: true },
     });
-    for (const approval of expired) {
-      try {
-        const prepared = await this.templateSender.prepare({
-          logicalKey: `disbursement-expired:${approval.id}`,
-          origin: 'DISBURSEMENT',
-          context: {
-            companyId: approval.companyId,
-            disbursementApprovalId: approval.id,
-          },
-          selection: { mode: 'DEFAULT', purpose: 'DISBURSEMENT_EXPIRED' },
-        });
-        // A held notice stays visible to the admin, who resumes it after fixing the template.
-        if (prepared.status === 'QUEUED')
-          await this.whatsapp.enqueuePreparedTemplate(prepared.intentId);
-        await this.prisma.disbursementApproval.update({
-          where: { id: approval.id },
-          data: { noticeSentAt: new Date() },
-        });
-      } catch {
-        this.logger.warn(`Aviso de expiração pendente: ${approval.id}`);
-      }
+    for (const approval of expired)
+      await this.notice(
+        approval,
+        'DISBURSEMENT_EXPIRED',
+        'disbursement-expired',
+      );
+  }
+
+  /** Once per approved batch that ended with failed items, with each reason. */
+  async notifyFailures(): Promise<void> {
+    const failed = await this.prisma.disbursementApproval.findMany({
+      where: {
+        state: 'APPROVED',
+        noticeSentAt: null,
+        batch: {
+          status: 'COMPLETED_WITH_FAILURES',
+          items: { some: { status: 'FAILED' } },
+        },
+      },
+      take: 50,
+      select: { id: true, companyId: true },
+    });
+    for (const approval of failed)
+      await this.notice(approval, 'DISBURSEMENT_FAILED', 'disbursement-failed');
+  }
+
+  private async notice(
+    approval: { id: string; companyId: string },
+    purpose: 'DISBURSEMENT_EXPIRED' | 'DISBURSEMENT_FAILED',
+    keyPrefix: string,
+  ): Promise<void> {
+    try {
+      const prepared = await this.templateSender.prepare({
+        logicalKey: `${keyPrefix}:${approval.id}`,
+        origin: 'DISBURSEMENT',
+        context: {
+          companyId: approval.companyId,
+          disbursementApprovalId: approval.id,
+        },
+        selection: { mode: 'DEFAULT', purpose },
+      });
+      // A held notice stays visible to the admin, who resumes it after fixing the template.
+      if (prepared.status === 'QUEUED')
+        await this.whatsapp.enqueuePreparedTemplate(prepared.intentId);
+      await this.prisma.disbursementApproval.update({
+        where: { id: approval.id },
+        data: { noticeSentAt: new Date() },
+      });
+    } catch {
+      this.logger.warn(`Aviso de pagamento pendente: ${approval.id}`);
     }
   }
 

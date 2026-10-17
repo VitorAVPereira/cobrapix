@@ -226,6 +226,40 @@ export class DisbursementSenderService {
       });
   }
 
+  /**
+   * A batch ends when every item has a known result. An item still under verification
+   * keeps it open: it may have been paid, and failures are reported only once known.
+   */
+  async completeFinished(): Promise<void> {
+    const finished = await this.prisma.disbursementBatch.findMany({
+      where: {
+        status: 'PROCESSING',
+        items: {
+          none: {
+            status: {
+              in: ['PENDING', 'SENDING', 'IN_PROCESSING', 'UNCERTAIN'],
+            },
+          },
+        },
+      },
+      take: 50,
+      select: { id: true },
+    });
+    for (const { id } of finished) {
+      const unpaid = await this.prisma.disbursementItem.count({
+        where: { batchId: id, status: { in: ['FAILED', 'CANCELED'] } },
+      });
+      await this.prisma.disbursementBatch.updateMany({
+        where: { id, status: 'PROCESSING' },
+        data: {
+          status: unpaid ? 'COMPLETED_WITH_FAILURES' : 'COMPLETED',
+          completedAt: new Date(),
+          version: { increment: 1 },
+        },
+      });
+    }
+  }
+
   /** Items whose result is still being confirmed with Efí, for the platform admin. */
   underVerification(companyId: string) {
     return this.prisma.disbursementItem.findMany({

@@ -15,6 +15,7 @@ import { DisbursementApprovalService } from '../src/disbursements/disbursement-a
 import { messageRecipient } from '../src/communications/message-context';
 import { DisbursementSenderService } from '../src/disbursements/disbursement-sender.service';
 import type { SendOutcome } from '../src/disbursements/efi-disbursement.client';
+import { DisbursementWebhookService } from '../src/disbursements/disbursement-webhook.service';
 
 if (
   !process.env.CIFRAMAIS_DISPOSABLE_E2E ||
@@ -1533,5 +1534,213 @@ describe('Pix send of approved batches (disposable PostgreSQL, simulated Efí)',
     await expect(
       sender.receipt(a.companyId, a.items[1]!.id),
     ).rejects.toMatchObject({ response: { code: 'RECEIPT_UNAVAILABLE' } });
+  });
+
+  // Webhook notices as captured in the Efí homologation.
+  const webhook = new DisbursementWebhookService(prisma);
+  const notice = (
+    idEnvio: string,
+    status: 'REALIZADO' | 'NAO_REALIZADO',
+    extra: Record<string, unknown> = {},
+  ) => ({
+    endToEndId: `E-${idEnvio}`,
+    chave: 'chave-da-empresa',
+    tipo: 'SOLICITACAO',
+    status,
+    valor: '1.00',
+    horario: status === 'REALIZADO' ? '2026-10-17T08:23:31.000Z' : null,
+    gnExtras: { idEnvio },
+    ...extra,
+  });
+  const statusOfItem = async (id: string) =>
+    prisma.disbursementItem.findUniqueOrThrow({ where: { id } });
+
+  it('the webhook pays or fails an item once, with the reason Efí gave', async () => {
+    const b = await approved([100, 200]);
+    const [paid, failed] = b.items;
+    await prisma.disbursementItem.updateMany({
+      where: { batchId: b.batchId },
+      data: { status: 'IN_PROCESSING', sentAt: new Date() },
+    });
+    await expect(
+      webhook.apply(notice(paid!.idEnvio, 'REALIZADO')),
+    ).resolves.toMatchObject({ result: 'APPLIED' });
+    await expect(
+      webhook.apply(notice(paid!.idEnvio, 'REALIZADO')),
+    ).resolves.toMatchObject({ result: 'IGNORED' });
+    await expect(
+      webhook.apply(notice(paid!.idEnvio, 'NAO_REALIZADO')),
+    ).resolves.toMatchObject({ result: 'SEND_STATUS_CONFLICT' });
+    expect(await statusOfItem(paid!.id)).toMatchObject({
+      status: 'PAID',
+      settledAt: new Date('2026-10-17T08:23:31.000Z'),
+    });
+    await webhook.apply(
+      notice(failed!.idEnvio, 'NAO_REALIZADO', {
+        gnExtras: {
+          idEnvio: failed!.idEnvio,
+          erro: {
+            codigo: 'AC03',
+            origem: 'PSP do usuário recebedor',
+            motivo:
+              'Número da agência e/ou conta transacional do usuário recebedor inexistente ou inválido',
+          },
+        },
+      }),
+    );
+    expect(await statusOfItem(failed!.id)).toMatchObject({
+      status: 'FAILED',
+      failureCode: 'AC03',
+      failureReason:
+        'Número da agência e/ou conta transacional do usuário recebedor inexistente ou inválido',
+    });
+  });
+
+  it('a notice from another key, an unknown send id or a refund changes nothing', async () => {
+    const b = await approved([100]);
+    const item = b.items[0]!;
+    await prisma.disbursementItem.update({
+      where: { id: item.id },
+      data: { status: 'IN_PROCESSING' },
+    });
+    await expect(
+      webhook.apply(
+        notice(item.idEnvio, 'REALIZADO', { chave: 'chave-de-outra-conta' }),
+      ),
+    ).resolves.toMatchObject({ result: 'SEND_KEY_MISMATCH' });
+    await expect(
+      webhook.apply(notice(randomUUID().replace(/-/g, ''), 'REALIZADO')),
+    ).resolves.toEqual({ result: 'UNKNOWN_SEND_ID' });
+    expect((await statusOfItem(item.id)).status).toBe('IN_PROCESSING');
+    await webhook.apply(notice(item.idEnvio, 'REALIZADO'));
+    // Refunds are not handled in this version: the item stays paid.
+    await expect(
+      webhook.apply(
+        notice(item.idEnvio, 'REALIZADO', {
+          devolucoes: [
+            {
+              id: 'D1',
+              rtrId: 'D1',
+              valor: '1.00',
+              natureza: 'ORIGINAL',
+              status: 'DEVOLVIDO',
+            },
+          ],
+        }),
+      ),
+    ).resolves.toMatchObject({ result: 'IGNORED' });
+    expect((await statusOfItem(item.id)).status).toBe('PAID');
+  });
+
+  it('a notice that arrives before the send answer is recorded wins', async () => {
+    const b = await approved([100]);
+    client.send.mockImplementation(
+      async (_account: unknown, input: { idEnvio: string }) => {
+        await webhook.apply(notice(input.idEnvio, 'REALIZADO'));
+        return { kind: 'IN_PROCESSING', e2eId: 'E-late' };
+      },
+    );
+    await sender.sendBatch(b.batchId);
+    expect((await statusOfItem(b.items[0]!.id)).status).toBe('PAID');
+  });
+
+  it('a batch completes only when every item is known, then the approver hears the failures once', async () => {
+    const allPaid = await approved([100, 200]);
+    const someFailed = await approved([100, 200]);
+    const stillChecking = await approved([100, 200]);
+    await prisma.disbursementItem.updateMany({
+      where: { batchId: allPaid.batchId },
+      data: { status: 'PAID' },
+    });
+    await prisma.disbursementItem.update({
+      where: { id: someFailed.items[0]!.id },
+      data: { status: 'PAID' },
+    });
+    await prisma.disbursementItem.update({
+      where: { id: someFailed.items[1]!.id },
+      data: {
+        status: 'FAILED',
+        failureReason: 'Chave Pix do colaborador não encontrada',
+      },
+    });
+    await prisma.disbursementItem.updateMany({
+      where: { batchId: stillChecking.batchId },
+      data: { status: 'FAILED' },
+    });
+    await prisma.disbursementItem.update({
+      where: { id: stillChecking.items[0]!.id },
+      data: { status: 'UNCERTAIN' },
+    });
+    const approval = await prisma.disbursementApproval.create({
+      data: {
+        batchId: someFailed.batchId,
+        companyId: someFailed.companyId,
+        requestNumber: 1,
+        contentHash: 'hash',
+        totalCents: 300,
+        itemCount: 2,
+        settingsVersion: 1,
+        approverPhoneHash: 'phone',
+        expiresAt: new Date(Date.now() + 86_400_000),
+        requestedByUserId: 'user',
+        state: 'APPROVED',
+        intentId: randomUUID(),
+      },
+    });
+    await sender.completeFinished();
+    const statusOfBatch = async (id: string) =>
+      (await prisma.disbursementBatch.findUniqueOrThrow({ where: { id } }))
+        .status;
+    expect(await statusOfBatch(allPaid.batchId)).toBe('COMPLETED');
+    expect(await statusOfBatch(someFailed.batchId)).toBe(
+      'COMPLETED_WITH_FAILURES',
+    );
+    expect(await statusOfBatch(stillChecking.batchId)).toBe('PROCESSING');
+
+    const templateSender = {
+      prepare: jest.fn().mockResolvedValue({ status: 'QUEUED', intentId: 'i' }),
+    };
+    const whatsapp = { enqueuePreparedTemplate: jest.fn() };
+    const approvals = new DisbursementApprovalService(
+      prisma,
+      settings,
+      {} as never,
+      {} as never,
+      policy as never,
+      templateSender as never,
+      whatsapp as never,
+      {} as never,
+    );
+    await approvals.notifyFailures();
+    await approvals.notifyFailures();
+    // Other approved batches of this shared database may be notified too; this one once.
+    const ours = (
+      templateSender.prepare.mock.calls as [{ logicalKey: string }][]
+    ).filter(
+      ([request]) =>
+        request.logicalKey === `disbursement-failed:${approval.id}`,
+    );
+    expect(ours).toEqual([
+      [
+        {
+          logicalKey: `disbursement-failed:${approval.id}`,
+          origin: 'DISBURSEMENT',
+          context: {
+            companyId: someFailed.companyId,
+            disbursementApprovalId: approval.id,
+          },
+          selection: { mode: 'DEFAULT', purpose: 'DISBURSEMENT_FAILED' },
+        },
+      ],
+    ]);
+    // Nothing is announced for a batch still under verification or fully paid.
+    expect(
+      await prisma.disbursementApproval.count({
+        where: {
+          batchId: { in: [allPaid.batchId, stillChecking.batchId] },
+          noticeSentAt: { not: null },
+        },
+      }),
+    ).toBe(0);
   });
 });
