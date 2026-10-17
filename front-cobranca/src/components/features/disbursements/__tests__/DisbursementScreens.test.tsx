@@ -247,6 +247,26 @@ describe("BatchDetail", () => {
     confirm.mockRestore();
   });
 
+  it("saving the draft after a refused request clears the old error", async () => {
+    mockApi.getDisbursementBatch.mockResolvedValue(batch());
+    mockApi.requestDisbursementApproval.mockRejectedValue(
+      Object.assign(new Error("Pagamentos a colaboradores estão temporariamente indisponíveis."), {
+        status: 409,
+        data: { code: "DISBURSEMENT_NOT_READY" },
+      }),
+    );
+    mockApi.updateDisbursementBatch.mockResolvedValue(batch({ version: 3 }));
+    const confirm = jest.spyOn(window, "confirm").mockReturnValue(true);
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Pedir aprovação" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("temporariamente indisponíveis");
+    fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Salvar rascunho" }));
+    expect(await screen.findByText("Rascunho salvo.")).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
+    confirm.mockRestore();
+  });
+
   it("an expired batch tells the company to pay manually", async () => {
     mockApi.getDisbursementBatch.mockResolvedValue(batch({ status: "EXPIRED" }));
     renderDetail();

@@ -18,7 +18,10 @@ export default function CollaboratorPaymentsPage() {
     api
       .getDisbursementStatus()
       .then((loaded) => {
-        if (current) setStatus(loaded);
+        if (!current) return;
+        // The first attempt may run before the session token exists; success clears it.
+        setError("");
+        setStatus(loaded);
       })
       .catch(() => {
         if (current)
@@ -30,7 +33,7 @@ export default function CollaboratorPaymentsPage() {
   }, [api]);
 
   return (
-    <div className="space-y-6">
+    <main className="min-h-full space-y-6 bg-slate-50 p-4 lg:p-8">
       <div>
         <h1 className="text-2xl font-bold text-slate-900">
           Pagamentos a colaboradores
@@ -39,7 +42,7 @@ export default function CollaboratorPaymentsPage() {
           Pix da conta Efí da empresa para os colaboradores, enviados só depois
           da aprovação no WhatsApp
           {status?.approverName
-            ? ` de ${status.approverName} (${status.approverPhoneMasked})`
+            ? ` de ${status.approverName}, no celular ${status.approverPhoneMasked}`
             : ""}
           .
         </p>
@@ -87,6 +90,6 @@ export default function CollaboratorPaymentsPage() {
           )}
         </>
       )}
-    </div>
+    </main>
   );
 }

@@ -7,10 +7,13 @@ const mockApi = {
   listDisbursementBatches: jest.fn(),
   listDisbursementRecipients: jest.fn(),
 };
-jest.mock("@/lib/use-api-client", () => ({ useApiClient: () => mockApi }));
+// The client changes once the session token arrives, as useApiClient does.
+let mockClient: typeof mockApi = mockApi;
+jest.mock("@/lib/use-api-client", () => ({ useApiClient: () => mockClient }));
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockClient = mockApi;
   mockApi.listDisbursementBatches.mockResolvedValue({
     items: [],
     total: 0,
@@ -55,5 +58,26 @@ describe("Pagamentos a colaboradores", () => {
     expect(await screen.findByText(/Nenhum lote ainda/)).toBeVisible();
     fireEvent.click(screen.getByRole("tab", { name: "Colaboradores" }));
     expect(await screen.findByText("Nenhum colaborador cadastrado ainda.")).toBeVisible();
+  });
+
+  it("an attempt before the session loads does not leave an error once it loads", async () => {
+    const released = {
+      enabled: true,
+      approverName: "Maria",
+      approverPhoneMasked: "(11) •••••-7777",
+    };
+    mockClient = {
+      ...mockApi,
+      getDisbursementStatus: jest
+        .fn()
+        .mockRejectedValue(new Error("Sessao autenticada ainda nao carregada.")),
+    };
+    const { rerender } = render(<CollaboratorPaymentsPage />);
+    expect(await screen.findByRole("alert")).toBeVisible();
+    mockApi.getDisbursementStatus.mockResolvedValue(released);
+    mockClient = mockApi;
+    rerender(<CollaboratorPaymentsPage />);
+    expect(await screen.findByRole("tab", { name: "Lotes" })).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

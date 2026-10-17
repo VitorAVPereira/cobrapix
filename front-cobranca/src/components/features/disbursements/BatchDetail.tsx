@@ -58,7 +58,9 @@ export function BatchDetail({
   const reload = useCallback(
     async (signal?: AbortSignal) => {
       const loaded = await api.getDisbursementBatch(batchId, signal);
-      if (!signal?.aborted) setBatch(loaded);
+      if (signal?.aborted) return;
+      setLoadError("");
+      setBatch(loaded);
     },
     [api, batchId],
   );
@@ -134,6 +136,7 @@ export function BatchDetail({
         onSaved={(saved) => {
           setBatch(saved);
           setEditing(false);
+          setError("");
           setNotice("Rascunho salvo.");
         }}
       />
@@ -152,7 +155,7 @@ export function BatchDetail({
           Voltar aos lotes
         </button>
       </div>
-      <p className="rounded-lg bg-slate-50 p-3 text-sm">{situation(batch, status)}</p>
+      <p className="rounded-lg border border-slate-200 bg-white p-3 text-sm">{situation(batch, status)}</p>
       {notice && (
         <p role="status" className="text-sm text-emerald-700">
           {notice}

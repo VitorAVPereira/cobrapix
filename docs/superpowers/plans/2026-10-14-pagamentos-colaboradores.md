@@ -658,7 +658,29 @@ manualmente"; "Em verificação: não pague manualmente".
   - `npm run build`: havia um servidor de desenvolvimento de outra sessão na mesma pasta, e o
     build poderia atrapalhá-lo;
   - verificação visual no navegador: exige a API local com as migrations aplicadas no banco de
-    desenvolvimento do usuário.
+    desenvolvimento do usuário. **Feita depois, em 17/10/2026; ver abaixo.**
+
+**Verificação no navegador (17/10/2026):**
+
+- **Ambiente:** o `.env` da API aponta para um banco Neon, que não foi usado. A verificação rodou
+  com PostgreSQL e Redis locais descartáveis (containers `ciframais-dev-*`), com as 47 migrations,
+  o seed do projeto e dados de teste. A API subiu com só banco e Redis sobrepostos. O Datafy ficou
+  sem configuração, então nenhuma mensagem real saiu.
+- **Empresa:** menu, lista de lotes (em envio, expirado, concluído com falhas), detalhe com motivo
+  da Efí e comprovante, item "em verificação", "novo lote com os pagamentos que falharam", editor
+  com valor "1.500,00", pedido de aprovação (texto de confirmação e recusa por falta de prontidão)
+  e cadastro recusado por chave CPF de outra pessoa.
+- **Admin:** prontidão com os quatro itens faltando, "Consultar Efí", desligar com confirmação e
+  histórico, e religar recusado com a mensagem de prontidão.
+- **Defeitos encontrados e corrigidos, com testes de regressão que falham sem a correção:**
+  - erro de uma tentativa feita antes da sessão carregar ficava na tela depois do sucesso (página
+    e detalhe do lote);
+  - erro de um pedido recusado continuava visível depois de salvar o rascunho.
+- **Ajustes visuais:** margem da página igual às demais, quadro de situação visível sobre o fundo
+  cinza e celular do aprovador sem parênteses duplicados.
+- **Observado fora do escopo:** a página existente `/admin/ativacao-financeira` mostra
+  "Sessao autenticada ainda nao carregada." pelo mesmo motivo do primeiro defeito. Não foi
+  alterada.
 
 **Desvios e decisões:**
 
