@@ -17,6 +17,7 @@ type MockMiddlewareRequest = {
 type MockMiddlewareResult =
   | { kind: "next" }
   | { kind: "redirect"; url: string }
+  | { kind: "rewrite"; url: string }
   | { body: unknown; init?: ResponseInit; kind: "json" };
 
 type MockMiddlewareHandler = (
@@ -25,6 +26,7 @@ type MockMiddlewareHandler = (
 
 type MockNextResponse = {
   redirect: jest.Mock<MockMiddlewareResult, [URL]>;
+  rewrite: jest.Mock<MockMiddlewareResult, [URL]>;
   next: jest.Mock<MockMiddlewareResult, []>;
   json: jest.Mock<MockMiddlewareResult, [unknown, ResponseInit?]>;
 };
@@ -33,6 +35,10 @@ jest.mock("next/server", () => ({
   NextResponse: {
     redirect: jest.fn((url: URL): MockMiddlewareResult => ({
       kind: "redirect",
+      url: url.toString(),
+    })),
+    rewrite: jest.fn((url: URL): MockMiddlewareResult => ({
+      kind: "rewrite",
       url: url.toString(),
     })),
     next: jest.fn((): MockMiddlewareResult => ({
@@ -181,6 +187,49 @@ describe("public payment page", () => {
     expect(
       runMiddleware(createRequest("/cobrancas", "COMPANY_ADMIN", { mustChangePassword: true })),
     ).toEqual({ kind: "redirect", url: "http://localhost:3000/primeiro-acesso" });
+  });
+});
+
+describe("presentation page on /", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("shows the presentation page on / to visitors without a session", () => {
+    expect(runMiddleware(createRequest("/", null))).toEqual({
+      kind: "rewrite",
+      url: "http://localhost:3000/apresentacao",
+    });
+    expect(mockedNextResponse.redirect).not.toHaveBeenCalled();
+  });
+
+  it("keeps the dashboard on / for signed-in company users", () => {
+    expect(runMiddleware(createRequest("/", "COMPANY_ADMIN"))).toEqual({ kind: "next" });
+    expect(mockedNextResponse.rewrite).not.toHaveBeenCalled();
+  });
+
+  it("keeps sending platform admins from / to their area", () => {
+    expect(runMiddleware(createRequest("/", "PLATFORM_ADMIN"))).toEqual({
+      kind: "redirect",
+      url: "http://localhost:3000/admin/clientes",
+    });
+  });
+
+  it("leaves the rewrite target outside the middleware so the rewrite is not undone", () => {
+    const matcher = new RegExp(`^${config.matcher[0]}$`);
+
+    expect(matcher.test("/apresentacao")).toBe(false);
+    expect(matcher.test("/")).toBe(true);
+  });
+
+  it("rewrites to the address the visitor reached, not the Auth.js origin", () => {
+    expect(
+      runMiddleware({
+        auth: null,
+        nextUrl: { pathname: "/" },
+        url: "http://127.0.0.1:4321/",
+      }),
+    ).toEqual({ kind: "rewrite", url: "http://127.0.0.1:4321/apresentacao" });
   });
 });
 

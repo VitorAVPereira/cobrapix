@@ -20,6 +20,7 @@ import { EfiOnboardingModule } from './efi-onboarding/efi-onboarding.module';
 import { FinancialActivationModule } from './financial-activation/financial-activation.module';
 import { SettlementsModule } from './settlements/settlements.module';
 import { CommunicationsModule } from './communications/communications.module';
+import { ContactModule } from './contact/contact.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { CommunicationsModule } from './communications/communications.module';
     FinancialActivationModule,
     SettlementsModule,
     CommunicationsModule,
+    ContactModule,
   ],
   providers: [
     {

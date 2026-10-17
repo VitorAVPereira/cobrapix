@@ -133,6 +133,30 @@ describe('ThrottleGuard', () => {
     guard.onModuleDestroy();
   });
 
+  it('limita pedidos de orçamento repetidos do mesmo IP', async () => {
+    const guard = buildGuard();
+    const response = new TestResponse();
+    const request: TestRequest = {
+      method: 'POST',
+      path: '/contact/quote-request',
+      ip: '203.0.113.30',
+      body: {},
+      socket: {},
+    };
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await expect(
+        guard.canActivate(buildContext(request, response)),
+      ).resolves.toBe(true);
+    }
+
+    await expect(
+      guard.canActivate(buildContext(request, response)),
+    ).rejects.toMatchObject({ status: HttpStatus.TOO_MANY_REQUESTS });
+
+    guard.onModuleDestroy();
+  });
+
   it('ignora rotas sem regra de rate limiting', async () => {
     const guard = buildGuard();
     const context = buildContext({

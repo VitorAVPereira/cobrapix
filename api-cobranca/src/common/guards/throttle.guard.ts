@@ -62,6 +62,12 @@ export class ThrottleGuard implements CanActivate, OnModuleDestroy {
       scope: 'ip',
     },
     {
+      points: 5,
+      duration: 15 * 60,
+      keyPrefix: 'throttle:contact:quote-request:ip',
+      scope: 'ip',
+    },
+    {
       points: 100,
       duration: 60,
       keyPrefix: 'throttle:payments',
@@ -214,6 +220,10 @@ export class ThrottleGuard implements CanActivate, OnModuleDestroy {
 
     if (method === 'POST' && path === '/auth/reset-password') {
       return this.findConfigs(['throttle:auth:password-recovery:ip']);
+    }
+
+    if (method === 'POST' && path === '/contact/quote-request') {
+      return this.findConfigs(['throttle:contact:quote-request:ip']);
     }
 
     if (path.startsWith('/payments')) {
