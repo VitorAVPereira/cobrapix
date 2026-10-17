@@ -105,6 +105,7 @@ export const envSchema = z
     EFI_ONBOARDING_PRIVACY_VERSION: z.string().default('draft-v1'),
     EFI_MTLS_PROXY_IP: z.string().optional(),
     PLATFORM_ALERT_EMAIL: z.string().email().optional(),
+    QUOTE_REQUEST_EMAIL: z.string().email().optional(),
     EFI_PLATFORM_CLIENT_ID: z.string().optional(),
     EFI_PLATFORM_CLIENT_SECRET: z.string().optional(),
     EFI_PLATFORM_CERT_PATH: z.string().optional(),
@@ -324,6 +325,7 @@ const BLANK_MEANS_ABSENT = [
   'EFI_PLATFORM_CERT_PATH',
   'EFI_PLATFORM_CERT_PASSWORD',
   'PLATFORM_ALERT_EMAIL',
+  'QUOTE_REQUEST_EMAIL',
 ];
 
 export const validateEnv = (config: Record<string, unknown>): Env => {
