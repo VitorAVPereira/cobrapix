@@ -33,7 +33,9 @@ const routesFor = (requestUrl: string) => auth((req) => {
   const pathname = req.nextUrl.pathname;
   const isApiRoute = pathname.startsWith("/api/");
 
-  if (pathname === "/" && !req.auth) {
+  // An expired session on "/" is a visitor too: the presentation page has the
+  // login button. Other routes still send it to login with the expiry notice.
+  if (pathname === "/" && (!req.auth || req.auth.user?.authInvalidated)) {
     return NextResponse.rewrite(new URL(LANDING_PATH, requestUrl));
   }
 
