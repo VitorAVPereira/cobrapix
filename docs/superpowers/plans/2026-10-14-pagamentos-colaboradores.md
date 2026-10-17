@@ -694,18 +694,49 @@ manualmente"; "Em verificação: não pague manualmente".
 
 ## Tarefa 10 — documentação e fechamento
 
-- [ ] Runbook `docs/operations/pagamentos-colaboradores.md`:
+- [x] Runbook `docs/operations/pagamentos-colaboradores.md`:
   - cliente inclui os escopos na aplicação Efí e aumenta o limite Pix;
   - admin valida as credenciais de novo;
   - admin cria, importa, mapeia (com botões de decisão), libera e define como padrão os três templates;
   - admin cadastra o aprovador e liga a funcionalidade;
   - admin trata itens em verificação e desliga a funcionalidade.
-- [ ] `AGENTS.md`: módulo `disbursements/` na tabela e regra "nenhum Pix sem aprovação válida" na
+- [x] `AGENTS.md`: módulo `disbursements/` na tabela e regra "nenhum Pix sem aprovação válida" na
   seção 4.2.
-- [ ] Rodar tudo:
+- [x] Rodar tudo:
   - backend: `npm test -- --runInBand`, `npx eslint "src/**/*.ts" "test/**/*.ts"`, `npm run build`
     e e2e descartáveis afetados;
   - frontend: lint, jest e build.
 
   Registrar resultados e pendências: homologação, publicação, templates na Meta, CLT e tarifa Efí.
   Commit.
+
+**Registro de execução (17/10/2026):**
+
+- **Documentação:**
+  - runbook `docs/operations/pagamentos-colaboradores.md`: publicação, liberação passo a passo,
+    dia a dia, itens em verificação, desligar ou trocar o aprovador, anomalias do webhook,
+    limitações e homologação;
+  - `AGENTS.md`: item no estado atual (2.2), módulo `disbursements/`, regra na seção 4.2, comando
+    `npm run test:e2e:disbursements` e runbook na lista da seção 9.
+- **Checagem final:**
+  - backend: 130 suítes e 1.064 testes; ESLint completo sem erros; `npm run build` ok;
+  - e2e descartáveis: 8 suítes e 101 testes (pagamentos a colaboradores, retomada de templates e
+    vizinhas), mais as suítes PostgreSQL de catálogo, pendências e pagamentos, com as 47
+    migrations;
+  - frontend: 61 suítes e 363 testes; lint só com o aviso conhecido de `useReactTable`;
+    `next build` ok, incluindo `/pagamentos-colaboradores`.
+- **Correção no teste e2e:** o documento fixo da empresa de teste (`11222333000181`) colidia com
+  `card-checkout.e2e-spec.ts` quando as suítes rodavam no mesmo banco. Passou a ser gerado a cada
+  execução.
+- **Ambiente:** servidores de desenvolvimento parados e containers descartáveis removidos.
+
+**Pendências (ação humana):**
+
+- **Publicação:** backend (2 migrations aditivas) antes do frontend, só com pedido explícito.
+- **Por cliente:** escopos de envio na aplicação Efí, aumento do limite Pix e nova validação da
+  credencial.
+- **Meta:** criar, importar, mapear e liberar os três templates.
+- **Validar com contador ou advogado:** se o comprovante Pix atende ao recibo de salário (CLT,
+  art. 464).
+- **Tarifa Efí do Pix enviado:** confirmar com a Efí e considerar na mensalidade.
+- **Homologação:** gerar novo Client_Secret, porque as credenciais circularam na conversa.

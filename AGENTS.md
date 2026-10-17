@@ -131,6 +131,10 @@ nova cobrança.
 - **WhatsApp:** canal central compartilhado, transporte **somente Datafy**. Templates são
   criados na Meta, importados, mapeados e liberados por empresa pelo admin (seção 4.3).
 - **E-mail:** conta central Resend, com atribuição da mensagem à empresa.
+- **Pagamentos a colaboradores:** Pix da conta Efí do próprio cliente para os colaboradores,
+  liberado por empresa pelo admin e enviado só depois da aprovação no WhatsApp do aprovador
+  cadastrado pelo admin. Não calcula folha; devoluções não são tratadas nesta versão. Operação em
+  `docs/operations/pagamentos-colaboradores.md`.
 - **Produção:** frontend na Vercel; API, PostgreSQL, Redis e Nginx na VPS InterServer,
   publicação manual (seção 9). Código no `main` não significa código publicado.
 - **Em aberto:** planos de correção de 29/09 em `docs/superpowers/plans/2026-09-29-0*.md`
@@ -154,6 +158,7 @@ nova cobrança.
 | `payment/`, `payment-fees/` | Emissão Efí, cobranças, link público de pagamento, webhooks de pagamento, tarifas versionadas |
 | `financial-activation/` | Ativação manual: perfil versionado, credenciais cifradas, validação em fila, elegibilidade, certificados |
 | `settlements/` | Lançamentos imutáveis (`FinancialLedgerEntry`), conciliação e divergências |
+| `disbursements/` | Pagamentos a colaboradores: liberação pelo admin, colaboradores, lotes, aprovação no WhatsApp, envio Pix e resultado pelo webhook Pix |
 | `efi-onboarding/` | Abertura de contas (desligada) e chaves de integração (`PlatformIntegrationState`) |
 | `communications/` | Conversas, mensagens, intenções de envio, atribuição por empresa, pendências e retomada de templates |
 | `whatsapp/` | Transporte Datafy e `OutboundDispatcherService` (ver `whatsapp/transport/README.md`) |
@@ -187,6 +192,10 @@ nova cobrança.
   auditoria.
 - Não marque cobrança como paga, não exclua reservas e não reemita só para limpar a tela.
 - Pagamento confirmado ≠ split recebido ≠ repasse concluído.
+- Pagamentos a colaboradores: **nenhum Pix sai sem aprovação válida**, isto é, decisão registrada
+  uma única vez para o pedido atual, com o lote igual ao aprovado (hash) e a conta emissora
+  fotografada. Envio usa `idEnvio` por item; resultado incerto vai para verificação pelo
+  `idEnvio`, nunca é reenviado nem dado como falha sem prova.
 
 ### 4.3 WhatsApp e templates
 
@@ -370,6 +379,7 @@ npm run test:template-catalog:postgres
 npm run test:template-pending:postgres
 npm run test:template-transition:postgres
 node test/e2e-disposable.cjs <arquivo>.e2e-spec.ts [...]   # ex.: npm run test:e2e:templates
+npm run test:e2e:disbursements                             # pagamentos a colaboradores
 ```
 
 - Testes que escrevem em banco ou Redis usam **somente** a infraestrutura descartável dos
@@ -402,7 +412,8 @@ Seed de desenvolvimento (`npx prisma db seed`): empresa "Empresa Teste MVP", log
 - Publique o backend antes do frontend (Vercel, a partir do `main`).
 - Confira no container que o código novo está rodando antes de declarar concluído.
 - Runbooks: `infra/interserver/README.md`, `infra/interserver/DATAFY.md`,
-  `docs/operations/financial-activation.md`, `docs/operations/whatsapp-template-catalog.md`.
+  `docs/operations/financial-activation.md`, `docs/operations/whatsapp-template-catalog.md`,
+  `docs/operations/pagamentos-colaboradores.md`.
 
 ---
 

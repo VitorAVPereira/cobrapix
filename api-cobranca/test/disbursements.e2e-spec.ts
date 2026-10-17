@@ -45,7 +45,7 @@ describe('Disbursements (disposable PostgreSQL)', () => {
       await prisma.company.create({
         data: {
           corporateName: 'Disbursement tenant LTDA',
-          document: '11222333000181',
+          document: randomUUID().replace(/\D/g, '').slice(0, 14),
           email: `${randomUUID()}@example.test`,
           phoneNumber: '5511999990000',
         },
