@@ -898,6 +898,28 @@
   .problemMedia .frame {
     aspect-ratio: 5 / 4;
   }
+  /* The spreadsheet fits the phone instead of bleeding out of the frame. */
+  .problemMedia .frame:has(.sheetScene) {
+    aspect-ratio: auto;
+  }
+  .sheetScene {
+    position: static;
+    padding: 16px;
+  }
+  .sheet {
+    min-width: 0;
+    border-radius: 10px;
+    font-size: 13px;
+  }
+  .sheetHead,
+  .sheetRow {
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto;
+    padding: 0 12px;
+  }
+  .sheetHead > :nth-child(3),
+  .sheetRow > :nth-child(3) {
+    display: none;
+  }
   .reminderScene {
     padding: 6%;
   }
