@@ -1,14 +1,15 @@
-// Commercial contacts come from the deploy configuration; no number or address
-// is hard-coded. Without a number, wa.me opens WhatsApp's own contact picker
-// with the message ready, and mailto opens a draft with the subject ready.
-const QUOTE_MESSAGE = "Olá! Gostaria de solicitar um orçamento da CifraMais.";
-const QUOTE_SUBJECT = "Orçamento CifraMais";
+// The WhatsApp number comes from the deploy configuration; nothing is
+// hard-coded. Without a number, wa.me opens WhatsApp's own contact picker with
+// the message ready. Quote requests go through the API, which holds the
+// destination address.
+const WHATSAPP_MESSAGE = "Olá, tenho interesse nos serviços da Cifra+.";
 
 const whatsappNumber = (process.env.NEXT_PUBLIC_CONTACT_WHATSAPP ?? "").replace(/\D/g, "");
-const contactEmail = (process.env.NEXT_PUBLIC_CONTACT_EMAIL ?? "").trim();
 
-export const WHATSAPP_QUOTE_URL = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(QUOTE_MESSAGE)}`;
+export const WHATSAPP_URL = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(WHATSAPP_MESSAGE)}`;
 
-export const EMAIL_QUOTE_URL = `mailto:${contactEmail}?subject=${encodeURIComponent(QUOTE_SUBJECT)}`;
+export const QUOTE_REQUEST_URL = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/contact/quote-request`;
+
+export const QUOTE_DIALOG_ID = "orcamento";
 
 export const LOGIN_URL = "/login";

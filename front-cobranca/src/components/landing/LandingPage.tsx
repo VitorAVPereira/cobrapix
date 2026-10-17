@@ -4,18 +4,19 @@ import {
   ArrowRight,
   Barcode,
   Check,
+  CreditCard,
   Landmark,
-  Mail,
   MessageCircle,
   Plus,
   QrCode,
 } from "lucide-react";
-import { EMAIL_QUOTE_URL, LOGIN_URL, WHATSAPP_QUOTE_URL } from "./contact";
+import { LOGIN_URL, WHATSAPP_URL } from "./contact";
 import { LandingFaq, type FaqItem } from "./LandingFaq";
 import { LandingHeader } from "./LandingHeader";
 import { LandingMotion } from "./LandingMotion";
+import { QuoteButton, QuoteDialog, WhatsAppFloat } from "./QuoteRequest";
 import {
-  BoletoChargePreview,
+  CardCheckoutPreview,
   ChargeMessagePreview,
   DashboardPreview,
   InvoiceListPreview,
@@ -29,27 +30,12 @@ import styles from "./landing.module.css";
 
 const ROOT_ID = "landing";
 
-function WhatsAppButton({ className = "" }: { className?: string }) {
+function QuoteCta() {
   return (
-    <a
-      href={WHATSAPP_QUOTE_URL}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={`${styles.btn} ${styles.btnPrimary} ${className}`}
-    >
-      <MessageCircle size={19} aria-hidden />
-      Pedir orçamento pelo WhatsApp
+    <QuoteButton className={`${styles.btn} ${styles.btnPrimary}`}>
+      Solicitar orçamento
       <ArrowRight size={18} className={styles.btnArrow} aria-hidden />
-    </a>
-  );
-}
-
-function EmailButton({ className = "" }: { className?: string }) {
-  return (
-    <a href={EMAIL_QUOTE_URL} className={`${styles.btn} ${className}`}>
-      <Mail size={18} aria-hidden />
-      Pedir orçamento por e-mail
-    </a>
+    </QuoteButton>
   );
 }
 
@@ -78,7 +64,7 @@ const REGUA = [
   {
     variant: "due",
     title: "No dia do vencimento",
-    text: "E-mail com o código Pix e a linha digitável do boleto.",
+    text: "E-mail com o link de pagamento da cobrança.",
   },
   {
     variant: "after",
@@ -90,7 +76,7 @@ const REGUA = [
 const STEPS = [
   {
     title: "Você pede o orçamento",
-    text: "Pelo WhatsApp ou por e-mail, contando como sua empresa cobra hoje.",
+    text: "Pelo formulário da página, contando como sua empresa cobra hoje.",
     checks: ["Resposta da nossa equipe", "Proposta para o seu volume"],
   },
   {
@@ -100,13 +86,13 @@ const STEPS = [
   },
   {
     title: "Você cadastra clientes e faturas",
-    text: "E monta a régua de avisos do seu jeito.",
-    checks: ["Clientes e faturas", "Etapas da régua"],
+    text: "E monta uma régua de avisos para cada perfil de cliente.",
+    checks: ["Clientes e faturas", "Perfis e etapas da régua"],
   },
   {
     title: "A primeira cobrança sai",
-    text: "A CifraMais emite a cobrança e envia a primeira mensagem.",
-    checks: ["Pix ou boleto emitido", "Aviso enviado"],
+    text: "A Cifra+ emite a cobrança e envia a primeira mensagem.",
+    checks: ["Pix, BOLIX ou cartão de crédito", "Aviso enviado"],
   },
 ];
 
@@ -121,25 +107,25 @@ const SECURITY = [
   ],
   [
     "O dinheiro vai direto para você",
-    "Cada cobrança é emitida e recebida na conta Efí da sua empresa. A CifraMais não segura pagamentos.",
+    "Cada cobrança é emitida e recebida na conta Efí da sua empresa. A Cifra+ não segura pagamentos.",
   ],
 ] as const;
 
 const FAQ: FaqItem[] = [
   {
-    question: "O dinheiro passa pela CifraMais?",
+    question: "O dinheiro passa pela Cifra+?",
     answer:
       "Não. Cada cobrança é emitida na conta Efí da sua empresa e o pagamento cai direto nela.",
   },
   {
     question: "Quais formas de pagamento posso oferecer?",
     answer:
-      "Pix com QR Code e copia e cola, boleto e BOLIX, que junta boleto e QR Code Pix no mesmo documento.",
+      "Três: Pix, com QR Code e copia e cola; BOLIX, que une a segurança do boleto e a agilidade do Pix no mesmo documento; e cartão de crédito, em até 6x.",
   },
   {
-    question: "Como funcionam os avisos por WhatsApp?",
+    question: "Como funciona a régua de cobrança?",
     answer:
-      "Você monta a régua com etapas antes, no dia e depois do vencimento. As mensagens usam modelos aprovados e também podem sair por e-mail.",
+      "Você cria quantos perfis de cliente quiser e cada perfil tem a própria régua, com etapas antes, no dia e depois do vencimento, por WhatsApp ou e-mail. As mensagens de WhatsApp usam modelos aprovados.",
   },
   {
     question: "Meus clientes precisam criar conta?",
@@ -154,7 +140,7 @@ const FAQ: FaqItem[] = [
   {
     question: "Quanto custa?",
     answer:
-      "Montamos um orçamento para a sua empresa. Fale com a gente pelo WhatsApp ou por e-mail.",
+      "Montamos um orçamento para a sua empresa. Clique em Solicitar orçamento e preencha o formulário, ou fale com a gente pelo WhatsApp.",
   },
 ];
 
@@ -176,11 +162,11 @@ export function LandingPage() {
             </span>
           </h1>
           <p className={styles.heroLead} data-hero="lead">
-            Emita Pix e boleto, avise por WhatsApp e e-mail e acompanhe cada pagamento.
+            Emita Pix, BOLIX e cartão de crédito, avise por WhatsApp e e-mail e acompanhe cada
+            pagamento.
           </p>
           <div className={styles.heroActions} data-hero="actions">
-            <WhatsAppButton />
-            <EmailButton className={styles.heroEmail} />
+            <QuoteCta />
           </div>
           <div className={styles.heroStackWrap}>
             <div className={styles.heroStack} data-hero="stack">
@@ -192,7 +178,7 @@ export function LandingPage() {
                 </div>
                 <div className={styles.heroCardBand} aria-hidden>
                   <Image src="/brand/cifra-mark-reverse.svg" alt="" width={22} height={22} />
-                  <span>PIX · BOLETO · BOLIX · WHATSAPP</span>
+                  <span>PIX · BOLIX · CARTÃO · WHATSAPP</span>
                 </div>
               </div>
             </div>
@@ -218,7 +204,7 @@ export function LandingPage() {
               </div>
             </div>
             <a href="#formas_pagamento" className={styles.rectCta}>
-              Ver como a CifraMais resolve
+              Ver como a Cifra+ resolve
               <span className={styles.rectCtaIcon} aria-hidden>
                 <ArrowRight size={16} />
               </span>
@@ -244,16 +230,16 @@ export function LandingPage() {
               Formas de pagamento
             </p>
             <h2 id="formas-title" className={styles.paymentsTitle}>
-              Seu cliente paga do jeito dele,{" "}
-              <span className={styles.mutedLine}>e o dinheiro cai na sua conta Efí.</span>
+              Três formas de receber: Pix, BOLIX e cartão de crédito.{" "}
+              <span className={styles.mutedLine}>O dinheiro cai na sua conta Efí.</span>
             </h2>
             <div className={styles.paymentsFrame}>
               <PixChargePreview />
             </div>
             <div className={styles.paymentsRight}>
               <p className={styles.paymentsLead}>
-                <strong>Emitido pela Efí.</strong> Cada cobrança sai da conta da sua empresa e a
-                baixa é automática quando o pagamento entra.
+                <strong>Só essas três, emitidas pela Efí.</strong> Cada cobrança sai da conta da sua
+                empresa e a baixa é automática quando o pagamento entra.
               </p>
               <div className={styles.payGrid}>
                 <article className={styles.payColumn} data-reveal="rise">
@@ -262,24 +248,44 @@ export function LandingPage() {
                     <p className={styles.payWord}>Pix</p>
                   </div>
                   <div className={styles.payCard}>
-                    <h3>Pix com QR Code e copia e cola</h3>
+                    <h3>QR Code e copia e cola</h3>
                     <p>Confirmação na hora, direto na sua conta.</p>
+                    <ul className={styles.payChips} aria-label="Como pagar">
+                      <li>
+                        <QrCode size={18} aria-hidden /> QR Code
+                      </li>
+                    </ul>
                   </div>
                 </article>
                 <article className={styles.payColumn} data-reveal="rise" data-reveal-delay={60}>
                   <div className={styles.payTile}>
                     <span className={styles.payIndex}>02</span>
-                    <p className={styles.payWord}>Boleto e BOLIX</p>
+                    <p className={styles.payWord}>BOLIX</p>
                   </div>
                   <div className={`${styles.payCard} ${styles.payCardAccent}`}>
-                    <h3>Boleto com QR Code Pix</h3>
-                    <p>O mesmo documento aceita boleto ou Pix. Seu cliente escolhe.</p>
-                    <ul className={styles.payChips} aria-label="Meios aceitos">
+                    <h3>A segurança do boleto com a agilidade do Pix</h3>
+                    <p>Boleto e QR Code Pix no mesmo documento. Seu cliente paga como preferir.</p>
+                    <ul className={styles.payChips} aria-label="Como pagar">
                       <li>
                         <QrCode size={18} aria-hidden /> Pix
                       </li>
                       <li>
-                        <Barcode size={18} aria-hidden /> Boleto
+                        <Barcode size={18} aria-hidden /> Linha digitável
+                      </li>
+                    </ul>
+                  </div>
+                </article>
+                <article className={styles.payColumn} data-reveal="rise" data-reveal-delay={120}>
+                  <div className={styles.payTile}>
+                    <span className={styles.payIndex}>03</span>
+                    <p className={styles.payWord}>Cartão de crédito</p>
+                  </div>
+                  <div className={styles.payCard}>
+                    <h3>Parcelado em até 6x</h3>
+                    <p>Seu cliente paga com cartão na página da cobrança, sem criar conta.</p>
+                    <ul className={styles.payChips} aria-label="Como pagar">
+                      <li>
+                        <CreditCard size={18} aria-hidden /> Até 6x
                       </li>
                       <li>
                         <Landmark size={18} aria-hidden /> Conta Efí
@@ -295,9 +301,16 @@ export function LandingPage() {
         {/* Régua: meridian-04-services */}
         <section id="regua" className={styles.regua} aria-labelledby="regua-title">
           <div className={styles.wrap}>
-            <h2 id="regua-title" className={styles.reguaTitle}>
-              Avisos que saem na hora certa
-            </h2>
+            <div className={styles.reguaHead}>
+              <h2 id="regua-title" className={styles.reguaTitle}>
+                Avisos que saem na hora certa
+              </h2>
+              <p className={styles.reguaLead}>
+                A régua de cobrança é configurável por perfil de cliente. Crie quantos perfis
+                quiser, cada um com as próprias etapas, canais e mensagens.
+              </p>
+            </div>
+            <p className={styles.reguaExample}>Exemplo de régua de um perfil</p>
             <ol className={styles.reguaCols}>
               {REGUA.map((item, index) => (
                 <li key={item.variant} data-reveal="slide" data-reveal-delay={index * 80}>
@@ -330,17 +343,17 @@ export function LandingPage() {
                   <PayPagePreview />
                 </div>
                 <figcaption>
-                  <strong>Pix copia e cola</strong>
-                  Um toque para copiar o código no celular.
+                  <strong>Pix e BOLIX</strong>
+                  Um toque para copiar o código Pix ou a linha digitável.
                 </figcaption>
               </figure>
               <figure>
                 <div className={`${styles.payerFrame} ${styles.payerFrameDark}`}>
-                  <BoletoChargePreview />
+                  <CardCheckoutPreview />
                 </div>
                 <figcaption>
-                  <strong>Linha digitável do boleto</strong>
-                  Para pagar em qualquer banco ou aplicativo.
+                  <strong>Cartão de crédito</strong>
+                  Pagamento na mesma página, parcelado em até 6x.
                 </figcaption>
               </figure>
             </div>
@@ -363,8 +376,8 @@ export function LandingPage() {
                   <DashboardPreview />
                 </div>
                 <figcaption>
-                  <span>Painel · Recebido, em aberto e vencido</span>
-                  <strong>Os números da sua empresa no mês</strong>
+                  <span>Painel · Recuperado, pendente e vencido</span>
+                  <strong>Os números da sua empresa e dos avisos enviados</strong>
                 </figcaption>
               </figure>
               <figure>
@@ -373,7 +386,7 @@ export function LandingPage() {
                 </div>
                 <figcaption>
                   <span>Faturas · Status por cliente</span>
-                  <strong>Quem pagou, quem está em aberto e quem atrasou</strong>
+                  <strong>Quem pagou, quem está pendente e quem atrasou</strong>
                 </figcaption>
               </figure>
             </div>
@@ -384,27 +397,18 @@ export function LandingPage() {
         <section id="como_funciona" className={styles.how} aria-labelledby="como-title">
           <div className={`${styles.wrap} ${styles.howGrid}`}>
             <aside className={styles.howAside}>
-              <p className={styles.howBrand}>CifraMais</p>
+              <p className={styles.howBrand}>Cifra+</p>
               <p className={styles.howIntro}>
-                Cobrança por Pix, boleto e WhatsApp para pequenas e médias empresas. A ativação é
-                feita pela nossa equipe.
+                Cobrança por Pix, BOLIX e cartão de crédito, com avisos por WhatsApp e e-mail. A
+                ativação é feita pela nossa equipe.
               </p>
               <div className={styles.howContact}>
                 <p>Contato</p>
-                <a href={WHATSAPP_QUOTE_URL} target="_blank" rel="noopener noreferrer">
+                <a href={WHATSAPP_URL} target="_blank" rel="noopener noreferrer">
                   WhatsApp
                 </a>
-                <a href={EMAIL_QUOTE_URL}>E-mail</a>
               </div>
-              <a
-                href={WHATSAPP_QUOTE_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={styles.howButton}
-              >
-                <MessageCircle size={17} aria-hidden />
-                Pedir orçamento pelo WhatsApp
-              </a>
+              <QuoteButton className={styles.howButton}>Solicitar orçamento</QuoteButton>
             </aside>
             <div>
               <h2 id="como-title" className={styles.howTitle}>
@@ -467,15 +471,10 @@ export function LandingPage() {
               <div className={styles.faqSide}>
                 <h3>Ainda com dúvida?</h3>
                 <p>Fale com a nossa equipe. Explicamos como a cobrança funcionaria na sua empresa.</p>
-                <a
-                  href={WHATSAPP_QUOTE_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={styles.faqSideButton}
-                >
-                  <MessageCircle size={18} aria-hidden />
-                  Pedir orçamento pelo WhatsApp
-                </a>
+                <QuoteButton className={styles.faqSideButton}>
+                  Solicitar orçamento
+                  <ArrowRight size={18} aria-hidden />
+                </QuoteButton>
               </div>
             </div>
             <LandingFaq items={FAQ} />
@@ -486,11 +485,10 @@ export function LandingPage() {
         <section className={styles.cta} aria-labelledby="cta-title">
           <h2 id="cta-title" className={styles.ctaTitle}>
             Vamos montar a cobrança da sua empresa.{" "}
-            <span>Fale com a gente pelo WhatsApp ou por e-mail.</span>
+            <span>Peça um orçamento e nossa equipe entra em contato.</span>
           </h2>
           <div className={styles.ctaActions}>
-            <WhatsAppButton />
-            <EmailButton className={styles.btnOutlineAccent} />
+            <QuoteCta />
           </div>
         </section>
       </main>
@@ -499,15 +497,15 @@ export function LandingPage() {
       <footer className={styles.footer}>
         <div className={`${styles.wrap} ${styles.footerTop}`}>
           <p className={styles.footerStatement}>
-            Cobrança por Pix, boleto e WhatsApp, com o dinheiro na conta da sua empresa.
+            Cobrança por Pix, BOLIX e cartão de crédito, com o dinheiro na conta da sua empresa.
           </p>
           <div className={styles.footerQuote}>
-            <a href={WHATSAPP_QUOTE_URL} target="_blank" rel="noopener noreferrer">
-              Pedir orçamento pelo WhatsApp
+            <QuoteButton className={styles.footerQuoteButton}>
+              Solicitar orçamento
               <ArrowRight size={18} aria-hidden />
-            </a>
-            <a href={EMAIL_QUOTE_URL}>
-              Pedir orçamento por e-mail
+            </QuoteButton>
+            <a href={WHATSAPP_URL} target="_blank" rel="noopener noreferrer">
+              Falar pelo WhatsApp
               <ArrowRight size={18} aria-hidden />
             </a>
           </div>
@@ -527,34 +525,32 @@ export function LandingPage() {
           <div>
             <h2>Pagamentos</h2>
             <p>Pix</p>
-            <p>Boleto</p>
             <p>BOLIX</p>
+            <p>Cartão de crédito</p>
           </div>
           <div>
             <h2>Fale com a gente</h2>
-            <p className={styles.footerInfo}>
-              <MessageCircle size={20} aria-hidden /> Atendimento para empresas
-            </p>
-            <p className={styles.footerInfo}>
-              <Mail size={20} aria-hidden /> Orçamento para o seu volume
-            </p>
+            <a
+              href={WHATSAPP_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={styles.footerInfo}
+            >
+              <MessageCircle size={20} aria-hidden /> WhatsApp
+            </a>
+            <QuoteButton className={styles.footerInfo}>
+              <ArrowRight size={20} aria-hidden /> Solicitar orçamento
+            </QuoteButton>
           </div>
         </div>
         <div className={`${styles.wrap} ${styles.footerBottom}`}>
-          <p>© 2026 CifraMais. Todos os direitos reservados.</p>
-          <Image src="/brand/cifra-plus-reverse.svg" alt="CifraMais" width={99} height={32} />
-        </div>
-        <div className={styles.wrap}>
-          <Image
-            src="/brand/cifra-wordmark-reverse.svg"
-            alt=""
-            width={556}
-            height={206}
-            className={styles.footerWordmark}
-          />
+          <p>© 2026 Cifra+. Todos os direitos reservados.</p>
+          <Image src="/brand/cifra-plus-reverse.svg" alt="Cifra+" width={99} height={32} />
         </div>
       </footer>
 
+      <WhatsAppFloat />
+      <QuoteDialog />
       <LandingMotion rootId={ROOT_ID} />
     </div>
   );

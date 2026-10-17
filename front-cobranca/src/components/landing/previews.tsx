@@ -1,7 +1,9 @@
 ﻿import {
   CheckCheck,
+  ChevronDown,
   CircleCheck,
   Copy,
+  CreditCard,
   ExternalLink,
   Mail,
   MessageCircle,
@@ -21,7 +23,7 @@ export function ChargeMessagePreview() {
     >
       <div className={styles.msgHeader}>
         <MessageCircle size={14} aria-hidden />
-        CifraMais · WhatsApp
+        Cifra+ · WhatsApp
       </div>
       <div className={styles.msgBubble} data-hero="bubble">
         <p>Olá, Ana! Sua fatura de R$ 350,00 vence em 20/11.</p>
@@ -41,11 +43,11 @@ export function ChargeMessagePreview() {
 
 const SHEET_ROWS = [
   ["Ana Souza", "R$ 350,00", "10/11", "Vencido"],
-  ["Oficina Prado", "R$ 1.200,00", "12/11", "Pago?"],
+  ["Oficina Prado", "R$ 1.200,00", "12/11", "Pago"],
   ["Carlos Lima", "R$ 480,00", "05/11", "Vencido"],
-  ["Clínica Bem-Estar", "R$ 890,00", "15/11", "Em aberto"],
+  ["Clínica Bem-Estar", "R$ 890,00", "15/11", "Pendente"],
   ["Escola Aquarela", "R$ 2.150,00", "08/11", "Vencido"],
-  ["Marcos Dias", "R$ 260,00", "18/11", "Avisar?"],
+  ["Marcos Dias", "R$ 260,00", "18/11", "Pendente"],
 ];
 
 export function ManualSpreadsheetPreview() {
@@ -68,7 +70,10 @@ export function ManualSpreadsheetPreview() {
             <span>{value}</span>
             <span className={styles.mono}>{due}</span>
             <span>
-              <i className={styles.statusChip} data-tone={status === "Vencido" ? "late" : "plain"}>
+              <i
+                className={styles.statusChip}
+                data-tone={status === "Pago" ? "good" : status === "Vencido" ? "late" : "plain"}
+              >
                 {status}
               </i>
             </span>
@@ -127,13 +132,13 @@ const REMINDERS = {
   before: {
     channel: "WhatsApp",
     label: "Lembrete de cobrança enviado pelo WhatsApp três dias antes do vencimento",
-    text: "Olá, Ana! Sua fatura de R$ 350,00 vence em 3 dias. Pague pelo link, com Pix ou boleto.",
+    text: "Olá, Ana! Sua fatura de R$ 350,00 vence em 3 dias. Pague pelo link.",
     time: "17/11 · 09:00",
   },
   due: {
     channel: "E-mail",
     label: "E-mail de cobrança enviado no dia do vencimento",
-    text: "Sua fatura de R$ 350,00 vence hoje. O código Pix e a linha digitável estão no link.",
+    text: "Sua fatura de R$ 350,00 vence hoje. Pague pelo link da cobrança.",
     time: "20/11 · 09:00",
   },
   after: {
@@ -152,7 +157,7 @@ export function ReminderMessagePreview({ variant }: { variant: keyof typeof REMI
     <div className={styles.reminderMsg} role="img" aria-label={item.label}>
       <div className={styles.reminderCard} data-kind={isEmail ? "email" : "chat"}>
         <span className={styles.reminderMeta}>
-          {isEmail ? "Assunto: Sua fatura vence hoje" : "CifraMais · WhatsApp"}
+          {isEmail ? "Assunto: Sua fatura vence hoje" : "Cifra+ · WhatsApp"}
         </span>
         <p>{item.text}</p>
         <span className={styles.msgTime}>{item.time}</span>
@@ -173,7 +178,7 @@ export function PayPagePreview() {
     >
       <div className={styles.payPhone} data-reveal="lift">
         <span className={styles.phoneLabel}>Sua Empresa Ltda.</span>
-        <span className={styles.payTag}>Cobrança</span>
+        <span className={styles.payTag}>BOLIX</span>
         <strong className={styles.phoneAmount}>R$ 350,00</strong>
         <span className={styles.payDue}>Vence em 20/11</span>
         <span className={styles.fieldLabel}>Pix copia e cola</span>
@@ -188,50 +193,74 @@ export function PayPagePreview() {
   );
 }
 
-export function BoletoChargePreview() {
+export function CardCheckoutPreview() {
   return (
     <div
-      className={styles.boletoPreview}
+      className={styles.payScene}
       role="img"
-      aria-label="Boleto com código de barras, linha digitável e vencimento"
+      aria-label="Página de pagamento com cartão de crédito, com escolha da bandeira e do parcelamento"
     >
-      <div className={styles.slip} data-reveal="lift">
-        <div className={styles.slipTop}>
-          <span>Boleto bancário</span>
-          <span className={styles.mono}>Venc. 20/11</span>
-        </div>
-        <strong className={styles.slipAmount}>R$ 350,00</strong>
-        <span className={styles.barcode} />
-        <span className={styles.slipLine}>00190.00009 01234.567893 01234.567893 1 00000000035000</span>
+      <div className={styles.payPhone} data-reveal="lift">
+        <span className={styles.phoneLabel}>Sua Empresa Ltda.</span>
+        <span className={styles.payTag}>Cartão de crédito</span>
+        <strong className={styles.phoneAmount}>R$ 350,00</strong>
+        <span className={styles.payDue}>Vence em 20/11</span>
+        <span className={styles.fieldLabel}>Bandeira</span>
+        <span className={styles.selectField}>
+          Visa <ChevronDown size={14} aria-hidden />
+        </span>
+        <span className={styles.fieldLabel}>Parcelamento</span>
+        <span className={styles.selectField}>
+          De 1x a 6x <ChevronDown size={14} aria-hidden />
+        </span>
+        <span className={styles.fakeButton}>
+          <CreditCard size={14} aria-hidden /> Pagar com cartão
+        </span>
       </div>
     </div>
   );
 }
 
-const MONTHS = [
-  ["Mai", 52],
-  ["Jun", 61],
-  ["Jul", 58],
-  ["Ago", 72],
-  ["Set", 80],
-  ["Out", 91],
+// Same labels as the company dashboard (app/(dashboard)/page.tsx).
+const DASH_TILES = [
+  ["Total Recuperado", "R$ 18.420,00", "good"],
+  ["Total Pendente", "R$ 6.150,00", "plain"],
+  ["Cobranças Ativas", "64", "plain"],
+  ["Vencidas em Aberto", "7", "late"],
+] as const;
+
+const DASH_CHANNELS = [
+  {
+    title: "Mensagens de WhatsApp",
+    period: "Últimas 24 horas",
+    stats: [
+      ["120", "enviadas"],
+      ["114", "entregues"],
+      ["96", "lidas"],
+      ["2", "falhas"],
+    ],
+  },
+  {
+    title: "E-mails de cobrança",
+    period: "Últimos 30 dias",
+    stats: [
+      ["310", "enviados"],
+      ["302", "entregues"],
+      ["188", "abertos"],
+      ["74", "cliques"],
+    ],
+  },
 ] as const;
 
 export function DashboardPreview() {
-  const tiles = [
-    ["Recebido", "R$ 18.420,00", "good"],
-    ["Em aberto", "R$ 6.150,00", "plain"],
-    ["Vencido", "R$ 1.050,00", "late"],
-    ["Faturas no mês", "64", "plain"],
-  ] as const;
   return (
     <div
       className={styles.dashPreview}
       role="img"
-      aria-label="Painel da empresa com valores recebidos, em aberto e vencidos, gráfico mensal e últimos pagamentos"
+      aria-label="Painel da empresa com total recuperado, total pendente, cobranças ativas, vencidas em aberto e números de WhatsApp e e-mail"
     >
       <div className={styles.dashTiles} data-reveal="lift">
-        {tiles.map(([label, value, tone]) => (
+        {DASH_TILES.map(([label, value, tone]) => (
           <div key={label} className={styles.dashTile} data-tone={tone}>
             <span>{label}</span>
             <strong>{value}</strong>
@@ -239,31 +268,20 @@ export function DashboardPreview() {
         ))}
       </div>
       <div className={styles.dashBody}>
-        <div className={styles.dashChart}>
-          <span className={styles.dashChartTitle}>Recebido por mês</span>
-          <div className={styles.dashBars}>
-            {MONTHS.map(([month, height]) => (
-              <span key={month} className={styles.dashBar}>
-                <i style={{ height: `${height}%` }} />
-                <small>{month}</small>
-              </span>
-            ))}
-          </div>
-        </div>
-        <div className={styles.dashList}>
-          <span className={styles.dashChartTitle}>Últimos pagamentos</span>
-          {[
-            ["Ana Souza", "R$ 350,00", "Pix"],
-            ["Oficina Prado", "R$ 1.200,00", "Boleto"],
-            ["Loja Ipê", "R$ 740,00", "BOLIX"],
-          ].map(([name, value, method]) => (
-            <div key={name} className={styles.dashListRow}>
-              <span>{name}</span>
-              <span className={styles.mono}>{method}</span>
-              <strong>{value}</strong>
+        {DASH_CHANNELS.map((channel) => (
+          <div key={channel.title} className={styles.dashChannel}>
+            <span className={styles.dashChartTitle}>{channel.title}</span>
+            <small>{channel.period}</small>
+            <div className={styles.dashStats}>
+              {channel.stats.map(([value, label]) => (
+                <span key={label}>
+                  <strong>{value}</strong>
+                  {label}
+                </span>
+              ))}
             </div>
-          ))}
-        </div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -271,11 +289,11 @@ export function DashboardPreview() {
 
 const INVOICES = [
   ["Ana Souza", "20/11", "R$ 350,00", "Pago"],
-  ["Oficina Prado", "22/11", "R$ 1.200,00", "Em aberto"],
+  ["Oficina Prado", "22/11", "R$ 1.200,00", "Pendente"],
   ["Carlos Lima", "05/11", "R$ 480,00", "Vencido"],
-  ["Clínica Bem-Estar", "25/11", "R$ 890,00", "Em aberto"],
+  ["Clínica Bem-Estar", "25/11", "R$ 890,00", "Pendente"],
   ["Escola Aquarela", "08/11", "R$ 2.150,00", "Pago"],
-  ["Loja Ipê", "28/11", "R$ 740,00", "Em aberto"],
+  ["Loja Ipê", "28/11", "R$ 740,00", "Pendente"],
 ] as const;
 
 export function InvoiceListPreview() {

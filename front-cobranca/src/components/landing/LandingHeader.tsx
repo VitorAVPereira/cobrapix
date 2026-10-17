@@ -45,7 +45,7 @@ export function LandingHeader() {
     <header className={styles.header} data-scrolled={scrolled || menuOpen ? "true" : "false"}>
       <div className={styles.headerInner}>
         <div className={styles.navPill}>
-          <a href="#inicio" className={styles.headerLogo} aria-label="CifraMais, início">
+          <a href="#inicio" className={styles.headerLogo} aria-label="Cifra+, início">
             <Image src="/brand/cifra-plus-reverse.svg" alt="" width={87} height={28} priority />
           </a>
           <nav aria-label="Seções da página" className={styles.headerNav}>
