@@ -1,12 +1,12 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { Plus } from "lucide-react";
 import styles from "./landing.module.css";
 
 export interface FaqItem {
   question: string;
-  answer: string;
+  answer: ReactNode;
 }
 
 export function LandingFaq({ items }: { items: FaqItem[] }) {
@@ -52,7 +52,9 @@ export function LandingFaq({ items }: { items: FaqItem[] }) {
               className={styles.faqPanel}
             >
               <div className={styles.faqPanelInner}>
-                <p>{item.answer}</p>
+                <div className={styles.faqAnswer}>
+                  {typeof item.answer === "string" ? <p>{item.answer}</p> : item.answer}
+                </div>
               </div>
             </div>
           </div>

@@ -185,7 +185,7 @@ export function PayPagePreview() {
     >
       <div className={styles.payPhone} data-reveal="lift">
         <span className={styles.phoneLabel}>Sua Empresa Ltda.</span>
-        <span className={styles.payTag}>BOLIX</span>
+        <span className={styles.payTag}>Boleto com Pix</span>
         <strong className={styles.phoneAmount}>R$ 350,00</strong>
         <span className={styles.payDue}>Vence em 20/11</span>
         <span className={styles.fieldLabel}>Pix copia e cola</span>
