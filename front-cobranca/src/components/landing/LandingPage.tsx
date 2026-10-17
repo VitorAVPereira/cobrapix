@@ -69,7 +69,7 @@ const REGUA = [
   {
     variant: "after",
     title: "5 dias depois",
-    text: "Novo aviso pelo WhatsApp, sem tom agressivo.",
+    text: "Novo aviso pelo WhatsApp, em um tom amigável.",
   },
 ] as const;
 
@@ -92,11 +92,15 @@ const STEPS = [
   {
     title: "A primeira cobrança sai",
     text: "A Cifra+ emite a cobrança e envia a primeira mensagem.",
-    checks: ["Pix, BOLIX ou cartão de crédito", "Aviso enviado"],
+    checks: ["Pix, boleto ou cartão de crédito", "Aviso enviado"],
   },
 ];
 
 const SECURITY = [
+  [
+    "Em conformidade com a LGPD",
+    "Seguimos todos os pontos da Lei Geral de Proteção de Dados (Lei nº 13.709/2018). Os dados dos seus clientes são tratados apenas para a cobrança e ficam protegidos em cada etapa.",
+  ],
   [
     "Cada empresa vê só os próprios dados",
     "Clientes, faturas, mensagens e estatísticas ficam separados por empresa. Uma empresa não acessa nada de outra.",
@@ -119,13 +123,44 @@ const FAQ: FaqItem[] = [
   },
   {
     question: "Quais formas de pagamento posso oferecer?",
-    answer:
-      "Três: Pix, com QR Code e copia e cola; BOLIX, que une a segurança do boleto e a agilidade do Pix no mesmo documento; e cartão de crédito, em até 6x.",
+    answer: (
+      <>
+        <p>Oferecemos três opções de pagamento:</p>
+        <ul>
+          <li>
+            <strong>Pix</strong>, com QR Code e código copia e cola.
+          </li>
+          <li>
+            <strong>Boleto</strong>, que também traz um QR Code Pix. Seu cliente escolhe pagar pelo
+            código de barras ou pelo Pix, e o pagamento via Pix é compensado na hora. É a segurança
+            do boleto com a agilidade do Pix no mesmo documento.
+          </li>
+          <li>
+            <strong>Cartão de crédito</strong>, parcelado em até 6x.
+          </li>
+        </ul>
+      </>
+    ),
   },
   {
     question: "Como funciona a régua de cobrança?",
-    answer:
-      "Você cria quantos perfis de cliente quiser e cada perfil tem a própria régua, com etapas antes, no dia e depois do vencimento, por WhatsApp ou e-mail. As mensagens de WhatsApp usam modelos aprovados.",
+    answer: (
+      <>
+        <p>
+          A régua é a sequência de lembretes que a Cifra+ envia sozinha para cada cobrança. Você
+          configura uma vez:
+        </p>
+        <ol>
+          <li>
+            Separa seus clientes em perfis, como bons pagadores e maus pagadores. Crie quantos
+            perfis quiser.
+          </li>
+          <li>Escolhe, para cada perfil, quando os avisos saem: antes, no dia ou depois do vencimento.</li>
+          <li>Define o canal de cada aviso: WhatsApp ou e-mail.</li>
+        </ol>
+        <p>Depois disso, os avisos saem no dia certo e param assim que a fatura é paga.</p>
+      </>
+    ),
   },
   {
     question: "Meus clientes precisam criar conta?",
@@ -140,7 +175,7 @@ const FAQ: FaqItem[] = [
   {
     question: "Quanto custa?",
     answer:
-      "Montamos um orçamento para a sua empresa. Clique em Solicitar orçamento e preencha o formulário, ou fale com a gente pelo WhatsApp.",
+      "Fazemos um orçamento personalizado para a sua empresa, de acordo com o volume de cobranças e o ticket médio. Clique em Solicitar orçamento e preencha o formulário, ou fale com a gente pelo WhatsApp.",
   },
 ];
 
@@ -156,13 +191,13 @@ export function LandingPage() {
         {/* Hero: nubo-01-hero */}
         <section className={styles.hero} aria-labelledby="hero-title">
           <h1 id="hero-title" className={styles.heroTitle}>
-            <span data-hero="line">Sua cobrança</span>{" "}
+            <span data-hero="line">Suas cobranças</span>{" "}
             <span data-hero="line2">
               no <em>automático</em>.
             </span>
           </h1>
           <p className={styles.heroLead} data-hero="lead">
-            Emita Pix, BOLIX e cartão de crédito, avise por WhatsApp e e-mail e acompanhe cada
+            Emita Pix, boleto e cartão de crédito, avise por WhatsApp e e-mail e acompanhe cada
             pagamento.
           </p>
           <div className={styles.heroActions} data-hero="actions">
@@ -178,7 +213,7 @@ export function LandingPage() {
                 </div>
                 <div className={styles.heroCardBand} aria-hidden>
                   <Image src="/brand/cifra-mark-reverse.svg" alt="" width={22} height={22} />
-                  <span>PIX · BOLIX · CARTÃO · WHATSAPP</span>
+                  <span>PIX · BOLETO · CARTÃO · WHATSAPP</span>
                 </div>
               </div>
             </div>
@@ -230,7 +265,7 @@ export function LandingPage() {
               Formas de pagamento
             </p>
             <h2 id="formas-title" className={styles.paymentsTitle}>
-              Três formas de receber: Pix, BOLIX e cartão de crédito.{" "}
+              Três formas de receber: Pix, boleto e cartão de crédito.{" "}
               <span className={styles.mutedLine}>O dinheiro cai na sua conta Efí.</span>
             </h2>
             <div className={styles.paymentsFrame}>
@@ -260,11 +295,14 @@ export function LandingPage() {
                 <article className={styles.payColumn} data-reveal="rise" data-reveal-delay={60}>
                   <div className={styles.payTile}>
                     <span className={styles.payIndex}>02</span>
-                    <p className={styles.payWord}>BOLIX</p>
+                    <p className={styles.payWord}>Boleto</p>
                   </div>
                   <div className={`${styles.payCard} ${styles.payCardAccent}`}>
-                    <h3>A segurança do boleto com a agilidade do Pix</h3>
-                    <p>Boleto e QR Code Pix no mesmo documento. Seu cliente paga como preferir.</p>
+                    <h3>Também pode ser pago com Pix, e compensa na hora</h3>
+                    <p>
+                      Código de barras e QR Code Pix no mesmo boleto: a segurança do boleto com a
+                      agilidade do Pix.
+                    </p>
                     <ul className={styles.payChips} aria-label="Como pagar">
                       <li>
                         <QrCode size={18} aria-hidden /> Pix
@@ -343,8 +381,8 @@ export function LandingPage() {
                   <PayPagePreview />
                 </div>
                 <figcaption>
-                  <strong>Pix e BOLIX</strong>
-                  Um toque para copiar o código Pix ou a linha digitável.
+                  <strong>Pix e boleto</strong>
+                  Um toque para copiar o código Pix ou a linha digitável do boleto.
                 </figcaption>
               </figure>
               <figure>
@@ -399,7 +437,7 @@ export function LandingPage() {
             <aside className={styles.howAside}>
               <p className={styles.howBrand}>Cifra+</p>
               <p className={styles.howIntro}>
-                Cobrança por Pix, BOLIX e cartão de crédito, com avisos por WhatsApp e e-mail. A
+                Cobrança por Pix, boleto e cartão de crédito, com avisos por WhatsApp e e-mail. A
                 ativação é feita pela nossa equipe.
               </p>
               <div className={styles.howContact}>
@@ -440,8 +478,9 @@ export function LandingPage() {
         {/* Segurança: ollef-04-values */}
         <section className={styles.security} aria-labelledby="seguranca-title">
           <div className={`${styles.wrap} ${styles.securityGrid}`}>
-            <h2 id="seguranca-title" className={styles.securityLabel}>
-              (Segurança)
+            <h2 id="seguranca-title" className={`${styles.squareLabel} ${styles.securityLabel}`}>
+              <span aria-hidden />
+              Segurança
             </h2>
             <div className={styles.securityBlocks}>
               {SECURITY.map(([title, text]) => (
@@ -497,7 +536,7 @@ export function LandingPage() {
       <footer className={styles.footer}>
         <div className={`${styles.wrap} ${styles.footerTop}`}>
           <p className={styles.footerStatement}>
-            Cobrança por Pix, BOLIX e cartão de crédito, com o dinheiro na conta da sua empresa.
+            Cobrança por Pix, boleto e cartão de crédito, com o dinheiro na conta da sua empresa.
           </p>
           <div className={styles.footerQuote}>
             <QuoteButton className={styles.footerQuoteButton}>
@@ -525,7 +564,7 @@ export function LandingPage() {
           <div>
             <h2>Pagamentos</h2>
             <p>Pix</p>
-            <p>BOLIX</p>
+            <p>Boleto</p>
             <p>Cartão de crédito</p>
           </div>
           <div>
