@@ -203,6 +203,13 @@ describe("presentation page on /", () => {
     expect(mockedNextResponse.redirect).not.toHaveBeenCalled();
   });
 
+  it("shows the presentation page on / when the stored session has expired", () => {
+    expect(
+      runMiddleware(createRequest("/", "COMPANY_ADMIN", { authInvalidated: true })),
+    ).toEqual({ kind: "rewrite", url: "http://localhost:3000/apresentacao" });
+    expect(mockedNextResponse.redirect).not.toHaveBeenCalled();
+  });
+
   it("keeps the dashboard on / for signed-in company users", () => {
     expect(runMiddleware(createRequest("/", "COMPANY_ADMIN"))).toEqual({ kind: "next" });
     expect(mockedNextResponse.rewrite).not.toHaveBeenCalled();
