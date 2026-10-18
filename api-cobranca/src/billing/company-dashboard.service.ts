@@ -19,12 +19,7 @@ type AgingRange = '1-15' | '16-30' | '31-60' | '60+';
 
 export interface CompanyDashboardResponse {
   period: DashboardRange;
-  received: {
-    amount: number;
-    count: number;
-    previousAmount: number;
-    previousCount: number;
-  };
+  received: { amount: number; count: number };
   collectionRate: {
     dueAmount: number;
     paidAmount: number;
@@ -92,14 +87,10 @@ export class CompanyDashboardService {
   ): Promise<CompanyDashboardResponse> {
     const range = resolveDashboardRange(key, now, custom);
     const current = this.instants(range.startDate, range.endDate);
-    const previous = this.instants(
-      range.previousStartDate,
-      range.previousEndDate,
-    );
     // Due dates are calendar dates stored in UTC, so they are compared as dates.
     const todayDue = new Date(`${saoPauloDate(now)}T00:00:00Z`);
 
-    const [paid, previousPaid, rate, previousRate, pending, whatsapp, email] =
+    const [paid, rate, previousRate, pending, whatsapp, email] =
       await Promise.all([
         this.prisma.invoice.findMany({
           where: { companyId, status: 'PAID', paidAt: current },
@@ -114,11 +105,6 @@ export class CompanyDashboardService {
               select: { billingMethod: true },
             },
           },
-        }),
-        this.prisma.invoice.aggregate({
-          where: { companyId, status: 'PAID', paidAt: previous },
-          _sum: { originalAmount: true },
-          _count: { _all: true },
         }),
         this.collectionRate(companyId, range.startDate, range.endDate),
         this.collectionRate(
@@ -204,8 +190,6 @@ export class CompanyDashboardService {
       received: {
         amount: toReais(receivedCents),
         count: paid.length,
-        previousAmount: toReais(toCents(previousPaid._sum.originalAmount)),
-        previousCount: previousPaid._count._all,
       },
       collectionRate: {
         dueAmount: toReais(rate.dueCents),

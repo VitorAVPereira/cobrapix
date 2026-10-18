@@ -9,10 +9,6 @@ function setup() {
   const prisma = {
     invoice: {
       findMany: jest.fn(),
-      aggregate: jest.fn().mockResolvedValue({
-        _sum: { originalAmount: money('80.00') },
-        _count: { _all: 2 },
-      }),
       groupBy: jest.fn().mockResolvedValue([]),
     },
   };
@@ -93,11 +89,7 @@ describe('CompanyDashboardService', () => {
       gte: new Date('2026-10-11T03:00:00Z'),
       lt: new Date('2026-10-18T03:00:00Z'),
     };
-    const calls = [
-      prisma.invoice.findMany,
-      prisma.invoice.aggregate,
-      prisma.invoice.groupBy,
-    ].flatMap(
+    const calls = [prisma.invoice.findMany, prisma.invoice.groupBy].flatMap(
       (mock) => mock.mock.calls as [{ where: { companyId: string } }][],
     );
     for (const [call] of calls) expect(call.where.companyId).toBe('company-a');
@@ -136,12 +128,7 @@ describe('CompanyDashboardService', () => {
     const { service } = setup();
     const result = await service.get('company-a', '7d', {}, now);
 
-    expect(result.received).toEqual({
-      amount: 150.3,
-      count: 2,
-      previousAmount: 80,
-      previousCount: 2,
-    });
+    expect(result.received).toEqual({ amount: 150.3, count: 2 });
     expect(result.receivedSeries).toHaveLength(7);
     expect(result.receivedSeries).toContainEqual({
       date: '2026-10-15',
