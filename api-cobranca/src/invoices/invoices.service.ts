@@ -896,12 +896,11 @@ export class InvoicesService {
     }
 
     if (params.search) {
-      const normalizedDocument = normalizeDebtorDocument(params.search);
-      const normalizedPhone = params.search.replace(/\D/g, '');
+      const digits = searchDigits(params.search);
       where.OR = [
         { name: { contains: params.search, mode: 'insensitive' } },
-        { document: { contains: normalizedDocument || params.search } },
-        { phoneNumber: { contains: normalizedPhone || params.search } },
+        { document: { contains: digits } },
+        { phoneNumber: { contains: digits } },
         { email: { contains: params.search, mode: 'insensitive' } },
       ];
     }
@@ -916,7 +915,9 @@ export class InvoicesService {
       where.invoices = { none: { companyId, status: 'PENDING' } };
     }
 
-    const [debtors, summaryDebtors, total] = await Promise.all([
+    // Totals are summed in the database: loading every client and invoice
+    // to add them up does not scale with thousands of clients.
+    const [debtors, totals, total] = await Promise.all([
       this.prisma.debtor.findMany({
         where,
         include: {
@@ -931,41 +932,44 @@ export class InvoicesService {
             },
           },
         },
-        orderBy: { updatedAt: 'desc' },
+        orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
         skip: (params.page - 1) * params.pageSize,
         take: params.pageSize,
       }),
-      this.prisma.debtor.findMany({
-        where,
-        include: {
-          collectionProfile: true,
-          invoices: {
-            where: { companyId, status: { in: ['PENDING', 'PAID'] } },
-            select: {
-              status: true,
-              originalAmount: true,
-              createdAt: true,
-              paidAt: true,
-            },
-          },
+      this.prisma.invoice.groupBy({
+        by: ['status'],
+        where: {
+          companyId,
+          status: { in: ['PENDING', 'PAID'] },
+          debtor: where,
         },
-        orderBy: { updatedAt: 'desc' },
-        skip: undefined,
-        take: undefined,
+        _sum: { originalAmount: true },
+        _count: { _all: true },
       }),
       this.prisma.debtor.count({ where }),
     ]);
-    const data = debtors.map((debtor) => this.mapDebtorListItem(debtor));
-    const summaryData = summaryDebtors.map((debtor) =>
-      this.mapDebtorListItem(debtor),
-    );
+    const totalOf = (status: 'PENDING' | 'PAID') => {
+      const row = totals.find((item) => item.status === status);
+      return {
+        amount: Number((row?._sum.originalAmount?.toNumber() ?? 0).toFixed(2)),
+        count: row?._count._all ?? 0,
+      };
+    };
+    const open = totalOf('PENDING');
+    const paid = totalOf('PAID');
 
     return {
-      data,
+      data: debtors.map((debtor) => this.mapDebtorListItem(debtor)),
       total,
       page: params.page,
       pageSize: params.pageSize,
-      summary: this.buildDebtorListSummary(summaryData, total),
+      summary: {
+        totalDebtors: total,
+        openInvoiceAmount: open.amount,
+        openInvoiceCount: open.count,
+        paidInvoiceAmount: paid.amount,
+        paidInvoiceCount: paid.count,
+      },
     };
   }
 
@@ -1764,34 +1768,6 @@ export class InvoicesService {
     if (existingDebtors.length > 0) {
       throw new ConflictException('Ja existe cliente com este WhatsApp.');
     }
-  }
-
-  private buildDebtorListSummary(
-    data: DebtorListItem[],
-    totalDebtors: number,
-  ): DebtorListSummary {
-    const openInvoiceAmount = data.reduce(
-      (sum, debtor) => sum + debtor.openInvoicesAmount,
-      0,
-    );
-    const paidInvoiceAmount = data.reduce(
-      (sum, debtor) => sum + debtor.paidInvoicesAmount,
-      0,
-    );
-
-    return {
-      totalDebtors,
-      openInvoiceAmount: Number(openInvoiceAmount.toFixed(2)),
-      openInvoiceCount: data.reduce(
-        (sum, debtor) => sum + debtor.openInvoicesCount,
-        0,
-      ),
-      paidInvoiceAmount: Number(paidInvoiceAmount.toFixed(2)),
-      paidInvoiceCount: data.reduce(
-        (sum, debtor) => sum + debtor.paidInvoicesCount,
-        0,
-      ),
-    };
   }
 
   private mapDebtorListItem(

@@ -1118,7 +1118,20 @@ describe('InvoicesService', () => {
       };
       const debtorFindMany = jest.fn().mockResolvedValue([debtorWithInvoices]);
       const debtorUpdateMany = jest.fn().mockResolvedValue({ count: 2 });
+      const invoiceGroupBy = jest.fn().mockResolvedValue([
+        {
+          status: 'PENDING',
+          _sum: { originalAmount: decimal(120) },
+          _count: { _all: 1 },
+        },
+        {
+          status: 'PAID',
+          _sum: { originalAmount: decimal(80) },
+          _count: { _all: 1 },
+        },
+      ]);
       const prisma = {
+        invoice: { groupBy: invoiceGroupBy },
         collectionProfile: {
           findFirst: jest.fn().mockResolvedValue(defaultProfile),
         },
@@ -1177,40 +1190,26 @@ describe('InvoicesService', () => {
       );
     });
 
-    it('calcula resumo de todos os clientes filtrados mesmo quando pagina retorna menos itens', async () => {
+    it('soma o resumo no banco com o mesmo filtro da lista, sem carregar todos os clientes', async () => {
       const pageDebtor = {
         ...buildDebtor({ id: 'debtor-page' }),
-        invoices: [
-          {
-            status: 'PENDING',
-            originalAmount: decimal(120),
-            createdAt: new Date('2026-06-04T12:00:00.000Z'),
-            paidAt: null,
-          },
-        ],
+        invoices: [],
       };
-      const summaryDebtor = {
-        ...buildDebtor({ id: 'debtor-summary' }),
-        invoices: [
-          {
-            status: 'PENDING',
-            originalAmount: decimal(50),
-            createdAt: new Date('2026-06-05T12:00:00.000Z'),
-            paidAt: null,
-          },
-          {
-            status: 'PAID',
-            originalAmount: decimal(200),
-            createdAt: new Date('2026-06-02T12:00:00.000Z'),
-            paidAt: new Date('2026-06-03T12:00:00.000Z'),
-          },
-        ],
-      };
-      const debtorFindMany = jest
-        .fn()
-        .mockResolvedValueOnce([pageDebtor])
-        .mockResolvedValueOnce([pageDebtor, summaryDebtor]);
+      const debtorFindMany = jest.fn().mockResolvedValue([pageDebtor]);
+      const invoiceGroupBy = jest.fn().mockResolvedValue([
+        {
+          status: 'PENDING',
+          _sum: { originalAmount: decimal(170) },
+          _count: { _all: 2 },
+        },
+        {
+          status: 'PAID',
+          _sum: { originalAmount: decimal(200) },
+          _count: { _all: 1 },
+        },
+      ]);
       const prisma = {
+        invoice: { groupBy: invoiceGroupBy },
         collectionProfile: {
           findFirst: jest.fn().mockResolvedValue(defaultProfile),
         },
@@ -1227,26 +1226,26 @@ describe('InvoicesService', () => {
       );
 
       const result = await service.listDebtors('company-1', {
-        page: 1,
+        page: 2,
         pageSize: 1,
         search: 'maria',
+        paymentStatus: 'open',
       });
 
-      expect(debtorFindMany).toHaveBeenCalledTimes(2);
-      expect(debtorFindMany).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({
-          skip: 0,
-          take: 1,
-          where: expect.objectContaining({ companyId: 'company-1' }) as unknown,
-        }),
+      expect(debtorFindMany).toHaveBeenCalledTimes(1);
+      expect(debtorFindMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 1, take: 1 }),
       );
-      expect(debtorFindMany).toHaveBeenNthCalledWith(
-        2,
+      const [{ where: listWhere }] = debtorFindMany.mock.calls[0] as [
+        { where: unknown },
+      ];
+      expect(invoiceGroupBy).toHaveBeenCalledWith(
         expect.objectContaining({
-          skip: undefined,
-          take: undefined,
-          where: expect.objectContaining({ companyId: 'company-1' }) as unknown,
+          where: {
+            companyId: 'company-1',
+            status: { in: ['PENDING', 'PAID'] },
+            debtor: listWhere,
+          },
         }),
       );
       expect(result.data).toHaveLength(1);
