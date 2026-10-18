@@ -473,6 +473,24 @@ describe('InvoicesService', () => {
         }),
       );
     });
+
+    it('numeros dentro de um nome nao viram busca por documento', async () => {
+      const { service, where } = listing();
+      await service.findPaginated('company-1', {
+        page: 1,
+        pageSize: 20,
+        search: 'Carla Alves 33',
+      });
+
+      expect(where()).toEqual(
+        expect.objectContaining({
+          OR: expect.arrayContaining([
+            { debtor: { document: { contains: 'Carla Alves 33' } } },
+            { debtor: { phoneNumber: { contains: 'Carla Alves 33' } } },
+          ]) as unknown,
+        }),
+      );
+    });
   });
 
   it('enfileira primeira cobranca apos importacao CSV', async () => {

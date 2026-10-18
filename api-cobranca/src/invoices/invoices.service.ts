@@ -59,6 +59,15 @@ export const INVOICE_LIST_ORDER = {
 } as const satisfies Record<string, Prisma.InvoiceOrderByWithRelationInput>;
 export type InvoiceListSort = keyof typeof INVOICE_LIST_ORDER;
 
+/**
+ * Documents and phones are stored as digits, so "123.456.789-09" must match.
+ * A search with letters is a name: its numbers ("Ana 33") are not a document.
+ */
+function searchDigits(search: string): string {
+  const digits = search.replace(/\D/g, '');
+  return digits && !/\p{L}/u.test(search) ? digits : search;
+}
+
 const RECURRING_GENERATION_LOOKAHEAD_DAYS = 30;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const PAYMENT_HISTORY_TIME_ZONE = 'America/Sao_Paulo';
@@ -566,8 +575,7 @@ export class InvoicesService {
     }
 
     if (params.search) {
-      // Documents and phones are stored as digits; "123.456.789-09" must match.
-      const digits = params.search.replace(/\D/g, '') || params.search;
+      const digits = searchDigits(params.search);
       where.OR = [
         { debtor: { name: { contains: params.search, mode: 'insensitive' } } },
         { debtor: { document: { contains: digits } } },
@@ -844,7 +852,7 @@ export class InvoicesService {
       email: string | null;
     }[]
   > {
-    const digits = search?.replace(/\D/g, '') || search;
+    const digits = search && searchDigits(search);
     const debtors = await this.prisma.debtor.findMany({
       where: {
         companyId,
