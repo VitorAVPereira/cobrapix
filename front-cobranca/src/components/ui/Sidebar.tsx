@@ -11,7 +11,6 @@ import {
   CalendarClock,
   ChevronDown,
   Database,
-  FileText,
   HandCoins,
   LayoutDashboard,
   LogOut,
@@ -31,7 +30,7 @@ import { useApiClient } from "@/lib/use-api-client";
 const dashboardItem = {
   href: "/",
   label: "Dashboard",
-  icon: FileText,
+  icon: LayoutDashboard,
 };
 
 const mainItems = [

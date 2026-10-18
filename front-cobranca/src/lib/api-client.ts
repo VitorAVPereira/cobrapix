@@ -271,21 +271,40 @@ export type MessagingLimitTier =
   | "TIER_UNLIMITED";
 export type PaymentNotificationStatus = "PENDING" | "SENT" | "FAILED" | "READ";
 export type RecurringInvoiceStatus = "ACTIVE" | "PAUSED";
-export type DashboardPeriod = "today" | "7d" | "30d" | "year";
+export type DashboardPeriod = "today" | "7d" | "30d" | "month" | "year" | "custom";
 export type CollectionProfileType = "NEW" | "GOOD" | "DOUBTFUL" | "BAD";
 export type PaymentTimeliness = "EARLY" | "ON_DUE_DATE" | "OVERDUE" | "UNKNOWN";
 
-export interface BillingMetrics {
-  period: DashboardPeriod;
-  activeCharges: number;
-  pendingAmount: number;
-  recoveredAmount: number;
-  recoveryRate: number;
-  paidCharges: number;
-  overdueCharges: number;
-  generatedPayments: number;
-  queuedMessages: number;
-  sentMessages: number;
+/** Company dashboard. Dates are São Paulo calendar dates (YYYY-MM-DD). */
+export interface CompanyDashboard {
+  period: {
+    key: DashboardPeriod;
+    startDate: string;
+    endDate: string;
+    previousStartDate: string;
+    previousEndDate: string;
+    granularity: "day" | "month";
+  };
+  received: { amount: number; count: number };
+  collectionRate: {
+    dueAmount: number;
+    paidAmount: number;
+    rate: number | null;
+    previousRate: number | null;
+  };
+  open: {
+    amount: number;
+    count: number;
+    upcomingAmount: number;
+    upcomingCount: number;
+    overdueAmount: number;
+    overdueCount: number;
+  };
+  overdueAging: { range: "1-15" | "16-30" | "31-60" | "60+"; amount: number; count: number }[];
+  receivedSeries: { date: string; amount: number; count: number }[];
+  receivedByMethod: { method: "PIX" | "BOLETO" | "CARD"; amount: number; count: number }[];
+  whatsapp: { sent: number; delivered: number; read: number; failed: number; replies: number };
+  email: { sent: number; delivered: number; opened: number; clicked: number };
 }
 
 export interface InvoicePaymentSummary {
@@ -1892,8 +1911,14 @@ class ApiClient {
     );
   }
 
-  async getBillingMetrics(period: DashboardPeriod): Promise<BillingMetrics> {
-    return this.fetch<BillingMetrics>(`/billing/metrics?period=${period}`);
+  getCompanyDashboard(
+    query: { period: DashboardPeriod; startDate?: string; endDate?: string },
+    signal?: AbortSignal,
+  ): Promise<CompanyDashboard> {
+    return this.fetch<CompanyDashboard>(
+      `/billing/dashboard${this.buildQueryString(query)}`,
+      { signal },
+    );
   }
 
   async getBillingSettings(): Promise<BillingSettings> {

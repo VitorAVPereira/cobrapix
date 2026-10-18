@@ -26,7 +26,7 @@ describe("useApiClient", () => {
 
     const { result } = renderHook(() => useApiClient());
 
-    await expect(result.current.getBillingMetrics("30d")).rejects.toMatchObject(
+    await expect(result.current.getCompanyDashboard({ period: "30d" })).rejects.toMatchObject(
       {
         status: 401,
       },
@@ -71,10 +71,10 @@ describe("useApiClient", () => {
 
     const { result } = renderHook(() => useApiClient());
 
-    await result.current.getBillingMetrics("30d");
+    await result.current.getCompanyDashboard({ period: "30d" });
 
     expect(mockFetch).toHaveBeenCalledWith(
-      "http://localhost:3001/billing/metrics?period=30d",
+      "http://localhost:3001/billing/dashboard?period=30d",
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: "Bearer session-token",
