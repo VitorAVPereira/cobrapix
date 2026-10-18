@@ -207,6 +207,39 @@ describe('importacao de cobrancas: revisao de clientes', () => {
     });
   });
 
+  it('oferece vincular cliente antigo sem documento e grava o CPF/CNPJ da planilha', () => {
+    const legacy = client({
+      debtorId: '44444444-4444-4444-8444-444444444444',
+      document: null,
+      name: 'Ana',
+      email: null,
+    });
+    const reviews = review([row({})], [legacy]);
+    expect(reviews[0]).toMatchObject({
+      kind: 'UNDOCUMENTED_OWNER',
+      differences: ['name', 'email'],
+    });
+
+    expect(
+      planImport(reviews, [
+        {
+          document: ANA,
+          action: 'LINK',
+          debtorId: legacy.debtorId,
+          version: legacy.version,
+          use: { name: 'EXISTING', phone: 'EXISTING', email: 'CSV' },
+        },
+      ])[0],
+    ).toMatchObject({
+      action: 'LINK',
+      debtorId: legacy.debtorId,
+      update: { document: ANA, email: 'ana@example.com' },
+    });
+    expect(code(() => planImport(reviews, undefined))).toBe(
+      'IMPORT_NEEDS_REVIEW',
+    );
+  });
+
   it('WhatsApp em uso so pode ser pulado; documento duplicado vincula ao escolhido', () => {
     const owner = client({ document: BRUNO, name: 'Bruno' });
     const taken = review([row({})], [owner]);

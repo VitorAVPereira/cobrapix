@@ -201,6 +201,51 @@ describe('importacao de cobrancas com revisao (PostgreSQL)', () => {
     expect(await prisma.invoice.count({ where: { companyId } })).toBe(before);
   });
 
+  it('vincula cliente antigo sem documento pelo WhatsApp e grava o CPF/CNPJ', async () => {
+    const legacy = await prisma.debtor.create({
+      data: {
+        companyId,
+        name: 'Cliente antigo',
+        phoneNumber: '+5511999990077',
+        collectionProfileId: profileId,
+      },
+    });
+    const rows = [
+      row({
+        name: 'Cliente antigo',
+        document: '39053344705',
+        phone_number: '+5511999990077',
+        email: '',
+      }),
+    ];
+    const [review] = (await service.previewImport(companyId, rows)).clients;
+    expect(review).toMatchObject({
+      kind: 'UNDOCUMENTED_OWNER',
+      differences: [],
+    });
+    if (review?.kind !== 'UNDOCUMENTED_OWNER')
+      throw new Error('unexpected review');
+
+    await service.importCsv(companyId, rows, [
+      {
+        document: '39053344705',
+        action: 'LINK',
+        debtorId: legacy.id,
+        version: review.existing.version,
+        use: { name: 'EXISTING', phone: 'EXISTING', email: 'EXISTING' },
+      },
+    ]);
+    expect(
+      await prisma.debtor.findUniqueOrThrow({ where: { id: legacy.id } }),
+    ).toMatchObject({
+      document: '39053344705',
+      collectionProfileId: profileId,
+    });
+    expect(await prisma.invoice.count({ where: { debtorId: legacy.id } })).toBe(
+      1,
+    );
+  });
+
   it('importa mais de mil cobrancas de uma vez', async () => {
     const rows = Array.from({ length: 1200 }, (_, index) =>
       row({

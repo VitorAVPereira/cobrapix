@@ -37,6 +37,12 @@ export type ImportClientReview = {
   | { kind: 'NEW' }
   | { kind: 'SAME'; existing: ExistingClient }
   | { kind: 'DIFFERENT'; existing: ExistingClient; differences: ImportField[] }
+  /** New document, but the WhatsApp belongs to an older client without one. */
+  | {
+      kind: 'UNDOCUMENTED_OWNER';
+      existing: ExistingClient;
+      differences: ImportField[];
+    }
   | { kind: 'PHONE_TAKEN' }
   | { kind: 'DUPLICATE_DOCUMENT'; candidates: ExistingClient[] }
 );
@@ -59,7 +65,12 @@ export type ImportPlanItem = {
   | {
       action: 'LINK';
       debtorId: string;
-      update: Partial<{ name: string; phoneNumber: string; email: string }>;
+      update: Partial<{
+        name: string;
+        phoneNumber: string;
+        email: string;
+        document: string;
+      }>;
       grantOptIn: boolean;
     }
 );
@@ -163,9 +174,17 @@ export function reviewImportGroups(
     );
     const [existing, ...others] = byDocument;
     if (!existing) {
-      return owner
+      if (!owner) return { ...base, kind: 'NEW' as const };
+      // An older client without a document may be the same person: the user
+      // can link them and record the spreadsheet document.
+      return owner.document
         ? { ...base, kind: 'PHONE_TAKEN' as const }
-        : { ...base, kind: 'NEW' as const };
+        : {
+            ...base,
+            kind: 'UNDOCUMENTED_OWNER' as const,
+            existing: owner,
+            differences: differences(owner, group.csv),
+          };
     }
     if (others.length > 0) {
       return {
@@ -263,6 +282,9 @@ export function planImport(
         ...(useCsv('name') && { name: review.csv.name }),
         ...(useCsv('phone') && { phoneNumber: review.csv.phone }),
         ...(useCsv('email') && review.csv.email && { email: review.csv.email }),
+        ...(review.kind === 'UNDOCUMENTED_OWNER' && {
+          document: review.document,
+        }),
       },
       // The spreadsheet consent is for its WhatsApp; it only grants, never revokes.
       grantOptIn:
