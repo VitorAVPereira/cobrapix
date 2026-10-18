@@ -13,7 +13,12 @@ import { formatWhatsAppNumber } from "@/lib/whatsapp-number";
 import { formatDebtorDocument as formatDocument } from "@/lib/debtor-document";
 
 type Choice = Record<ImportField, "CSV" | "EXISTING">;
-type Rules = Partial<{ DIFFERENT: Choice; PHONE_TAKEN: "SKIP"; DUPLICATE_DOCUMENT: "SKIP" }>;
+type Rules = Partial<{
+  DIFFERENT: Choice;
+  UNDOCUMENTED_OWNER: Choice | "SKIP";
+  PHONE_TAKEN: "SKIP";
+  DUPLICATE_DOCUMENT: "SKIP";
+}>;
 
 const FIELD_LABELS: Record<ImportField, string> = {
   name: "Nome",
@@ -90,6 +95,8 @@ export function ImportReview({
   const [newPhone, setNewPhone] = useState("");
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [validating, setValidating] = useState(false);
+  // Older client without document: link to them, or register a new client.
+  const [ownerAction, setOwnerAction] = useState<"link" | "phone">("link");
 
   const client = clients[index];
   if (!client) return null;
@@ -101,8 +108,15 @@ export function ImportReview({
     for (; position < clients.length; position += 1) {
       const upcoming = clients[position];
       if (!upcoming) break;
+      const ownerRule = nextRules.UNDOCUMENTED_OWNER;
       if (upcoming.kind === "DIFFERENT" && nextRules.DIFFERENT) {
         done.push(link(upcoming, upcoming.existing, nextRules.DIFFERENT));
+      } else if (upcoming.kind === "UNDOCUMENTED_OWNER" && ownerRule) {
+        done.push(
+          ownerRule === "SKIP"
+            ? { document: upcoming.document, action: "SKIP" }
+            : link(upcoming, upcoming.existing, ownerRule),
+        );
       } else if (upcoming.kind === "PHONE_TAKEN" && nextRules.PHONE_TAKEN) {
         done.push({ document: upcoming.document, action: "SKIP" });
       } else if (upcoming.kind === "DUPLICATE_DOCUMENT" && nextRules.DUPLICATE_DOCUMENT) {
@@ -123,6 +137,7 @@ export function ImportReview({
     setApplyAll(false);
     setNewPhone("");
     setPhoneError(null);
+    setOwnerAction("link");
   }
 
   function skip(): void {
@@ -143,13 +158,14 @@ export function ImportReview({
   }
 
   const chosen =
-    client.kind === "DIFFERENT"
+    client.kind === "DIFFERENT" ||
+    (client.kind === "UNDOCUMENTED_OWNER" && ownerAction === "link")
       ? client.existing
       : client.kind === "DUPLICATE_DOCUMENT"
         ? client.candidates.find((candidate) => candidate.debtorId === candidateId)
         : undefined;
   const differences =
-    client.kind === "DIFFERENT"
+    client.kind === "DIFFERENT" || client.kind === "UNDOCUMENTED_OWNER"
       ? client.differences
       : chosen
         ? importDifferences(chosen, client.csv)
@@ -188,14 +204,49 @@ export function ImportReview({
         </div>
 
         <div className="space-y-4 px-5 py-5 text-sm">
-          {client.kind === "PHONE_TAKEN" && (
+          {client.kind === "UNDOCUMENTED_OWNER" && (
+            <fieldset className="space-y-2">
+              <legend className="mb-2 text-slate-700">
+                Este CPF/CNPJ é novo, mas o WhatsApp{" "}
+                <strong>{formatWhatsAppNumber(client.csv.phone)}</strong> é de{" "}
+                <strong>{client.existing.name}</strong>, cadastrado sem CPF/CNPJ.
+              </legend>
+              <label className="flex items-start gap-3 rounded-md border border-slate-200 px-3 py-2.5 hover:bg-slate-50">
+                <input
+                  type="radio"
+                  name="owner-action"
+                  checked={ownerAction === "link"}
+                  onChange={() => setOwnerAction("link")}
+                  className="mt-1"
+                />
+                <span>
+                  Vincular a {client.existing.name} e gravar este CPF/CNPJ no cadastro
+                </span>
+              </label>
+              <label className="flex items-start gap-3 rounded-md border border-slate-200 px-3 py-2.5 hover:bg-slate-50">
+                <input
+                  type="radio"
+                  name="owner-action"
+                  checked={ownerAction === "phone"}
+                  onChange={() => setOwnerAction("phone")}
+                  className="mt-1"
+                />
+                <span>Cadastrar como cliente novo, com outro WhatsApp</span>
+              </label>
+            </fieldset>
+          )}
+
+          {(client.kind === "PHONE_TAKEN" ||
+            (client.kind === "UNDOCUMENTED_OWNER" && ownerAction === "phone")) && (
             <>
+              {client.kind === "PHONE_TAKEN" && (
               <p className="text-slate-700">
                 Este CPF/CNPJ é novo, mas o WhatsApp{" "}
                 <strong>{formatWhatsAppNumber(client.csv.phone)}</strong> já é de{" "}
                 <strong>{client.phoneOwner?.name}</strong>. Informe outro WhatsApp para
                 cadastrar o cliente ou não importe as cobranças dele.
               </p>
+              )}
               <label className="flex flex-col gap-1.5">
                 <span className="text-xs font-semibold uppercase text-slate-500">
                   Outro WhatsApp
@@ -336,7 +387,9 @@ export function ImportReview({
             />
             {client.kind === "DIFFERENT"
               ? "Aplicar esta escolha a todos os próximos clientes com dados diferentes"
-              : "Não importar os próximos clientes nesta mesma situação"}
+              : client.kind === "UNDOCUMENTED_OWNER"
+                ? "Aplicar esta escolha aos próximos clientes antigos sem CPF/CNPJ"
+                : "Não importar os próximos clientes nesta mesma situação"}
           </label>
         </div>
 
@@ -354,8 +407,9 @@ export function ImportReview({
               onClick={() =>
                 next(
                   link(client, chosen, choice),
-                  applyAll && client.kind === "DIFFERENT"
-                    ? { ...rules, DIFFERENT: choice }
+                  applyAll &&
+                    (client.kind === "DIFFERENT" || client.kind === "UNDOCUMENTED_OWNER")
+                    ? { ...rules, [client.kind]: choice }
                     : rules,
                 )
               }

@@ -479,6 +479,8 @@ export type ImportClientReview = {
   | { kind: "NEW" }
   | { kind: "SAME"; existing: ImportExistingClient }
   | { kind: "DIFFERENT"; existing: ImportExistingClient; differences: ImportField[] }
+  /** New document, but the WhatsApp belongs to an older client without one. */
+  | { kind: "UNDOCUMENTED_OWNER"; existing: ImportExistingClient; differences: ImportField[] }
   | { kind: "PHONE_TAKEN" }
   | { kind: "DUPLICATE_DOCUMENT"; candidates: ImportExistingClient[] }
 );

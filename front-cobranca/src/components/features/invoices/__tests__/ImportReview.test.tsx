@@ -151,4 +151,48 @@ describe("ImportReview", () => {
     fireEvent.click(screen.getByRole("button", { name: "Não importar este cliente" }));
     expect(onComplete).toHaveBeenCalledWith([{ document: "52998224725", action: "SKIP" }]);
   });
+
+  it("links an older client without document, or registers a new one with another WhatsApp", async () => {
+    const owner = existing({ debtorId: "debtor-old", document: null, name: "Ana", email: null });
+    const undocumented = {
+      document: "52998224725",
+      rows: [0],
+      csv: { name: "Ana Souza", phone: "+5511999990009", email: null },
+      optIn: false,
+      phoneOwner: { debtorId: "debtor-old", name: "Ana" },
+      kind: "UNDOCUMENTED_OWNER",
+      existing: owner,
+      differences: ["name"],
+    } as ImportClientReview;
+
+    const { onComplete } = renderReview([undocumented]);
+    expect(screen.getByText(/cadastrado sem CPF\/CNPJ/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar" }));
+    expect(onComplete).toHaveBeenCalledWith([
+      expect.objectContaining({ action: "LINK", debtorId: "debtor-old" }),
+    ]);
+  });
+
+  it("registers the older client case as new when another WhatsApp is given", async () => {
+    const undocumented = {
+      document: "52998224725",
+      rows: [0],
+      csv: { name: "Ana Souza", phone: "+5511999990009", email: null },
+      optIn: false,
+      phoneOwner: { debtorId: "debtor-old", name: "Ana" },
+      kind: "UNDOCUMENTED_OWNER",
+      existing: existing({ debtorId: "debtor-old", document: null }),
+      differences: [],
+    } as ImportClientReview;
+    const onValidatePhone = jest.fn().mockResolvedValue(null);
+    const { onComplete } = renderReview([undocumented], onValidatePhone);
+
+    fireEvent.click(screen.getByLabelText("Cadastrar como cliente novo, com outro WhatsApp"));
+    expect(screen.queryByRole("button", { name: "Confirmar" })).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText("+55 (11) 99999-9999"), {
+      target: { value: "11977776666" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Usar este WhatsApp" }));
+    await waitFor(() => expect(onComplete).toHaveBeenCalledWith([]));
+  });
 });

@@ -391,6 +391,7 @@ function CobrancasContent() {
   const [reviewQueue, setReviewQueue] = useState<ImportClientReview[] | null>(null);
   const [importDecisions, setImportDecisions] = useState<ImportDecision[] | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+  const [importConsent, setImportConsent] = useState(false);
 
   const fetchInvoices = useCallback(async (): Promise<void> => {
     // A slower answer for a previous filter must not replace the current list.
@@ -456,6 +457,7 @@ function CobrancasContent() {
     setImportClients([]);
     setReviewQueue(null);
     setImportDecisions(null);
+    setImportConsent(false);
   }
 
   async function analyzeImport(rows: ParsedDebtor[]): Promise<void> {
@@ -539,7 +541,10 @@ function CobrancasContent() {
     setIsImporting(true);
     setImportError(null);
     try {
-      const result = await apiClient.importInvoices(importRows, importDecisions);
+      const rows = importConsent
+        ? importRows.map((row) => ({ ...row, whatsapp_opt_in: true }))
+        : importRows;
+      const result = await apiClient.importInvoices(rows, importDecisions);
       resetImport();
       setIsUploadingCSV(false);
       setErrorMsg(null);
@@ -1108,6 +1113,8 @@ function CobrancasContent() {
                 clients={importClients}
                 decisions={importDecisions}
                 busy={isImporting}
+                whatsappConsent={importConsent}
+                onWhatsappConsentChange={setImportConsent}
                 onConfirm={() => void confirmImport()}
                 onCancel={resetImport}
               />

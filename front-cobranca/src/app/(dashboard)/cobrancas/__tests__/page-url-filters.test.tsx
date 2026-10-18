@@ -345,6 +345,30 @@ describe("CobrancasPage URL filters", () => {
       );
     });
 
+    it("sends the WhatsApp consent of every row when the user confirms it for all", async () => {
+      mockApiClient.previewInvoiceImport.mockResolvedValue({
+        clients: [newClient("52998224725", [0], "Ana Souza"), newClient("11144477735", [1], "Bruno")],
+      });
+      mockApiClient.importInvoices.mockResolvedValue({
+        success: true,
+        count: 2,
+        initialChargeQueued: 0,
+        skipped: [],
+      });
+      await upload();
+
+      fireEvent.click(
+        await screen.findByLabelText(/Todos os clientes desta planilha autorizaram/),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Importar 2 cobranças" }));
+      await waitFor(() =>
+        expect(mockApiClient.importInvoices).toHaveBeenCalledWith(
+          mockRows.map((row) => ({ ...row, whatsapp_opt_in: true })),
+          [],
+        ),
+      );
+    });
+
     it("reviews again when the clients changed since the review", async () => {
       mockApiClient.previewInvoiceImport.mockResolvedValue({
         clients: [newClient("52998224725", [0, 1], "Ana Souza")],

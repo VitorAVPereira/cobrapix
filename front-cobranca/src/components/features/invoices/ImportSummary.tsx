@@ -9,6 +9,8 @@ export function ImportSummary({
   clients,
   decisions,
   busy,
+  whatsappConsent,
+  onWhatsappConsentChange,
   onConfirm,
   onCancel,
 }: {
@@ -16,6 +18,9 @@ export function ImportSummary({
   clients: ImportClientReview[];
   decisions: ImportDecision[];
   busy: boolean;
+  /** Consent for every client of the spreadsheet at once. */
+  whatsappConsent: boolean;
+  onWhatsappConsentChange: (value: boolean) => void;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -56,6 +61,21 @@ export function ImportSummary({
           </p>
         </div>
       )}
+
+      <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
+        <input
+          type="checkbox"
+          checked={whatsappConsent}
+          onChange={(event) => onWhatsappConsentChange(event.target.checked)}
+          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+        />
+        <span>
+          Todos os clientes desta planilha autorizaram receber cobranças pelo WhatsApp
+          <span className="block text-xs text-slate-500">
+            Sem marcar, vale a coluna de autorização de cada linha.
+          </span>
+        </span>
+      </label>
 
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
         <button
