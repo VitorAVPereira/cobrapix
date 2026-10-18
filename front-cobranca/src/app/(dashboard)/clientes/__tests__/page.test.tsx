@@ -385,6 +385,18 @@ describe("ClientesPage", () => {
       expect(replace).toHaveBeenLastCalledWith("/clientes?pageSize=100", { scroll: false });
     });
 
+    it("goes to the last page when the URL points past it", async () => {
+      mockParams = new URLSearchParams("page=16&paymentStatus=open");
+      getDebtors.mockResolvedValue({ ...debtorResponse, data: [], total: 45 });
+      render(<ClientesPage />);
+
+      await waitFor(() =>
+        expect(replace).toHaveBeenCalledWith("/clientes?paymentStatus=open&page=3", {
+          scroll: false,
+        }),
+      );
+    });
+
     it("a failure is an error with retry, not an empty list", async () => {
       const user = userEvent.setup();
       getDebtors.mockRejectedValueOnce(new Error("offline"));

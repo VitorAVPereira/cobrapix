@@ -328,6 +328,12 @@ function ClientesContent() {
     void fetchDebtors();
   }, [fetchDebtors]);
 
+  // A saved link or a shorter list can point past the last page.
+  useEffect(() => {
+    const lastPage = Math.max(1, Math.ceil(response.total / query.pageSize));
+    if (!loading && query.page > lastPage) updateQuery({ page: lastPage });
+  }, [loading, query.page, query.pageSize, response.total, updateQuery]);
+
   useEffect(() => () => listRequest.current?.abort(), []);
 
   // Profiles change rarely: loaded once, not on every filter.

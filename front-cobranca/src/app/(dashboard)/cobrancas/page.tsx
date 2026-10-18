@@ -432,6 +432,12 @@ function CobrancasContent() {
     void fetchInvoices();
   }, [fetchInvoices]);
 
+  // A saved link or a shorter list can point past the last page.
+  useEffect(() => {
+    const lastPage = Math.max(1, Math.ceil(total / query.pageSize));
+    if (!isLoading && query.page > lastPage) updateQuery({ page: lastPage });
+  }, [isLoading, query.page, query.pageSize, total, updateQuery]);
+
   useEffect(() => {
     async function fetchBillingSettings(): Promise<void> {
       try {
