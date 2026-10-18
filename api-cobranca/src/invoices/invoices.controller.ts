@@ -27,7 +27,10 @@ import {
 import {
   DebtorPaymentHistoryResponse,
   DebtorSettingsResponse,
+  INVOICE_LIST_ORDER,
   InvoicesService,
+  type InvoiceListSort,
+  type InvoiceListStatus,
 } from './invoices.service';
 import {
   BillingType,
@@ -96,6 +99,8 @@ export class InvoicesController {
     @Query('search') search?: string,
     @Query('status') status?: string,
     @Query('debtorId') debtorId?: string,
+    @Query('billingType') billingType?: string,
+    @Query('sort') sort?: string,
   ): Promise<unknown> {
     const pageNum = this.parsePositiveInt(page, 1);
     const size = Math.min(
@@ -114,6 +119,13 @@ export class InvoicesController {
       search: search?.trim() || undefined,
       status: normalizedStatus,
       debtorId: normalizedDebtorId,
+      billingType: (['PIX', 'BOLETO', 'CREDIT_CARD'] as const).find(
+        (value) => value === billingType,
+      ),
+      sort:
+        sort && sort in INVOICE_LIST_ORDER
+          ? (sort as InvoiceListSort)
+          : undefined,
     });
   }
 
@@ -684,13 +696,14 @@ export class InvoicesController {
     return Number.isInteger(num) && num > 0 ? num : fallback;
   }
 
-  private normalizeInvoiceStatus(raw: string | undefined): string | undefined {
+  private normalizeInvoiceStatus(
+    raw: string | undefined,
+  ): InvoiceListStatus | undefined {
     if (!raw) return undefined;
     const upper = raw.toUpperCase();
-    if (upper === 'PENDING' || upper === 'PAID' || upper === 'CANCELED') {
-      return upper;
-    }
-    return undefined;
+    return (['PENDING', 'OVERDUE', 'PAID', 'CANCELED'] as const).find(
+      (value) => value === upper,
+    );
   }
 
   private normalizeDebtorPaymentStatus(

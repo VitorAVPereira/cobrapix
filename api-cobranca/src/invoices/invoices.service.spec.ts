@@ -355,6 +355,82 @@ describe('InvoicesService', () => {
     });
   });
 
+  describe('listagem de cobrancas', () => {
+    function listing() {
+      const invoiceFindMany = jest.fn().mockResolvedValue([]);
+      const invoiceCount = jest.fn().mockResolvedValue(0);
+      const service = new InvoicesService(
+        {
+          invoice: { findMany: invoiceFindMany, count: invoiceCount },
+        } as unknown as PrismaService,
+        buildMessageQueue(),
+        buildPaymentService(),
+      );
+      const where = () =>
+        (invoiceFindMany.mock.calls[0] as [{ where: unknown }])[0].where;
+      return { service, invoiceFindMany, invoiceCount, where };
+    }
+
+    it('vencidas sao pendentes com vencimento antes de hoje em Sao Paulo', async () => {
+      const { service, invoiceCount, where } = listing();
+      // 18/10 01:30 UTC is still 17/10 in São Paulo.
+      await service.findPaginated(
+        'company-1',
+        { page: 1, pageSize: 20, status: 'OVERDUE' },
+        new Date('2026-10-18T01:30:00Z'),
+      );
+
+      const expected = {
+        companyId: 'company-1',
+        status: 'PENDING',
+        dueDate: { lt: new Date('2026-10-17T00:00:00Z') },
+      };
+      expect(where()).toEqual(expected);
+      expect(invoiceCount).toHaveBeenCalledWith({ where: expected });
+    });
+
+    it('boleto inclui BOLIX e a ordenacao tem desempate estavel', async () => {
+      const { service, invoiceFindMany, where } = listing();
+      await service.findPaginated('company-1', {
+        page: 2,
+        pageSize: 50,
+        billingType: 'BOLETO',
+        sort: 'dueDate_asc',
+      });
+
+      expect(where()).toEqual({
+        companyId: 'company-1',
+        billingType: { in: ['BOLETO', 'BOLIX'] },
+      });
+      expect(invoiceFindMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderBy: [{ dueDate: 'asc' }, { id: 'asc' }],
+          skip: 50,
+          take: 50,
+        }),
+      );
+    });
+
+    it('busca CPF e WhatsApp digitados com pontuacao', async () => {
+      const { service, where } = listing();
+      await service.findPaginated('company-1', {
+        page: 1,
+        pageSize: 20,
+        search: '123.456.789-09',
+      });
+
+      expect(where()).toEqual(
+        expect.objectContaining({
+          companyId: 'company-1',
+          OR: expect.arrayContaining([
+            { debtor: { document: { contains: '12345678909' } } },
+            { debtor: { phoneNumber: { contains: '12345678909' } } },
+          ]) as unknown,
+        }),
+      );
+    });
+  });
+
   it('enfileira primeira cobranca apos importacao CSV', async () => {
     const debtorFindMany = jest.fn().mockResolvedValue([]);
     const debtorCreate = jest.fn().mockResolvedValue({ id: 'debtor-1' });

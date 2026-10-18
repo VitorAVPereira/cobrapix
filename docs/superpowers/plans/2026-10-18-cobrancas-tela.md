@@ -4,10 +4,10 @@ Especificação: `docs/superpowers/specs/2026-10-18-cobrancas-tela-design.md`.
 
 ## Tarefa 1: listagem no backend
 
-- [ ] `GET /invoices`: `status=OVERDUE`, `billingType=PIX|BOLETO|CREDIT_CARD` e
+- [x] `GET /invoices`: `status=OVERDUE`, `billingType=PIX|BOLETO|CREDIT_CARD` e
   `sort=createdAt_desc|dueDate_asc|dueDate_desc|amount_desc|amount_asc`.
-- [ ] Busca com CPF/CNPJ e WhatsApp normalizados.
-- [ ] Testes de unidade, incluindo isolamento por empresa. Commit.
+- [x] Busca com CPF/CNPJ e WhatsApp normalizados.
+- [x] Testes de unidade, incluindo isolamento por empresa. Commit.
 
 ## Tarefa 2: importação com revisão no backend
 

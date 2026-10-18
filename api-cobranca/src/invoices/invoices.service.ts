@@ -29,6 +29,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { InitialChargeJob, MessageQueueService } from '../queue/message.queue';
 import { PaymentService } from '../payment/payment.service';
 import { BillingType } from './dto/invoice.dto';
+import { saoPauloDate } from '../billing/dashboard-period';
 import {
   CompanyLateDefaults,
   LateTermsInput,
@@ -37,6 +38,17 @@ import {
   resolveLateTerms,
   toLateTermsView,
 } from './late-terms';
+
+export type InvoiceListStatus = 'PENDING' | 'OVERDUE' | 'PAID' | 'CANCELED';
+export type InvoiceListBillingType = 'PIX' | 'BOLETO' | 'CREDIT_CARD';
+export const INVOICE_LIST_ORDER = {
+  createdAt_desc: { createdAt: 'desc' },
+  dueDate_asc: { dueDate: 'asc' },
+  dueDate_desc: { dueDate: 'desc' },
+  amount_desc: { originalAmount: 'desc' },
+  amount_asc: { originalAmount: 'asc' },
+} as const satisfies Record<string, Prisma.InvoiceOrderByWithRelationInput>;
+export type InvoiceListSort = keyof typeof INVOICE_LIST_ORDER;
 
 const RECURRING_GENERATION_LOOKAHEAD_DAYS = 30;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -510,9 +522,12 @@ export class InvoicesService {
       page: number;
       pageSize: number;
       search?: string;
-      status?: string;
+      status?: InvoiceListStatus;
       debtorId?: string;
+      billingType?: InvoiceListBillingType;
+      sort?: InvoiceListSort;
     },
+    now = new Date(),
   ): Promise<{
     data: InvoiceListItem[];
     total: number;
@@ -521,8 +536,20 @@ export class InvoicesService {
   }> {
     const where: Prisma.InvoiceWhereInput = { companyId };
 
-    if (params.status) {
-      where.status = params.status as 'PENDING' | 'PAID' | 'CANCELED';
+    if (params.status === 'OVERDUE') {
+      // Due dates are calendar dates: overdue means due before today in São Paulo.
+      where.status = 'PENDING';
+      where.dueDate = { lt: new Date(`${saoPauloDate(now)}T00:00:00Z`) };
+    } else if (params.status) {
+      where.status = params.status;
+    }
+
+    if (params.billingType) {
+      // BOLIX is a boleto for the company and its payers.
+      where.billingType =
+        params.billingType === 'BOLETO'
+          ? { in: ['BOLETO', 'BOLIX'] }
+          : params.billingType;
     }
 
     if (params.debtorId) {
@@ -530,10 +557,12 @@ export class InvoicesService {
     }
 
     if (params.search) {
+      // Documents and phones are stored as digits; "123.456.789-09" must match.
+      const digits = params.search.replace(/\D/g, '') || params.search;
       where.OR = [
         { debtor: { name: { contains: params.search, mode: 'insensitive' } } },
-        { debtor: { document: { contains: params.search } } },
-        { debtor: { phoneNumber: { contains: params.search } } },
+        { debtor: { document: { contains: digits } } },
+        { debtor: { phoneNumber: { contains: digits } } },
         { debtor: { email: { contains: params.search, mode: 'insensitive' } } },
         { studentName: { contains: params.search, mode: 'insensitive' } },
         { studentEnrollment: { contains: params.search, mode: 'insensitive' } },
@@ -553,7 +582,11 @@ export class InvoicesService {
             take: 1,
           },
         },
-        orderBy: { createdAt: 'desc' },
+        // The id tie-breaker keeps pages stable when many rows share a value.
+        orderBy: [
+          INVOICE_LIST_ORDER[params.sort ?? 'createdAt_desc'],
+          { id: 'asc' },
+        ],
         skip: (params.page - 1) * params.pageSize,
         take: params.pageSize,
       }),
