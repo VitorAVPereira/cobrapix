@@ -4,7 +4,6 @@ import DashboardPage from "../page";
 
 const mockApi = {
   getCompanyDashboard: jest.fn(),
-  getWhatsappUsage: jest.fn(),
   getChannelCapacity: jest.fn(),
 };
 // The client changes once the session token arrives, as useApiClient does.
@@ -125,7 +124,6 @@ it("has no technical jargon nor channel limits", async () => {
 
   expect(screen.queryByText(/Cockpit|webhook|Efí|fila|ROI|logs/i)).toBeNull();
   expect(screen.queryByText(/Limite|restantes|Tier|qualidade/i)).toBeNull();
-  expect(mockApi.getWhatsappUsage).not.toHaveBeenCalled();
   expect(mockApi.getChannelCapacity).not.toHaveBeenCalled();
 });
 

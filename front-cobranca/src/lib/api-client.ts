@@ -580,20 +580,6 @@ export interface UpdateDebtorBillingSettingsInput {
   collectionProfileId?: string | null;
 }
 
-export interface WhatsAppInteractions {
-  outbound: number;
-  delivered: number;
-  read: number;
-  inbound: number;
-  failed: number;
-}
-
-/** Results of the signed-in company over the last 24 hours (moving window). */
-export interface WhatsAppStatsResponse {
-  period: "rolling_24h";
-  interactions: WhatsAppInteractions;
-}
-
 export type ChannelCapacitySource = "PROVIDER" | "VERIFIED_CACHE" | "FALLBACK" | "UNAVAILABLE";
 
 /** Central WhatsApp channel (platform administration only). */
@@ -608,21 +594,6 @@ export interface CentralChannelCapacity {
   tier: string | null;
   checkedAt: string | null;
   nextAvailableAt: string | null;
-}
-
-/** @deprecated Company quota fields are no longer rendered; see WhatsAppStatsResponse. */
-export interface WhatsAppUsageResponse {
-  tier: string;
-  dailyLimit: number;
-  dailyUsage: number;
-  remaining: number;
-  interactions: {
-    outbound: number;
-    delivered: number;
-    read: number;
-    inbound: number;
-    failed: number;
-  };
 }
 
 /** WhatsApp choice of a rule step; UNCONFIGURED marks a legacy step that sends nothing. */
@@ -1816,43 +1787,12 @@ class ApiClient {
   }
 
   // WhatsApp (canal central Datafy, administrado pela plataforma)
-  async getWhatsappUsage(): Promise<WhatsAppUsageResponse> {
-    return this.fetch<WhatsAppUsageResponse>("/whatsapp/usage");
-  }
-
-  // Company results only. While an older API without /whatsapp/stats is
-  // live, only `interactions` is taken from the legacy usage answer.
-  async getWhatsappStats(): Promise<WhatsAppStatsResponse> {
-    try {
-      return await this.fetch<WhatsAppStatsResponse>("/whatsapp/stats");
-    } catch (error: unknown) {
-      if ((error as ApiError).status !== 404) throw error;
-      const legacy = await this.getWhatsappUsage();
-      return { period: "rolling_24h", interactions: legacy.interactions };
-    }
-  }
-
   async getChannelCapacity(): Promise<CentralChannelCapacity> {
     return this.fetch<CentralChannelCapacity>("/whatsapp/admin/channel-capacity");
   }
 
   async syncChannelTier(): Promise<{ tier: string; capacity: CentralChannelCapacity }> {
     return this.fetch("/whatsapp/sync-tier", { method: "POST" });
-  }
-
-  // Email
-  async getEmailStats(period: string = "30d"): Promise<{
-    period: string;
-    periodStart?: string;
-    sent: number;
-    delivered: number;
-    opened: number;
-    clicked: number;
-    bounced: number;
-    complained: number;
-    failed: number;
-  }> {
-    return this.fetch(`/email/stats?period=${period}`);
   }
 
   // Billing
