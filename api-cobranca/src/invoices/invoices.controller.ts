@@ -298,6 +298,18 @@ export class InvoicesController {
     }
   }
 
+  @Get('debtors/search')
+  async searchDebtors(
+    @GetUser() user: AuthenticatedUser,
+    @Query('search') search?: string,
+  ): Promise<unknown> {
+    return this.invoicesService.searchDebtors(
+      user.companyId,
+      search?.trim() || undefined,
+      8,
+    );
+  }
+
   @Get('debtors')
   async listDebtors(
     @GetUser() user: AuthenticatedUser,

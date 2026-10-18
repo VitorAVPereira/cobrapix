@@ -36,8 +36,11 @@ const mockApiClient = {
   createDebtorInvoice,
 };
 
+const replace = jest.fn();
+let mockParams = new URLSearchParams();
 jest.mock("next/navigation", () => ({
-  useRouter: () => ({ push }),
+  useRouter: () => ({ push, replace }),
+  useSearchParams: () => mockParams,
 }));
 
 jest.mock("@/lib/use-api-client", () => ({
@@ -110,6 +113,8 @@ const debtorResponse: DebtorListResponse = {
 describe("ClientesPage", () => {
   beforeEach(() => {
     push.mockReset();
+    replace.mockReset();
+    mockParams = new URLSearchParams();
     getDebtors.mockReset();
     getRules.mockReset();
     createDebtor.mockReset();
@@ -243,6 +248,16 @@ describe("ClientesPage", () => {
         collectionProfileId: "profile-new",
       });
     });
+  });
+
+  it("opens the new client form when coming from Cobranças", async () => {
+    mockParams = new URLSearchParams("novo=1");
+    render(<ClientesPage />);
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/perfil de pagador/i)).toHaveValue("profile-new"),
+    );
+    expect(replace).toHaveBeenCalledWith("/clientes", { scroll: false });
   });
 
   it("edits debtor data from the row menu", async () => {

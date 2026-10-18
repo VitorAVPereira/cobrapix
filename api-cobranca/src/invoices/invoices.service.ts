@@ -830,6 +830,52 @@ export class InvoicesService {
     }));
   }
 
+  /** Light lookup for choosing a client (no totals, so it stays fast with many clients). */
+  async searchDebtors(
+    companyId: string,
+    search: string | undefined,
+    limit: number,
+  ): Promise<
+    {
+      debtorId: string;
+      name: string;
+      document: string | null;
+      phone_number: string;
+      email: string | null;
+    }[]
+  > {
+    const digits = search?.replace(/\D/g, '') || search;
+    const debtors = await this.prisma.debtor.findMany({
+      where: {
+        companyId,
+        ...(search && {
+          OR: [
+            { name: { contains: search, mode: 'insensitive' } },
+            { document: { contains: digits } },
+            { phoneNumber: { contains: digits } },
+            { email: { contains: search, mode: 'insensitive' } },
+          ],
+        }),
+      },
+      select: {
+        id: true,
+        name: true,
+        document: true,
+        phoneNumber: true,
+        email: true,
+      },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      take: limit,
+    });
+    return debtors.map((debtor) => ({
+      debtorId: debtor.id,
+      name: debtor.name,
+      document: debtor.document,
+      phone_number: this.normalizePhoneNumberForResponse(debtor.phoneNumber),
+      email: debtor.email,
+    }));
+  }
+
   async listDebtors(
     companyId: string,
     params: DebtorListParams,

@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertCircle,
   CheckCircle2,
@@ -171,9 +171,11 @@ function buildClientForm(
   };
 }
 
-export default function ClientesPage() {
+function ClientesContent() {
   const apiClient = useApiClient();
   const router = useRouter();
+  // "Cadastrar novo cliente" in Cobranças arrives with ?novo=1.
+  const opensCreate = useSearchParams().get("novo") === "1";
   const [response, setResponse] = useState<DebtorListResponse>(emptyResponse);
   const [profiles, setProfiles] = useState<CollectionRuleProfile[]>([]);
   const [search, setSearch] = useState("");
@@ -186,7 +188,7 @@ export default function ClientesPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [clientModalMode, setClientModalMode] = useState<"create" | "edit" | null>(
-    null,
+    () => (opensCreate ? "create" : null),
   );
   const [clientForm, setClientForm] = useState<ClientForm>(emptyClientForm);
   const [editingDebtor, setEditingDebtor] = useState<DebtorListItem | null>(
@@ -249,6 +251,11 @@ export default function ClientesPage() {
   useEffect(() => {
     void fetchDebtors();
   }, [fetchDebtors]);
+
+  // A reload after saving must not open the form again.
+  useEffect(() => {
+    if (opensCreate) router.replace("/clientes", { scroll: false });
+  }, [opensCreate, router]);
 
   useEffect(() => {
     let active = true;
@@ -985,5 +992,13 @@ export default function ClientesPage() {
         />
       )}
     </main>
+  );
+}
+
+export default function ClientesPage() {
+  return (
+    <Suspense fallback={null}>
+      <ClientesContent />
+    </Suspense>
   );
 }

@@ -214,7 +214,7 @@ describe('importacao de cobrancas: revisao de clientes', () => {
       'IMPORT_NEEDS_REVIEW',
     );
     expect(
-      planImport(taken, [{ document: ANA, action: 'SKIP' }])[0].action,
+      planImport(taken, [{ document: ANA, action: 'SKIP' }])[0]?.action,
     ).toBe('SKIP');
 
     const second = client({

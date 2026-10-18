@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import CobrancasPage from "../page";
 
 const getInvoices = jest.fn();
@@ -13,6 +13,7 @@ const mockApiClient = {
   importInvoices: jest.fn(),
   createInvoice: jest.fn(),
   createDebtorInvoice: jest.fn(),
+  searchDebtors: jest.fn(),
   runSelectedBilling: jest.fn(),
   createPayment: jest.fn(),
   getInvoicePaymentStatus: jest.fn(),
@@ -170,5 +171,92 @@ describe("CobrancasPage URL filters", () => {
     expect(await screen.findByText("Nenhuma cobrança encontrada")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Limpar filtros" }));
     expect(mockReplace).toHaveBeenLastCalledWith("/cobrancas", { scroll: false });
+  });
+
+  describe("Nova cobrança", () => {
+    const ana = {
+      debtorId: "debtor-ana",
+      name: "Ana Souza",
+      document: "52998224725",
+      phone_number: "+5511999990001",
+      email: null,
+    };
+
+    beforeEach(() => {
+      mockApiClient.searchDebtors.mockReset();
+      mockApiClient.searchDebtors.mockResolvedValue([ana]);
+      mockApiClient.createDebtorInvoice.mockReset();
+      mockApiClient.createDebtorInvoice.mockResolvedValue({});
+      mockParams = new URLSearchParams("");
+    });
+
+    it("only accepts a registered client and links to Clientes to register a new one", async () => {
+      render(<CobrancasPage />);
+      fireEvent.click(await screen.findByRole("button", { name: "Nova cobrança" }));
+
+      expect(screen.queryByLabelText(/Nome do Devedor/i)).toBeNull();
+      expect(screen.getByRole("link", { name: /Cadastrar novo cliente/ })).toHaveAttribute(
+        "href",
+        "/clientes?novo=1",
+      );
+      fireEvent.change(screen.getByLabelText("Buscar cliente"), {
+        target: { value: "529.982" },
+      });
+      await waitFor(() =>
+        expect(mockApiClient.searchDebtors).toHaveBeenLastCalledWith(
+          "529.982",
+          expect.any(AbortSignal),
+        ),
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Salvar Cobrança" }));
+      expect(
+        await within(screen.getByRole("dialog")).findByRole("alert"),
+      ).toHaveTextContent("Escolha o cliente da cobrança.");
+      expect(mockApiClient.createDebtorInvoice).not.toHaveBeenCalled();
+    });
+
+    it("creates the charge for the chosen client", async () => {
+      const { container } = render(<CobrancasPage />);
+      fireEvent.click(await screen.findByRole("button", { name: "Nova cobrança" }));
+      fireEvent.click(await screen.findByRole("option", { name: /Ana Souza/ }));
+      expect(screen.getByText("529.982.247-25 · +55 (11) 99999-0001")).toBeInTheDocument();
+
+      fireEvent.change(screen.getByRole("spinbutton"), { target: { value: "150" } });
+      const dueDate = container.querySelector("input[type=date]") as HTMLInputElement;
+      fireEvent.change(dueDate, { target: { value: "2026-11-10" } });
+      fireEvent.click(screen.getByRole("button", { name: "Salvar Cobrança" }));
+
+      await waitFor(() =>
+        expect(mockApiClient.createDebtorInvoice).toHaveBeenCalledWith(
+          "debtor-ana",
+          expect.objectContaining({ original_amount: 150, due_date: "2026-11-10" }),
+        ),
+      );
+    });
+
+    it("keeps Bolix as default and hides traditional Boleto even with legacy settings", async () => {
+      getBillingSettings.mockResolvedValueOnce({
+        preferredBillingMethod: "BOLETO",
+        enabledBillingMethods: ["PIX", "BOLETO", "BOLIX"],
+        collectionReminderDays: [0],
+        autoGenerateFirstCharge: false,
+        autoDiscountEnabled: false,
+        autoDiscountDaysAfterDue: null,
+        autoDiscountPercentage: null,
+        businessSegment: "GENERAL",
+        paymentNotificationEnabled: true,
+        paymentNotificationEmails: [],
+        tariffs: {},
+      });
+      render(<CobrancasPage />);
+      await waitFor(() => expect(getBillingSettings).toHaveBeenCalled());
+      fireEvent.click(screen.getByRole("button", { name: "Nova cobrança" }));
+      const dialog = screen.getByRole("dialog", { name: "Nova cobrança" });
+      expect(within(dialog).queryByRole("option", { name: /^Boleto$/i })).not.toBeInTheDocument();
+      expect(within(dialog).getByRole("option", { name: /Bolix/i }).closest("select")).toHaveValue(
+        "BOLIX",
+      );
+    });
   });
 });

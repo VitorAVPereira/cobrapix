@@ -34,6 +34,7 @@ import type {
   PaymentFeeQuote,
   CollectionChannel,
   CreatePaymentResponse,
+  DebtorOption,
   InvoiceListSort,
   InvoicePaymentStatusResponse,
   SelectedBillingContactInput,
@@ -45,8 +46,8 @@ import {
   InvoiceFilters,
   type InvoiceFilterValues,
 } from "@/components/features/invoices/InvoiceFilters";
+import { ClientPicker } from "@/components/features/invoices/ClientPicker";
 import { formatBillingMethodRateLabel } from "@/lib/billing-fees";
-import { normalizeRequiredDebtorDocument } from "@/lib/debtor-document";
 import { useApiClient } from "@/lib/use-api-client";
 import { useFinancialActivation } from "@/components/features/financial-activation-context";
 import { normalizeWhatsAppNumber } from "@/lib/whatsapp-number";
@@ -65,11 +66,6 @@ interface ApiErrorData {
 }
 
 interface ManualChargeForm {
-  customerName: string;
-  document: string;
-  email: string;
-  whatsapp: string;
-  whatsappOptIn: boolean;
   amount: string;
   dueDate: string;
   billingType: PaymentMethod;
@@ -103,11 +99,6 @@ interface SendBillingForm {
 }
 
 const initialManualChargeForm: ManualChargeForm = {
-  customerName: "",
-  document: "",
-  email: "",
-  whatsapp: "",
-  whatsappOptIn: false,
   amount: "",
   dueDate: "",
   billingType: "BOLIX",
@@ -384,6 +375,7 @@ function CobrancasContent() {
   const [manualForm, setManualForm] = useState<ManualChargeForm>(
     initialManualChargeForm,
   );
+  const [pickedClient, setPickedClient] = useState<DebtorOption | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -770,6 +762,7 @@ function CobrancasContent() {
 
   function openNewChargeModal(): void {
     setInvoiceTargetDebtor(null);
+    setPickedClient(null);
     setManualForm({ ...initialManualChargeForm, lateTerms: companyLateTerms() });
     setIsModalOpen(true);
   }
@@ -777,6 +770,7 @@ function CobrancasContent() {
   function closeManualModal(): void {
     setIsModalOpen(false);
     setInvoiceTargetDebtor(null);
+    setPickedClient(null);
     setManualForm(initialManualChargeForm);
   }
 
@@ -829,6 +823,11 @@ function CobrancasContent() {
     const dueDay = Number(manualForm.dueDay);
 
     try {
+      const debtorId = invoiceTargetDebtor?.debtorId ?? pickedClient?.debtorId;
+      if (!debtorId) {
+        throw new Error("Escolha o cliente da cobrança.");
+      }
+
       if (!Number.isFinite(amount) || amount <= 0) {
         throw new Error("Informe um valor de fatura valido.");
       }
@@ -855,49 +854,22 @@ function CobrancasContent() {
         payment_days_after_due: parsedLateTerms.terms.days,
       };
 
-      if (invoiceTargetDebtor?.debtorId) {
-        await apiClient.createDebtorInvoice(invoiceTargetDebtor.debtorId, {
-          original_amount: amount,
-          due_date: manualForm.recurring ? undefined : manualForm.dueDate,
-          billing_type: manualForm.billingType,
-          recurring: manualForm.recurring,
-          due_day: manualForm.recurring ? dueDay : undefined,
-          ...lateTerms,
-          ...(isEducationSegment
-            ? {
-                studentName: manualForm.studentName.trim() || undefined,
-                studentEnrollment:
-                  manualForm.studentEnrollment.trim() || undefined,
-                studentGroup: manualForm.studentGroup.trim() || undefined,
-              }
-            : {}),
-        });
-      } else {
-        const phoneNumber = normalizeWhatsAppNumber(manualForm.whatsapp);
-        const document = normalizeRequiredDebtorDocument(manualForm.document);
-
-        await apiClient.createInvoice({
-          name: manualForm.customerName.trim(),
-          document,
-          email: manualForm.email.trim(),
-          phone_number: phoneNumber,
-          whatsappOptIn: manualForm.whatsappOptIn,
-          original_amount: amount,
-          due_date: manualForm.recurring ? undefined : manualForm.dueDate,
-          billing_type: manualForm.billingType,
-          recurring: manualForm.recurring,
-          due_day: manualForm.recurring ? dueDay : undefined,
-          ...lateTerms,
-          ...(isEducationSegment
-            ? {
-                studentName: manualForm.studentName.trim() || undefined,
-                studentEnrollment:
-                  manualForm.studentEnrollment.trim() || undefined,
-                studentGroup: manualForm.studentGroup.trim() || undefined,
-              }
-            : {}),
-        });
-      }
+      await apiClient.createDebtorInvoice(debtorId, {
+        original_amount: amount,
+        due_date: manualForm.recurring ? undefined : manualForm.dueDate,
+        billing_type: manualForm.billingType,
+        recurring: manualForm.recurring,
+        due_day: manualForm.recurring ? dueDay : undefined,
+        ...lateTerms,
+        ...(isEducationSegment
+          ? {
+              studentName: manualForm.studentName.trim() || undefined,
+              studentEnrollment:
+                manualForm.studentEnrollment.trim() || undefined,
+              studentGroup: manualForm.studentGroup.trim() || undefined,
+            }
+          : {}),
+      });
 
       closeManualModal();
       await fetchInvoices();
@@ -913,8 +885,8 @@ function CobrancasContent() {
     ? billingSettings.enabledBillingMethods.filter((method) => method !== "BOLETO")
     : ["BOLIX"];
   const modalTitle = invoiceTargetDebtor
-    ? `Nova fatura para ${invoiceTargetDebtor.name}`
-    : "Adicionar cobrança manual";
+    ? `Nova cobrança para ${invoiceTargetDebtor.name}`
+    : "Nova cobrança";
   const sendBillingTitle =
     sendBillingModal?.mode === "resend"
       ? `Reenviar cobrança para ${sendBillingModal.invoice?.name ?? "devedor"}`
@@ -1134,14 +1106,21 @@ function CobrancasContent() {
 
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 transition-all duration-200">
-          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-md bg-white shadow-xl transition-all duration-200">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="new-charge-title"
+            className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-md bg-white shadow-xl transition-all duration-200"
+          >
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
               <div>
-                <h2 className="font-semibold text-slate-900">{modalTitle}</h2>
+                <h2 id="new-charge-title" className="font-semibold text-slate-900">
+                  {modalTitle}
+                </h2>
                 <p className="mt-1 text-sm text-slate-500">
                   {invoiceTargetDebtor
-                    ? "Preencha os dados da nova fatura deste devedor."
-                    : "Preencha os dados principais da nova fatura."}
+                    ? "Preencha os dados da nova cobrança deste cliente."
+                    : "Escolha um cliente cadastrado e preencha os dados da cobrança."}
                 </p>
               </div>
 
@@ -1155,91 +1134,24 @@ function CobrancasContent() {
               </button>
             </div>
 
-            <form onSubmit={handleManualSubmit}>
+            <form onSubmit={handleManualSubmit} noValidate={!pickedClient && !invoiceTargetDebtor}>
               <div className="grid gap-4 px-5 py-5 sm:grid-cols-2">
+                {errorMsg && (
+                  <p
+                    role="alert"
+                    className="flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 sm:col-span-2"
+                  >
+                    <AlertCircle className="mt-0.5 shrink-0" size={16} />
+                    {errorMsg}
+                  </p>
+                )}
                 {!invoiceTargetDebtor && (
-                  <>
-                    <label className="flex flex-col gap-1.5 sm:col-span-2">
-                      <span className="text-xs font-semibold uppercase text-slate-500">
-                        Nome do Devedor
-                      </span>
-                      <input
-                        required
-                        type="text"
-                        value={manualForm.customerName}
-                        onChange={(event) =>
-                          updateManualForm("customerName", event.target.value)
-                        }
-                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                      />
-                    </label>
-
-                    <label className="flex flex-col gap-1.5 sm:col-span-2">
-                      <span className="text-xs font-semibold uppercase text-slate-500">
-                        CPF/CNPJ do Devedor
-                      </span>
-                      <input
-                        required
-                        type="text"
-                        inputMode="numeric"
-                        value={manualForm.document}
-                        placeholder="CPF ou CNPJ"
-                        onChange={(event) =>
-                          updateManualForm("document", event.target.value)
-                        }
-                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                      />
-                    </label>
-
-                    <label className="flex flex-col gap-1.5 sm:col-span-2">
-                      <span className="text-xs font-semibold uppercase text-slate-500">
-                        Email
-                      </span>
-                      <input
-                        required
-                        type="email"
-                        value={manualForm.email}
-                        onChange={(event) =>
-                          updateManualForm("email", event.target.value)
-                        }
-                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                      />
-                    </label>
-
-                    <label className="flex flex-col gap-1.5">
-                      <span className="text-xs font-semibold uppercase text-slate-500">
-                        WhatsApp (pais + DDD)
-                      </span>
-                      <input
-                        required
-                        type="tel"
-                        value={manualForm.whatsapp}
-                        placeholder="+55 (11) 99999-9999"
-                        onChange={(event) =>
-                          updateManualForm("whatsapp", event.target.value)
-                        }
-                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                      />
-                    </label>
-
-                    <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 sm:col-span-2">
-                      <input
-                        type="checkbox"
-                        checked={manualForm.whatsappOptIn}
-                        onChange={(event) =>
-                          updateManualForm(
-                            "whatsappOptIn",
-                            event.target.checked,
-                          )
-                        }
-                        className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                      />
-                      <span className="text-sm font-medium text-slate-700">
-                        Cliente autorizou mensagens de cobrança pelo WhatsApp
-                        oficial
-                      </span>
-                    </label>
-                  </>
+                  <div className="flex flex-col gap-1.5 sm:col-span-2">
+                    <span className="text-xs font-semibold uppercase text-slate-500">
+                      Cliente
+                    </span>
+                    <ClientPicker value={pickedClient} onChange={setPickedClient} />
+                  </div>
                 )}
 
                 <label className="flex flex-col gap-1.5">
@@ -1394,7 +1306,7 @@ function CobrancasContent() {
                       days: "Padrão da empresa",
                     }}
                     individualDebtor={isIndividualDocument(
-                      invoiceTargetDebtor?.document ?? manualForm.document,
+                      invoiceTargetDebtor?.document ?? pickedClient?.document ?? "",
                     )}
                   />
                   <p className="mt-2 text-xs text-slate-500">

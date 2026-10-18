@@ -458,6 +458,14 @@ export interface DebtorCollectionProfile {
   profileType: CollectionProfileType;
 }
 
+export interface DebtorOption {
+  debtorId: string;
+  name: string;
+  document: string | null;
+  phone_number: string;
+  email: string | null;
+}
+
 export interface DebtorListItem {
   debtorId: string;
   name: string;
@@ -1735,6 +1743,14 @@ class ApiClient {
         method: "POST",
         body: JSON.stringify(data),
       },
+    );
+  }
+
+  /** Up to 8 clients for choosing one in a form; no totals. */
+  searchDebtors(search: string, signal?: AbortSignal): Promise<DebtorOption[]> {
+    return this.fetch<DebtorOption[]>(
+      `/invoices/debtors/search${this.buildQueryString({ search })}`,
+      { signal },
     );
   }
 

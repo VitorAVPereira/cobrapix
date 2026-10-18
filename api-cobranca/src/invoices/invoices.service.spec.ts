@@ -355,6 +355,50 @@ describe('InvoicesService', () => {
     });
   });
 
+  it('busca clientes para a nova cobranca so na empresa, com documento formatado e limite', async () => {
+    const debtorFindMany = jest.fn().mockResolvedValue([
+      {
+        id: 'debtor-1',
+        name: 'Ana',
+        document: '12345678909',
+        phoneNumber: '+5511999990001',
+        email: null,
+      },
+    ]);
+    const service = new InvoicesService(
+      { debtor: { findMany: debtorFindMany } } as unknown as PrismaService,
+      buildMessageQueue(),
+      buildPaymentService(),
+    );
+
+    const result = await service.searchDebtors(
+      'company-1',
+      '123.456.789-09',
+      8,
+    );
+
+    expect(result).toEqual([
+      {
+        debtorId: 'debtor-1',
+        name: 'Ana',
+        document: '12345678909',
+        phone_number: '+5511999990001',
+        email: null,
+      },
+    ]);
+    expect(debtorFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          companyId: 'company-1',
+          OR: expect.arrayContaining([
+            { document: { contains: '12345678909' } },
+          ]) as unknown,
+        },
+        take: 8,
+      }),
+    );
+  });
+
   describe('listagem de cobrancas', () => {
     function listing() {
       const invoiceFindMany = jest.fn().mockResolvedValue([]);

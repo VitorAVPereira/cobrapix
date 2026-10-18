@@ -26,9 +26,9 @@ Especificação: `docs/superpowers/specs/2026-10-18-cobrancas-tela-design.md`.
 
 ## Tarefa 4: nova cobrança
 
-- [ ] Seletor de cliente com busca no servidor; "Cadastrar novo cliente" → `/clientes?novo=1`.
-- [ ] Clientes abre o cadastro com `?novo=1`.
-- [ ] Testes. Commit.
+- [x] Seletor de cliente com busca no servidor; "Cadastrar novo cliente" → `/clientes?novo=1`.
+- [x] Clientes abre o cadastro com `?novo=1`.
+- [x] Testes. Commit.
 
 ## Tarefa 5: importação com revisão no frontend
 
