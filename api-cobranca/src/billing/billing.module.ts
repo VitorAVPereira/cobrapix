@@ -3,6 +3,7 @@ import { BillingService } from './billing.service';
 import { BillingController } from './billing.controller';
 import { CollectionProfileService } from './collection-profile.service';
 import { CollectionRuleEngine } from './collection-rule-engine';
+import { CompanyDashboardService } from './company-dashboard.service';
 import { QueueModule } from '../queue/queue.module';
 import { PaymentModule } from '../payment/payment.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
@@ -22,7 +23,12 @@ import { TemplatePolicyModule } from '../templates/template-policy.module';
     TemplatePolicyModule,
   ],
   controllers: [BillingController],
-  providers: [BillingService, CollectionProfileService, CollectionRuleEngine],
+  providers: [
+    BillingService,
+    CollectionProfileService,
+    CollectionRuleEngine,
+    CompanyDashboardService,
+  ],
   exports: [BillingService, CollectionProfileService, CollectionRuleEngine],
 })
 export class BillingModule {}

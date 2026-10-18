@@ -576,7 +576,10 @@ describe('Consumo das ultimas 24 h', () => {
     const scope = {
       companyId: 'company-1',
       conversation: { channel: 'WHATSAPP' },
-      createdAt: { gte: expect.any(Date) as unknown },
+      createdAt: {
+        gte: expect.any(Date) as unknown,
+        lt: expect.any(Date) as unknown,
+      },
     };
     expect(groupBy).toHaveBeenCalledWith(
       expect.objectContaining({

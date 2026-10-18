@@ -34,6 +34,8 @@ import {
 } from './billing.service';
 import { CollectionProfileService } from './collection-profile.service';
 import { UpdateBillingSettingsDto } from './dto/update-billing-settings.dto';
+import { CompanyDashboardQueryDto } from './dto/company-dashboard-query.dto';
+import { CompanyDashboardService } from './company-dashboard.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { GetUser } from '../auth/decorators/get-user.decorator';
@@ -248,6 +250,7 @@ export class BillingController {
     private readonly billingService: BillingService,
     private readonly collectionProfileService: CollectionProfileService,
     private readonly prisma: PrismaService,
+    private readonly dashboard: CompanyDashboardService,
   ) {}
 
   @Post('run')
@@ -288,12 +291,12 @@ export class BillingController {
     return this.billingService.getSettings(user.companyId);
   }
 
-  @Get('metrics')
-  async getMetrics(
+  @Get('dashboard')
+  async getDashboard(
     @GetUser() user: AuthenticatedUser,
-    @Query('period') period?: string,
+    @Query() query: CompanyDashboardQueryDto,
   ) {
-    return this.billingService.getMetrics(user.companyId, period);
+    return this.dashboard.get(user.companyId, query.period ?? '30d', query);
   }
 
   @Post('invoices/run')

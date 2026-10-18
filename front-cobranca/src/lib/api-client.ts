@@ -271,21 +271,40 @@ export type MessagingLimitTier =
   | "TIER_UNLIMITED";
 export type PaymentNotificationStatus = "PENDING" | "SENT" | "FAILED" | "READ";
 export type RecurringInvoiceStatus = "ACTIVE" | "PAUSED";
-export type DashboardPeriod = "today" | "7d" | "30d" | "year";
+export type DashboardPeriod = "today" | "7d" | "30d" | "month" | "year" | "custom";
 export type CollectionProfileType = "NEW" | "GOOD" | "DOUBTFUL" | "BAD";
 export type PaymentTimeliness = "EARLY" | "ON_DUE_DATE" | "OVERDUE" | "UNKNOWN";
 
-export interface BillingMetrics {
-  period: DashboardPeriod;
-  activeCharges: number;
-  pendingAmount: number;
-  recoveredAmount: number;
-  recoveryRate: number;
-  paidCharges: number;
-  overdueCharges: number;
-  generatedPayments: number;
-  queuedMessages: number;
-  sentMessages: number;
+/** Company dashboard. Dates are São Paulo calendar dates (YYYY-MM-DD). */
+export interface CompanyDashboard {
+  period: {
+    key: DashboardPeriod;
+    startDate: string;
+    endDate: string;
+    previousStartDate: string;
+    previousEndDate: string;
+    granularity: "day" | "month";
+  };
+  received: { amount: number; count: number };
+  collectionRate: {
+    dueAmount: number;
+    paidAmount: number;
+    rate: number | null;
+    previousRate: number | null;
+  };
+  open: {
+    amount: number;
+    count: number;
+    upcomingAmount: number;
+    upcomingCount: number;
+    overdueAmount: number;
+    overdueCount: number;
+  };
+  overdueAging: { range: "1-15" | "16-30" | "31-60" | "60+"; amount: number; count: number }[];
+  receivedSeries: { date: string; amount: number; count: number }[];
+  receivedByMethod: { method: "PIX" | "BOLETO" | "CARD"; amount: number; count: number }[];
+  whatsapp: { sent: number; delivered: number; read: number; failed: number; replies: number };
+  email: { sent: number; delivered: number; opened: number; clicked: number };
 }
 
 export interface InvoicePaymentSummary {
@@ -561,20 +580,6 @@ export interface UpdateDebtorBillingSettingsInput {
   collectionProfileId?: string | null;
 }
 
-export interface WhatsAppInteractions {
-  outbound: number;
-  delivered: number;
-  read: number;
-  inbound: number;
-  failed: number;
-}
-
-/** Results of the signed-in company over the last 24 hours (moving window). */
-export interface WhatsAppStatsResponse {
-  period: "rolling_24h";
-  interactions: WhatsAppInteractions;
-}
-
 export type ChannelCapacitySource = "PROVIDER" | "VERIFIED_CACHE" | "FALLBACK" | "UNAVAILABLE";
 
 /** Central WhatsApp channel (platform administration only). */
@@ -589,21 +594,6 @@ export interface CentralChannelCapacity {
   tier: string | null;
   checkedAt: string | null;
   nextAvailableAt: string | null;
-}
-
-/** @deprecated Company quota fields are no longer rendered; see WhatsAppStatsResponse. */
-export interface WhatsAppUsageResponse {
-  tier: string;
-  dailyLimit: number;
-  dailyUsage: number;
-  remaining: number;
-  interactions: {
-    outbound: number;
-    delivered: number;
-    read: number;
-    inbound: number;
-    failed: number;
-  };
 }
 
 /** WhatsApp choice of a rule step; UNCONFIGURED marks a legacy step that sends nothing. */
@@ -1797,43 +1787,12 @@ class ApiClient {
   }
 
   // WhatsApp (canal central Datafy, administrado pela plataforma)
-  async getWhatsappUsage(): Promise<WhatsAppUsageResponse> {
-    return this.fetch<WhatsAppUsageResponse>("/whatsapp/usage");
-  }
-
-  // Company results only. While an older API without /whatsapp/stats is
-  // live, only `interactions` is taken from the legacy usage answer.
-  async getWhatsappStats(): Promise<WhatsAppStatsResponse> {
-    try {
-      return await this.fetch<WhatsAppStatsResponse>("/whatsapp/stats");
-    } catch (error: unknown) {
-      if ((error as ApiError).status !== 404) throw error;
-      const legacy = await this.getWhatsappUsage();
-      return { period: "rolling_24h", interactions: legacy.interactions };
-    }
-  }
-
   async getChannelCapacity(): Promise<CentralChannelCapacity> {
     return this.fetch<CentralChannelCapacity>("/whatsapp/admin/channel-capacity");
   }
 
   async syncChannelTier(): Promise<{ tier: string; capacity: CentralChannelCapacity }> {
     return this.fetch("/whatsapp/sync-tier", { method: "POST" });
-  }
-
-  // Email
-  async getEmailStats(period: string = "30d"): Promise<{
-    period: string;
-    periodStart?: string;
-    sent: number;
-    delivered: number;
-    opened: number;
-    clicked: number;
-    bounced: number;
-    complained: number;
-    failed: number;
-  }> {
-    return this.fetch(`/email/stats?period=${period}`);
   }
 
   // Billing
@@ -1892,8 +1851,14 @@ class ApiClient {
     );
   }
 
-  async getBillingMetrics(period: DashboardPeriod): Promise<BillingMetrics> {
-    return this.fetch<BillingMetrics>(`/billing/metrics?period=${period}`);
+  getCompanyDashboard(
+    query: { period: DashboardPeriod; startDate?: string; endDate?: string },
+    signal?: AbortSignal,
+  ): Promise<CompanyDashboard> {
+    return this.fetch<CompanyDashboard>(
+      `/billing/dashboard${this.buildQueryString(query)}`,
+      { signal },
+    );
   }
 
   async getBillingSettings(): Promise<BillingSettings> {

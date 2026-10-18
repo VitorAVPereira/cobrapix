@@ -406,10 +406,17 @@ export class MessagingLimitService {
   }
 
   /**
-   * Last 24 h of the company's WhatsApp messages, from the Datafy conversation
-   * history (provider status of each outbound message, attributed inbound).
+   * The company's WhatsApp messages in the window (default: last 24 h), from
+   * the Datafy conversation history (provider status of each outbound
+   * message, attributed inbound).
    */
-  async getInteractionStats(companyId: string): Promise<{
+  async getInteractionStats(
+    companyId: string,
+    window: { start: Date; end: Date } = {
+      start: new Date(Date.now() - 24 * 60 * 60 * 1000),
+      end: new Date(),
+    },
+  ): Promise<{
     outbound: number;
     delivered: number;
     read: number;
@@ -418,7 +425,7 @@ export class MessagingLimitService {
   }> {
     const where = {
       companyId,
-      createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      createdAt: { gte: window.start, lt: window.end },
       conversation: { channel: 'WHATSAPP' as const },
     };
     const [outbound, inbound] = await Promise.all([
