@@ -133,78 +133,7 @@ describe('InvoicesService', () => {
     expect(tx).toBeDefined();
   });
 
-  it('cria devedor novo com documento normalizado na fatura manual', async () => {
-    const invoice = buildInvoice({ debtorId: 'debtor-new' });
-    const debtorFindMany = jest.fn().mockResolvedValue([]);
-    const debtorCreate = jest.fn().mockResolvedValue({ id: 'debtor-new' });
-    const invoiceCreate = jest.fn().mockResolvedValue(invoice);
-    const profileFindFirst = jest.fn().mockResolvedValue({
-      id: 'profile-new',
-      name: 'Novo Cliente',
-      profileType: 'NEW',
-    });
-    const prisma = {
-      company: {
-        findUnique: jest.fn().mockResolvedValue({
-          id: 'company-1',
-          enabledBillingMethods: ['PIX', 'BOLETO', 'BOLIX'],
-        }),
-      },
-      collectionProfile: { findFirst: profileFindFirst },
-      $transaction: jest.fn(
-        async (
-          callback: (tx: {
-            debtor: {
-              findMany: typeof debtorFindMany;
-              create: typeof debtorCreate;
-            };
-            invoice: { create: typeof invoiceCreate };
-          }) => Promise<unknown>,
-        ) =>
-          callback({
-            debtor: { findMany: debtorFindMany, create: debtorCreate },
-            invoice: { create: invoiceCreate },
-          }),
-      ),
-    } as unknown as PrismaService;
-
-    const service = new InvoicesService(
-      prisma,
-      buildMessageQueue(),
-      buildPaymentService(),
-    );
-    const result = await service.createInvoice('company-1', {
-      name: 'Maria Silva',
-      document: '123.456.789-09',
-      phone_number: '11999999999',
-      email: 'maria@email.com',
-      original_amount: 199.9,
-      due_date: '2026-05-10',
-      billing_type: 'PIX',
-    });
-
-    expect(result.phone_number).toBe('+5511999999999');
-    expect(debtorCreate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          companyId: 'company-1',
-          document: '12345678909',
-          phoneNumber: '+5511999999999',
-          collectionProfileId: 'profile-new',
-        }) as unknown,
-      }),
-    );
-    expect(invoiceCreate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          companyId: 'company-1',
-          debtorId: 'debtor-new',
-        }) as unknown,
-      }),
-    );
-  });
-
-  it('bloqueia fatura manual para novo devedor sem CPF ou CNPJ', async () => {
+  it('recusa cobranca sem cliente cadastrado, sem criar cliente', async () => {
     const transaction = jest.fn();
     const prisma = {
       company: {
@@ -225,13 +154,14 @@ describe('InvoicesService', () => {
     await expect(
       service.createInvoice('company-1', {
         name: 'Maria Silva',
+        document: '123.456.789-09',
         phone_number: '11999999999',
         email: 'maria@email.com',
         original_amount: 199.9,
         due_date: '2026-05-10',
         billing_type: 'PIX',
       }),
-    ).rejects.toThrow('CPF/CNPJ do devedor');
+    ).rejects.toThrow('Escolha um cliente cadastrado em Clientes.');
     expect(transaction).not.toHaveBeenCalled();
   });
 
@@ -301,10 +231,7 @@ describe('InvoicesService', () => {
 
     await expect(
       service.createInvoice('company-1', {
-        name: 'Maria Silva',
-        document: '123.456.789-09',
-        phone_number: '11999999999',
-        email: 'maria@email.com',
+        debtorId: 'debtor-1',
         original_amount: 199.9,
         due_date: '2026-05-10',
         billing_type: 'BOLIX',

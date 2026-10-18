@@ -368,13 +368,8 @@ export interface InvoiceListItem {
   } | null;
 }
 
+/** A charge for a client already registered in Clientes. */
 export interface CreateInvoiceInput {
-  debtorId?: string;
-  name?: string;
-  document?: string;
-  phone_number?: string;
-  email?: string;
-  whatsappOptIn?: boolean;
   original_amount: number;
   due_date?: string;
   billing_type: BillingMethod;
@@ -1777,13 +1772,6 @@ class ApiClient {
     });
   }
 
-  async createInvoice(data: CreateInvoiceInput): Promise<InvoiceListItem> {
-    return this.fetch<InvoiceListItem>("/invoices", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-  }
-
   async cancelInvoice(invoiceId: string): Promise<InvoiceListItem> {
     return this.fetch<InvoiceListItem>(`/invoices/${invoiceId}/cancel`, {
       method: "POST",
@@ -1792,10 +1780,7 @@ class ApiClient {
 
   async createDebtorInvoice(
     debtorId: string,
-    data: Omit<
-      CreateInvoiceInput,
-      "debtorId" | "name" | "document" | "phone_number" | "email"
-    >,
+    data: CreateInvoiceInput,
   ): Promise<InvoiceListItem> {
     return this.fetch<InvoiceListItem>(
       `/invoices/debtors/${debtorId}/invoices`,

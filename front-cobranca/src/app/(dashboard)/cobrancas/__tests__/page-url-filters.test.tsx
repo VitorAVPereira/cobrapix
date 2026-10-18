@@ -11,7 +11,6 @@ const mockApiClient = {
   getInvoices,
   getBillingSettings,
   importInvoices: jest.fn(),
-  createInvoice: jest.fn(),
   createDebtorInvoice: jest.fn(),
   searchDebtors: jest.fn(),
   previewInvoiceImport: jest.fn(),

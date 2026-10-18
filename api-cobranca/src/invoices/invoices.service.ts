@@ -265,20 +265,6 @@ interface UpdateRecurringInvoiceInput {
   paymentDaysAfterDue?: number;
 }
 
-interface DebtorUpsertInput {
-  name: string;
-  document: string;
-  phoneNumber: string;
-  email?: string | null;
-  whatsappOptIn?: boolean;
-  collectionProfileId: string;
-}
-
-interface DebtorIdentity {
-  id: string;
-  document: string;
-}
-
 interface InvoiceWithRelations {
   companyId: string;
   paymentCharges?: FinancialCharge[];
@@ -1092,14 +1078,20 @@ export class InvoicesService {
     input: CreateInvoiceInput,
   ): Promise<InvoiceListItem> {
     const debtorId = input.debtorId;
+    // Charges are only for clients registered in Clientes.
+    if (!debtorId) {
+      throw new BadRequestException(
+        'Escolha um cliente cadastrado em Clientes.',
+      );
+    }
     await this.ensureBillingMethodEnabled(companyId, input.billing_type);
 
-    const newDebtorDocument = debtorId
-      ? null
-      : this.normalizeRequiredDebtorDocument(input.document);
-
     if (input.recurring === true) {
-      const recurrence = await this.createRecurringInvoice(companyId, input);
+      const recurrence = await this.createRecurringInvoice(
+        companyId,
+        debtorId,
+        input,
+      );
       const invoice = await this.prisma.invoice.findFirst({
         where: {
           companyId,
@@ -1155,29 +1147,16 @@ export class InvoicesService {
     if (!dueDate) {
       throw new Error('Data de vencimento invalida.');
     }
-    const collectionProfileId = debtorId
-      ? null
-      : await this.resolveRequiredCollectionProfileId(companyId, undefined);
     const lateTerms = resolveLateTerms(
       this.lateTermsInput(input),
       await this.companyLateDefaults(companyId),
     );
 
     const invoice = await this.prisma.$transaction(async (tx) => {
-      const debtor = debtorId
-        ? await tx.debtor.findFirst({
-            where: { id: debtorId, companyId },
-            select: { id: true, document: true },
-          })
-        : await this.upsertDebtor(tx, companyId, {
-            name: input.name ?? '',
-            document: newDebtorDocument ?? '',
-            phoneNumber: input.phone_number ?? '',
-            email: input.email ?? null,
-            whatsappOptIn: input.whatsappOptIn ?? false,
-            collectionProfileId:
-              this.ensureProvidedCollectionProfile(collectionProfileId),
-          });
+      const debtor = await tx.debtor.findFirst({
+        where: { id: debtorId, companyId },
+        select: { id: true, document: true },
+      });
 
       if (!debtor) {
         throw new Error('Devedor nao encontrado.');
@@ -1854,32 +1833,17 @@ export class InvoicesService {
 
   private async createRecurringInvoice(
     companyId: string,
+    debtorId: string,
     input: CreateInvoiceInput,
   ): Promise<RecurringInvoiceListItem> {
     if (!input.due_day) {
       throw new Error('Dia de vencimento recorrente invalido.');
     }
 
-    const newDebtorDocument = input.debtorId
-      ? null
-      : this.normalizeRequiredDebtorDocument(input.document);
-    const collectionProfileId = input.debtorId
-      ? null
-      : await this.resolveRequiredCollectionProfileId(companyId, undefined);
-    const debtor = input.debtorId
-      ? await this.prisma.debtor.findFirst({
-          where: { id: input.debtorId, companyId },
-          select: { id: true, document: true },
-        })
-      : await this.upsertDebtor(this.prisma, companyId, {
-          name: input.name ?? '',
-          document: newDebtorDocument ?? '',
-          phoneNumber: input.phone_number ?? '',
-          email: input.email ?? null,
-          whatsappOptIn: input.whatsappOptIn ?? false,
-          collectionProfileId:
-            this.ensureProvidedCollectionProfile(collectionProfileId),
-        });
+    const debtor = await this.prisma.debtor.findFirst({
+      where: { id: debtorId, companyId },
+      select: { id: true, document: true },
+    });
 
     if (!debtor) {
       throw new Error('Devedor nao encontrado.');
@@ -2119,69 +2083,6 @@ export class InvoicesService {
     if (!validateDebtorDocument(normalized).valid) {
       throw new Error('CPF/CNPJ do devedor deve ter 11 ou 14 digitos validos.');
     }
-  }
-
-  private async upsertDebtor(
-    client: Pick<Prisma.TransactionClient, 'debtor'>,
-    companyId: string,
-    input: DebtorUpsertInput,
-  ): Promise<DebtorIdentity> {
-    const document = this.normalizeRequiredDebtorDocument(input.document);
-    const phoneNumber = normalizeWhatsAppNumber(input.phoneNumber);
-    const lookupCandidates = getWhatsAppNumberLookupCandidates(phoneNumber);
-    const existingDebtors = await client.debtor.findMany({
-      where: {
-        companyId,
-        phoneNumber: { in: lookupCandidates },
-      },
-      select: {
-        id: true,
-        document: true,
-        phoneNumber: true,
-      },
-    });
-    const exactDebtor =
-      existingDebtors.find((debtor) => debtor.phoneNumber === phoneNumber) ??
-      null;
-    const existingDebtor = exactDebtor ?? existingDebtors[0] ?? null;
-
-    if (existingDebtor) {
-      await client.debtor.updateMany({
-        where: { id: existingDebtor.id, companyId },
-        data: {
-          name: input.name,
-          document,
-          phoneNumber,
-          email: input.email || null,
-          collectionProfileId: input.collectionProfileId,
-          ...(input.whatsappOptIn === true && {
-            whatsappOptIn: true,
-            whatsappOptInAt: new Date(),
-            whatsappOptInSource: 'manual_import',
-          }),
-        },
-      });
-
-      return { id: existingDebtor.id, document };
-    }
-
-    const createdDebtor = await client.debtor.create({
-      data: {
-        companyId,
-        name: input.name,
-        document,
-        phoneNumber,
-        email: input.email || null,
-        whatsappOptIn: input.whatsappOptIn === true,
-        whatsappOptInAt: input.whatsappOptIn === true ? new Date() : null,
-        whatsappOptInSource:
-          input.whatsappOptIn === true ? 'manual_import' : null,
-        collectionProfileId: input.collectionProfileId,
-      },
-      select: { id: true },
-    });
-
-    return { id: createdDebtor.id, document };
   }
 
   private normalizePhoneNumberForResponse(phoneNumber: string): string {
