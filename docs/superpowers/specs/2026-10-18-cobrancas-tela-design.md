@@ -102,3 +102,38 @@
   - a busca "Carla Alves 33" trazia clientes com "33" no CPF ou no WhatsApp;
   - os erros do modal de nova cobrança ficavam escondidos atrás do fundo escuro;
   - o formulário pedia o valor antes de avisar que faltava o cliente.
+
+## Clientes e pendências (18/10/2026)
+
+**Decisões confirmadas:**
+
+1. **Cliente antigo sem CPF/CNPJ:** quando ele tem o WhatsApp de uma linha com documento novo, o
+   modal oferece vincular a ele e gravar o CPF/CNPJ da planilha no cadastro. A comparação Cadastro ×
+   Planilha vale para os outros campos. As alternativas continuam: outro WhatsApp ou não importar.
+2. **Autorização de WhatsApp em massa:** um campo no resumo da importação, "Todos os clientes desta
+   planilha autorizaram receber cobranças pelo WhatsApp". Desmarcado, vale a coluna de cada linha.
+   - Quando o WhatsApp do cliente é trocado pelo da planilha, a autorização que ele já tinha
+     continua valendo para o número novo.
+3. **API:** `POST /invoices` exige um cliente cadastrado ("Escolha um cliente cadastrado em
+   Clientes."). O caminho que cadastrava o cliente junto com a cobrança foi removido.
+
+**Execução:**
+
+- **Clientes:**
+  - filtros e página no endereço; 20, 50 ou 100 por página com o rodapé compartilhado
+    (`components/ui/TablePagination.tsx`, também usado em Cobranças);
+  - busca que espera a digitação parar; respostas antigas descartadas;
+  - erro com "Tentar de novo" e lista vazia com "Limpar filtros";
+  - CPF/CNPJ formatado, acentos nos textos, erros dos modais dentro deles;
+  - perfis carregados uma vez só.
+- **Resumo de Clientes:** somado no banco (`groupBy`) com o mesmo filtro da lista, em vez de
+  carregar todos os clientes e faturas. Conferido no navegador contra o banco: 301 clientes,
+  R$ 798.762,00 em aberto (787) e R$ 402.191,00 pagos (394).
+- **Busca de Clientes:** números dentro de um nome não viram busca por documento.
+- **Endereço com página além da última:** leva à última página, em Clientes e em Cobranças.
+- **Testes:**
+  - backend: 133 suítes e 1.087 testes; e2e de importação com 4 testes, incluindo o vínculo do
+    cliente sem documento;
+  - frontend: 61 suítes e 391 testes; builds ok.
+- **Observado e não alterado:** o e2e `cobrapix-flow` já falhava antes destas mudanças, porque a
+  emissão do Pix exige ativação financeira e o teste não a configura.
