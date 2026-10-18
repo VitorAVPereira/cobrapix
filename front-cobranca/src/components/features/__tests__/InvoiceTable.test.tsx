@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { PaginationState } from "@tanstack/react-table";
 import { InvoiceTable } from "../InvoiceTable";
 import type { ParsedDebtor } from "../UploadCSV";
+import type { InvoiceListSort } from "@/lib/api-client";
 
 function buildInvoice(status: string): ParsedDebtor {
   return {
@@ -25,6 +26,10 @@ function renderTable(options?: {
   data?: ParsedDebtor[];
   onCancelInvoice?: jest.Mock;
   canIssue?: boolean;
+  sort?: InvoiceListSort;
+  onSortChange?: jest.Mock;
+  onPaginationChange?: jest.Mock;
+  total?: number;
 }): void {
   const data = options?.data ?? [buildInvoice("PENDING")];
   const pagination: PaginationState = { pageIndex: 0, pageSize: 20 };
@@ -33,10 +38,12 @@ function renderTable(options?: {
     <InvoiceTable
       canIssue={options?.canIssue}
       data={data}
-      pageCount={1}
-      total={data.length}
+      pageCount={Math.ceil((options?.total ?? data.length) / 20)}
+      total={options?.total ?? data.length}
       pagination={pagination}
-      onPaginationChange={jest.fn()}
+      onPaginationChange={options?.onPaginationChange ?? jest.fn()}
+      sort={options?.sort}
+      onSortChange={options?.onSortChange}
       onConfigureDebtor={jest.fn()}
       onAddInvoice={jest.fn()}
       onRunSelectedInvoices={jest.fn()}
@@ -142,5 +149,41 @@ describe("InvoiceTable row actions", () => {
         screen.getByRole("menuitem", { name: "Cancelar cobrança" }),
       ).toBeDisabled();
     }
+  });
+});
+
+describe("InvoiceTable with many charges", () => {
+  it("sorts by due date and amount from the headers", async () => {
+    const user = userEvent.setup();
+    const onSortChange = jest.fn();
+    renderTable({ sort: "dueDate_asc", onSortChange });
+
+    await user.click(screen.getByRole("button", { name: "Ordenar por vencimento" }));
+    expect(onSortChange).toHaveBeenLastCalledWith("dueDate_desc");
+    await user.click(screen.getByRole("button", { name: "Ordenar por valor" }));
+    expect(onSortChange).toHaveBeenLastCalledWith("amount_asc");
+    expect(screen.getByRole("columnheader", { name: /Vencimento/ })).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
+  });
+
+  it("pages through thousands of charges with 20, 50 or 100 per page", async () => {
+    const user = userEvent.setup();
+    const onPaginationChange = jest.fn();
+    renderTable({ total: 1240, onPaginationChange });
+
+    expect(screen.getByText("Página 1 de 62")).toBeInTheDocument();
+    expect(screen.getByText("1.240")).toBeInTheDocument();
+    expect(
+      Array.from(
+        (screen.getByLabelText("Cobranças por página") as HTMLSelectElement).options,
+      ).map((option) => option.value),
+    ).toEqual(["20", "50", "100"]);
+
+    await user.click(screen.getByRole("button", { name: "Última página" }));
+    expect(onPaginationChange).toHaveBeenCalled();
+    await user.selectOptions(screen.getByLabelText("Cobranças por página"), "100");
+    expect(onPaginationChange).toHaveBeenLastCalledWith({ pageIndex: 0, pageSize: 100 });
   });
 });

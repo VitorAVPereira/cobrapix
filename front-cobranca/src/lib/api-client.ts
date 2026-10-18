@@ -271,6 +271,14 @@ export type MessagingLimitTier =
   | "TIER_UNLIMITED";
 export type PaymentNotificationStatus = "PENDING" | "SENT" | "FAILED" | "READ";
 export type RecurringInvoiceStatus = "ACTIVE" | "PAUSED";
+export type InvoiceListStatus = "PENDING" | "OVERDUE" | "PAID" | "CANCELED";
+export type InvoiceListBillingType = "PIX" | "BOLETO" | "CREDIT_CARD";
+export type InvoiceListSort =
+  | "createdAt_desc"
+  | "dueDate_asc"
+  | "dueDate_desc"
+  | "amount_desc"
+  | "amount_asc";
 export type DashboardPeriod = "today" | "7d" | "30d" | "month" | "year" | "custom";
 export type CollectionProfileType = "NEW" | "GOOD" | "DOUBTFUL" | "BAD";
 export type PaymentTimeliness = "EARLY" | "ON_DUE_DATE" | "OVERDUE" | "UNKNOWN";
@@ -1664,9 +1672,12 @@ class ApiClient {
       page?: number;
       pageSize?: number;
       search?: string;
-      status?: string;
+      status?: InvoiceListStatus;
       debtorId?: string;
+      billingType?: InvoiceListBillingType;
+      sort?: InvoiceListSort;
     } = {},
+    signal?: AbortSignal,
   ): Promise<{
     data: InvoiceListItem[];
     total: number;
@@ -1679,6 +1690,8 @@ class ApiClient {
     if (params.search) qs.set("search", params.search);
     if (params.status) qs.set("status", params.status);
     if (params.debtorId) qs.set("debtorId", params.debtorId);
+    if (params.billingType) qs.set("billingType", params.billingType);
+    if (params.sort) qs.set("sort", params.sort);
 
     const qsStr = qs.toString();
     return this.fetch<{
@@ -1686,7 +1699,7 @@ class ApiClient {
       total: number;
       page: number;
       pageSize: number;
-    }>(`/invoices${qsStr ? `?${qsStr}` : ""}`);
+    }>(`/invoices${qsStr ? `?${qsStr}` : ""}`, { signal });
   }
 
   async importInvoices(data: ReadonlyArray<unknown>): Promise<unknown> {

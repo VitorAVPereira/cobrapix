@@ -19,10 +19,10 @@ Especificação: `docs/superpowers/specs/2026-10-18-cobrancas-tela-design.md`.
 
 ## Tarefa 3: lista e filtros no frontend
 
-- [ ] Cabeçalho e cartão de filtros no estilo de Clientes.
-- [ ] Filtros e paginação no endereço da página.
-- [ ] Tabela compacta a partir de `lg`, ordenação e 20, 50 ou 100 por página.
-- [ ] Testes. Commit.
+- [x] Cabeçalho e cartão de filtros no estilo de Clientes.
+- [x] Filtros e paginação no endereço da página.
+- [x] Tabela compacta a partir de `lg`, ordenação e 20, 50 ou 100 por página.
+- [x] Testes. Commit.
 
 ## Tarefa 4: nova cobrança
 
