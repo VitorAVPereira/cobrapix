@@ -17,6 +17,7 @@ function fixture(whatsappStatus = 'DISCONNECTED') {
     { enqueueSelectedInvoices } as unknown as BillingService,
     {} as CollectionProfileService,
     { company: { findUnique: findCompany } } as unknown as PrismaService,
+    {} as never,
   );
   return { controller, enqueueSelectedInvoices, findCompany };
 }
@@ -81,6 +82,7 @@ describe('BillingController: configuracoes da empresa', () => {
       { updateSettings } as unknown as BillingService,
       {} as CollectionProfileService,
       {} as PrismaService,
+      {} as never,
     );
 
     await controller.updateSettings(
@@ -100,5 +102,30 @@ describe('BillingController: configuracoes da empresa', () => {
         businessSegment: expect.anything() as unknown,
       }),
     );
+  });
+});
+
+describe('BillingController: dashboard', () => {
+  it('reads the company from the session and defaults to 30 days', async () => {
+    const get = jest.fn().mockResolvedValue({});
+    const controller = new BillingController(
+      {} as BillingService,
+      {} as CollectionProfileService,
+      {} as PrismaService,
+      { get } as never,
+    );
+
+    await controller.getDashboard({ companyId: 'company-1' }, {});
+    await controller.getDashboard(
+      { companyId: 'company-1' },
+      { period: 'custom', startDate: '2026-09-01', endDate: '2026-09-30' },
+    );
+
+    expect(get).toHaveBeenNthCalledWith(1, 'company-1', '30d', {});
+    expect(get).toHaveBeenNthCalledWith(2, 'company-1', 'custom', {
+      period: 'custom',
+      startDate: '2026-09-01',
+      endDate: '2026-09-30',
+    });
   });
 });

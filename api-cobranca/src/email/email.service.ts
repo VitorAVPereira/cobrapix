@@ -140,9 +140,14 @@ export class EmailService {
 
   async getStats(
     companyId: string,
-    period: 'today' | '7d' | '30d',
+    period: 'today' | '7d' | '30d' | { start: Date; end: Date },
   ): Promise<EmailStats> {
-    const since = this.sinceDate(period);
+    const since =
+      typeof period === 'string' ? this.sinceDate(period) : period.start;
+    const window = {
+      gte: since,
+      lt: typeof period === 'string' ? undefined : period.end,
+    };
 
     const [sent, delivered, opened, clicked, bounced, complained, failed] =
       await Promise.all([
@@ -153,42 +158,42 @@ export class EmailService {
             status: {
               in: ['SENT', 'DELIVERED', 'OPENED', 'CLICKED'],
             },
-            createdAt: { gte: since },
+            createdAt: window,
           },
         }),
         this.prisma.emailEvent.count({
           where: {
             companyId,
             eventType: 'delivered',
-            occurredAt: { gte: since },
+            occurredAt: window,
           },
         }),
         this.prisma.emailEvent.count({
           where: {
             companyId,
             eventType: 'opened',
-            occurredAt: { gte: since },
+            occurredAt: window,
           },
         }),
         this.prisma.emailEvent.count({
           where: {
             companyId,
             eventType: 'clicked',
-            occurredAt: { gte: since },
+            occurredAt: window,
           },
         }),
         this.prisma.emailEvent.count({
           where: {
             companyId,
             eventType: 'bounced',
-            occurredAt: { gte: since },
+            occurredAt: window,
           },
         }),
         this.prisma.emailEvent.count({
           where: {
             companyId,
             eventType: 'complained',
-            occurredAt: { gte: since },
+            occurredAt: window,
           },
         }),
         this.prisma.collectionAttempt.count({
@@ -196,7 +201,7 @@ export class EmailService {
             companyId,
             channel: 'EMAIL',
             status: 'FAILED',
-            createdAt: { gte: since },
+            createdAt: window,
           },
         }),
       ]);
