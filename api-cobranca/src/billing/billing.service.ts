@@ -56,21 +56,6 @@ export interface SelectedBillingOptions {
   contacts?: SelectedBillingContactInput[];
 }
 
-type DashboardPeriod = 'today' | '7d' | '30d' | 'year';
-
-export interface BillingMetricsResponse {
-  period: DashboardPeriod;
-  activeCharges: number;
-  pendingAmount: number;
-  recoveredAmount: number;
-  recoveryRate: number;
-  paidCharges: number;
-  overdueCharges: number;
-  generatedPayments: number;
-  queuedMessages: number;
-  sentMessages: number;
-}
-
 interface TariffDetails {
   method: BillingMethod;
   combinedLabel: string;
@@ -356,113 +341,6 @@ export class BillingService {
         });
       }),
     );
-  }
-
-  async getMetrics(
-    companyId: string,
-    periodInput?: string,
-  ): Promise<BillingMetricsResponse> {
-    const period = this.normalizeDashboardPeriod(periodInput);
-    const range = this.getDashboardPeriodRange(period);
-    const now = new Date();
-
-    const [
-      activeCharges,
-      pendingAggregate,
-      recoveredAggregate,
-      paidCharges,
-      overdueCharges,
-      generatedPayments,
-      queuedMessages,
-      sentMessages,
-    ] = await Promise.all([
-      this.prisma.invoice.count({
-        where: { companyId, status: 'PENDING' },
-      }),
-      this.prisma.invoice.aggregate({
-        where: { companyId, status: 'PENDING' },
-        _sum: { originalAmount: true },
-      }),
-      this.prisma.invoice.aggregate({
-        where: {
-          companyId,
-          status: 'PAID',
-          paidAt: { gte: range.start, lte: range.end },
-        },
-        _sum: { originalAmount: true },
-      }),
-      this.prisma.invoice.count({
-        where: {
-          companyId,
-          status: 'PAID',
-          paidAt: { gte: range.start, lte: range.end },
-        },
-      }),
-      this.prisma.invoice.count({
-        where: {
-          companyId,
-          status: 'PENDING',
-          dueDate: { lt: this.startOfDay(now) },
-        },
-      }),
-      this.prisma.collectionLog.count({
-        where: {
-          companyId,
-          actionType: {
-            in: [
-              'PAYMENT_GENERATED',
-              'PAYMENT_REUSED',
-              'INITIAL_CHARGE_PAYMENT_GENERATED',
-              'INITIAL_CHARGE_PAYMENT_READY',
-              'EFI_PIX_CREATED',
-              'EFI_BOLETO_CREATED',
-              'EFI_BOLIX_CREATED',
-            ],
-          },
-          createdAt: { gte: range.start, lte: range.end },
-        },
-      }),
-      this.prisma.collectionLog.count({
-        where: {
-          companyId,
-          actionType: 'WHATSAPP_QUEUED',
-          status: 'QUEUED',
-          createdAt: { gte: range.start, lte: range.end },
-        },
-      }),
-      this.prisma.collectionLog.count({
-        where: {
-          companyId,
-          actionType: 'WHATSAPP_SENT',
-          status: 'SENT',
-          createdAt: { gte: range.start, lte: range.end },
-        },
-      }),
-    ]);
-
-    const pendingAmount = this.decimalToNumber(
-      pendingAggregate._sum.originalAmount,
-    );
-    const recoveredAmount = this.decimalToNumber(
-      recoveredAggregate._sum.originalAmount,
-    );
-    const recoveryBase = pendingAmount + recoveredAmount;
-
-    return {
-      period,
-      activeCharges,
-      pendingAmount,
-      recoveredAmount,
-      recoveryRate:
-        recoveryBase > 0
-          ? Number(((recoveredAmount / recoveryBase) * 100).toFixed(1))
-          : 0,
-      paidCharges,
-      overdueCharges,
-      generatedPayments,
-      queuedMessages,
-      sentMessages,
-    };
   }
 
   async getSettings(companyId: string): Promise<BillingSettingsResponse> {
@@ -1384,56 +1262,6 @@ export class BillingService {
         company?.defaultPaymentDaysAfterDue ?? DEFAULT_PAYMENT_DAYS_AFTER_DUE,
       tariffs,
     };
-  }
-
-  private normalizeDashboardPeriod(value?: string): DashboardPeriod {
-    if (value === 'today' || value === '7d' || value === '30d') {
-      return value;
-    }
-
-    if (value === 'year') {
-      return 'year';
-    }
-
-    return '30d';
-  }
-
-  private getDashboardPeriodRange(period: DashboardPeriod): {
-    start: Date;
-    end: Date;
-  } {
-    const now = new Date();
-    const end = this.endOfDay(now);
-
-    if (period === 'today') {
-      return {
-        start: this.startOfDay(now),
-        end,
-      };
-    }
-
-    if (period === '7d') {
-      return {
-        start: this.startOfDay(this.addDays(now, -6)),
-        end,
-      };
-    }
-
-    if (period === 'year') {
-      return {
-        start: new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0),
-        end,
-      };
-    }
-
-    return {
-      start: this.startOfDay(this.addDays(now, -29)),
-      end,
-    };
-  }
-
-  private decimalToNumber(value: Prisma.Decimal | null): number {
-    return value ? Number(value.toNumber().toFixed(2)) : 0;
   }
 
   private async assertFinancialActive(companyId: string): Promise<void> {

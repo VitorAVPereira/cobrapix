@@ -291,14 +291,6 @@ export class BillingController {
     return this.billingService.getSettings(user.companyId);
   }
 
-  @Get('metrics')
-  async getMetrics(
-    @GetUser() user: AuthenticatedUser,
-    @Query('period') period?: string,
-  ) {
-    return this.billingService.getMetrics(user.companyId, period);
-  }
-
   @Get('dashboard')
   async getDashboard(
     @GetUser() user: AuthenticatedUser,
