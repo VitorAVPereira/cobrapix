@@ -1,5 +1,6 @@
 import { CardReconciliationWorker } from './card-reconciliation.worker';
 import { CardPaymentService } from './card-payment.service';
+import { DisbursementWebhookService } from '../disbursements/disbursement-webhook.service';
 import { EfiCardClient } from './efi-card.client';
 import {
   CardPublicPaymentController,
@@ -45,6 +46,7 @@ import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
   providers: [
     CardReconciliationWorker,
     CardPaymentService,
+    DisbursementWebhookService,
     EfiCardClient,
     CardCheckoutGuard,
     ThrottleGuard,

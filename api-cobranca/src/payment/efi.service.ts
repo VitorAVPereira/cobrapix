@@ -1,4 +1,5 @@
 import { CardPaymentService } from './card-payment.service';
+import { DisbursementWebhookService } from '../disbursements/disbursement-webhook.service';
 import { assertNewBillingMethod } from '../payment/billing-method-policy';
 import {
   HttpException,
@@ -259,6 +260,7 @@ export class EfiService {
     private readonly gatewayHealth: GatewayHealthService | null,
     private readonly charges: PaymentChargeService,
     @Optional() private readonly cards?: CardPaymentService,
+    @Optional() private readonly disbursements?: DisbursementWebhookService,
   ) {}
 
   async upsertManualGatewayAccount(
@@ -826,9 +828,11 @@ export class EfiService {
     invoiceId?: string;
     status?: InvoiceStatus;
   }> {
+    const sentPix = await this.applySentPix(payload);
     const events = this.extractPixEvents(payload);
 
     if (events.length === 0) {
+      if (sentPix) return { processed: true };
       this.logger.warn('Webhook Efi Pix sem txid processavel');
       return { processed: false };
     }
@@ -2051,6 +2055,32 @@ export class EfiService {
     } catch {
       this.logger.error('PAYMENT_WEBHOOK_ANOMALY_NOT_RECORDED');
     }
+  }
+
+  /**
+   * Pix sent by collaborator payments arrive on the same key webhook, without txid; they
+   * never settle an invoice. Returns whether the notice carried any of them.
+   */
+  private async applySentPix(payload: unknown): Promise<boolean> {
+    if (!this.isRecord(payload) || !Array.isArray(payload.pix)) return false;
+    const sent = payload.pix.filter(
+      (event): event is Record<string, unknown> =>
+        this.isRecord(event) && DisbursementWebhookService.isSentPix(event),
+    );
+    for (const event of sent) {
+      if (!DisbursementWebhookService.isSentPix(event)) continue;
+      const outcome = this.disbursements
+        ? await this.disbursements.apply(event)
+        : { result: 'UNKNOWN_SEND_ID' as const, companyId: undefined };
+      if (outcome.result !== 'APPLIED' && outcome.result !== 'IGNORED')
+        await this.recordWebhookAnomaly(
+          'PIX',
+          outcome.result,
+          event.gnExtras.idEnvio,
+          outcome.companyId,
+        );
+    }
+    return sent.length > 0;
   }
 
   private extractPixEvents(

@@ -21,6 +21,7 @@ import { FinancialActivationModule } from './financial-activation/financial-acti
 import { SettlementsModule } from './settlements/settlements.module';
 import { CommunicationsModule } from './communications/communications.module';
 import { ContactModule } from './contact/contact.module';
+import { DisbursementsModule } from './disbursements/disbursements.module';
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { ContactModule } from './contact/contact.module';
     SettlementsModule,
     CommunicationsModule,
     ContactModule,
+    DisbursementsModule,
   ],
   providers: [
     {

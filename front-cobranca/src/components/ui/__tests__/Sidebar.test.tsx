@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { Sidebar } from "../Sidebar";
 import { FinancialActivationContext } from "@/components/features/financial-activation-context";
 
@@ -12,9 +12,15 @@ jest.mock("next/navigation", () => ({
   usePathname: () => mockPathname,
 }));
 
+const mockApi = {
+  getDisbursementStatus: jest.fn().mockResolvedValue({ enabled: false }),
+};
+jest.mock("@/lib/use-api-client", () => ({ useApiClient: () => mockApi }));
+
 jest.mock("next-auth/react", () => ({
   signOut: jest.fn(),
   useSession: () => ({
+    status: "authenticated",
     data: {
       user: {
         email: "admin@cobrapix.com",
@@ -142,5 +148,36 @@ describe("financial activation entry", () => {
       </FinancialActivationContext.Provider>,
     );
     expect(Boolean(screen.queryByRole("link", { name: /Ativação financeira/ }))).toBe(shown);
+  });
+});
+
+describe("Sidebar: collaborator payments", () => {
+  beforeEach(() => {
+    mockPathname = "/cobrancas";
+    mockRole = "COMPANY_ADMIN";
+  });
+
+  it("shows the item only to a company with the feature released", async () => {
+    mockApi.getDisbursementStatus.mockResolvedValueOnce({ enabled: true });
+    renderSidebar();
+    expect(
+      await screen.findByRole("link", { name: /Pagamentos a colaboradores/ }),
+    ).toHaveAttribute("href", "/pagamentos-colaboradores");
+  });
+
+  it("keeps it hidden when not released or when the check fails", async () => {
+    mockApi.getDisbursementStatus.mockRejectedValueOnce(new Error("offline"));
+    renderSidebar();
+    await waitFor(() => expect(mockApi.getDisbursementStatus).toHaveBeenCalled());
+    expect(
+      screen.queryByRole("link", { name: /Pagamentos a colaboradores/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("never asks for platform admins", () => {
+    mockRole = "PLATFORM_ADMIN";
+    mockApi.getDisbursementStatus.mockClear();
+    renderSidebar();
+    expect(mockApi.getDisbursementStatus).not.toHaveBeenCalled();
   });
 });

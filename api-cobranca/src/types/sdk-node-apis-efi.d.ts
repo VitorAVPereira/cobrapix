@@ -189,8 +189,51 @@ declare module 'sdk-node-apis-efi' {
     }>;
   }
 
+  interface PixSendBody {
+    valor: string;
+    pagador: { chave: string; infoPagador?: string };
+    favorecido:
+      | { chave: string; cpf?: string; cnpj?: string }
+      | {
+          contaBanco: {
+            nome: string;
+            cpf?: string;
+            cnpj?: string;
+            codigoBanco: string;
+            agencia: string;
+            conta: string;
+            tipoConta: string;
+          };
+        };
+  }
+
+  // Shape confirmed in homologation (docs/implementation/efi-disbursement-validation.md).
+  interface PixSendResponse {
+    idEnvio: string;
+    e2eId: string;
+    valor: string;
+    horario: { solicitacao: string };
+    status: string;
+  }
+
+  interface PixSentDetail {
+    endToEndId: string;
+    idEnvio: string;
+    valor: string;
+    chave: string;
+    status: string;
+    horario: { solicitacao: string; liquidacao?: string };
+  }
+
   export default class EfiPay {
     constructor(options: EfiPayOptions);
+    pixSend(
+      params: { idEnvio: string },
+      body: PixSendBody,
+    ): Promise<PixSendResponse>;
+    pixSendDetailId(params: { idEnvio: string }): Promise<PixSentDetail>;
+    getAccountBalance(): Promise<{ saldo: string }>;
+    pixGetReceipt(params: { idEnvio: string }): Promise<Buffer>;
     pixListEvp(): Promise<{ chaves: string[] }>;
     pixCreateEvp(): Promise<{ chave: string }>;
     pixConfigWebhook(

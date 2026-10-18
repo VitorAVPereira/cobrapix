@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
@@ -20,11 +20,13 @@ import {
   Settings,
   SlidersHorizontal,
   Scale,
+  Send,
   Users,
   Wallet,
   X,
 } from "lucide-react";
 import { useFinancialActivation } from "@/components/features/financial-activation-context";
+import { useApiClient } from "@/lib/use-api-client";
 
 const dashboardItem = {
   href: "/",
@@ -107,6 +109,36 @@ const adminItems = [
   },
 ];
 
+// Shown only to companies with collaborator payments released by the admin.
+const disbursementsItem = {
+  href: "/pagamentos-colaboradores",
+  label: "Pagamentos a colaboradores",
+  icon: Send,
+};
+
+function useDisbursementsEnabled(isCompany: boolean): boolean {
+  const api = useApiClient();
+  const { status } = useSession();
+  const [enabled, setEnabled] = useState(false);
+  useEffect(() => {
+    if (!isCompany || status !== "authenticated") return;
+    let current = true;
+    api
+      .getDisbursementStatus()
+      .then((result) => {
+        if (current) setEnabled(result.enabled);
+      })
+      // A failed check hides the item; the page itself explains a real error.
+      .catch(() => {
+        if (current) setEnabled(false);
+      });
+    return () => {
+      current = false;
+    };
+  }, [api, isCompany, status]);
+  return enabled;
+}
+
 interface SidebarProps {
   open: boolean;
   onClose: () => void;
@@ -123,6 +155,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const DashboardIcon = dashboardItem.icon;
   const isPlatformAdmin = session?.user.role === "PLATFORM_ADMIN";
   const { openingEnabled, canIssue } = useFinancialActivation();
+  const disbursementsEnabled = useDisbursementsEnabled(!isPlatformAdmin);
   // Self-service activation stays hidden while the opening API is disabled,
   // and an active company is never invited to activate again.
   const visibleSettingsItems = settingsItems.filter(
@@ -204,7 +237,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                   <span>{dashboardItem.label}</span>
                 </Link>
 
-                {mainItems.map((item) => {
+                {[...mainItems, ...(disbursementsEnabled ? [disbursementsItem] : [])].map((item) => {
                   const Icon = item.icon;
                   const isActive = isCurrentPath(pathname, item.href);
 

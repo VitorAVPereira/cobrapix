@@ -203,6 +203,59 @@ export interface CardSettings {
 }
 export interface CardSettingsOverview { activeIssuerIdentityId: string | null; settings: CardSettings[] }
 export interface CardAttempt { reviewRequired?: boolean; id: string; invoiceId: string; status: string; totalCents: number; installments: number; createdAt: string }
+
+// Collaborator payments (Pix from the company's own Efí account, approved on WhatsApp).
+export interface DisbursementSettingsVersion {
+  id: string; version: number; enabled: boolean; approverName: string; approverPhone: string;
+  changedByUserId: string; createdAt: string;
+}
+export interface DisbursementSettingsView {
+  current: DisbursementSettingsVersion | null;
+  history: DisbursementSettingsVersion[];
+  readiness: { ready: boolean; missing: { code: string; message: string }[] };
+}
+export interface DisbursementStatus {
+  enabled: boolean; approverName: string | null; approverPhoneMasked: string | null;
+}
+export type DisbursementDocumentType = "CPF" | "CNPJ";
+export interface DisbursementRecipientInput {
+  name: string; document: string; pixKey?: string | null; bankIspb?: string | null;
+  bankAgency?: string | null; bankAccount?: string | null; bankAccountType?: string | null;
+}
+export interface DisbursementRecipient extends DisbursementRecipientInput {
+  id: string; documentType: DisbursementDocumentType; active: boolean; version: number;
+  createdAt: string; updatedAt: string;
+}
+export interface Page<T> { items: T[]; total: number; page: number; pageSize: number }
+export type DisbursementBatchStatus =
+  | "DRAFT" | "AWAITING_APPROVAL" | "PROCESSING" | "COMPLETED"
+  | "COMPLETED_WITH_FAILURES" | "REJECTED" | "EXPIRED" | "CANCELED";
+export type DisbursementItemStatus =
+  | "PENDING" | "SENDING" | "IN_PROCESSING" | "PAID" | "FAILED" | "UNCERTAIN" | "CANCELED";
+export interface DisbursementBatchSummary {
+  id: string; reference: string; status: DisbursementBatchStatus; totalCents: number;
+  itemCount: number; retryOfBatchId: string | null; version: number; createdAt: string;
+  updatedAt: string; completedAt: string | null;
+}
+export interface DisbursementItem {
+  id: string; recipientId: string; recipientName: string; documentType: DisbursementDocumentType;
+  document: string; pixKey: string | null; bankIspb: string | null; bankAgency: string | null;
+  bankAccount: string | null; bankAccountType: string | null; amountCents: number;
+  status: DisbursementItemStatus; failureCode: string | null; failureReason: string | null;
+  sentAt: string | null; settledAt: string | null;
+}
+export interface DisbursementBatch extends DisbursementBatchSummary {
+  items: DisbursementItem[];
+  approval: { requestNumber: number; state: string; expiresAt: string; decidedAt: string | null } | null;
+  skippedInactive?: number;
+}
+export interface DisbursementBatchInput {
+  reference: string; items: { recipientId: string; amountCents: number }[];
+}
+export interface DisbursementItemUnderVerification {
+  id: string; batchId: string; recipientName: string; amountCents: number; status: string;
+  idEnvio: string; sendingAt: string | null; lastCheckedAt: string | null;
+}
 export type BillingMethod = "PIX" | "BOLETO" | "BOLIX" | "CREDIT_CARD";
 export type UserRole = "PLATFORM_ADMIN" | "COMPANY_ADMIN";
 export type CompanyStatus = "ACTIVE" | "INACTIVE" | "SUSPENDED";
@@ -1402,6 +1455,85 @@ class ApiClient {
   getCardPaymentAttempts(companyId: string): Promise<CardAttempt[]> { return this.fetch(`/admin/card-payments/${companyId}/attempts`); }
   reconcileCardPayment(companyId: string, attemptId: string): Promise<{ state: string; reviewRequired: boolean }> {
     return this.fetch(`/admin/card-payments/${companyId}/attempts/${attemptId}/reconcile`, { method: "POST" });
+  }
+
+  // Collaborator payments: admin.
+  getDisbursementSettings(companyId: string): Promise<DisbursementSettingsView> {
+    return this.fetch(`/admin/disbursements/${companyId}/settings`);
+  }
+  configureDisbursements(
+    companyId: string,
+    body: { expectedVersion: number; enabled: boolean; approverName: string; approverPhone: string },
+  ): Promise<DisbursementSettingsVersion> {
+    return this.fetch(`/admin/disbursements/${companyId}/settings`, { method: "POST", body: JSON.stringify(body) });
+  }
+  getDisbursementsUnderVerification(companyId: string): Promise<DisbursementItemUnderVerification[]> {
+    return this.fetch(`/admin/disbursements/${companyId}/items/under-verification`);
+  }
+  checkDisbursementItem(companyId: string, itemId: string): Promise<{ id: string; status: string; failureReason: string | null }> {
+    return this.fetch(`/admin/disbursements/${companyId}/items/${itemId}/check`, { method: "POST" });
+  }
+
+  // Collaborator payments: the session company.
+  getDisbursementStatus(): Promise<DisbursementStatus> {
+    return this.fetch("/disbursements/status");
+  }
+  listDisbursementRecipients(
+    query: { search?: string; includeInactive?: boolean; page?: number; pageSize?: number },
+    signal?: AbortSignal,
+  ): Promise<Page<DisbursementRecipient>> {
+    return this.fetch(
+      `/disbursements/recipients${this.buildQueryString({
+        search: query.search,
+        includeInactive: query.includeInactive ? "true" : undefined,
+        page: query.page,
+        pageSize: query.pageSize,
+      })}`,
+      { signal },
+    );
+  }
+  createDisbursementRecipient(body: DisbursementRecipientInput): Promise<DisbursementRecipient> {
+    return this.fetch("/disbursements/recipients", { method: "POST", body: JSON.stringify(body) });
+  }
+  updateDisbursementRecipient(
+    id: string,
+    body: DisbursementRecipientInput & { expectedVersion: number; active: boolean },
+  ): Promise<DisbursementRecipient> {
+    return this.fetch(`/disbursements/recipients/${id}`, { method: "PUT", body: JSON.stringify(body) });
+  }
+  importDisbursementRecipients(rows: DisbursementRecipientInput[]): Promise<{ created: number; skipped: number }> {
+    return this.fetch("/disbursements/recipients/import", { method: "POST", body: JSON.stringify({ rows }) });
+  }
+  listDisbursementBatches(
+    query: { status?: DisbursementBatchStatus; page?: number; pageSize?: number },
+    signal?: AbortSignal,
+  ): Promise<Page<DisbursementBatchSummary>> {
+    return this.fetch(`/disbursements/batches${this.buildQueryString({ status: query.status, page: query.page, pageSize: query.pageSize })}`, { signal });
+  }
+  getDisbursementBatch(id: string, signal?: AbortSignal): Promise<DisbursementBatch> {
+    return this.fetch(`/disbursements/batches/${id}`, { signal });
+  }
+  createDisbursementBatch(body: DisbursementBatchInput): Promise<DisbursementBatch> {
+    return this.fetch("/disbursements/batches", { method: "POST", body: JSON.stringify(body) });
+  }
+  updateDisbursementBatch(id: string, body: DisbursementBatchInput & { expectedVersion: number }): Promise<DisbursementBatch> {
+    return this.fetch(`/disbursements/batches/${id}`, { method: "PUT", body: JSON.stringify(body) });
+  }
+  cancelDisbursementBatch(id: string): Promise<DisbursementBatch> {
+    return this.fetch(`/disbursements/batches/${id}/cancel`, { method: "POST" });
+  }
+  retryDisbursementFailures(id: string): Promise<DisbursementBatch> {
+    return this.fetch(`/disbursements/batches/${id}/retry-failed`, { method: "POST" });
+  }
+  requestDisbursementApproval(id: string, expectedVersion: number): Promise<DisbursementBatch> {
+    return this.fetch(`/disbursements/batches/${id}/request-approval`, {
+      method: "POST",
+      body: JSON.stringify({ expectedVersion }),
+    });
+  }
+  async fetchDisbursementReceipt(itemId: string): Promise<Blob> {
+    const response = await this.send(`/disbursements/items/${encodeURIComponent(itemId)}/receipt`, { cache: "no-store" });
+    return response.blob();
   }
 
   private buildMissingAuthError(): ApiError {

@@ -312,6 +312,54 @@ describe("TemplateMappingEditor", () => {
     );
   });
 
+  it("maps which quick reply approves and which refuses a collaborator payment", async () => {
+    mockApi.getAdminWhatsappTemplate.mockResolvedValue(
+      template({
+        variables: ["1"],
+        content: {
+          body: "Olá {{1}}, aprove o lote.",
+          footer: null,
+          button: null,
+          quickReplies: ["Aprovar pagamento", "Recusar"],
+        },
+      }),
+    );
+    mockApi.saveWhatsappTemplateMapping.mockResolvedValue({ mappingRevision: 1 });
+    renderEditor();
+    fireEvent.change(await screen.findByLabelText("Variável {{1}}"), {
+      target: { value: "APPROVER_NAME" },
+    });
+    fireEvent.change(screen.getByLabelText("Resposta que aprova"), {
+      target: { value: "0" },
+    });
+    // Only one of the two chosen: cannot be saved.
+    expect(screen.getByRole("button", { name: "Salvar variáveis" })).toBeDisabled();
+    expect(
+      screen.getByText("Escolha as duas respostas, diferentes entre si, ou nenhuma."),
+    ).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Resposta que recusa"), {
+      target: { value: "1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar variáveis" }));
+    await waitFor(() =>
+      expect(mockApi.saveWhatsappTemplateMapping).toHaveBeenCalledWith(
+        "tpl-1",
+        expect.objectContaining({
+          mapping: {
+            body: { "1": { kind: "SOURCE", source: "APPROVER_NAME" } },
+            decisionButtons: { approve: 0, reject: 1 },
+          },
+        }),
+      ),
+    );
+  });
+
+  it("offers no decision buttons for a template with fewer than two quick replies", async () => {
+    renderEditor();
+    await screen.findByLabelText("Variável {{1}}");
+    expect(screen.queryByLabelText("Resposta que aprova")).toBeNull();
+  });
+
   it("offers no mapping for an unsupported format", async () => {
     mockApi.getAdminWhatsappTemplate.mockResolvedValue(
       template({ supported: false, supportReason: "HEADER_MEDIA", variables: [] }),

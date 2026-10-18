@@ -13,6 +13,9 @@ export const TEMPLATE_PURPOSES = [
   "CRITICAL_OVERDUE",
   "ACTIVATION_NOTICE",
   "ACTIVATION_REMINDER",
+  "DISBURSEMENT_APPROVAL",
+  "DISBURSEMENT_EXPIRED",
+  "DISBURSEMENT_FAILED",
 ] as const;
 export type TemplatePurpose = (typeof TEMPLATE_PURPOSES)[number];
 
@@ -25,6 +28,9 @@ export const PURPOSE_LABELS: Record<TemplatePurpose, string> = {
   CRITICAL_OVERDUE: "Atraso crítico",
   ACTIVATION_NOTICE: "Aviso de ativação financeira",
   ACTIVATION_REMINDER: "Lembrete de ativação financeira",
+  DISBURSEMENT_APPROVAL: "Pagamento a colaboradores: pedido de aprovação",
+  DISBURSEMENT_EXPIRED: "Pagamento a colaboradores: lote expirado",
+  DISBURSEMENT_FAILED: "Pagamento a colaboradores: falhas no lote",
 };
 
 export const TEMPLATE_SOURCES = [
@@ -38,6 +44,13 @@ export const TEMPLATE_SOURCES = [
   "BOLETO_LINK",
   "BOLETO_PDF",
   "REPRESENTATIVE_NAME",
+  "APPROVER_NAME",
+  "DISBURSEMENT_REFERENCE",
+  "DISBURSEMENT_COUNT",
+  "DISBURSEMENT_TOTAL",
+  "DISBURSEMENT_EXPIRES_AT",
+  "DISBURSEMENT_FAILURE_COUNT",
+  "DISBURSEMENT_FAILURES",
 ] as const;
 export type TemplateSource = (typeof TEMPLATE_SOURCES)[number];
 
@@ -52,6 +65,13 @@ export const SOURCE_LABELS: Record<TemplateSource, string> = {
   BOLETO_LINK: "Link do boleto",
   BOLETO_PDF: "PDF do boleto",
   REPRESENTATIVE_NAME: "Nome do representante",
+  APPROVER_NAME: "Nome do aprovador (pagamentos)",
+  DISBURSEMENT_REFERENCE: "Referência do lote de pagamentos",
+  DISBURSEMENT_COUNT: "Quantidade de pagamentos do lote",
+  DISBURSEMENT_TOTAL: "Total do lote de pagamentos",
+  DISBURSEMENT_EXPIRES_AT: "Validade do pedido de aprovação",
+  DISBURSEMENT_FAILURE_COUNT: "Quantidade de pagamentos com falha",
+  DISBURSEMENT_FAILURES: "Pagamentos com falha e motivos",
 };
 
 export type TemplateBinding =
@@ -63,6 +83,8 @@ export interface TemplateMapping {
   paymentButton?: { index: number; source: "PAYMENT_URL_SUFFIX" };
   pixButton?: { index: number; source: "PIX_COPY_PASTE" };
   boletoButton?: { index: number; source: "BOLETO_LINE" };
+  /** Collaborator payments: positions among the quick replies of approve and refuse. */
+  decisionButtons?: { approve: number; reject: number };
 }
 
 export type TemplateBlockCode =
