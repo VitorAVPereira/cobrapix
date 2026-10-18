@@ -27,7 +27,8 @@ Primeira tela da melhoria visual das telas de usuário. Para o Dashboard:
 3. **Período:**
    - atalhos Hoje, 7 dias, 30 dias, Este mês, Este ano e Personalizado (intervalo de datas);
    - todos os blocos seguem o período, inclusive WhatsApp e e-mail;
-   - os indicadores mostram a variação contra o período anterior.
+   - comparação com o período anterior só na taxa de recebimento, e só quando ela sobe: mostra
+     "antes: X%" (ajuste de 18/10; "Recebido" não tem comparação, e "p.p." confundia).
 4. **Gráficos com Recharts.** É uma dependência nova do frontend.
 5. **Fuso:** dias e períodos contados no horário de São Paulo, não no relógio do servidor.
 
@@ -69,7 +70,7 @@ Resposta:
     key, startDate, endDate, previousStartDate, previousEndDate,
     granularity: 'day' | 'month',
   };
-  received: { amount, count, previousAmount, previousCount };
+  received: { amount, count };
   collectionRate: { dueAmount, paidAmount, rate: number | null, previousRate: number | null };
   open: { amount, count, upcomingAmount, upcomingCount, overdueAmount, overdueCount };
   overdueAging: { range: '1-15' | '16-30' | '31-60' | '60+', amount, count }[];
@@ -82,11 +83,12 @@ Resposta:
 
 ## Tela
 
-1. **Cabeçalho:** "Visão geral", o intervalo e os botões de período. "Personalizado" abre dois
+1. **Cabeçalho:** "Visão geral", o intervalo escolhido (sem o período de comparação) e os botões
+   de período. "Personalizado" abre dois
    campos de data com "Aplicar".
 2. **Quatro indicadores:**
-   - Recebido (com variação);
-   - Taxa de recebimento (com variação em pontos percentuais);
+   - Recebido;
+   - Taxa de recebimento ("antes: X%" quando subiu);
    - Em aberto;
    - Vencidas.
 3. **Gráficos:**
@@ -106,3 +108,26 @@ Resposta:
 
 - As demais telas de usuário (próximas etapas).
 - Remover `GET /billing/metrics`: pode sair depois que o frontend novo estiver publicado.
+
+## Registro de execução (18/10/2026)
+
+- **Backend:**
+  - `GET /billing/dashboard` em `CompanyDashboardService`, com os períodos em
+    `billing/dashboard-period.ts`;
+  - as estatísticas de WhatsApp e e-mail passaram a aceitar um intervalo, sem mudar
+    `/whatsapp/stats` e `/email/stats`.
+- **Frontend:**
+  - página `/` refeita, com `PeriodFilter` e `DashboardCharts` em
+    `components/features/dashboard/`;
+  - Recharts 3.10.1, publicada em 25/07/2026;
+  - ícone do menu trocado para `LayoutDashboard`;
+  - o método `getBillingMetrics` do cliente da API foi substituído por `getCompanyDashboard`.
+- **Teste ajustado:** `messaging-limit.service.spec` passou a esperar o limite final do intervalo
+  de 24 h.
+- **Verificação no navegador:**
+  - ambiente: PostgreSQL e Redis descartáveis, com seed e faturas de exemplo;
+  - períodos conferidos: 30 dias, Este ano (agrupado por mês) e Personalizado (data invertida
+    recusada; intervalo válido aplicado);
+  - celular (375 px) sem rolagem horizontal; console sem erros;
+  - totais conferidos com os dados inseridos: vencidas, a vencer, faixas de atraso e formas (Boleto
+    somando boleto e BOLIX).
