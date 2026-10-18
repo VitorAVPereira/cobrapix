@@ -16,6 +16,18 @@ export function validateDebtorDocument(value: string): DebtorDocumentValidation 
   };
 }
 
+/** "52998224725" → "529.982.247-25"; CNPJ as "11.222.333/0001-81". */
+export function formatDebtorDocument(document: string | null): string {
+  if (!document) return "Sem CPF/CNPJ";
+  if (document.length === 11) {
+    return document.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4");
+  }
+  if (document.length === 14) {
+    return document.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5");
+  }
+  return document;
+}
+
 export function normalizeRequiredDebtorDocument(value: string): string {
   const result = validateDebtorDocument(value);
 

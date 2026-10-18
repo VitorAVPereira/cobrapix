@@ -6,17 +6,7 @@ import { Loader2, Search, UserPlus, UserRound } from "lucide-react";
 import type { DebtorOption } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 import { formatWhatsAppNumber } from "@/lib/whatsapp-number";
-
-export function formatDocument(document: string | null): string {
-  if (!document) return "Sem CPF/CNPJ";
-  if (document.length === 11) {
-    return document.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4");
-  }
-  if (document.length === 14) {
-    return document.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5");
-  }
-  return document;
-}
+import { formatDebtorDocument as formatDocument } from "@/lib/debtor-document";
 
 /**
  * Chooses a client already registered in Clientes. The search runs on the

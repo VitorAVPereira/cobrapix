@@ -32,10 +32,10 @@ Especificação: `docs/superpowers/specs/2026-10-18-cobrancas-tela-design.md`.
 
 ## Tarefa 5: importação com revisão no frontend
 
-- [ ] Análise, modais de revisão (Cadastro × Planilha, WhatsApp em uso, documento duplicado),
+- [x] Análise, modais de revisão (Cadastro × Planilha, WhatsApp em uso, documento duplicado),
   "Aplicar a todos os próximos" e andamento.
-- [ ] Envio com `decisions`; tratar 409; resumo do que foi importado e do que ficou de fora.
-- [ ] Testes. Commit.
+- [x] Envio com `decisions`; tratar 409; resumo do que foi importado e do que ficou de fora.
+- [x] Testes. Commit.
 
 ## Tarefa 6: verificação e fechamento
 

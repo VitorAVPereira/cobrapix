@@ -458,6 +458,53 @@ export interface DebtorCollectionProfile {
   profileType: CollectionProfileType;
 }
 
+export type ImportField = "name" | "phone" | "email";
+
+export interface ImportClientData {
+  name: string;
+  phone: string;
+  email: string | null;
+}
+
+export interface ImportExistingClient extends ImportClientData {
+  debtorId: string;
+  document: string | null;
+  whatsappOptIn: boolean;
+  version: string;
+}
+
+/** One client of the spreadsheet (row indexes are 0-based) and what exists already. */
+export type ImportClientReview = {
+  document: string;
+  rows: number[];
+  csv: ImportClientData;
+  optIn: boolean;
+  phoneOwner: { debtorId: string; name: string } | null;
+} & (
+  | { kind: "NEW" }
+  | { kind: "SAME"; existing: ImportExistingClient }
+  | { kind: "DIFFERENT"; existing: ImportExistingClient; differences: ImportField[] }
+  | { kind: "PHONE_TAKEN" }
+  | { kind: "DUPLICATE_DOCUMENT"; candidates: ImportExistingClient[] }
+);
+
+export type ImportDecision =
+  | { document: string; action: "SKIP" }
+  | {
+      document: string;
+      action: "LINK";
+      debtorId: string;
+      version: string;
+      use: Record<ImportField, "CSV" | "EXISTING">;
+    };
+
+export interface ImportResult {
+  success: boolean;
+  count: number;
+  initialChargeQueued: number;
+  skipped: { document: string; name: string; rows: number[] }[];
+}
+
 export interface DebtorOption {
   debtorId: string;
   name: string;
@@ -1710,10 +1757,23 @@ class ApiClient {
     }>(`/invoices${qsStr ? `?${qsStr}` : ""}`, { signal });
   }
 
-  async importInvoices(data: ReadonlyArray<unknown>): Promise<unknown> {
+  /** What the import would do with each client of the spreadsheet. */
+  previewInvoiceImport(
+    rows: ReadonlyArray<unknown>,
+  ): Promise<{ clients: ImportClientReview[] }> {
+    return this.fetch("/invoices/import/preview", {
+      method: "POST",
+      body: JSON.stringify({ rows }),
+    });
+  }
+
+  importInvoices(
+    rows: ReadonlyArray<unknown>,
+    decisions: ImportDecision[],
+  ): Promise<ImportResult> {
     return this.fetch("/invoices/import", {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify({ rows, decisions }),
     });
   }
 

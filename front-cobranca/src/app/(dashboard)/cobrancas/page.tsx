@@ -35,6 +35,8 @@ import type {
   CollectionChannel,
   CreatePaymentResponse,
   DebtorOption,
+  ImportClientReview,
+  ImportDecision,
   InvoiceListSort,
   InvoicePaymentStatusResponse,
   SelectedBillingContactInput,
@@ -47,6 +49,9 @@ import {
   type InvoiceFilterValues,
 } from "@/components/features/invoices/InvoiceFilters";
 import { ClientPicker } from "@/components/features/invoices/ClientPicker";
+import { ImportReview } from "@/components/features/invoices/ImportReview";
+import { ImportSummary } from "@/components/features/invoices/ImportSummary";
+import { errorCode } from "@/lib/disbursements";
 import { formatBillingMethodRateLabel } from "@/lib/billing-fees";
 import { useApiClient } from "@/lib/use-api-client";
 import { useFinancialActivation } from "@/components/features/financial-activation-context";
@@ -380,6 +385,12 @@ function CobrancasContent() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  // Import in steps: analysis, review of the clients that need a decision, summary.
+  const [importRows, setImportRows] = useState<ParsedDebtor[] | null>(null);
+  const [importClients, setImportClients] = useState<ImportClientReview[]>([]);
+  const [reviewQueue, setReviewQueue] = useState<ImportClientReview[] | null>(null);
+  const [importDecisions, setImportDecisions] = useState<ImportDecision[] | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
 
   const fetchInvoices = useCallback(async (): Promise<void> => {
     // A slower answer for a previous filter must not replace the current list.
@@ -440,19 +451,118 @@ function CobrancasContent() {
 
   const isEducationSegment = billingSettings?.businessSegment === "EDUCATION";
 
+  function resetImport(): void {
+    setImportRows(null);
+    setImportClients([]);
+    setReviewQueue(null);
+    setImportDecisions(null);
+  }
+
+  async function analyzeImport(rows: ParsedDebtor[]): Promise<void> {
+    setIsImporting(true);
+    try {
+      const { clients } = await apiClient.previewInvoiceImport(rows);
+      const queue = clients.filter(
+        (client) => client.kind !== "NEW" && client.kind !== "SAME",
+      );
+      setImportRows(rows);
+      setImportClients(clients);
+      setImportDecisions(queue.length === 0 ? [] : null);
+      setReviewQueue(queue.length > 0 ? queue : null);
+    } catch (error: unknown) {
+      resetImport();
+      setImportError(
+        getErrorMessage(error, "Não foi possível analisar a planilha."),
+      );
+    } finally {
+      setIsImporting(false);
+    }
+  }
+
   async function handleUploadSuccess(
     importedDebtors: ParsedDebtor[],
   ): Promise<void> {
     setImportError(null);
+    await analyzeImport(importedDebtors);
+  }
 
+  /** A replacement WhatsApp for a new client whose number belongs to someone else. */
+  async function validateImportPhone(
+    client: ImportClientReview,
+    phone: string,
+  ): Promise<string | null> {
+    if (!importRows) return "Envie a planilha de novo.";
+    let normalized: string;
     try {
-      await apiClient.importInvoices(importedDebtors);
+      normalized = normalizeWhatsAppNumber(phone);
+    } catch {
+      return "Informe um WhatsApp válido, com DDD.";
+    }
+    if (
+      importClients.some(
+        (other) =>
+          other.document !== client.document &&
+          other.csv.phone.replace(/\D/g, "") === normalized.replace(/\D/g, ""),
+      )
+    ) {
+      return "Este WhatsApp já está em outra linha da planilha.";
+    }
+    const rows = importRows.map((row, index) =>
+      client.rows.includes(index) ? { ...row, phone_number: normalized } : row,
+    );
+    try {
+      const { clients } = await apiClient.previewInvoiceImport(
+        client.rows.map((index) => rows[index]),
+      );
+      const [checked] = clients;
+      if (checked?.kind !== "NEW") {
+        return checked?.phoneOwner
+          ? `Este WhatsApp também já é de ${checked.phoneOwner.name}.`
+          : "Não foi possível usar este WhatsApp.";
+      }
+      setImportRows(rows);
+      setImportClients((current) =>
+        current.map((item) =>
+          item.document === client.document
+            ? { ...client, kind: "NEW", phoneOwner: null, csv: { ...client.csv, phone: normalized } }
+            : item,
+        ),
+      );
+      return null;
+    } catch (error: unknown) {
+      return getErrorMessage(error, "Não foi possível verificar este WhatsApp.");
+    }
+  }
+
+  async function confirmImport(): Promise<void> {
+    if (!importRows || !importDecisions) return;
+    setIsImporting(true);
+    setImportError(null);
+    try {
+      const result = await apiClient.importInvoices(importRows, importDecisions);
+      resetImport();
       setIsUploadingCSV(false);
+      setErrorMsg(null);
+      setSuccessMsg(
+        result.skipped.length > 0
+          ? `${result.count} cobranças importadas. Ficaram de fora as cobranças de: ${result.skipped
+              .map((client) => client.name)
+              .join(", ")}.`
+          : `${result.count} cobranças importadas.`,
+      );
       await fetchInvoices();
     } catch (error: unknown) {
-      setImportError(
-        getErrorMessage(error, "Nao foi possivel importar a planilha."),
-      );
+      const code = errorCode(error);
+      if (code === "IMPORT_CHANGED" || code === "IMPORT_NEEDS_REVIEW") {
+        setImportError(getErrorMessage(error, "Revise a importação de novo."));
+        await analyzeImport(importRows);
+      } else {
+        setImportError(
+          getErrorMessage(error, "Não foi possível importar a planilha."),
+        );
+      }
+    } finally {
+      setIsImporting(false);
     }
   }
 
@@ -964,10 +1074,10 @@ function CobrancasContent() {
             <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h2 className="font-semibold text-slate-900">
-                  Importar cobranças por CSV
+                  Importar cobranças por planilha
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Envie uma planilha para cadastrar cobranças em lote.
+                  Cada linha é ligada ao cliente com o mesmo CPF/CNPJ; quem não existe é cadastrado. Divergências com o cadastro são revisadas antes de importar.
                 </p>
               </div>
 
@@ -975,6 +1085,7 @@ function CobrancasContent() {
                 type="button"
                 onClick={() => {
                   setImportError(null);
+                  resetImport();
                   setIsUploadingCSV(false);
                 }}
                 className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-all duration-200 hover:bg-slate-100 hover:text-slate-900"
@@ -991,12 +1102,28 @@ function CobrancasContent() {
               </div>
             )}
 
-            <UploadCSV
-              showEducationFields={isEducationSegment}
-              onUploadSuccess={(importedDebtors) => {
-                void handleUploadSuccess(importedDebtors);
-              }}
-            />
+            {importRows && importDecisions ? (
+              <ImportSummary
+                rows={importRows.length}
+                clients={importClients}
+                decisions={importDecisions}
+                busy={isImporting}
+                onConfirm={() => void confirmImport()}
+                onCancel={resetImport}
+              />
+            ) : isImporting ? (
+              <p className="flex items-center gap-2 py-10 text-sm text-slate-500">
+                <Loader2 size={18} className="animate-spin" />
+                Analisando a planilha
+              </p>
+            ) : (
+              <UploadCSV
+                showEducationFields={isEducationSegment}
+                onUploadSuccess={(importedDebtors) => {
+                  void handleUploadSuccess(importedDebtors);
+                }}
+              />
+            )}
           </section>
         ) : (
           <section className="overflow-hidden rounded-md border border-slate-200 bg-white">
@@ -1339,6 +1466,18 @@ function CobrancasContent() {
             </form>
           </div>
         </div>
+      )}
+
+      {reviewQueue && (
+        <ImportReview
+          clients={reviewQueue}
+          onValidatePhone={validateImportPhone}
+          onComplete={(decisions) => {
+            setReviewQueue(null);
+            setImportDecisions(decisions);
+          }}
+          onCancel={resetImport}
+        />
       )}
 
       {feePreview && (

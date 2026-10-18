@@ -14,6 +14,7 @@ const mockApiClient = {
   createInvoice: jest.fn(),
   createDebtorInvoice: jest.fn(),
   searchDebtors: jest.fn(),
+  previewInvoiceImport: jest.fn(),
   runSelectedBilling: jest.fn(),
   createPayment: jest.fn(),
   getInvoicePaymentStatus: jest.fn(),
@@ -34,8 +35,16 @@ jest.mock("@/components/features/InvoiceTable", () => ({
   InvoiceTable: () => <div>Tabela de cobrancas</div>,
 }));
 
+const mockRows = [
+  { name: "Ana Souza", document: "52998224725", phone_number: "11999990001", original_amount: 100, due_date: "2026-11-10" },
+  { name: "Bruno", document: "11144477735", phone_number: "11999990002", original_amount: 50, due_date: "2026-11-10" },
+];
 jest.mock("@/components/features/UploadCSV", () => ({
-  UploadCSV: () => <div>Upload CSV</div>,
+  UploadCSV: ({ onUploadSuccess }: { onUploadSuccess: (rows: unknown[]) => void }) => (
+    <button type="button" onClick={() => onUploadSuccess(mockRows)}>
+      Enviar planilha
+    </button>
+  ),
 }));
 
 jest.mock("@/components/features/DebtorSettingsModal", () => ({
@@ -257,6 +266,101 @@ describe("CobrancasPage URL filters", () => {
       expect(within(dialog).getByRole("option", { name: /Bolix/i }).closest("select")).toHaveValue(
         "BOLIX",
       );
+    });
+  });
+
+  describe("Importação por planilha", () => {
+    const newClient = (document: string, rows: number[], name: string) => ({
+      document,
+      rows,
+      csv: { name, phone: "+5511999990001", email: null },
+      optIn: false,
+      phoneOwner: null,
+      kind: "NEW",
+    });
+
+    beforeEach(() => {
+      mockParams = new URLSearchParams("");
+      mockApiClient.previewInvoiceImport.mockReset();
+      mockApiClient.importInvoices.mockReset();
+    });
+
+    async function upload() {
+      render(<CobrancasPage />);
+      fireEvent.click(await screen.findByRole("button", { name: "Importar planilha" }));
+      fireEvent.click(screen.getByRole("button", { name: "Enviar planilha" }));
+    }
+
+    it("shows a summary and imports when no client needs review", async () => {
+      mockApiClient.previewInvoiceImport.mockResolvedValue({
+        clients: [newClient("52998224725", [0], "Ana Souza"), newClient("11144477735", [1], "Bruno")],
+      });
+      mockApiClient.importInvoices.mockResolvedValue({
+        success: true,
+        count: 2,
+        initialChargeQueued: 0,
+        skipped: [],
+      });
+      await upload();
+
+      expect(await screen.findByText("2 de 2")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Importar 2 cobranças" }));
+
+      await waitFor(() =>
+        expect(mockApiClient.importInvoices).toHaveBeenCalledWith(mockRows, []),
+      );
+      expect(await screen.findByText("2 cobranças importadas.")).toBeInTheDocument();
+    });
+
+    it("reviews a client with different data and leaves it out when asked", async () => {
+      mockApiClient.previewInvoiceImport.mockResolvedValue({
+        clients: [
+          {
+            ...newClient("52998224725", [0], "Ana Souza"),
+            kind: "DIFFERENT",
+            existing: {
+              debtorId: "debtor-ana",
+              document: "52998224725",
+              name: "Ana Maria",
+              phone: "+5511999990001",
+              email: null,
+              whatsappOptIn: false,
+              version: "v1",
+            },
+            differences: ["name"],
+          },
+          newClient("11144477735", [1], "Bruno"),
+        ],
+      });
+      await upload();
+
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Não importar este cliente" }));
+
+      expect(await screen.findByText(/Ficam de fora as cobranças de 1 cliente/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Importar 1 cobrança" }));
+      await waitFor(() =>
+        expect(mockApiClient.importInvoices).toHaveBeenCalledWith(mockRows, [
+          { document: "52998224725", action: "SKIP" },
+        ]),
+      );
+    });
+
+    it("reviews again when the clients changed since the review", async () => {
+      mockApiClient.previewInvoiceImport.mockResolvedValue({
+        clients: [newClient("52998224725", [0, 1], "Ana Souza")],
+      });
+      mockApiClient.importInvoices.mockRejectedValue(
+        Object.assign(new Error("Os cadastros de clientes mudaram desde a revisão."), {
+          status: 409,
+          data: { code: "IMPORT_CHANGED" },
+        }),
+      );
+      await upload();
+
+      fireEvent.click(await screen.findByRole("button", { name: "Importar 2 cobranças" }));
+      expect(await screen.findByText(/mudaram desde a revisão/)).toBeInTheDocument();
+      await waitFor(() => expect(mockApiClient.previewInvoiceImport).toHaveBeenCalledTimes(2));
     });
   });
 });
