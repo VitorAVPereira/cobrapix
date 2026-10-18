@@ -59,8 +59,11 @@ Primeira tela da melhoria visual das telas de usuário. Para o Dashboard:
 - **Acesso:** JWT da empresa; o `companyId` vem do token.
 - **Erros:** período personalizado incompleto, invertido, com data futura ou maior que 366 dias
   responde 400 com código estável `INVALID_DASHBOARD_PERIOD`.
-- **Compatibilidade:** `GET /billing/metrics`, `/whatsapp/stats` e `/email/stats` continuam iguais,
-  para o frontend publicado.
+- **Compatibilidade:**
+  - `GET /billing/metrics` foi removido a pedido (18/10/2026). O frontend publicado o usa: o
+    Dashboard antigo mostra erro entre a publicação do backend e a do frontend. Publique os dois em
+    sequência.
+  - `/whatsapp/stats` e `/email/stats` continuam iguais.
 
 Resposta:
 
@@ -84,8 +87,7 @@ Resposta:
 ## Tela
 
 1. **Cabeçalho:** "Visão geral", o intervalo escolhido (sem o período de comparação) e os botões
-   de período. "Personalizado" abre dois
-   campos de data com "Aplicar".
+   de período. "Personalizado" abre dois campos de data com "Aplicar".
 2. **Quatro indicadores:**
    - Recebido;
    - Taxa de recebimento ("antes: X%" quando subiu);
@@ -107,7 +109,6 @@ Resposta:
 ## Fora do escopo
 
 - As demais telas de usuário (próximas etapas).
-- Remover `GET /billing/metrics`: pode sair depois que o frontend novo estiver publicado.
 
 ## Registro de execução (18/10/2026)
 
@@ -131,3 +132,8 @@ Resposta:
   - celular (375 px) sem rolagem horizontal; console sem erros;
   - totais conferidos com os dados inseridos: vencidas, a vencer, faixas de atraso e formas (Boleto
     somando boleto e BOLIX).
+- **Limpeza (pedido de 18/10/2026):**
+  - backend: saíram `GET /billing/metrics`, `BillingService.getMetrics` e os cálculos de período
+    antigos;
+  - frontend: saíram `getWhatsappStats`, `getEmailStats` e `getWhatsappUsage` do cliente da API,
+    com os tipos e o teste que só eles usavam.
