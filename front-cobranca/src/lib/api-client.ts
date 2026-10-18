@@ -1822,9 +1822,11 @@ class ApiClient {
       profileId?: string;
       paymentStatus?: DebtorPaymentStatusFilter;
     } = {},
+    signal?: AbortSignal,
   ): Promise<DebtorListResponse> {
     return this.fetch<DebtorListResponse>(
       `/invoices/debtors${this.buildQueryString(params)}`,
+      { signal },
     );
   }
 

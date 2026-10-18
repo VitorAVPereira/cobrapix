@@ -11,6 +11,7 @@ import {
 } from "@tanstack/react-table";
 import type { ParsedDebtor } from "./UploadCSV";
 import type { InvoiceListSort } from "@/lib/api-client";
+import { TablePagination } from "@/components/ui/TablePagination";
 import {
   DebtorActionsMenu,
   type DebtorAction,
@@ -21,10 +22,6 @@ import {
   ArrowUp,
   ArrowUpDown,
   CalendarDays,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
   MessageCircle,
   AlertCircle,
   Clock,
@@ -71,7 +68,6 @@ interface InvoiceTableProps {
   onSortChange?: (sort: InvoiceListSort) => void;
 }
 
-const PAGE_SIZES = [20, 50, 100];
 
 const PROFILE_LABELS: Record<string, string> = {
   NEW: "Novo",
@@ -748,12 +744,7 @@ export function InvoiceTable({
   });
 
   const { pageIndex, pageSize } = pagination;
-  const rangeStart = total === 0 ? 0 : pageIndex * pageSize + 1;
-  const rangeEnd = Math.min((pageIndex + 1) * pageSize, total);
-  const totalPages = Math.max(table.getPageCount(), 1);
   const count = (value: number) => value.toLocaleString("pt-BR");
-  const pageButton =
-    "rounded-md border border-slate-200 bg-white p-2 text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40";
 
   return (
     <div>
@@ -894,82 +885,15 @@ export function InvoiceTable({
         })}
       </div>
 
-      <div className="flex flex-col items-center justify-between gap-3 border-t border-slate-200 bg-slate-50/50 px-4 py-3 sm:flex-row">
-        <div className="flex items-center gap-3">
-          <p className="text-sm text-slate-500">
-            <span className="font-medium text-slate-700 tabular-nums">
-              {count(rangeStart)}–{count(rangeEnd)}
-            </span>{" "}
-            de{" "}
-            <span className="font-medium text-slate-700 tabular-nums">
-              {count(total)}
-            </span>
-          </p>
-          <label>
-            <span className="sr-only">Cobranças por página</span>
-            <select
-              value={pageSize}
-              onChange={(e) =>
-                onPaginationChange({
-                  pageIndex: 0,
-                  pageSize: Number(e.target.value),
-                })
-              }
-              className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600"
-            >
-              {PAGE_SIZES.map((size) => (
-                <option key={size} value={size}>
-                  {size} por página
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        <nav aria-label="Paginação" className="flex items-center gap-1.5">
-          <button
-            type="button"
-            aria-label="Primeira página"
-            onClick={() => table.setPageIndex(0)}
-            disabled={!table.getCanPreviousPage()}
-            className={pageButton}
-          >
-            <ChevronsLeft size={16} />
-          </button>
-          <button
-            type="button"
-            aria-label="Página anterior"
-            onClick={() => table.previousPage()}
-            disabled={!table.getCanPreviousPage()}
-            className={pageButton}
-          >
-            <ChevronLeft size={16} />
-          </button>
-
-          <span className="px-3 py-1.5 text-sm font-medium text-slate-700 tabular-nums">
-            Página {count(pageIndex + 1)} de {count(totalPages)}
-          </span>
-
-          <button
-            type="button"
-            aria-label="Próxima página"
-            onClick={() => table.nextPage()}
-            disabled={!table.getCanNextPage()}
-            className={pageButton}
-          >
-            <ChevronRight size={16} />
-          </button>
-          <button
-            type="button"
-            aria-label="Última página"
-            onClick={() => table.setPageIndex(totalPages - 1)}
-            disabled={!table.getCanNextPage()}
-            className={pageButton}
-          >
-            <ChevronsRight size={16} />
-          </button>
-        </nav>
-      </div>
+      <TablePagination
+        page={pageIndex + 1}
+        pageSize={pageSize}
+        total={total}
+        pageSizeLabel="Cobranças por página"
+        onChange={(next) =>
+          onPaginationChange({ pageIndex: next.page - 1, pageSize: next.pageSize })
+        }
+      />
 
       <DebtorActionsMenu
         open={Boolean(actionInvoice)}
