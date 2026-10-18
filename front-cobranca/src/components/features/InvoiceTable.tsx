@@ -681,14 +681,26 @@ export function InvoiceTable({
     {
       accessorKey: "name",
       header: showEducationFields ? "Responsável / aluno" : "Cliente",
-      cell: (info) => (
-        <div className="min-w-0">
-          {renderDebtorSummary(info.row.original)}
-          <p className="mt-1 truncate text-xs text-slate-500">
-            {formatWhatsAppNumber(info.row.original.phone_number)}
-          </p>
-        </div>
-      ),
+      // One line for name and profile keeps long lists dense.
+      cell: (info) => {
+        const invoice = info.row.original;
+        return (
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <p className="truncate font-semibold text-slate-900">{invoice.name}</p>
+              {renderProfileBadge(invoice)}
+            </div>
+            {showEducationFields && invoice.studentName && (
+              <p className="truncate text-xs text-slate-600">
+                {invoice.studentName} · {getStudentSummary(invoice)}
+              </p>
+            )}
+            <p className="truncate text-xs text-slate-500">
+              {formatWhatsAppNumber(invoice.phone_number)}
+            </p>
+          </div>
+        );
+      },
     },
     {
       id: "dueDate",
