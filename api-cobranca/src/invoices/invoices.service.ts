@@ -31,6 +31,15 @@ import { PaymentService } from '../payment/payment.service';
 import { BillingType } from './dto/invoice.dto';
 import { saoPauloDate } from '../billing/dashboard-period';
 import {
+  groupImportRows,
+  planImport,
+  reviewImportGroups,
+  type ExistingClient,
+  type ImportClientGroup,
+  type ImportClientReview,
+  type ImportDecision,
+} from './invoice-import';
+import {
   CompanyLateDefaults,
   LateTermsInput,
   LateTermsView,
@@ -626,62 +635,145 @@ export class InvoicesService {
     });
   }
 
+  /** What the import would do with each client of the spreadsheet, before writing. */
+  async previewImport(
+    companyId: string,
+    rows: ImportRow[],
+  ): Promise<{ clients: ImportClientReview[] }> {
+    const { groups } = groupImportRows(rows);
+    const debtors = await this.findImportDebtors(
+      this.prisma,
+      companyId,
+      groups,
+    );
+    return { clients: reviewImportGroups(groups, debtors) };
+  }
+
   async importCsv(
     companyId: string,
     rows: ImportRow[],
-  ): Promise<{ success: boolean; count: number; initialChargeQueued: number }> {
+    decisions?: ImportDecision[],
+  ): Promise<{
+    success: boolean;
+    count: number;
+    initialChargeQueued: number;
+    skipped: { document: string; name: string; rows: number[] }[];
+  }> {
     const collectionProfileId = await this.resolveRequiredCollectionProfileId(
       companyId,
       undefined,
     );
     const lateDefaults = await this.companyLateDefaults(companyId);
-    const result = await this.prisma.$transaction(async (tx) => {
-      let created = 0;
-      const invoiceIds: string[] = [];
-
-      for (const row of rows) {
-        const debtor = await this.upsertDebtor(tx, companyId, {
-          name: row.name,
-          document: row.document,
-          phoneNumber: row.phone_number,
-          email: row.email || null,
-          whatsappOptIn: row.whatsapp_opt_in ?? false,
-          collectionProfileId,
-        });
-
-        const dueDate = this.parseDueDate(row.due_date);
-        if (!dueDate) continue;
-
-        const invoice = await tx.invoice.create({
-          data: {
-            companyId,
-            debtorId: debtor.id,
-            originalAmount: row.original_amount,
-            dueDate,
-            billingType: row.billing_type,
-            ...resolveLateTerms(
-              {
-                lateFinePercentage: row.late_fine_percentage,
-                lateInterestMonthlyPercentage:
-                  row.late_interest_monthly_percentage,
-                paymentDaysAfterDue: row.payment_days_after_due,
+    const result = await this.prisma
+      .$transaction(
+        async (tx) => {
+          const { groups } = groupImportRows(rows);
+          const plan = planImport(
+            reviewImportGroups(
+              groups,
+              await this.findImportDebtors(tx, companyId, groups),
+            ),
+            decisions,
+          );
+          const debtorByDocument = new Map<string, string>();
+          const toCreate = plan.filter((item) => item.action === 'CREATE');
+          if (toCreate.length > 0) {
+            const created = await tx.debtor.createManyAndReturn({
+              data: toCreate.map(({ group }) => ({
+                companyId,
+                name: group.csv.name,
+                document: group.document,
+                phoneNumber: group.csv.phone,
+                email: group.csv.email,
+                whatsappOptIn: group.optIn,
+                whatsappOptInAt: group.optIn ? new Date() : null,
+                whatsappOptInSource: group.optIn ? 'manual_import' : null,
+                collectionProfileId,
+              })),
+              select: { id: true, document: true },
+            });
+            for (const debtor of created) {
+              debtorByDocument.set(debtor.document ?? '', debtor.id);
+            }
+          }
+          // Only the fields the user chose from the spreadsheet change; the
+          // collection profile of an existing client is never touched.
+          for (const item of plan) {
+            if (item.action !== 'LINK') continue;
+            debtorByDocument.set(item.group.document, item.debtorId);
+            if (Object.keys(item.update).length === 0 && !item.grantOptIn)
+              continue;
+            await tx.debtor.updateMany({
+              where: { id: item.debtorId, companyId },
+              data: {
+                ...item.update,
+                ...(item.grantOptIn && {
+                  whatsappOptIn: true,
+                  whatsappOptInAt: new Date(),
+                  whatsappOptInSource: 'manual_import',
+                }),
               },
-              lateDefaults,
-            ),
-            studentName: this.normalizeOptionalText(row.studentName),
-            studentEnrollment: this.normalizeOptionalText(
-              row.studentEnrollment,
-            ),
-            studentGroup: this.normalizeOptionalText(row.studentGroup),
-          },
-        });
+            });
+          }
 
-        invoiceIds.push(invoice.id);
-        created++;
-      }
+          const invoiceRows = rows.flatMap((row) => {
+            const debtorId = debtorByDocument.get(row.document);
+            const dueDate = this.parseDueDate(row.due_date);
+            return debtorId && dueDate ? [{ row, debtorId, dueDate }] : [];
+          });
+          const invoices = await tx.invoice.createManyAndReturn({
+            data: invoiceRows.map(({ row, debtorId, dueDate }) => ({
+              companyId,
+              debtorId,
+              originalAmount: row.original_amount,
+              dueDate,
+              billingType: row.billing_type,
+              ...resolveLateTerms(
+                {
+                  lateFinePercentage: row.late_fine_percentage,
+                  lateInterestMonthlyPercentage:
+                    row.late_interest_monthly_percentage,
+                  paymentDaysAfterDue: row.payment_days_after_due,
+                },
+                lateDefaults,
+              ),
+              studentName: this.normalizeOptionalText(row.studentName),
+              studentEnrollment: this.normalizeOptionalText(
+                row.studentEnrollment,
+              ),
+              studentGroup: this.normalizeOptionalText(row.studentGroup),
+            })),
+            select: { id: true },
+          });
 
-      return { created, invoiceIds };
-    });
+          return {
+            invoiceIds: invoices.map((invoice) => invoice.id),
+            skipped: plan
+              .filter((item) => item.action === 'SKIP')
+              .map(({ group }) => ({
+                document: group.document,
+                name: group.csv.name,
+                rows: group.rows,
+              })),
+          };
+        },
+        // Large spreadsheets: rows are written in bulk, but still in one transaction.
+        { timeout: 60_000 },
+      )
+      .catch((error: unknown) => {
+        // Another import or edit took a WhatsApp in the meantime.
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === 'P2002'
+        ) {
+          throw new ConflictException({
+            code: 'IMPORT_CHANGED',
+            message:
+              'Os cadastros de clientes mudaram desde a revisão. Revise a importação de novo.',
+          });
+        }
+        throw error;
+      });
 
     const initialChargeQueued = await this.queueInitialChargeJobs(
       companyId,
@@ -689,7 +781,53 @@ export class InvoicesService {
       'CSV',
     );
 
-    return { success: true, count: result.created, initialChargeQueued };
+    return {
+      success: true,
+      count: result.invoiceIds.length,
+      initialChargeQueued,
+      skipped: result.skipped,
+    };
+  }
+
+  private async findImportDebtors(
+    client: Pick<Prisma.TransactionClient, 'debtor'>,
+    companyId: string,
+    groups: ImportClientGroup[],
+  ): Promise<ExistingClient[]> {
+    if (groups.length === 0) return [];
+    const debtors = await client.debtor.findMany({
+      where: {
+        companyId,
+        OR: [
+          { document: { in: groups.map((group) => group.document) } },
+          {
+            phoneNumber: {
+              in: groups.flatMap((group) =>
+                getWhatsAppNumberLookupCandidates(group.csv.phone),
+              ),
+            },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        document: true,
+        phoneNumber: true,
+        email: true,
+        whatsappOptIn: true,
+        updatedAt: true,
+      },
+    });
+    return debtors.map((debtor) => ({
+      debtorId: debtor.id,
+      name: debtor.name,
+      document: debtor.document,
+      phone: debtor.phoneNumber,
+      email: debtor.email?.toLowerCase() ?? null,
+      whatsappOptIn: debtor.whatsappOptIn,
+      version: debtor.updatedAt.toISOString(),
+    }));
   }
 
   async listDebtors(

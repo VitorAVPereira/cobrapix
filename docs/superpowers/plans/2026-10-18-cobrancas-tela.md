@@ -11,11 +11,11 @@ Especificação: `docs/superpowers/specs/2026-10-18-cobrancas-tela-design.md`.
 
 ## Tarefa 2: importação com revisão no backend
 
-- [ ] Análise por CPF/CNPJ com consultas em lote; validação de planilha incoerente.
-- [ ] `POST /invoices/import/preview` e `POST /invoices/import` com `decisions`.
-- [ ] O perfil de cobrança não muda; o opt-in segue a regra da spec.
-- [ ] 409 `IMPORT_CHANGED` e `IMPORT_NEEDS_REVIEW`.
-- [ ] Testes de unidade e e2e em PostgreSQL descartável. Commit.
+- [x] Análise por CPF/CNPJ com consultas em lote; validação de planilha incoerente.
+- [x] `POST /invoices/import/preview` e `POST /invoices/import` com `decisions`.
+- [x] O perfil de cobrança não muda; o opt-in segue a regra da spec.
+- [x] 409 `IMPORT_CHANGED` e `IMPORT_NEEDS_REVIEW`.
+- [x] Testes de unidade e e2e em PostgreSQL descartável. Commit.
 
 ## Tarefa 3: lista e filtros no frontend
 

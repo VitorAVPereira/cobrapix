@@ -433,11 +433,13 @@ describe('InvoicesService', () => {
 
   it('enfileira primeira cobranca apos importacao CSV', async () => {
     const debtorFindMany = jest.fn().mockResolvedValue([]);
-    const debtorCreate = jest.fn().mockResolvedValue({ id: 'debtor-1' });
+    const debtorCreate = jest.fn().mockResolvedValue([
+      { id: 'debtor-1', document: '12345678909' },
+      { id: 'debtor-2', document: '52998224725' },
+    ]);
     const invoiceCreate = jest
       .fn()
-      .mockResolvedValueOnce({ id: 'invoice-1' })
-      .mockResolvedValueOnce({ id: 'invoice-2' });
+      .mockResolvedValue([{ id: 'invoice-1' }, { id: 'invoice-2' }]);
     const profileFindFirst = jest.fn().mockResolvedValue({
       id: 'profile-new',
       name: 'Novo Cliente',
@@ -460,14 +462,17 @@ describe('InvoicesService', () => {
           callback: (tx: {
             debtor: {
               findMany: typeof debtorFindMany;
-              create: typeof debtorCreate;
+              createManyAndReturn: typeof debtorCreate;
             };
-            invoice: { create: typeof invoiceCreate };
+            invoice: { createManyAndReturn: typeof invoiceCreate };
           }) => Promise<unknown>,
         ) =>
           callback({
-            debtor: { findMany: debtorFindMany, create: debtorCreate },
-            invoice: { create: invoiceCreate },
+            debtor: {
+              findMany: debtorFindMany,
+              createManyAndReturn: debtorCreate,
+            },
+            invoice: { createManyAndReturn: invoiceCreate },
           }),
       ),
     } as unknown as PrismaService;
@@ -480,8 +485,8 @@ describe('InvoicesService', () => {
     const result = await service.importCsv('company-1', [
       {
         name: 'Maria Silva',
-        document: '123.456.789-09',
-        phone_number: '11999999999',
+        document: '12345678909',
+        phone_number: '+5511999999999',
         email: 'maria@email.com',
         original_amount: 199.9,
         due_date: '2026-05-10',
@@ -489,8 +494,8 @@ describe('InvoicesService', () => {
       },
       {
         name: 'Joao Souza',
-        document: '529.982.247-25',
-        phone_number: '11988888888',
+        document: '52998224725',
+        phone_number: '+5511988888888',
         email: 'joao@email.com',
         original_amount: 50,
         due_date: '2026-05-10',
@@ -505,12 +510,11 @@ describe('InvoicesService', () => {
       success: true,
       count: 2,
       initialChargeQueued: 2,
+      skipped: [],
     });
     // Empty columns use the company default; an explicit zero means none.
     expect(
-      (invoiceCreate.mock.calls as Array<[{ data: unknown }]>).map(
-        ([args]) => args.data,
-      ),
+      (invoiceCreate.mock.calls as Array<[{ data: unknown[] }]>)[0]?.[0].data,
     ).toEqual([
       expect.objectContaining({
         lateFineBasisPoints: 200,
@@ -525,11 +529,13 @@ describe('InvoicesService', () => {
     ]);
     expect(debtorCreate).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({
-          document: '12345678909',
-          phoneNumber: '+5511999999999',
-          collectionProfileId: 'profile-new',
-        }) as unknown,
+        data: expect.arrayContaining([
+          expect.objectContaining({
+            document: '12345678909',
+            phoneNumber: '+5511999999999',
+            collectionProfileId: 'profile-new',
+          }),
+        ]) as unknown,
       }),
     );
     const messageQueueMock = messageQueue as unknown as {
