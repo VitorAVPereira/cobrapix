@@ -39,5 +39,5 @@ Especificação: `docs/superpowers/specs/2026-10-18-cobrancas-tela-design.md`.
 
 ## Tarefa 6: verificação e fechamento
 
-- [ ] Navegador com dados de exemplo (mais de 1.000 cobranças), celular e desktop.
-- [ ] Checks completos; registro na spec. Commit.
+- [x] Navegador com dados de exemplo (mais de 1.000 cobranças), celular e desktop.
+- [x] Checks completos; registro na spec. Commit.

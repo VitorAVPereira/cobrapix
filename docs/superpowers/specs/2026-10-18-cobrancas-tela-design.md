@@ -67,3 +67,38 @@
 ## Fora do escopo (registrado como gap)
 
 - A tela de Clientes carrega só os 20 primeiros clientes, sem paginação.
+
+## Registro de execução (18/10/2026)
+
+- **Backend:**
+  - `GET /invoices` com `status=OVERDUE`, `billingType` e `sort` (desempate por id, para páginas
+    estáveis);
+  - busca por documento e WhatsApp formatados; números dentro de um nome não viram busca por
+    documento;
+  - `GET /invoices/debtors/search` (até 8 clientes, sem totais) para o seletor da nova cobrança;
+  - importação: `POST /invoices/import/preview` e `POST /invoices/import` com `decisions`, gravação
+    em lote (`createManyAndReturn`) numa transação de até 60 s;
+  - regras puras em `invoices/invoice-import.ts`.
+- **Frontend:**
+  - página `/cobrancas` refeita: cabeçalho, cartão de filtros no estilo de Clientes, filtros e
+    paginação no endereço, tabela a partir de `lg`, 20, 50 ou 100 por página;
+  - estados de erro com "Tentar de novo" e de lista vazia com "Limpar filtros";
+  - nova cobrança com `ClientPicker`; Clientes abre o cadastro com `?novo=1`;
+  - importação com `ImportReview` e `ImportSummary`.
+- **Testes:**
+  - backend: 133 suítes e 1.087 testes; e2e `npm run test:e2e:invoice-import` (3 testes em
+    PostgreSQL descartável, incluindo 1.200 linhas de uma vez);
+  - frontend: 61 suítes e 384 testes; builds ok.
+- **Navegador**, com PostgreSQL e Redis descartáveis, 300 clientes e 1.300 cobranças:
+  - Vencidas + Boleto (com BOLIX) ordenadas por valor;
+  - busca por WhatsApp formatado;
+  - 100 por página até a última (1.201–1.300 de 1.300);
+  - nova cobrança pelo seletor;
+  - `/clientes?novo=1`;
+  - importação com os três casos de revisão: dados diferentes, WhatsApp em uso com outro número
+    recusado e outro aceito, cliente novo. As escolhas foram conferidas no banco;
+  - celular sem rolagem horizontal.
+- **Defeitos encontrados na verificação e corrigidos:**
+  - a busca "Carla Alves 33" trazia clientes com "33" no CPF ou no WhatsApp;
+  - os erros do modal de nova cobrança ficavam escondidos atrás do fundo escuro;
+  - o formulário pedia o valor antes de avisar que faltava o cliente.

@@ -380,6 +380,7 @@ npm run test:template-pending:postgres
 npm run test:template-transition:postgres
 node test/e2e-disposable.cjs <arquivo>.e2e-spec.ts [...]   # ex.: npm run test:e2e:templates
 npm run test:e2e:disbursements                             # pagamentos a colaboradores
+npm run test:e2e:invoice-import                             # importação de cobranças com revisão
 ```
 
 - Testes que escrevem em banco ou Redis usam **somente** a infraestrutura descartável dos
