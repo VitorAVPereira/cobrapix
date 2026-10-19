@@ -13,6 +13,7 @@ import type {
 } from "./financial-activation";
 import type {
   CompanyReceipts,
+  CompanyReceiptsQuery,
   DivergenceDecision,
   FinancialHistory,
   PlatformFeeEvidenceResult,
@@ -1409,8 +1410,13 @@ class ApiClient {
       { method: "PUT", body: JSON.stringify({ refundPlatformFeeOnRefund }) },
     );
   }
-  getCompanyReceipts(page = 1, pageSize = 20): Promise<CompanyReceipts> {
-    return this.fetch(`/financial/receipts?page=${page}&pageSize=${pageSize}`);
+  getCompanyReceipts(
+    query: CompanyReceiptsQuery,
+    signal?: AbortSignal,
+  ): Promise<CompanyReceipts> {
+    return this.fetch(`/financial/receipts${this.buildQueryString(query)}`, {
+      signal,
+    });
   }
   getFinancialActivation(id: string): Promise<FinancialProfile> {
     return this.fetch(`/admin/financial-activations/${encodeURIComponent(id)}`);
