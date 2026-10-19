@@ -24,10 +24,14 @@ import {
   parseOptionalCsvDays,
   parseOptionalCsvPercentage,
 } from './late-terms';
+import { groupImportRows, parseImportDecisions } from './invoice-import';
 import {
   DebtorPaymentHistoryResponse,
   DebtorSettingsResponse,
+  INVOICE_LIST_ORDER,
   InvoicesService,
+  type InvoiceListSort,
+  type InvoiceListStatus,
 } from './invoices.service';
 import {
   BillingType,
@@ -96,6 +100,8 @@ export class InvoicesController {
     @Query('search') search?: string,
     @Query('status') status?: string,
     @Query('debtorId') debtorId?: string,
+    @Query('billingType') billingType?: string,
+    @Query('sort') sort?: string,
   ): Promise<unknown> {
     const pageNum = this.parsePositiveInt(page, 1);
     const size = Math.min(
@@ -114,6 +120,13 @@ export class InvoicesController {
       search: search?.trim() || undefined,
       status: normalizedStatus,
       debtorId: normalizedDebtorId,
+      billingType: (['PIX', 'BOLETO', 'CREDIT_CARD'] as const).find(
+        (value) => value === billingType,
+      ),
+      sort:
+        sort && sort in INVOICE_LIST_ORDER
+          ? (sort as InvoiceListSort)
+          : undefined,
     });
   }
 
@@ -283,6 +296,18 @@ export class InvoicesController {
         HttpStatus.BAD_REQUEST,
       );
     }
+  }
+
+  @Get('debtors/search')
+  async searchDebtors(
+    @GetUser() user: AuthenticatedUser,
+    @Query('search') search?: string,
+  ): Promise<unknown> {
+    return this.invoicesService.searchDebtors(
+      user.companyId,
+      search?.trim() || undefined,
+      8,
+    );
   }
 
   @Get('debtors')
@@ -474,11 +499,36 @@ export class InvoicesController {
     );
   }
 
+  @Post('import/preview')
+  async previewImport(
+    @GetUser() user: AuthenticatedUser,
+    @Body() body: unknown,
+  ): Promise<unknown> {
+    const { rows } = (body ?? {}) as { rows?: unknown };
+    return this.invoicesService.previewImport(
+      user.companyId,
+      this.validateImportRows(rows),
+    );
+  }
+
+  // Accepts { rows, decisions } and, from frontends published before the
+  // review step, the bare array of rows.
   @Post('import')
   async importCsv(
     @GetUser() user: AuthenticatedUser,
     @Body() body: unknown,
-  ): Promise<{ success: boolean; count: number; initialChargeQueued: number }> {
+  ): Promise<unknown> {
+    const { rows, decisions } = Array.isArray(body)
+      ? { rows: body, decisions: undefined }
+      : ((body ?? {}) as { rows?: unknown; decisions?: unknown });
+    return this.invoicesService.importCsv(
+      user.companyId,
+      this.validateImportRows(rows),
+      parseImportDecisions(decisions),
+    );
+  }
+
+  private validateImportRows(body: unknown): ValidImportRow[] {
     if (!Array.isArray(body) || body.length === 0) {
       throw new HttpException('Nenhum dado recebido.', HttpStatus.BAD_REQUEST);
     }
@@ -535,6 +585,10 @@ export class InvoicesController {
       }
     }
 
+    if (errors.length === 0) {
+      errors.push(...groupImportRows(validRows).errors.slice(0, 10));
+    }
+
     if (errors.length > 0) {
       throw new HttpException(
         { error: 'Erros de validacao.', details: errors },
@@ -542,7 +596,7 @@ export class InvoicesController {
       );
     }
 
-    return this.invoicesService.importCsv(user.companyId, validRows);
+    return validRows;
   }
 
   private validateRow(row: ImportRowInput, index: number): string | null {
@@ -684,13 +738,14 @@ export class InvoicesController {
     return Number.isInteger(num) && num > 0 ? num : fallback;
   }
 
-  private normalizeInvoiceStatus(raw: string | undefined): string | undefined {
+  private normalizeInvoiceStatus(
+    raw: string | undefined,
+  ): InvoiceListStatus | undefined {
     if (!raw) return undefined;
     const upper = raw.toUpperCase();
-    if (upper === 'PENDING' || upper === 'PAID' || upper === 'CANCELED') {
-      return upper;
-    }
-    return undefined;
+    return (['PENDING', 'OVERDUE', 'PAID', 'CANCELED'] as const).find(
+      (value) => value === upper,
+    );
   }
 
   private normalizeDebtorPaymentStatus(

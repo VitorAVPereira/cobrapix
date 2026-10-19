@@ -29,6 +29,16 @@ import { PrismaService } from '../prisma/prisma.service';
 import { InitialChargeJob, MessageQueueService } from '../queue/message.queue';
 import { PaymentService } from '../payment/payment.service';
 import { BillingType } from './dto/invoice.dto';
+import { saoPauloDate } from '../billing/dashboard-period';
+import {
+  groupImportRows,
+  planImport,
+  reviewImportGroups,
+  type ExistingClient,
+  type ImportClientGroup,
+  type ImportClientReview,
+  type ImportDecision,
+} from './invoice-import';
 import {
   CompanyLateDefaults,
   LateTermsInput,
@@ -37,6 +47,26 @@ import {
   resolveLateTerms,
   toLateTermsView,
 } from './late-terms';
+
+export type InvoiceListStatus = 'PENDING' | 'OVERDUE' | 'PAID' | 'CANCELED';
+export type InvoiceListBillingType = 'PIX' | 'BOLETO' | 'CREDIT_CARD';
+export const INVOICE_LIST_ORDER = {
+  createdAt_desc: { createdAt: 'desc' },
+  dueDate_asc: { dueDate: 'asc' },
+  dueDate_desc: { dueDate: 'desc' },
+  amount_desc: { originalAmount: 'desc' },
+  amount_asc: { originalAmount: 'asc' },
+} as const satisfies Record<string, Prisma.InvoiceOrderByWithRelationInput>;
+export type InvoiceListSort = keyof typeof INVOICE_LIST_ORDER;
+
+/**
+ * Documents and phones are stored as digits, so "123.456.789-09" must match.
+ * A search with letters is a name: its numbers ("Ana 33") are not a document.
+ */
+function searchDigits(search: string): string {
+  const digits = search.replace(/\D/g, '');
+  return digits && !/\p{L}/u.test(search) ? digits : search;
+}
 
 const RECURRING_GENERATION_LOOKAHEAD_DAYS = 30;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -233,20 +263,6 @@ interface UpdateRecurringInvoiceInput {
   lateFinePercentage?: number;
   lateInterestMonthlyPercentage?: number;
   paymentDaysAfterDue?: number;
-}
-
-interface DebtorUpsertInput {
-  name: string;
-  document: string;
-  phoneNumber: string;
-  email?: string | null;
-  whatsappOptIn?: boolean;
-  collectionProfileId: string;
-}
-
-interface DebtorIdentity {
-  id: string;
-  document: string;
 }
 
 interface InvoiceWithRelations {
@@ -510,9 +526,12 @@ export class InvoicesService {
       page: number;
       pageSize: number;
       search?: string;
-      status?: string;
+      status?: InvoiceListStatus;
       debtorId?: string;
+      billingType?: InvoiceListBillingType;
+      sort?: InvoiceListSort;
     },
+    now = new Date(),
   ): Promise<{
     data: InvoiceListItem[];
     total: number;
@@ -521,8 +540,20 @@ export class InvoicesService {
   }> {
     const where: Prisma.InvoiceWhereInput = { companyId };
 
-    if (params.status) {
-      where.status = params.status as 'PENDING' | 'PAID' | 'CANCELED';
+    if (params.status === 'OVERDUE') {
+      // Due dates are calendar dates: overdue means due before today in São Paulo.
+      where.status = 'PENDING';
+      where.dueDate = { lt: new Date(`${saoPauloDate(now)}T00:00:00Z`) };
+    } else if (params.status) {
+      where.status = params.status;
+    }
+
+    if (params.billingType) {
+      // BOLIX is a boleto for the company and its payers.
+      where.billingType =
+        params.billingType === 'BOLETO'
+          ? { in: ['BOLETO', 'BOLIX'] }
+          : params.billingType;
     }
 
     if (params.debtorId) {
@@ -530,10 +561,11 @@ export class InvoicesService {
     }
 
     if (params.search) {
+      const digits = searchDigits(params.search);
       where.OR = [
         { debtor: { name: { contains: params.search, mode: 'insensitive' } } },
-        { debtor: { document: { contains: params.search } } },
-        { debtor: { phoneNumber: { contains: params.search } } },
+        { debtor: { document: { contains: digits } } },
+        { debtor: { phoneNumber: { contains: digits } } },
         { debtor: { email: { contains: params.search, mode: 'insensitive' } } },
         { studentName: { contains: params.search, mode: 'insensitive' } },
         { studentEnrollment: { contains: params.search, mode: 'insensitive' } },
@@ -553,7 +585,11 @@ export class InvoicesService {
             take: 1,
           },
         },
-        orderBy: { createdAt: 'desc' },
+        // The id tie-breaker keeps pages stable when many rows share a value.
+        orderBy: [
+          INVOICE_LIST_ORDER[params.sort ?? 'createdAt_desc'],
+          { id: 'asc' },
+        ],
         skip: (params.page - 1) * params.pageSize,
         take: params.pageSize,
       }),
@@ -593,62 +629,145 @@ export class InvoicesService {
     });
   }
 
+  /** What the import would do with each client of the spreadsheet, before writing. */
+  async previewImport(
+    companyId: string,
+    rows: ImportRow[],
+  ): Promise<{ clients: ImportClientReview[] }> {
+    const { groups } = groupImportRows(rows);
+    const debtors = await this.findImportDebtors(
+      this.prisma,
+      companyId,
+      groups,
+    );
+    return { clients: reviewImportGroups(groups, debtors) };
+  }
+
   async importCsv(
     companyId: string,
     rows: ImportRow[],
-  ): Promise<{ success: boolean; count: number; initialChargeQueued: number }> {
+    decisions?: ImportDecision[],
+  ): Promise<{
+    success: boolean;
+    count: number;
+    initialChargeQueued: number;
+    skipped: { document: string; name: string; rows: number[] }[];
+  }> {
     const collectionProfileId = await this.resolveRequiredCollectionProfileId(
       companyId,
       undefined,
     );
     const lateDefaults = await this.companyLateDefaults(companyId);
-    const result = await this.prisma.$transaction(async (tx) => {
-      let created = 0;
-      const invoiceIds: string[] = [];
-
-      for (const row of rows) {
-        const debtor = await this.upsertDebtor(tx, companyId, {
-          name: row.name,
-          document: row.document,
-          phoneNumber: row.phone_number,
-          email: row.email || null,
-          whatsappOptIn: row.whatsapp_opt_in ?? false,
-          collectionProfileId,
-        });
-
-        const dueDate = this.parseDueDate(row.due_date);
-        if (!dueDate) continue;
-
-        const invoice = await tx.invoice.create({
-          data: {
-            companyId,
-            debtorId: debtor.id,
-            originalAmount: row.original_amount,
-            dueDate,
-            billingType: row.billing_type,
-            ...resolveLateTerms(
-              {
-                lateFinePercentage: row.late_fine_percentage,
-                lateInterestMonthlyPercentage:
-                  row.late_interest_monthly_percentage,
-                paymentDaysAfterDue: row.payment_days_after_due,
+    const result = await this.prisma
+      .$transaction(
+        async (tx) => {
+          const { groups } = groupImportRows(rows);
+          const plan = planImport(
+            reviewImportGroups(
+              groups,
+              await this.findImportDebtors(tx, companyId, groups),
+            ),
+            decisions,
+          );
+          const debtorByDocument = new Map<string, string>();
+          const toCreate = plan.filter((item) => item.action === 'CREATE');
+          if (toCreate.length > 0) {
+            const created = await tx.debtor.createManyAndReturn({
+              data: toCreate.map(({ group }) => ({
+                companyId,
+                name: group.csv.name,
+                document: group.document,
+                phoneNumber: group.csv.phone,
+                email: group.csv.email,
+                whatsappOptIn: group.optIn,
+                whatsappOptInAt: group.optIn ? new Date() : null,
+                whatsappOptInSource: group.optIn ? 'manual_import' : null,
+                collectionProfileId,
+              })),
+              select: { id: true, document: true },
+            });
+            for (const debtor of created) {
+              debtorByDocument.set(debtor.document ?? '', debtor.id);
+            }
+          }
+          // Only the fields the user chose from the spreadsheet change; the
+          // collection profile of an existing client is never touched.
+          for (const item of plan) {
+            if (item.action !== 'LINK') continue;
+            debtorByDocument.set(item.group.document, item.debtorId);
+            if (Object.keys(item.update).length === 0 && !item.grantOptIn)
+              continue;
+            await tx.debtor.updateMany({
+              where: { id: item.debtorId, companyId },
+              data: {
+                ...item.update,
+                ...(item.grantOptIn && {
+                  whatsappOptIn: true,
+                  whatsappOptInAt: new Date(),
+                  whatsappOptInSource: 'manual_import',
+                }),
               },
-              lateDefaults,
-            ),
-            studentName: this.normalizeOptionalText(row.studentName),
-            studentEnrollment: this.normalizeOptionalText(
-              row.studentEnrollment,
-            ),
-            studentGroup: this.normalizeOptionalText(row.studentGroup),
-          },
-        });
+            });
+          }
 
-        invoiceIds.push(invoice.id);
-        created++;
-      }
+          const invoiceRows = rows.flatMap((row) => {
+            const debtorId = debtorByDocument.get(row.document);
+            const dueDate = this.parseDueDate(row.due_date);
+            return debtorId && dueDate ? [{ row, debtorId, dueDate }] : [];
+          });
+          const invoices = await tx.invoice.createManyAndReturn({
+            data: invoiceRows.map(({ row, debtorId, dueDate }) => ({
+              companyId,
+              debtorId,
+              originalAmount: row.original_amount,
+              dueDate,
+              billingType: row.billing_type,
+              ...resolveLateTerms(
+                {
+                  lateFinePercentage: row.late_fine_percentage,
+                  lateInterestMonthlyPercentage:
+                    row.late_interest_monthly_percentage,
+                  paymentDaysAfterDue: row.payment_days_after_due,
+                },
+                lateDefaults,
+              ),
+              studentName: this.normalizeOptionalText(row.studentName),
+              studentEnrollment: this.normalizeOptionalText(
+                row.studentEnrollment,
+              ),
+              studentGroup: this.normalizeOptionalText(row.studentGroup),
+            })),
+            select: { id: true },
+          });
 
-      return { created, invoiceIds };
-    });
+          return {
+            invoiceIds: invoices.map((invoice) => invoice.id),
+            skipped: plan
+              .filter((item) => item.action === 'SKIP')
+              .map(({ group }) => ({
+                document: group.document,
+                name: group.csv.name,
+                rows: group.rows,
+              })),
+          };
+        },
+        // Large spreadsheets: rows are written in bulk, but still in one transaction.
+        { timeout: 60_000 },
+      )
+      .catch((error: unknown) => {
+        // Another import or edit took a WhatsApp in the meantime.
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === 'P2002'
+        ) {
+          throw new ConflictException({
+            code: 'IMPORT_CHANGED',
+            message:
+              'Os cadastros de clientes mudaram desde a revisão. Revise a importação de novo.',
+          });
+        }
+        throw error;
+      });
 
     const initialChargeQueued = await this.queueInitialChargeJobs(
       companyId,
@@ -656,7 +775,99 @@ export class InvoicesService {
       'CSV',
     );
 
-    return { success: true, count: result.created, initialChargeQueued };
+    return {
+      success: true,
+      count: result.invoiceIds.length,
+      initialChargeQueued,
+      skipped: result.skipped,
+    };
+  }
+
+  private async findImportDebtors(
+    client: Pick<Prisma.TransactionClient, 'debtor'>,
+    companyId: string,
+    groups: ImportClientGroup[],
+  ): Promise<ExistingClient[]> {
+    if (groups.length === 0) return [];
+    const debtors = await client.debtor.findMany({
+      where: {
+        companyId,
+        OR: [
+          { document: { in: groups.map((group) => group.document) } },
+          {
+            phoneNumber: {
+              in: groups.flatMap((group) =>
+                getWhatsAppNumberLookupCandidates(group.csv.phone),
+              ),
+            },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        document: true,
+        phoneNumber: true,
+        email: true,
+        whatsappOptIn: true,
+        updatedAt: true,
+      },
+    });
+    return debtors.map((debtor) => ({
+      debtorId: debtor.id,
+      name: debtor.name,
+      document: debtor.document,
+      phone: debtor.phoneNumber,
+      email: debtor.email?.toLowerCase() ?? null,
+      whatsappOptIn: debtor.whatsappOptIn,
+      version: debtor.updatedAt.toISOString(),
+    }));
+  }
+
+  /** Light lookup for choosing a client (no totals, so it stays fast with many clients). */
+  async searchDebtors(
+    companyId: string,
+    search: string | undefined,
+    limit: number,
+  ): Promise<
+    {
+      debtorId: string;
+      name: string;
+      document: string | null;
+      phone_number: string;
+      email: string | null;
+    }[]
+  > {
+    const digits = search && searchDigits(search);
+    const debtors = await this.prisma.debtor.findMany({
+      where: {
+        companyId,
+        ...(search && {
+          OR: [
+            { name: { contains: search, mode: 'insensitive' } },
+            { document: { contains: digits } },
+            { phoneNumber: { contains: digits } },
+            { email: { contains: search, mode: 'insensitive' } },
+          ],
+        }),
+      },
+      select: {
+        id: true,
+        name: true,
+        document: true,
+        phoneNumber: true,
+        email: true,
+      },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      take: limit,
+    });
+    return debtors.map((debtor) => ({
+      debtorId: debtor.id,
+      name: debtor.name,
+      document: debtor.document,
+      phone_number: this.normalizePhoneNumberForResponse(debtor.phoneNumber),
+      email: debtor.email,
+    }));
   }
 
   async listDebtors(
@@ -671,12 +882,11 @@ export class InvoicesService {
     }
 
     if (params.search) {
-      const normalizedDocument = normalizeDebtorDocument(params.search);
-      const normalizedPhone = params.search.replace(/\D/g, '');
+      const digits = searchDigits(params.search);
       where.OR = [
         { name: { contains: params.search, mode: 'insensitive' } },
-        { document: { contains: normalizedDocument || params.search } },
-        { phoneNumber: { contains: normalizedPhone || params.search } },
+        { document: { contains: digits } },
+        { phoneNumber: { contains: digits } },
         { email: { contains: params.search, mode: 'insensitive' } },
       ];
     }
@@ -691,7 +901,9 @@ export class InvoicesService {
       where.invoices = { none: { companyId, status: 'PENDING' } };
     }
 
-    const [debtors, summaryDebtors, total] = await Promise.all([
+    // Totals are summed in the database: loading every client and invoice
+    // to add them up does not scale with thousands of clients.
+    const [debtors, totals, total] = await Promise.all([
       this.prisma.debtor.findMany({
         where,
         include: {
@@ -706,41 +918,44 @@ export class InvoicesService {
             },
           },
         },
-        orderBy: { updatedAt: 'desc' },
+        orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
         skip: (params.page - 1) * params.pageSize,
         take: params.pageSize,
       }),
-      this.prisma.debtor.findMany({
-        where,
-        include: {
-          collectionProfile: true,
-          invoices: {
-            where: { companyId, status: { in: ['PENDING', 'PAID'] } },
-            select: {
-              status: true,
-              originalAmount: true,
-              createdAt: true,
-              paidAt: true,
-            },
-          },
+      this.prisma.invoice.groupBy({
+        by: ['status'],
+        where: {
+          companyId,
+          status: { in: ['PENDING', 'PAID'] },
+          debtor: where,
         },
-        orderBy: { updatedAt: 'desc' },
-        skip: undefined,
-        take: undefined,
+        _sum: { originalAmount: true },
+        _count: { _all: true },
       }),
       this.prisma.debtor.count({ where }),
     ]);
-    const data = debtors.map((debtor) => this.mapDebtorListItem(debtor));
-    const summaryData = summaryDebtors.map((debtor) =>
-      this.mapDebtorListItem(debtor),
-    );
+    const totalOf = (status: 'PENDING' | 'PAID') => {
+      const row = totals.find((item) => item.status === status);
+      return {
+        amount: Number((row?._sum.originalAmount?.toNumber() ?? 0).toFixed(2)),
+        count: row?._count._all ?? 0,
+      };
+    };
+    const open = totalOf('PENDING');
+    const paid = totalOf('PAID');
 
     return {
-      data,
+      data: debtors.map((debtor) => this.mapDebtorListItem(debtor)),
       total,
       page: params.page,
       pageSize: params.pageSize,
-      summary: this.buildDebtorListSummary(summaryData, total),
+      summary: {
+        totalDebtors: total,
+        openInvoiceAmount: open.amount,
+        openInvoiceCount: open.count,
+        paidInvoiceAmount: paid.amount,
+        paidInvoiceCount: paid.count,
+      },
     };
   }
 
@@ -863,14 +1078,20 @@ export class InvoicesService {
     input: CreateInvoiceInput,
   ): Promise<InvoiceListItem> {
     const debtorId = input.debtorId;
+    // Charges are only for clients registered in Clientes.
+    if (!debtorId) {
+      throw new BadRequestException(
+        'Escolha um cliente cadastrado em Clientes.',
+      );
+    }
     await this.ensureBillingMethodEnabled(companyId, input.billing_type);
 
-    const newDebtorDocument = debtorId
-      ? null
-      : this.normalizeRequiredDebtorDocument(input.document);
-
     if (input.recurring === true) {
-      const recurrence = await this.createRecurringInvoice(companyId, input);
+      const recurrence = await this.createRecurringInvoice(
+        companyId,
+        debtorId,
+        input,
+      );
       const invoice = await this.prisma.invoice.findFirst({
         where: {
           companyId,
@@ -926,29 +1147,16 @@ export class InvoicesService {
     if (!dueDate) {
       throw new Error('Data de vencimento invalida.');
     }
-    const collectionProfileId = debtorId
-      ? null
-      : await this.resolveRequiredCollectionProfileId(companyId, undefined);
     const lateTerms = resolveLateTerms(
       this.lateTermsInput(input),
       await this.companyLateDefaults(companyId),
     );
 
     const invoice = await this.prisma.$transaction(async (tx) => {
-      const debtor = debtorId
-        ? await tx.debtor.findFirst({
-            where: { id: debtorId, companyId },
-            select: { id: true, document: true },
-          })
-        : await this.upsertDebtor(tx, companyId, {
-            name: input.name ?? '',
-            document: newDebtorDocument ?? '',
-            phoneNumber: input.phone_number ?? '',
-            email: input.email ?? null,
-            whatsappOptIn: input.whatsappOptIn ?? false,
-            collectionProfileId:
-              this.ensureProvidedCollectionProfile(collectionProfileId),
-          });
+      const debtor = await tx.debtor.findFirst({
+        where: { id: debtorId, companyId },
+        select: { id: true, document: true },
+      });
 
       if (!debtor) {
         throw new Error('Devedor nao encontrado.');
@@ -1541,34 +1749,6 @@ export class InvoicesService {
     }
   }
 
-  private buildDebtorListSummary(
-    data: DebtorListItem[],
-    totalDebtors: number,
-  ): DebtorListSummary {
-    const openInvoiceAmount = data.reduce(
-      (sum, debtor) => sum + debtor.openInvoicesAmount,
-      0,
-    );
-    const paidInvoiceAmount = data.reduce(
-      (sum, debtor) => sum + debtor.paidInvoicesAmount,
-      0,
-    );
-
-    return {
-      totalDebtors,
-      openInvoiceAmount: Number(openInvoiceAmount.toFixed(2)),
-      openInvoiceCount: data.reduce(
-        (sum, debtor) => sum + debtor.openInvoicesCount,
-        0,
-      ),
-      paidInvoiceAmount: Number(paidInvoiceAmount.toFixed(2)),
-      paidInvoiceCount: data.reduce(
-        (sum, debtor) => sum + debtor.paidInvoicesCount,
-        0,
-      ),
-    };
-  }
-
   private mapDebtorListItem(
     debtor: DebtorWithSummaryRelations,
   ): DebtorListItem {
@@ -1653,32 +1833,17 @@ export class InvoicesService {
 
   private async createRecurringInvoice(
     companyId: string,
+    debtorId: string,
     input: CreateInvoiceInput,
   ): Promise<RecurringInvoiceListItem> {
     if (!input.due_day) {
       throw new Error('Dia de vencimento recorrente invalido.');
     }
 
-    const newDebtorDocument = input.debtorId
-      ? null
-      : this.normalizeRequiredDebtorDocument(input.document);
-    const collectionProfileId = input.debtorId
-      ? null
-      : await this.resolveRequiredCollectionProfileId(companyId, undefined);
-    const debtor = input.debtorId
-      ? await this.prisma.debtor.findFirst({
-          where: { id: input.debtorId, companyId },
-          select: { id: true, document: true },
-        })
-      : await this.upsertDebtor(this.prisma, companyId, {
-          name: input.name ?? '',
-          document: newDebtorDocument ?? '',
-          phoneNumber: input.phone_number ?? '',
-          email: input.email ?? null,
-          whatsappOptIn: input.whatsappOptIn ?? false,
-          collectionProfileId:
-            this.ensureProvidedCollectionProfile(collectionProfileId),
-        });
+    const debtor = await this.prisma.debtor.findFirst({
+      where: { id: debtorId, companyId },
+      select: { id: true, document: true },
+    });
 
     if (!debtor) {
       throw new Error('Devedor nao encontrado.');
@@ -1918,69 +2083,6 @@ export class InvoicesService {
     if (!validateDebtorDocument(normalized).valid) {
       throw new Error('CPF/CNPJ do devedor deve ter 11 ou 14 digitos validos.');
     }
-  }
-
-  private async upsertDebtor(
-    client: Pick<Prisma.TransactionClient, 'debtor'>,
-    companyId: string,
-    input: DebtorUpsertInput,
-  ): Promise<DebtorIdentity> {
-    const document = this.normalizeRequiredDebtorDocument(input.document);
-    const phoneNumber = normalizeWhatsAppNumber(input.phoneNumber);
-    const lookupCandidates = getWhatsAppNumberLookupCandidates(phoneNumber);
-    const existingDebtors = await client.debtor.findMany({
-      where: {
-        companyId,
-        phoneNumber: { in: lookupCandidates },
-      },
-      select: {
-        id: true,
-        document: true,
-        phoneNumber: true,
-      },
-    });
-    const exactDebtor =
-      existingDebtors.find((debtor) => debtor.phoneNumber === phoneNumber) ??
-      null;
-    const existingDebtor = exactDebtor ?? existingDebtors[0] ?? null;
-
-    if (existingDebtor) {
-      await client.debtor.updateMany({
-        where: { id: existingDebtor.id, companyId },
-        data: {
-          name: input.name,
-          document,
-          phoneNumber,
-          email: input.email || null,
-          collectionProfileId: input.collectionProfileId,
-          ...(input.whatsappOptIn === true && {
-            whatsappOptIn: true,
-            whatsappOptInAt: new Date(),
-            whatsappOptInSource: 'manual_import',
-          }),
-        },
-      });
-
-      return { id: existingDebtor.id, document };
-    }
-
-    const createdDebtor = await client.debtor.create({
-      data: {
-        companyId,
-        name: input.name,
-        document,
-        phoneNumber,
-        email: input.email || null,
-        whatsappOptIn: input.whatsappOptIn === true,
-        whatsappOptInAt: input.whatsappOptIn === true ? new Date() : null,
-        whatsappOptInSource:
-          input.whatsappOptIn === true ? 'manual_import' : null,
-        collectionProfileId: input.collectionProfileId,
-      },
-      select: { id: true },
-    });
-
-    return { id: createdDebtor.id, document };
   }
 
   private normalizePhoneNumberForResponse(phoneNumber: string): string {

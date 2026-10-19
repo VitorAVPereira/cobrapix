@@ -271,6 +271,14 @@ export type MessagingLimitTier =
   | "TIER_UNLIMITED";
 export type PaymentNotificationStatus = "PENDING" | "SENT" | "FAILED" | "READ";
 export type RecurringInvoiceStatus = "ACTIVE" | "PAUSED";
+export type InvoiceListStatus = "PENDING" | "OVERDUE" | "PAID" | "CANCELED";
+export type InvoiceListBillingType = "PIX" | "BOLETO" | "CREDIT_CARD";
+export type InvoiceListSort =
+  | "createdAt_desc"
+  | "dueDate_asc"
+  | "dueDate_desc"
+  | "amount_desc"
+  | "amount_asc";
 export type DashboardPeriod = "today" | "7d" | "30d" | "month" | "year" | "custom";
 export type CollectionProfileType = "NEW" | "GOOD" | "DOUBTFUL" | "BAD";
 export type PaymentTimeliness = "EARLY" | "ON_DUE_DATE" | "OVERDUE" | "UNKNOWN";
@@ -360,13 +368,8 @@ export interface InvoiceListItem {
   } | null;
 }
 
+/** A charge for a client already registered in Clientes. */
 export interface CreateInvoiceInput {
-  debtorId?: string;
-  name?: string;
-  document?: string;
-  phone_number?: string;
-  email?: string;
-  whatsappOptIn?: boolean;
   original_amount: number;
   due_date?: string;
   billing_type: BillingMethod;
@@ -448,6 +451,63 @@ export interface DebtorCollectionProfile {
   id: string;
   name: string;
   profileType: CollectionProfileType;
+}
+
+export type ImportField = "name" | "phone" | "email";
+
+export interface ImportClientData {
+  name: string;
+  phone: string;
+  email: string | null;
+}
+
+export interface ImportExistingClient extends ImportClientData {
+  debtorId: string;
+  document: string | null;
+  whatsappOptIn: boolean;
+  version: string;
+}
+
+/** One client of the spreadsheet (row indexes are 0-based) and what exists already. */
+export type ImportClientReview = {
+  document: string;
+  rows: number[];
+  csv: ImportClientData;
+  optIn: boolean;
+  phoneOwner: { debtorId: string; name: string } | null;
+} & (
+  | { kind: "NEW" }
+  | { kind: "SAME"; existing: ImportExistingClient }
+  | { kind: "DIFFERENT"; existing: ImportExistingClient; differences: ImportField[] }
+  /** New document, but the WhatsApp belongs to an older client without one. */
+  | { kind: "UNDOCUMENTED_OWNER"; existing: ImportExistingClient; differences: ImportField[] }
+  | { kind: "PHONE_TAKEN" }
+  | { kind: "DUPLICATE_DOCUMENT"; candidates: ImportExistingClient[] }
+);
+
+export type ImportDecision =
+  | { document: string; action: "SKIP" }
+  | {
+      document: string;
+      action: "LINK";
+      debtorId: string;
+      version: string;
+      use: Record<ImportField, "CSV" | "EXISTING">;
+    };
+
+export interface ImportResult {
+  success: boolean;
+  count: number;
+  initialChargeQueued: number;
+  skipped: { document: string; name: string; rows: number[] }[];
+}
+
+export interface DebtorOption {
+  debtorId: string;
+  name: string;
+  document: string | null;
+  phone_number: string;
+  email: string | null;
 }
 
 export interface DebtorListItem {
@@ -1664,9 +1724,12 @@ class ApiClient {
       page?: number;
       pageSize?: number;
       search?: string;
-      status?: string;
+      status?: InvoiceListStatus;
       debtorId?: string;
+      billingType?: InvoiceListBillingType;
+      sort?: InvoiceListSort;
     } = {},
+    signal?: AbortSignal,
   ): Promise<{
     data: InvoiceListItem[];
     total: number;
@@ -1679,6 +1742,8 @@ class ApiClient {
     if (params.search) qs.set("search", params.search);
     if (params.status) qs.set("status", params.status);
     if (params.debtorId) qs.set("debtorId", params.debtorId);
+    if (params.billingType) qs.set("billingType", params.billingType);
+    if (params.sort) qs.set("sort", params.sort);
 
     const qsStr = qs.toString();
     return this.fetch<{
@@ -1686,20 +1751,26 @@ class ApiClient {
       total: number;
       page: number;
       pageSize: number;
-    }>(`/invoices${qsStr ? `?${qsStr}` : ""}`);
+    }>(`/invoices${qsStr ? `?${qsStr}` : ""}`, { signal });
   }
 
-  async importInvoices(data: ReadonlyArray<unknown>): Promise<unknown> {
-    return this.fetch("/invoices/import", {
+  /** What the import would do with each client of the spreadsheet. */
+  previewInvoiceImport(
+    rows: ReadonlyArray<unknown>,
+  ): Promise<{ clients: ImportClientReview[] }> {
+    return this.fetch("/invoices/import/preview", {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify({ rows }),
     });
   }
 
-  async createInvoice(data: CreateInvoiceInput): Promise<InvoiceListItem> {
-    return this.fetch<InvoiceListItem>("/invoices", {
+  importInvoices(
+    rows: ReadonlyArray<unknown>,
+    decisions: ImportDecision[],
+  ): Promise<ImportResult> {
+    return this.fetch("/invoices/import", {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify({ rows, decisions }),
     });
   }
 
@@ -1711,10 +1782,7 @@ class ApiClient {
 
   async createDebtorInvoice(
     debtorId: string,
-    data: Omit<
-      CreateInvoiceInput,
-      "debtorId" | "name" | "document" | "phone_number" | "email"
-    >,
+    data: CreateInvoiceInput,
   ): Promise<InvoiceListItem> {
     return this.fetch<InvoiceListItem>(
       `/invoices/debtors/${debtorId}/invoices`,
@@ -1722,6 +1790,14 @@ class ApiClient {
         method: "POST",
         body: JSON.stringify(data),
       },
+    );
+  }
+
+  /** Up to 8 clients for choosing one in a form; no totals. */
+  searchDebtors(search: string, signal?: AbortSignal): Promise<DebtorOption[]> {
+    return this.fetch<DebtorOption[]>(
+      `/invoices/debtors/search${this.buildQueryString({ search })}`,
+      { signal },
     );
   }
 
@@ -1733,9 +1809,11 @@ class ApiClient {
       profileId?: string;
       paymentStatus?: DebtorPaymentStatusFilter;
     } = {},
+    signal?: AbortSignal,
   ): Promise<DebtorListResponse> {
     return this.fetch<DebtorListResponse>(
       `/invoices/debtors${this.buildQueryString(params)}`,
+      { signal },
     );
   }
 

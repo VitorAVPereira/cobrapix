@@ -1,9 +1,9 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { useSearchParams } from "next/navigation";
-import type { PaginationState } from "@tanstack/react-table";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import type { PaginationState, Updater } from "@tanstack/react-table";
 import {
   AlertCircle,
   ArrowLeft,
@@ -14,7 +14,6 @@ import {
   Mail,
   MessageCircle,
   Plus,
-  Search,
   Send,
   X,
 } from "lucide-react";
@@ -35,11 +34,25 @@ import type {
   PaymentFeeQuote,
   CollectionChannel,
   CreatePaymentResponse,
+  DebtorOption,
+  ImportClientReview,
+  ImportDecision,
+  InvoiceListSort,
   InvoicePaymentStatusResponse,
   SelectedBillingContactInput,
 } from "@/lib/api-client";
+import {
+  INVOICE_BILLING_OPTIONS,
+  INVOICE_SORT_OPTIONS,
+  INVOICE_STATUS_OPTIONS,
+  InvoiceFilters,
+  type InvoiceFilterValues,
+} from "@/components/features/invoices/InvoiceFilters";
+import { ClientPicker } from "@/components/features/invoices/ClientPicker";
+import { ImportReview } from "@/components/features/invoices/ImportReview";
+import { ImportSummary } from "@/components/features/invoices/ImportSummary";
+import { errorCode } from "@/lib/disbursements";
 import { formatBillingMethodRateLabel } from "@/lib/billing-fees";
-import { normalizeRequiredDebtorDocument } from "@/lib/debtor-document";
 import { useApiClient } from "@/lib/use-api-client";
 import { useFinancialActivation } from "@/components/features/financial-activation-context";
 import { normalizeWhatsAppNumber } from "@/lib/whatsapp-number";
@@ -58,11 +71,6 @@ interface ApiErrorData {
 }
 
 interface ManualChargeForm {
-  customerName: string;
-  document: string;
-  email: string;
-  whatsapp: string;
-  whatsappOptIn: boolean;
   amount: string;
   dueDate: string;
   billingType: PaymentMethod;
@@ -96,11 +104,6 @@ interface SendBillingForm {
 }
 
 const initialManualChargeForm: ManualChargeForm = {
-  customerName: "",
-  document: "",
-  email: "",
-  whatsapp: "",
-  whatsappOptIn: false,
   amount: "",
   dueDate: "",
   billingType: "BOLIX",
@@ -158,6 +161,45 @@ function getErrorMessage(error: unknown, fallback: string): string {
   }
 
   return fallback;
+}
+
+interface InvoiceListQuery extends Omit<InvoiceFilterValues, "search"> {
+  search: string;
+  page: number;
+  pageSize: number;
+  debtorId?: string;
+}
+
+const PAGE_SIZES = [20, 50, 100];
+
+/** Filters live in the URL: a reload or the back button returns to the same list. */
+function readListQuery(params: URLSearchParams): InvoiceListQuery {
+  const pick = <T extends string>(value: string | null, options: { value: T }[], fallback: T): T =>
+    options.find((option) => option.value === value)?.value ?? fallback;
+  const page = Number(params.get("page"));
+  const pageSize = Number(params.get("pageSize"));
+  return {
+    search: params.get("search") ?? "",
+    status: pick(params.get("status"), INVOICE_STATUS_OPTIONS, ""),
+    billingType: pick(params.get("billingType"), INVOICE_BILLING_OPTIONS, ""),
+    sort: pick<InvoiceListSort>(params.get("sort"), INVOICE_SORT_OPTIONS, "createdAt_desc"),
+    page: Number.isInteger(page) && page > 0 ? page : 1,
+    pageSize: PAGE_SIZES.includes(pageSize) ? pageSize : 20,
+    debtorId: params.get("debtorId") ?? undefined,
+  };
+}
+
+function writeListQuery(query: InvoiceListQuery): string {
+  const params = new URLSearchParams();
+  if (query.search) params.set("search", query.search);
+  if (query.status) params.set("status", query.status);
+  if (query.billingType) params.set("billingType", query.billingType);
+  if (query.sort !== "createdAt_desc") params.set("sort", query.sort);
+  if (query.page > 1) params.set("page", String(query.page));
+  if (query.pageSize !== 20) params.set("pageSize", String(query.pageSize));
+  if (query.debtorId) params.set("debtorId", query.debtorId);
+  const value = params.toString();
+  return value ? `?${value}` : "";
 }
 
 function getInvoiceId(invoice: ParsedDebtor): string | null {
@@ -262,14 +304,54 @@ function CobrancasContent() {
   const { canIssue } = useFinancialActivation();
   const apiClient = useApiClient();
   const searchParams = useSearchParams();
-  const debtorIdFilter = searchParams.get("debtorId") ?? undefined;
-  const statusFilter = searchParams.get("status") ?? undefined;
+  const router = useRouter();
+  const pathname = usePathname();
+  const query = useMemo(
+    () => readListQuery(new URLSearchParams(searchParams.toString())),
+    [searchParams],
+  );
   const [debtors, setDebtors] = useState<ParsedDebtor[]>([]);
   const [total, setTotal] = useState(0);
-  const [pagination, setPagination] = useState<PaginationState>({
-    pageIndex: 0,
-    pageSize: 20,
-  });
+  const [searchInput, setSearchInput] = useState(query.search);
+  const [listError, setListError] = useState<string | null>(null);
+  const listRequest = useRef<AbortController | null>(null);
+  const pagination: PaginationState = {
+    pageIndex: query.page - 1,
+    pageSize: query.pageSize,
+  };
+
+  const updateQuery = useCallback(
+    (patch: Partial<InvoiceListQuery>): void => {
+      // Any filter change starts again from the first page.
+      const next = { ...query, page: 1, ...patch };
+      router.replace(`${pathname}${writeListQuery(next)}`, { scroll: false });
+    },
+    [pathname, query, router],
+  );
+
+  function changePagination(updater: Updater<PaginationState>): void {
+    const next = typeof updater === "function" ? updater(pagination) : updater;
+    updateQuery({ page: next.pageIndex + 1, pageSize: next.pageSize });
+  }
+
+  const hasFilters = Boolean(
+    query.search || query.status || query.billingType || query.debtorId,
+  );
+
+  function clearFilters(): void {
+    setSearchInput("");
+    updateQuery({ search: "", status: "", billingType: "", debtorId: undefined });
+  }
+
+  // The search reaches the URL (and the API) once the user stops typing.
+  useEffect(() => {
+    if (searchInput.trim() === query.search) return;
+    const timer = window.setTimeout(
+      () => updateQuery({ search: searchInput.trim() }),
+      350,
+    );
+    return () => window.clearTimeout(timer);
+  }, [query.search, searchInput, updateQuery]);
   const [selectedDebtor, setSelectedDebtor] = useState<ParsedDebtor | null>(
     null,
   );
@@ -277,7 +359,6 @@ function CobrancasContent() {
     useState<ParsedDebtor | null>(null);
   const [invoiceTargetDebtor, setInvoiceTargetDebtor] =
     useState<ParsedDebtor | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isUploadingCSV, setIsUploadingCSV] = useState(false);
   const [isSavingInvoice, setIsSavingInvoice] = useState(false);
@@ -299,46 +380,63 @@ function CobrancasContent() {
   const [manualForm, setManualForm] = useState<ManualChargeForm>(
     initialManualChargeForm,
   );
+  const [pickedClient, setPickedClient] = useState<DebtorOption | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  // Import in steps: analysis, review of the clients that need a decision, summary.
+  const [importRows, setImportRows] = useState<ParsedDebtor[] | null>(null);
+  const [importClients, setImportClients] = useState<ImportClientReview[]>([]);
+  const [reviewQueue, setReviewQueue] = useState<ImportClientReview[] | null>(null);
+  const [importDecisions, setImportDecisions] = useState<ImportDecision[] | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importConsent, setImportConsent] = useState(false);
 
   const fetchInvoices = useCallback(async (): Promise<void> => {
+    // A slower answer for a previous filter must not replace the current list.
+    listRequest.current?.abort();
+    const controller = new AbortController();
+    listRequest.current = controller;
     setIsLoading(true);
-    setErrorMsg(null);
-    setSuccessMsg(null);
 
     try {
-      const result = await apiClient.getInvoices({
-        page: pagination.pageIndex + 1,
-        pageSize: pagination.pageSize,
-        search: searchQuery.trim() || undefined,
-        status: statusFilter || undefined,
-        debtorId: debtorIdFilter,
-      });
+      const result = await apiClient.getInvoices(
+        {
+          page: query.page,
+          pageSize: query.pageSize,
+          search: query.search || undefined,
+          status: query.status || undefined,
+          billingType: query.billingType || undefined,
+          sort: query.sort,
+          debtorId: query.debtorId,
+        },
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
       const invoices = result.data;
       setDebtors(isParsedDebtorArray(invoices) ? invoices : []);
       setTotal(result.total);
-    } catch (error: unknown) {
-      setErrorMsg(
-        getErrorMessage(error, "Nao foi possivel carregar as cobrancas."),
-      );
+      setListError(null);
+    } catch {
+      if (controller.signal.aborted) return;
+      setListError("Não foi possível carregar as cobranças.");
     } finally {
-      setIsLoading(false);
+      if (!controller.signal.aborted) setIsLoading(false);
     }
-  }, [
-    apiClient,
-    debtorIdFilter,
-    pagination.pageIndex,
-    pagination.pageSize,
-    searchQuery,
-    statusFilter,
-  ]);
+  }, [apiClient, query]);
+
+  useEffect(() => () => listRequest.current?.abort(), []);
 
   useEffect(() => {
     void fetchInvoices();
   }, [fetchInvoices]);
+
+  // A saved link or a shorter list can point past the last page.
+  useEffect(() => {
+    const lastPage = Math.max(1, Math.ceil(total / query.pageSize));
+    if (!isLoading && query.page > lastPage) updateQuery({ page: lastPage });
+  }, [isLoading, query.page, query.pageSize, total, updateQuery]);
 
   useEffect(() => {
     async function fetchBillingSettings(): Promise<void> {
@@ -358,22 +456,124 @@ function CobrancasContent() {
     void fetchBillingSettings();
   }, [apiClient]);
 
-  const filteredDebtors = debtors;
   const isEducationSegment = billingSettings?.businessSegment === "EDUCATION";
+
+  function resetImport(): void {
+    setImportRows(null);
+    setImportClients([]);
+    setReviewQueue(null);
+    setImportDecisions(null);
+    setImportConsent(false);
+  }
+
+  async function analyzeImport(rows: ParsedDebtor[]): Promise<void> {
+    setIsImporting(true);
+    try {
+      const { clients } = await apiClient.previewInvoiceImport(rows);
+      const queue = clients.filter(
+        (client) => client.kind !== "NEW" && client.kind !== "SAME",
+      );
+      setImportRows(rows);
+      setImportClients(clients);
+      setImportDecisions(queue.length === 0 ? [] : null);
+      setReviewQueue(queue.length > 0 ? queue : null);
+    } catch (error: unknown) {
+      resetImport();
+      setImportError(
+        getErrorMessage(error, "Não foi possível analisar a planilha."),
+      );
+    } finally {
+      setIsImporting(false);
+    }
+  }
 
   async function handleUploadSuccess(
     importedDebtors: ParsedDebtor[],
   ): Promise<void> {
     setImportError(null);
+    await analyzeImport(importedDebtors);
+  }
 
+  /** A replacement WhatsApp for a new client whose number belongs to someone else. */
+  async function validateImportPhone(
+    client: ImportClientReview,
+    phone: string,
+  ): Promise<string | null> {
+    if (!importRows) return "Envie a planilha de novo.";
+    let normalized: string;
     try {
-      await apiClient.importInvoices(importedDebtors);
+      normalized = normalizeWhatsAppNumber(phone);
+    } catch {
+      return "Informe um WhatsApp válido, com DDD.";
+    }
+    if (
+      importClients.some(
+        (other) =>
+          other.document !== client.document &&
+          other.csv.phone.replace(/\D/g, "") === normalized.replace(/\D/g, ""),
+      )
+    ) {
+      return "Este WhatsApp já está em outra linha da planilha.";
+    }
+    const rows = importRows.map((row, index) =>
+      client.rows.includes(index) ? { ...row, phone_number: normalized } : row,
+    );
+    try {
+      const { clients } = await apiClient.previewInvoiceImport(
+        client.rows.map((index) => rows[index]),
+      );
+      const [checked] = clients;
+      if (checked?.kind !== "NEW") {
+        return checked?.phoneOwner
+          ? `Este WhatsApp também já é de ${checked.phoneOwner.name}.`
+          : "Não foi possível usar este WhatsApp.";
+      }
+      setImportRows(rows);
+      setImportClients((current) =>
+        current.map((item) =>
+          item.document === client.document
+            ? { ...client, kind: "NEW", phoneOwner: null, csv: { ...client.csv, phone: normalized } }
+            : item,
+        ),
+      );
+      return null;
+    } catch (error: unknown) {
+      return getErrorMessage(error, "Não foi possível verificar este WhatsApp.");
+    }
+  }
+
+  async function confirmImport(): Promise<void> {
+    if (!importRows || !importDecisions) return;
+    setIsImporting(true);
+    setImportError(null);
+    try {
+      const rows = importConsent
+        ? importRows.map((row) => ({ ...row, whatsapp_opt_in: true }))
+        : importRows;
+      const result = await apiClient.importInvoices(rows, importDecisions);
+      resetImport();
       setIsUploadingCSV(false);
+      setErrorMsg(null);
+      setSuccessMsg(
+        result.skipped.length > 0
+          ? `${result.count} cobranças importadas. Ficaram de fora as cobranças de: ${result.skipped
+              .map((client) => client.name)
+              .join(", ")}.`
+          : `${result.count} cobranças importadas.`,
+      );
       await fetchInvoices();
     } catch (error: unknown) {
-      setImportError(
-        getErrorMessage(error, "Nao foi possivel importar a planilha."),
-      );
+      const code = errorCode(error);
+      if (code === "IMPORT_CHANGED" || code === "IMPORT_NEEDS_REVIEW") {
+        setImportError(getErrorMessage(error, "Revise a importação de novo."));
+        await analyzeImport(importRows);
+      } else {
+        setImportError(
+          getErrorMessage(error, "Não foi possível importar a planilha."),
+        );
+      }
+    } finally {
+      setIsImporting(false);
     }
   }
 
@@ -681,9 +881,17 @@ function CobrancasContent() {
       : EMPTY_LATE_TERMS;
   }
 
+  function openNewChargeModal(): void {
+    setInvoiceTargetDebtor(null);
+    setPickedClient(null);
+    setManualForm({ ...initialManualChargeForm, lateTerms: companyLateTerms() });
+    setIsModalOpen(true);
+  }
+
   function closeManualModal(): void {
     setIsModalOpen(false);
     setInvoiceTargetDebtor(null);
+    setPickedClient(null);
     setManualForm(initialManualChargeForm);
   }
 
@@ -736,6 +944,11 @@ function CobrancasContent() {
     const dueDay = Number(manualForm.dueDay);
 
     try {
+      const debtorId = invoiceTargetDebtor?.debtorId ?? pickedClient?.debtorId;
+      if (!debtorId) {
+        throw new Error("Escolha o cliente da cobrança.");
+      }
+
       if (!Number.isFinite(amount) || amount <= 0) {
         throw new Error("Informe um valor de fatura valido.");
       }
@@ -762,49 +975,22 @@ function CobrancasContent() {
         payment_days_after_due: parsedLateTerms.terms.days,
       };
 
-      if (invoiceTargetDebtor?.debtorId) {
-        await apiClient.createDebtorInvoice(invoiceTargetDebtor.debtorId, {
-          original_amount: amount,
-          due_date: manualForm.recurring ? undefined : manualForm.dueDate,
-          billing_type: manualForm.billingType,
-          recurring: manualForm.recurring,
-          due_day: manualForm.recurring ? dueDay : undefined,
-          ...lateTerms,
-          ...(isEducationSegment
-            ? {
-                studentName: manualForm.studentName.trim() || undefined,
-                studentEnrollment:
-                  manualForm.studentEnrollment.trim() || undefined,
-                studentGroup: manualForm.studentGroup.trim() || undefined,
-              }
-            : {}),
-        });
-      } else {
-        const phoneNumber = normalizeWhatsAppNumber(manualForm.whatsapp);
-        const document = normalizeRequiredDebtorDocument(manualForm.document);
-
-        await apiClient.createInvoice({
-          name: manualForm.customerName.trim(),
-          document,
-          email: manualForm.email.trim(),
-          phone_number: phoneNumber,
-          whatsappOptIn: manualForm.whatsappOptIn,
-          original_amount: amount,
-          due_date: manualForm.recurring ? undefined : manualForm.dueDate,
-          billing_type: manualForm.billingType,
-          recurring: manualForm.recurring,
-          due_day: manualForm.recurring ? dueDay : undefined,
-          ...lateTerms,
-          ...(isEducationSegment
-            ? {
-                studentName: manualForm.studentName.trim() || undefined,
-                studentEnrollment:
-                  manualForm.studentEnrollment.trim() || undefined,
-                studentGroup: manualForm.studentGroup.trim() || undefined,
-              }
-            : {}),
-        });
-      }
+      await apiClient.createDebtorInvoice(debtorId, {
+        original_amount: amount,
+        due_date: manualForm.recurring ? undefined : manualForm.dueDate,
+        billing_type: manualForm.billingType,
+        recurring: manualForm.recurring,
+        due_day: manualForm.recurring ? dueDay : undefined,
+        ...lateTerms,
+        ...(isEducationSegment
+          ? {
+              studentName: manualForm.studentName.trim() || undefined,
+              studentEnrollment:
+                manualForm.studentEnrollment.trim() || undefined,
+              studentGroup: manualForm.studentGroup.trim() || undefined,
+            }
+          : {}),
+      });
 
       closeManualModal();
       await fetchInvoices();
@@ -820,8 +1006,8 @@ function CobrancasContent() {
     ? billingSettings.enabledBillingMethods.filter((method) => method !== "BOLETO")
     : ["BOLIX"];
   const modalTitle = invoiceTargetDebtor
-    ? `Nova fatura para ${invoiceTargetDebtor.name}`
-    : "Adicionar cobrança manual";
+    ? `Nova cobrança para ${invoiceTargetDebtor.name}`
+    : "Nova cobrança";
   const sendBillingTitle =
     sendBillingModal?.mode === "resend"
       ? `Reenviar cobrança para ${sendBillingModal.invoice?.name ?? "devedor"}`
@@ -832,66 +1018,37 @@ function CobrancasContent() {
 
   return (
     <main className="min-h-full bg-slate-50">
-      <div className="mx-auto flex flex-col gap-5 p-4 lg:p-8">
-        <header className="flex flex-col gap-4 2xl:flex-row 2xl:items-center 2xl:justify-between">
+      <div className="mx-auto flex max-w-7xl flex-col gap-5 p-4 lg:p-8">
+        <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="min-w-0">
-            <h1 className="text-2xl font-bold text-slate-900">
-              Gestão de Cobranças
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+              Cobranças
             </h1>
             <p className="mt-1 text-sm text-slate-500">
-              Gerencie devedores, adicione novas faturas ou importe listas em
-              lote.
+              Acompanhe, filtre e envie as cobranças da empresa.
             </p>
           </div>
 
-          <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center 2xl:w-auto">
-            <div className="relative min-w-0 flex-1 2xl:w-[28rem] 2xl:flex-none">
-              <Search
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-                size={18}
-              />
-              <input
-                type="search"
-                value={searchQuery}
-                onChange={(event) => {
-                  setSearchQuery(event.target.value);
-                  setPagination((prev) => ({ ...prev, pageIndex: 0 }));
-                }}
-                placeholder={
-                  isEducationSegment
-                    ? "Buscar por responsável, aluno ou WhatsApp"
-                    : "Buscar por nome, CPF/CNPJ ou WhatsApp"
-                }
-                className="h-11 w-full rounded-md border border-slate-200 bg-white py-2 pl-10 pr-3 text-sm text-slate-900 outline-none transition-all duration-200 placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-              />
-            </div>
-
+          <div className="flex flex-col gap-2 sm:flex-row">
             <button
               type="button"
               onClick={() => {
                 setImportError(null);
                 setIsUploadingCSV(true);
               }}
-              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-all duration-200 hover:bg-slate-100 hover:text-slate-900"
+              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 hover:text-slate-900"
             >
               <FileUp size={17} />
-              Importar CSV
+              Importar planilha
             </button>
 
             <button
               type="button"
-              onClick={() => {
-                setInvoiceTargetDebtor(null);
-                setManualForm({
-                  ...initialManualChargeForm,
-                  lateTerms: companyLateTerms(),
-                });
-                setIsModalOpen(true);
-              }}
-              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:bg-emerald-700"
+              onClick={openNewChargeModal}
+              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
             >
               <Plus size={17} />
-              Adicionar Manual
+              Nova cobrança
             </button>
           </div>
         </header>
@@ -910,9 +1067,16 @@ function CobrancasContent() {
           </div>
         )}
 
-        {debtorIdFilter && (
-          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
-            Exibindo cobrancas filtradas pelo cliente selecionado.
+        {query.debtorId && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
+            Mostrando as cobranças de um cliente.
+            <button
+              type="button"
+              onClick={() => updateQuery({ debtorId: undefined })}
+              className="font-semibold underline underline-offset-2"
+            >
+              Ver todas
+            </button>
           </div>
         )}
 
@@ -921,10 +1085,10 @@ function CobrancasContent() {
             <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h2 className="font-semibold text-slate-900">
-                  Importar cobranças por CSV
+                  Importar cobranças por planilha
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Envie uma planilha para cadastrar cobranças em lote.
+                  Cada linha é ligada ao cliente com o mesmo CPF/CNPJ; quem não existe é cadastrado. Divergências com o cadastro são revisadas antes de importar.
                 </p>
               </div>
 
@@ -932,6 +1096,7 @@ function CobrancasContent() {
                 type="button"
                 onClick={() => {
                   setImportError(null);
+                  resetImport();
                   setIsUploadingCSV(false);
                 }}
                 className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-all duration-200 hover:bg-slate-100 hover:text-slate-900"
@@ -948,29 +1113,109 @@ function CobrancasContent() {
               </div>
             )}
 
-            <UploadCSV
-              showEducationFields={isEducationSegment}
-              onUploadSuccess={(importedDebtors) => {
-                void handleUploadSuccess(importedDebtors);
-              }}
-            />
+            {importRows && importDecisions ? (
+              <ImportSummary
+                rows={importRows.length}
+                clients={importClients}
+                decisions={importDecisions}
+                busy={isImporting}
+                whatsappConsent={importConsent}
+                onWhatsappConsentChange={setImportConsent}
+                onConfirm={() => void confirmImport()}
+                onCancel={resetImport}
+              />
+            ) : isImporting ? (
+              <p className="flex items-center gap-2 py-10 text-sm text-slate-500">
+                <Loader2 size={18} className="animate-spin" />
+                Analisando a planilha
+              </p>
+            ) : (
+              <UploadCSV
+                showEducationFields={isEducationSegment}
+                onUploadSuccess={(importedDebtors) => {
+                  void handleUploadSuccess(importedDebtors);
+                }}
+              />
+            )}
           </section>
         ) : (
-          <section className="flex flex-col gap-4">
-            {isLoading ? (
-              <div className="flex min-h-80 flex-col items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500">
-                <Loader2 className="mb-3 animate-spin" size={34} />
-                <p className="text-sm">Carregando cobranças...</p>
+          <section className="overflow-hidden rounded-md border border-slate-200 bg-white">
+            <InvoiceFilters
+              values={{ ...query, search: searchInput }}
+              searchPlaceholder={
+                isEducationSegment
+                  ? "Buscar por responsável, aluno, CPF/CNPJ ou WhatsApp"
+                  : "Buscar por nome, CPF/CNPJ, WhatsApp ou e-mail"
+              }
+              onSearchChange={setSearchInput}
+              onChange={updateQuery}
+            />
+
+            {listError ? (
+              <div
+                role="alert"
+                className="flex min-h-64 flex-col items-center justify-center gap-3 px-4 text-center text-sm text-rose-700"
+              >
+                <AlertCircle size={28} aria-hidden="true" />
+                <p>{listError}</p>
+                <button
+                  type="button"
+                  onClick={() => void fetchInvoices()}
+                  className="rounded-md border border-rose-200 bg-white px-3 py-1.5 font-semibold hover:bg-rose-50"
+                >
+                  Tentar de novo
+                </button>
               </div>
-            ) : debtors.length > 0 ? (
-              <>
+            ) : debtors.length === 0 && isLoading ? (
+              <div className="flex min-h-64 items-center justify-center gap-2 text-sm text-slate-500">
+                <Loader2 className="animate-spin" size={18} />
+                Carregando cobranças
+              </div>
+            ) : debtors.length === 0 ? (
+              <div className="flex min-h-64 flex-col items-center justify-center px-4 text-center">
+                <FileSpreadsheet size={34} className="text-slate-300" aria-hidden="true" />
+                {hasFilters ? (
+                  <>
+                    <h2 className="mt-3 font-semibold text-slate-900">
+                      Nenhuma cobrança encontrada
+                    </h2>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Ajuste a busca ou os filtros.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={clearFilters}
+                      className="mt-4 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                    >
+                      Limpar filtros
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <h2 className="mt-3 font-semibold text-slate-900">
+                      Nenhuma cobrança cadastrada
+                    </h2>
+                    <p className="mt-1 max-w-md text-sm text-slate-500">
+                      Importe uma planilha ou crie uma cobrança para um cliente
+                      cadastrado.
+                    </p>
+                  </>
+                )}
+              </div>
+            ) : (
+              <div
+                aria-busy={isLoading}
+                className={isLoading ? "opacity-60 transition-opacity" : "transition-opacity"}
+              >
                 <InvoiceTable
                   canIssue={canIssue}
-                  data={filteredDebtors}
+                  data={debtors}
                   pageCount={Math.ceil(total / pagination.pageSize)}
                   total={total}
                   pagination={pagination}
-                  onPaginationChange={setPagination}
+                  onPaginationChange={changePagination}
+                  sort={query.sort}
+                  onSortChange={(sort) => updateQuery({ sort })}
                   onConfigureDebtor={openDebtorSettings}
                   onAddInvoice={openInvoiceModal}
                   onRunSelectedInvoices={(invoiceIds) => {
@@ -993,25 +1238,6 @@ function CobrancasContent() {
                   runningInvoiceAction={runningInvoiceAction}
                   showEducationFields={isEducationSegment}
                 />
-
-                {searchQuery && filteredDebtors.length === 0 && (
-                  <div className="rounded-md border border-dashed border-slate-300 bg-white py-12 text-center text-sm text-slate-500">
-                    Nenhum devedor encontrado para &quot;{searchQuery}&quot;.
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="rounded-md border border-dashed border-slate-300 bg-white px-6 py-16 text-center">
-                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-md bg-slate-100 text-slate-400">
-                  <FileSpreadsheet size={28} />
-                </div>
-                <h2 className="font-semibold text-slate-900">
-                  Nenhuma cobrança cadastrada
-                </h2>
-                <p className="mx-auto mt-2 max-w-md text-sm text-slate-500">
-                  Importe um CSV ou adicione uma fatura manualmente para começar
-                  a operação de cobrança.
-                </p>
               </div>
             )}
           </section>
@@ -1020,14 +1246,21 @@ function CobrancasContent() {
 
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 transition-all duration-200">
-          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-md bg-white shadow-xl transition-all duration-200">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="new-charge-title"
+            className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-md bg-white shadow-xl transition-all duration-200"
+          >
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
               <div>
-                <h2 className="font-semibold text-slate-900">{modalTitle}</h2>
+                <h2 id="new-charge-title" className="font-semibold text-slate-900">
+                  {modalTitle}
+                </h2>
                 <p className="mt-1 text-sm text-slate-500">
                   {invoiceTargetDebtor
-                    ? "Preencha os dados da nova fatura deste devedor."
-                    : "Preencha os dados principais da nova fatura."}
+                    ? "Preencha os dados da nova cobrança deste cliente."
+                    : "Escolha um cliente cadastrado e preencha os dados da cobrança."}
                 </p>
               </div>
 
@@ -1041,91 +1274,24 @@ function CobrancasContent() {
               </button>
             </div>
 
-            <form onSubmit={handleManualSubmit}>
+            <form onSubmit={handleManualSubmit} noValidate={!pickedClient && !invoiceTargetDebtor}>
               <div className="grid gap-4 px-5 py-5 sm:grid-cols-2">
+                {errorMsg && (
+                  <p
+                    role="alert"
+                    className="flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 sm:col-span-2"
+                  >
+                    <AlertCircle className="mt-0.5 shrink-0" size={16} />
+                    {errorMsg}
+                  </p>
+                )}
                 {!invoiceTargetDebtor && (
-                  <>
-                    <label className="flex flex-col gap-1.5 sm:col-span-2">
-                      <span className="text-xs font-semibold uppercase text-slate-500">
-                        Nome do Devedor
-                      </span>
-                      <input
-                        required
-                        type="text"
-                        value={manualForm.customerName}
-                        onChange={(event) =>
-                          updateManualForm("customerName", event.target.value)
-                        }
-                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                      />
-                    </label>
-
-                    <label className="flex flex-col gap-1.5 sm:col-span-2">
-                      <span className="text-xs font-semibold uppercase text-slate-500">
-                        CPF/CNPJ do Devedor
-                      </span>
-                      <input
-                        required
-                        type="text"
-                        inputMode="numeric"
-                        value={manualForm.document}
-                        placeholder="CPF ou CNPJ"
-                        onChange={(event) =>
-                          updateManualForm("document", event.target.value)
-                        }
-                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                      />
-                    </label>
-
-                    <label className="flex flex-col gap-1.5 sm:col-span-2">
-                      <span className="text-xs font-semibold uppercase text-slate-500">
-                        Email
-                      </span>
-                      <input
-                        required
-                        type="email"
-                        value={manualForm.email}
-                        onChange={(event) =>
-                          updateManualForm("email", event.target.value)
-                        }
-                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                      />
-                    </label>
-
-                    <label className="flex flex-col gap-1.5">
-                      <span className="text-xs font-semibold uppercase text-slate-500">
-                        WhatsApp (pais + DDD)
-                      </span>
-                      <input
-                        required
-                        type="tel"
-                        value={manualForm.whatsapp}
-                        placeholder="+55 (11) 99999-9999"
-                        onChange={(event) =>
-                          updateManualForm("whatsapp", event.target.value)
-                        }
-                        className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                      />
-                    </label>
-
-                    <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 sm:col-span-2">
-                      <input
-                        type="checkbox"
-                        checked={manualForm.whatsappOptIn}
-                        onChange={(event) =>
-                          updateManualForm(
-                            "whatsappOptIn",
-                            event.target.checked,
-                          )
-                        }
-                        className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                      />
-                      <span className="text-sm font-medium text-slate-700">
-                        Cliente autorizou mensagens de cobrança pelo WhatsApp
-                        oficial
-                      </span>
-                    </label>
-                  </>
+                  <div className="flex flex-col gap-1.5 sm:col-span-2">
+                    <span className="text-xs font-semibold uppercase text-slate-500">
+                      Cliente
+                    </span>
+                    <ClientPicker value={pickedClient} onChange={setPickedClient} />
+                  </div>
                 )}
 
                 <label className="flex flex-col gap-1.5">
@@ -1280,7 +1446,7 @@ function CobrancasContent() {
                       days: "Padrão da empresa",
                     }}
                     individualDebtor={isIndividualDocument(
-                      invoiceTargetDebtor?.document ?? manualForm.document,
+                      invoiceTargetDebtor?.document ?? pickedClient?.document ?? "",
                     )}
                   />
                   <p className="mt-2 text-xs text-slate-500">
@@ -1313,6 +1479,18 @@ function CobrancasContent() {
             </form>
           </div>
         </div>
+      )}
+
+      {reviewQueue && (
+        <ImportReview
+          clients={reviewQueue}
+          onValidatePhone={validateImportPhone}
+          onComplete={(decisions) => {
+            setReviewQueue(null);
+            setImportDecisions(decisions);
+          }}
+          onCancel={resetImport}
+        />
       )}
 
       {feePreview && (

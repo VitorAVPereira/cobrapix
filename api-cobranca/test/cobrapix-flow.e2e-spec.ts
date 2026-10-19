@@ -405,8 +405,9 @@ describe('CobraPix main flow smoke (e2e)', () => {
   }
 
   async function createInvoice(accessToken: string): Promise<InvoiceResponse> {
-    const response = await request(httpServer)
-      .post('/invoices')
+    // Charges are only for clients registered first.
+    const debtorResponse = await request(httpServer)
+      .post('/invoices/debtors')
       .set('Authorization', `Bearer ${accessToken}`)
       .send({
         name: 'Responsavel Smoke',
@@ -415,6 +416,18 @@ describe('CobraPix main flow smoke (e2e)', () => {
         phone_number: '+55 11 99999-0000',
         email: debtorEmail,
         whatsappOptIn: true,
+      });
+    if (debtorResponse.status !== 201)
+      throw new Error(
+        `POST /invoices/debtors ${debtorResponse.status}: ${JSON.stringify(debtorResponse.body)}`,
+      );
+    const { debtorId } = responseBody<{ debtorId: string }>(debtorResponse);
+
+    const response = await request(httpServer)
+      .post('/invoices')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({
+        debtorId,
         original_amount: 123.45,
         due_date: '2026-05-20',
         billing_type: 'PIX',

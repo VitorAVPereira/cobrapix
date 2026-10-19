@@ -36,8 +36,12 @@ const mockApiClient = {
   createDebtorInvoice,
 };
 
+const replace = jest.fn();
+let mockParams = new URLSearchParams();
 jest.mock("next/navigation", () => ({
-  useRouter: () => ({ push }),
+  useRouter: () => ({ push, replace }),
+  useSearchParams: () => mockParams,
+  usePathname: () => "/clientes",
 }));
 
 jest.mock("@/lib/use-api-client", () => ({
@@ -110,6 +114,8 @@ const debtorResponse: DebtorListResponse = {
 describe("ClientesPage", () => {
   beforeEach(() => {
     push.mockReset();
+    replace.mockReset();
+    mockParams = new URLSearchParams();
     getDebtors.mockReset();
     getRules.mockReset();
     createDebtor.mockReset();
@@ -132,8 +138,8 @@ describe("ClientesPage", () => {
 
     expect(await screen.findByText("Maria Silva")).toBeInTheDocument();
     expect(screen.getAllByText("Novo Cliente").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("2 cobrancas").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("3 pagas").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("2 cobranças").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/3 pagas/).length).toBeGreaterThan(0);
     expect(screen.queryByText(/sem perfil/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/abrir menu/i)).not.toBeInTheDocument();
   });
@@ -144,10 +150,10 @@ describe("ClientesPage", () => {
 
     await screen.findByText("Maria Silva");
     await user.click(
-      screen.getByRole("button", { name: /abrir acoes do cliente maria/i }),
+      screen.getByRole("button", { name: /abrir ações do cliente maria/i }),
     );
     await user.click(
-      screen.getByRole("menuitem", { name: /ver cobrancas em aberto/i }),
+      screen.getByRole("menuitem", { name: /ver cobranças em aberto/i }),
     );
 
     expect(push).toHaveBeenCalledWith(
@@ -173,16 +179,16 @@ describe("ClientesPage", () => {
       getDebtors.mockResolvedValue(twoRows);
       render(<ClientesPage />);
       await screen.findByText("Joao Souza");
-      const button = screen.getByRole("button", { name: /abrir acoes do cliente joao/i });
+      const button = screen.getByRole("button", { name: /abrir ações do cliente joao/i });
       await user.click(button);
-      const menu = screen.getByRole("menu", { name: /acoes do cliente joao souza/i });
+      const menu = screen.getByRole("menu", { name: /ações do cliente joao souza/i });
       expect(button).toHaveAttribute("aria-expanded", "true");
       // Not inside the table (whose overflow container used to cut it).
       expect(screen.getByRole("table")).not.toContainElement(menu);
-      await user.click(screen.getByRole("menuitem", { name: /nova cobranca/i }));
+      await user.click(screen.getByRole("menuitem", { name: /nova cobrança/i }));
       await user.type(screen.getByLabelText(/valor/i), "50");
       await user.type(screen.getByLabelText(/data de vencimento/i), "2026-10-10");
-      await user.click(screen.getByRole("button", { name: /salvar cobranca/i }));
+      await user.click(screen.getByRole("button", { name: /salvar cobrança/i }));
       await waitFor(() =>
         expect(createDebtorInvoice).toHaveBeenCalledWith("debtor-2", expect.anything()),
       );
@@ -193,27 +199,29 @@ describe("ClientesPage", () => {
       getDebtors.mockResolvedValue(twoRows);
       render(<ClientesPage />);
       await screen.findByText("Joao Souza");
-      await user.click(screen.getByRole("button", { name: /abrir acoes do cliente maria/i }));
-      await user.click(screen.getByRole("button", { name: /abrir acoes do cliente joao/i }));
+      await user.click(screen.getByRole("button", { name: /abrir ações do cliente maria/i }));
+      await user.click(screen.getByRole("button", { name: /abrir ações do cliente joao/i }));
       expect(screen.getAllByRole("menu")).toHaveLength(1);
       expect(screen.getByRole("menu", { name: /joao souza/i })).toBeInTheDocument();
       await user.keyboard("{Escape}");
       expect(screen.queryByRole("menu")).toBeNull();
-      expect(screen.getByRole("button", { name: /abrir acoes do cliente joao/i })).toHaveFocus();
+      expect(screen.getByRole("button", { name: /abrir ações do cliente joao/i })).toHaveFocus();
     });
 
     it("never keeps a menu open over a reloaded or filtered list", async () => {
       const user = userEvent.setup();
-      render(<ClientesPage />);
+      const { rerender } = render(<ClientesPage />);
       await screen.findByText("Maria Silva");
-      await user.click(screen.getByRole("button", { name: /abrir acoes do cliente maria/i }));
+      await user.click(screen.getByRole("button", { name: /abrir ações do cliente maria/i }));
       expect(screen.getByRole("menu")).toBeInTheDocument();
       getDebtors.mockResolvedValue({ ...debtorResponse, data: [], total: 0 });
-      await user.type(screen.getByPlaceholderText(/buscar por nome/i), "x");
+      mockParams = new URLSearchParams("search=x");
+      rerender(<ClientesPage />);
       await screen.findByText("Nenhum cliente encontrado");
       expect(screen.queryByRole("menu")).toBeNull();
       getDebtors.mockResolvedValue(debtorResponse);
-      await user.clear(screen.getByPlaceholderText(/buscar por nome/i));
+      mockParams = new URLSearchParams();
+      rerender(<ClientesPage />);
       await screen.findByText("Maria Silva");
       // Coming back does not reopen the old menu.
       expect(screen.queryByRole("menu")).toBeNull();
@@ -245,13 +253,23 @@ describe("ClientesPage", () => {
     });
   });
 
+  it("opens the new client form when coming from Cobranças", async () => {
+    mockParams = new URLSearchParams("novo=1");
+    render(<ClientesPage />);
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/perfil de pagador/i)).toHaveValue("profile-new"),
+    );
+    expect(replace).toHaveBeenCalledWith("/clientes", { scroll: false });
+  });
+
   it("edits debtor data from the row menu", async () => {
     const user = userEvent.setup();
     render(<ClientesPage />);
 
     await screen.findByText("Maria Silva");
     await user.click(
-      screen.getByRole("button", { name: /abrir acoes do cliente maria/i }),
+      screen.getByRole("button", { name: /abrir ações do cliente maria/i }),
     );
     await user.click(screen.getByRole("menuitem", { name: /editar cliente/i }));
     await user.type(screen.getByLabelText(/e-mail/i), "maria@email.com");
@@ -274,12 +292,12 @@ describe("ClientesPage", () => {
 
     await screen.findByText("Maria Silva");
     await user.click(
-      screen.getByRole("button", { name: /abrir acoes do cliente maria/i }),
+      screen.getByRole("button", { name: /abrir ações do cliente maria/i }),
     );
-    await user.click(screen.getByRole("menuitem", { name: /nova cobranca/i }));
+    await user.click(screen.getByRole("menuitem", { name: /nova cobrança/i }));
     await user.type(screen.getByLabelText(/valor/i), "120");
     await user.type(screen.getByLabelText(/data de vencimento/i), "2026-07-10");
-    await user.click(screen.getByRole("button", { name: /salvar cobranca/i }));
+    await user.click(screen.getByRole("button", { name: /salvar cobrança/i }));
 
     await waitFor(() => {
       expect(createDebtorInvoice).toHaveBeenCalledWith("debtor-1", {
@@ -300,9 +318,9 @@ describe("ClientesPage", () => {
     await screen.findByText("Maria Silva");
     await waitFor(() => expect(getBillingSettings).toHaveBeenCalled());
     await user.click(
-      screen.getByRole("button", { name: /abrir acoes do cliente maria/i }),
+      screen.getByRole("button", { name: /abrir ações do cliente maria/i }),
     );
-    await user.click(screen.getByRole("menuitem", { name: /nova cobranca/i }));
+    await user.click(screen.getByRole("menuitem", { name: /nova cobrança/i }));
     expect(screen.getByLabelText(/^multa \(%\)/i)).toHaveValue("2");
     expect(screen.getByLabelText(/^juros ao mês/i)).toHaveValue("1");
     expect(screen.getByLabelText(/^dias aceitando pagamento/i)).toHaveValue("30");
@@ -315,7 +333,7 @@ describe("ClientesPage", () => {
     await user.type(screen.getByLabelText(/^dias aceitando pagamento/i), "0");
     await user.type(screen.getByLabelText(/valor/i), "120");
     await user.type(screen.getByLabelText(/data de vencimento/i), "2026-07-10");
-    await user.click(screen.getByRole("button", { name: /salvar cobranca/i }));
+    await user.click(screen.getByRole("button", { name: /salvar cobrança/i }));
 
     await waitFor(() => {
       expect(createDebtorInvoice).toHaveBeenCalledWith(
@@ -327,6 +345,69 @@ describe("ClientesPage", () => {
           payment_days_after_due: 0,
         }),
       );
+    });
+  });
+
+  describe("with many clients", () => {
+    it("reads filters and page from the URL and loads profiles only once", async () => {
+      mockParams = new URLSearchParams(
+        "search=Maria&profileId=profile-new&paymentStatus=open&page=3&pageSize=50",
+      );
+      const { rerender } = render(<ClientesPage />);
+      await screen.findByText("Maria Silva");
+
+      expect(getDebtors).toHaveBeenCalledWith(
+        {
+          page: 3,
+          pageSize: 50,
+          search: "Maria",
+          profileId: "profile-new",
+          paymentStatus: "open",
+        },
+        expect.any(AbortSignal),
+      );
+      mockParams = new URLSearchParams("page=4&pageSize=50");
+      rerender(<ClientesPage />);
+      await waitFor(() => expect(getDebtors).toHaveBeenCalledTimes(2));
+      expect(getRules).toHaveBeenCalledTimes(1);
+    });
+
+    it("pages through the clients in the URL", async () => {
+      const user = userEvent.setup();
+      getDebtors.mockResolvedValue({ ...debtorResponse, total: 1240 });
+      render(<ClientesPage />);
+      await screen.findByText("Maria Silva");
+
+      expect(screen.getByText("Página 1 de 62")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Próxima página" }));
+      expect(replace).toHaveBeenLastCalledWith("/clientes?page=2", { scroll: false });
+      await user.selectOptions(screen.getByLabelText("Clientes por página"), "100");
+      expect(replace).toHaveBeenLastCalledWith("/clientes?pageSize=100", { scroll: false });
+    });
+
+    it("goes to the last page when the URL points past it", async () => {
+      mockParams = new URLSearchParams("page=16&paymentStatus=open");
+      getDebtors.mockResolvedValue({ ...debtorResponse, data: [], total: 45 });
+      render(<ClientesPage />);
+
+      await waitFor(() =>
+        expect(replace).toHaveBeenCalledWith("/clientes?paymentStatus=open&page=3", {
+          scroll: false,
+        }),
+      );
+    });
+
+    it("a failure is an error with retry, not an empty list", async () => {
+      const user = userEvent.setup();
+      getDebtors.mockRejectedValueOnce(new Error("offline"));
+      render(<ClientesPage />);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "Não foi possível carregar os clientes.",
+      );
+      expect(screen.queryByText("Nenhum cliente cadastrado")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Tentar de novo" }));
+      expect(await screen.findByText("Maria Silva")).toBeInTheDocument();
     });
   });
 });

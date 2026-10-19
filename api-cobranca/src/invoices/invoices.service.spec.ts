@@ -133,78 +133,7 @@ describe('InvoicesService', () => {
     expect(tx).toBeDefined();
   });
 
-  it('cria devedor novo com documento normalizado na fatura manual', async () => {
-    const invoice = buildInvoice({ debtorId: 'debtor-new' });
-    const debtorFindMany = jest.fn().mockResolvedValue([]);
-    const debtorCreate = jest.fn().mockResolvedValue({ id: 'debtor-new' });
-    const invoiceCreate = jest.fn().mockResolvedValue(invoice);
-    const profileFindFirst = jest.fn().mockResolvedValue({
-      id: 'profile-new',
-      name: 'Novo Cliente',
-      profileType: 'NEW',
-    });
-    const prisma = {
-      company: {
-        findUnique: jest.fn().mockResolvedValue({
-          id: 'company-1',
-          enabledBillingMethods: ['PIX', 'BOLETO', 'BOLIX'],
-        }),
-      },
-      collectionProfile: { findFirst: profileFindFirst },
-      $transaction: jest.fn(
-        async (
-          callback: (tx: {
-            debtor: {
-              findMany: typeof debtorFindMany;
-              create: typeof debtorCreate;
-            };
-            invoice: { create: typeof invoiceCreate };
-          }) => Promise<unknown>,
-        ) =>
-          callback({
-            debtor: { findMany: debtorFindMany, create: debtorCreate },
-            invoice: { create: invoiceCreate },
-          }),
-      ),
-    } as unknown as PrismaService;
-
-    const service = new InvoicesService(
-      prisma,
-      buildMessageQueue(),
-      buildPaymentService(),
-    );
-    const result = await service.createInvoice('company-1', {
-      name: 'Maria Silva',
-      document: '123.456.789-09',
-      phone_number: '11999999999',
-      email: 'maria@email.com',
-      original_amount: 199.9,
-      due_date: '2026-05-10',
-      billing_type: 'PIX',
-    });
-
-    expect(result.phone_number).toBe('+5511999999999');
-    expect(debtorCreate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          companyId: 'company-1',
-          document: '12345678909',
-          phoneNumber: '+5511999999999',
-          collectionProfileId: 'profile-new',
-        }) as unknown,
-      }),
-    );
-    expect(invoiceCreate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          companyId: 'company-1',
-          debtorId: 'debtor-new',
-        }) as unknown,
-      }),
-    );
-  });
-
-  it('bloqueia fatura manual para novo devedor sem CPF ou CNPJ', async () => {
+  it('recusa cobranca sem cliente cadastrado, sem criar cliente', async () => {
     const transaction = jest.fn();
     const prisma = {
       company: {
@@ -225,13 +154,14 @@ describe('InvoicesService', () => {
     await expect(
       service.createInvoice('company-1', {
         name: 'Maria Silva',
+        document: '123.456.789-09',
         phone_number: '11999999999',
         email: 'maria@email.com',
         original_amount: 199.9,
         due_date: '2026-05-10',
         billing_type: 'PIX',
       }),
-    ).rejects.toThrow('CPF/CNPJ do devedor');
+    ).rejects.toThrow('Escolha um cliente cadastrado em Clientes.');
     expect(transaction).not.toHaveBeenCalled();
   });
 
@@ -301,10 +231,7 @@ describe('InvoicesService', () => {
 
     await expect(
       service.createInvoice('company-1', {
-        name: 'Maria Silva',
-        document: '123.456.789-09',
-        phone_number: '11999999999',
-        email: 'maria@email.com',
+        debtorId: 'debtor-1',
         original_amount: 199.9,
         due_date: '2026-05-10',
         billing_type: 'BOLIX',
@@ -355,13 +282,153 @@ describe('InvoicesService', () => {
     });
   });
 
+  it('busca clientes para a nova cobranca so na empresa, com documento formatado e limite', async () => {
+    const debtorFindMany = jest.fn().mockResolvedValue([
+      {
+        id: 'debtor-1',
+        name: 'Ana',
+        document: '12345678909',
+        phoneNumber: '+5511999990001',
+        email: null,
+      },
+    ]);
+    const service = new InvoicesService(
+      { debtor: { findMany: debtorFindMany } } as unknown as PrismaService,
+      buildMessageQueue(),
+      buildPaymentService(),
+    );
+
+    const result = await service.searchDebtors(
+      'company-1',
+      '123.456.789-09',
+      8,
+    );
+
+    expect(result).toEqual([
+      {
+        debtorId: 'debtor-1',
+        name: 'Ana',
+        document: '12345678909',
+        phone_number: '+5511999990001',
+        email: null,
+      },
+    ]);
+    expect(debtorFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          companyId: 'company-1',
+          OR: expect.arrayContaining([
+            { document: { contains: '12345678909' } },
+          ]) as unknown,
+        },
+        take: 8,
+      }),
+    );
+  });
+
+  describe('listagem de cobrancas', () => {
+    function listing() {
+      const invoiceFindMany = jest.fn().mockResolvedValue([]);
+      const invoiceCount = jest.fn().mockResolvedValue(0);
+      const service = new InvoicesService(
+        {
+          invoice: { findMany: invoiceFindMany, count: invoiceCount },
+        } as unknown as PrismaService,
+        buildMessageQueue(),
+        buildPaymentService(),
+      );
+      const where = () =>
+        (invoiceFindMany.mock.calls[0] as [{ where: unknown }])[0].where;
+      return { service, invoiceFindMany, invoiceCount, where };
+    }
+
+    it('vencidas sao pendentes com vencimento antes de hoje em Sao Paulo', async () => {
+      const { service, invoiceCount, where } = listing();
+      // 18/10 01:30 UTC is still 17/10 in São Paulo.
+      await service.findPaginated(
+        'company-1',
+        { page: 1, pageSize: 20, status: 'OVERDUE' },
+        new Date('2026-10-18T01:30:00Z'),
+      );
+
+      const expected = {
+        companyId: 'company-1',
+        status: 'PENDING',
+        dueDate: { lt: new Date('2026-10-17T00:00:00Z') },
+      };
+      expect(where()).toEqual(expected);
+      expect(invoiceCount).toHaveBeenCalledWith({ where: expected });
+    });
+
+    it('boleto inclui BOLIX e a ordenacao tem desempate estavel', async () => {
+      const { service, invoiceFindMany, where } = listing();
+      await service.findPaginated('company-1', {
+        page: 2,
+        pageSize: 50,
+        billingType: 'BOLETO',
+        sort: 'dueDate_asc',
+      });
+
+      expect(where()).toEqual({
+        companyId: 'company-1',
+        billingType: { in: ['BOLETO', 'BOLIX'] },
+      });
+      expect(invoiceFindMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderBy: [{ dueDate: 'asc' }, { id: 'asc' }],
+          skip: 50,
+          take: 50,
+        }),
+      );
+    });
+
+    it('busca CPF e WhatsApp digitados com pontuacao', async () => {
+      const { service, where } = listing();
+      await service.findPaginated('company-1', {
+        page: 1,
+        pageSize: 20,
+        search: '123.456.789-09',
+      });
+
+      expect(where()).toEqual(
+        expect.objectContaining({
+          companyId: 'company-1',
+          OR: expect.arrayContaining([
+            { debtor: { document: { contains: '12345678909' } } },
+            { debtor: { phoneNumber: { contains: '12345678909' } } },
+          ]) as unknown,
+        }),
+      );
+    });
+
+    it('numeros dentro de um nome nao viram busca por documento', async () => {
+      const { service, where } = listing();
+      await service.findPaginated('company-1', {
+        page: 1,
+        pageSize: 20,
+        search: 'Carla Alves 33',
+      });
+
+      expect(where()).toEqual(
+        expect.objectContaining({
+          OR: expect.arrayContaining([
+            { debtor: { document: { contains: 'Carla Alves 33' } } },
+            { debtor: { phoneNumber: { contains: 'Carla Alves 33' } } },
+          ]) as unknown,
+        }),
+      );
+    });
+  });
+
   it('enfileira primeira cobranca apos importacao CSV', async () => {
     const debtorFindMany = jest.fn().mockResolvedValue([]);
-    const debtorCreate = jest.fn().mockResolvedValue({ id: 'debtor-1' });
+    const debtorCreate = jest.fn().mockResolvedValue([
+      { id: 'debtor-1', document: '12345678909' },
+      { id: 'debtor-2', document: '52998224725' },
+    ]);
     const invoiceCreate = jest
       .fn()
-      .mockResolvedValueOnce({ id: 'invoice-1' })
-      .mockResolvedValueOnce({ id: 'invoice-2' });
+      .mockResolvedValue([{ id: 'invoice-1' }, { id: 'invoice-2' }]);
     const profileFindFirst = jest.fn().mockResolvedValue({
       id: 'profile-new',
       name: 'Novo Cliente',
@@ -384,14 +451,17 @@ describe('InvoicesService', () => {
           callback: (tx: {
             debtor: {
               findMany: typeof debtorFindMany;
-              create: typeof debtorCreate;
+              createManyAndReturn: typeof debtorCreate;
             };
-            invoice: { create: typeof invoiceCreate };
+            invoice: { createManyAndReturn: typeof invoiceCreate };
           }) => Promise<unknown>,
         ) =>
           callback({
-            debtor: { findMany: debtorFindMany, create: debtorCreate },
-            invoice: { create: invoiceCreate },
+            debtor: {
+              findMany: debtorFindMany,
+              createManyAndReturn: debtorCreate,
+            },
+            invoice: { createManyAndReturn: invoiceCreate },
           }),
       ),
     } as unknown as PrismaService;
@@ -404,8 +474,8 @@ describe('InvoicesService', () => {
     const result = await service.importCsv('company-1', [
       {
         name: 'Maria Silva',
-        document: '123.456.789-09',
-        phone_number: '11999999999',
+        document: '12345678909',
+        phone_number: '+5511999999999',
         email: 'maria@email.com',
         original_amount: 199.9,
         due_date: '2026-05-10',
@@ -413,8 +483,8 @@ describe('InvoicesService', () => {
       },
       {
         name: 'Joao Souza',
-        document: '529.982.247-25',
-        phone_number: '11988888888',
+        document: '52998224725',
+        phone_number: '+5511988888888',
         email: 'joao@email.com',
         original_amount: 50,
         due_date: '2026-05-10',
@@ -429,12 +499,11 @@ describe('InvoicesService', () => {
       success: true,
       count: 2,
       initialChargeQueued: 2,
+      skipped: [],
     });
     // Empty columns use the company default; an explicit zero means none.
     expect(
-      (invoiceCreate.mock.calls as Array<[{ data: unknown }]>).map(
-        ([args]) => args.data,
-      ),
+      (invoiceCreate.mock.calls as Array<[{ data: unknown[] }]>)[0]?.[0].data,
     ).toEqual([
       expect.objectContaining({
         lateFineBasisPoints: 200,
@@ -449,11 +518,13 @@ describe('InvoicesService', () => {
     ]);
     expect(debtorCreate).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({
-          document: '12345678909',
-          phoneNumber: '+5511999999999',
-          collectionProfileId: 'profile-new',
-        }) as unknown,
+        data: expect.arrayContaining([
+          expect.objectContaining({
+            document: '12345678909',
+            phoneNumber: '+5511999999999',
+            collectionProfileId: 'profile-new',
+          }),
+        ]) as unknown,
       }),
     );
     const messageQueueMock = messageQueue as unknown as {
@@ -974,7 +1045,20 @@ describe('InvoicesService', () => {
       };
       const debtorFindMany = jest.fn().mockResolvedValue([debtorWithInvoices]);
       const debtorUpdateMany = jest.fn().mockResolvedValue({ count: 2 });
+      const invoiceGroupBy = jest.fn().mockResolvedValue([
+        {
+          status: 'PENDING',
+          _sum: { originalAmount: decimal(120) },
+          _count: { _all: 1 },
+        },
+        {
+          status: 'PAID',
+          _sum: { originalAmount: decimal(80) },
+          _count: { _all: 1 },
+        },
+      ]);
       const prisma = {
+        invoice: { groupBy: invoiceGroupBy },
         collectionProfile: {
           findFirst: jest.fn().mockResolvedValue(defaultProfile),
         },
@@ -1033,40 +1117,26 @@ describe('InvoicesService', () => {
       );
     });
 
-    it('calcula resumo de todos os clientes filtrados mesmo quando pagina retorna menos itens', async () => {
+    it('soma o resumo no banco com o mesmo filtro da lista, sem carregar todos os clientes', async () => {
       const pageDebtor = {
         ...buildDebtor({ id: 'debtor-page' }),
-        invoices: [
-          {
-            status: 'PENDING',
-            originalAmount: decimal(120),
-            createdAt: new Date('2026-06-04T12:00:00.000Z'),
-            paidAt: null,
-          },
-        ],
+        invoices: [],
       };
-      const summaryDebtor = {
-        ...buildDebtor({ id: 'debtor-summary' }),
-        invoices: [
-          {
-            status: 'PENDING',
-            originalAmount: decimal(50),
-            createdAt: new Date('2026-06-05T12:00:00.000Z'),
-            paidAt: null,
-          },
-          {
-            status: 'PAID',
-            originalAmount: decimal(200),
-            createdAt: new Date('2026-06-02T12:00:00.000Z'),
-            paidAt: new Date('2026-06-03T12:00:00.000Z'),
-          },
-        ],
-      };
-      const debtorFindMany = jest
-        .fn()
-        .mockResolvedValueOnce([pageDebtor])
-        .mockResolvedValueOnce([pageDebtor, summaryDebtor]);
+      const debtorFindMany = jest.fn().mockResolvedValue([pageDebtor]);
+      const invoiceGroupBy = jest.fn().mockResolvedValue([
+        {
+          status: 'PENDING',
+          _sum: { originalAmount: decimal(170) },
+          _count: { _all: 2 },
+        },
+        {
+          status: 'PAID',
+          _sum: { originalAmount: decimal(200) },
+          _count: { _all: 1 },
+        },
+      ]);
       const prisma = {
+        invoice: { groupBy: invoiceGroupBy },
         collectionProfile: {
           findFirst: jest.fn().mockResolvedValue(defaultProfile),
         },
@@ -1083,26 +1153,26 @@ describe('InvoicesService', () => {
       );
 
       const result = await service.listDebtors('company-1', {
-        page: 1,
+        page: 2,
         pageSize: 1,
         search: 'maria',
+        paymentStatus: 'open',
       });
 
-      expect(debtorFindMany).toHaveBeenCalledTimes(2);
-      expect(debtorFindMany).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({
-          skip: 0,
-          take: 1,
-          where: expect.objectContaining({ companyId: 'company-1' }) as unknown,
-        }),
+      expect(debtorFindMany).toHaveBeenCalledTimes(1);
+      expect(debtorFindMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 1, take: 1 }),
       );
-      expect(debtorFindMany).toHaveBeenNthCalledWith(
-        2,
+      const [{ where: listWhere }] = debtorFindMany.mock.calls[0] as [
+        { where: unknown },
+      ];
+      expect(invoiceGroupBy).toHaveBeenCalledWith(
         expect.objectContaining({
-          skip: undefined,
-          take: undefined,
-          where: expect.objectContaining({ companyId: 'company-1' }) as unknown,
+          where: {
+            companyId: 'company-1',
+            status: { in: ['PENDING', 'PAID'] },
+            debtor: listWhere,
+          },
         }),
       );
       expect(result.data).toHaveLength(1);
