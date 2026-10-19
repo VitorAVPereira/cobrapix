@@ -57,7 +57,7 @@ describe("Sidebar", () => {
       screen.queryByRole("link", { name: /dashboard/i }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("link", { name: /cobrancas/i }),
+      screen.queryByRole("link", { name: /cobranças/i }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("link", { name: /baixas/i }),
@@ -69,7 +69,7 @@ describe("Sidebar", () => {
       screen.queryByRole("link", { name: /inbox whatsapp/i }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: /configuracoes/i }),
+      screen.queryByRole("button", { name: /configurações/i }),
     ).not.toBeInTheDocument();
   });
 
@@ -80,7 +80,7 @@ describe("Sidebar", () => {
       screen.getByRole("link", { name: /dashboard/i }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("link", { name: /cobrancas/i }),
+      screen.getByRole("link", { name: /cobranças/i }),
     ).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /baixas/i })).toBeInTheDocument();
     expect(
@@ -94,7 +94,7 @@ describe("Sidebar", () => {
       "/clientes",
     );
     expect(
-      screen.getByRole("button", { name: /configuracoes/i }),
+      screen.getByRole("button", { name: /configurações/i }),
     ).toBeInTheDocument();
   });
 
