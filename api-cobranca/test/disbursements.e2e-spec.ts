@@ -16,6 +16,12 @@ import { messageRecipient } from '../src/communications/message-context';
 import { DisbursementSenderService } from '../src/disbursements/disbursement-sender.service';
 import type { SendOutcome } from '../src/disbursements/efi-disbursement.client';
 import { DisbursementWebhookService } from '../src/disbursements/disbursement-webhook.service';
+import { DisbursementSchedulerService } from '../src/disbursements/disbursement-scheduler.service';
+import {
+  endOfSaoPauloDay,
+  saoPauloDate,
+} from '../src/disbursements/disbursement-schedule';
+import { addDays, saoPauloStart } from '../src/billing/dashboard-period';
 
 if (
   !process.env.CIFRAMAIS_DISPOSABLE_E2E ||
@@ -843,7 +849,7 @@ describe('Approval on WhatsApp (disposable PostgreSQL, simulated transport)', ()
   });
   afterAll(() => prisma.$disconnect());
 
-  it('requests approval with a frozen batch, the current registration and a 24 h deadline', async () => {
+  it('requests approval with a frozen batch, the current registration and a deadline at 23:59 today', async () => {
     const t = await tenant();
     const draft = await batches.create(t.companyId, 'user', {
       reference: 'Folha 10/2026',
@@ -857,7 +863,6 @@ describe('Approval on WhatsApp (disposable PostgreSQL, simulated transport)', ()
       expectedVersion: t.ana.version,
       active: true,
     });
-    const before = Date.now();
     const batch = await approvals.request(
       t.companyId,
       'user',
@@ -878,8 +883,9 @@ describe('Approval on WhatsApp (disposable PostgreSQL, simulated transport)', ()
       rejectLabel: 'Recusar',
       approverPhoneHash: messageRecipient({ type: 'PHONE', value: PHONE }).hash,
     });
-    expect(approval.expiresAt.getTime() - before).toBeGreaterThanOrEqual(
-      86_400_000 - 1000,
+    // Valid until the end of the day in São Paulo (decision of 19/10/2026).
+    expect(approval.expiresAt.toISOString()).toBe(
+      endOfSaoPauloDay(saoPauloDate(new Date())).toISOString(),
     );
     expect(templateSender.prepare).toHaveBeenCalledWith({
       logicalKey: `disbursement-approval:${approval.id}`,
@@ -1101,7 +1107,7 @@ describe('Approval on WhatsApp (disposable PostgreSQL, simulated transport)', ()
     expect(await statusOf(r.batch.id)).toBe('DRAFT');
   });
 
-  it('without an answer in 24 h the batch expires and the approver is told once to pay manually', async () => {
+  it('without an answer by the deadline the batch expires and the approver is told once to pay manually', async () => {
     const r = await requested();
     await prisma.disbursementApproval.update({
       where: { id: r.approval.id },
@@ -1159,6 +1165,240 @@ describe('Approval on WhatsApp (disposable PostgreSQL, simulated transport)', ()
     });
     await approvals.releaseUnsent();
     expect(await statusOf(draft.id)).toBe('DRAFT');
+  });
+
+  describe('scheduled payments', () => {
+    const scheduler = new DisbursementSchedulerService(prisma, approvals);
+    const today = saoPauloDate(new Date());
+    const tomorrow = addDays(today, 1);
+    // 08:00 in São Paulo of a date, and a minute before it.
+    const at8 = (date: string) =>
+      new Date(saoPauloStart(date).getTime() + 8 * 3_600_000);
+    const before8 = (date: string) => new Date(at8(date).getTime() - 60_000);
+    const scheduledOf = (batchId: string) =>
+      prisma.disbursementBatch.findUniqueOrThrow({ where: { id: batchId } });
+
+    it('a future date waits for 08:00 of that day, then asks until 23:59 and pays on approval', async () => {
+      const t = await tenant();
+      const created = await batches.create(t.companyId, 'user', {
+        reference: 'Folha 11/2026',
+        items: [{ recipientId: t.ana.id, amountCents: 150000 }],
+        scheduledFor: tomorrow,
+      });
+      expect(created).toMatchObject({
+        status: 'SCHEDULED',
+        scheduledFor: tomorrow,
+      });
+      await scheduler.requestIfToday(t.companyId, created.id);
+      await scheduler.requestDue(before8(tomorrow));
+      expect(await statusOf(created.id)).toBe('SCHEDULED');
+      expect(templateSender.prepare).not.toHaveBeenCalled();
+
+      await scheduler.requestDue(at8(tomorrow));
+      expect(await statusOf(created.id)).toBe('AWAITING_APPROVAL');
+      const approval = await prisma.disbursementApproval.findFirstOrThrow({
+        where: { batchId: created.id },
+      });
+      expect(approval.expiresAt.toISOString()).toBe(
+        endOfSaoPauloDay(tomorrow).toISOString(),
+      );
+      // A second tick does not ask again.
+      await scheduler.requestDue(at8(tomorrow));
+      expect(templateSender.prepare).toHaveBeenCalledTimes(1);
+
+      await tap(approval.id, 'Aprovar pagamento');
+      await approvals.decideAwaiting();
+      expect(await statusOf(created.id)).toBe('PROCESSING');
+    });
+
+    it('a payment for today asks for approval right away', async () => {
+      const t = await tenant();
+      const created = await batches.create(t.companyId, 'user', {
+        reference: 'Adiantamento',
+        items: [{ recipientId: t.ana.id, amountCents: 50000 }],
+        scheduledFor: today,
+      });
+      await scheduler.requestIfToday(t.companyId, created.id);
+      expect(await statusOf(created.id)).toBe('AWAITING_APPROVAL');
+    });
+
+    it('a date in the past is refused', async () => {
+      const t = await tenant();
+      await expect(
+        batches.create(t.companyId, 'user', {
+          reference: 'Folha',
+          items: [{ recipientId: t.ana.id, amountCents: 100 }],
+          scheduledFor: addDays(today, -1),
+        }),
+      ).rejects.toMatchObject({ response: { code: 'PAYMENT_DATE_PAST' } });
+    });
+
+    it('a request that cannot go out on the date returns to draft with the reason; a missed date is not asked later', async () => {
+      const t = await tenant();
+      const inactive = await batches.create(t.companyId, 'user', {
+        reference: 'Folha',
+        items: [{ recipientId: t.bruno.id, amountCents: 100 }],
+        scheduledFor: tomorrow,
+      });
+      await recipients.update(t.companyId, t.bruno.id, {
+        name: 'Bruno Lima',
+        document: '11144477735',
+        pixKey: 'bruno@example.com',
+        expectedVersion: t.bruno.version,
+        active: false,
+      });
+      const onTime = await batches.create(t.companyId, 'user', {
+        reference: 'Bônus',
+        items: [{ recipientId: t.ana.id, amountCents: 100 }],
+        scheduledFor: tomorrow,
+      });
+      await scheduler.requestDue(at8(tomorrow));
+      expect(await scheduledOf(inactive.id)).toMatchObject({
+        status: 'DRAFT',
+        scheduleProblem:
+          'Bruno Lima está desativado. Retire do lote antes de pedir aprovação.',
+      });
+      expect(await statusOf(onTime.id)).toBe('AWAITING_APPROVAL');
+
+      const late = await batches.create(t.companyId, 'user', {
+        reference: 'Comissão',
+        items: [{ recipientId: t.ana.id, amountCents: 100 }],
+        scheduledFor: tomorrow,
+      });
+      templateSender.prepare.mockClear();
+      await scheduler.requestDue(at8(addDays(tomorrow, 1)));
+      expect(await scheduledOf(late.id)).toMatchObject({
+        status: 'DRAFT',
+        scheduleProblem: expect.stringContaining(
+          'A data agendada passou',
+        ) as unknown,
+      });
+      expect(templateSender.prepare).not.toHaveBeenCalled();
+    });
+
+    it('a scheduled payment can be edited and canceled until its date; another company cannot touch it', async () => {
+      const t = await tenant();
+      const other = await tenant();
+      const created = await batches.create(t.companyId, 'user', {
+        reference: 'Folha',
+        items: [{ recipientId: t.ana.id, amountCents: 100 }],
+        scheduledFor: tomorrow,
+      });
+      const edited = await batches.update(t.companyId, created.id, {
+        reference: 'Folha',
+        items: [{ recipientId: t.ana.id, amountCents: 250 }],
+        scheduledFor: addDays(tomorrow, 2),
+        expectedVersion: created.version,
+      });
+      expect(edited).toMatchObject({
+        status: 'SCHEDULED',
+        totalCents: 250,
+        scheduledFor: addDays(tomorrow, 2),
+      });
+      await expect(
+        batches.cancel(other.companyId, created.id),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect((await batches.cancel(t.companyId, created.id)).status).toBe(
+        'CANCELED',
+      );
+      await scheduler.requestDue(at8(addDays(tomorrow, 2)));
+      expect(await statusOf(created.id)).toBe('CANCELED');
+    });
+
+    it('a repetition keeps one occurrence ahead, copies its amounts and ends after the chosen times', async () => {
+      const t = await tenant();
+      const first = await batches.create(t.companyId, 'user', {
+        reference: 'Folha',
+        items: [
+          { recipientId: t.ana.id, amountCents: 150000 },
+          { recipientId: t.bruno.id, amountCents: 98000 },
+        ],
+        scheduledFor: tomorrow,
+        repeat: { unit: 'MONTH', every: 1, occurrences: 3 },
+      });
+      const scheduleId = first.schedule!.id;
+      await scheduler.createNextOccurrences();
+      expect(
+        await prisma.disbursementBatch.count({ where: { scheduleId } }),
+      ).toBe(1);
+
+      // On the date the first one asks; the second is created, already scheduled.
+      await scheduler.requestDue(at8(tomorrow));
+      await scheduler.createNextOccurrences();
+      await scheduler.createNextOccurrences();
+      const second = await prisma.disbursementBatch.findFirstOrThrow({
+        where: { scheduleId, scheduleOccurrence: 2 },
+        include: { items: true },
+      });
+      expect(second).toMatchObject({ status: 'SCHEDULED', totalCents: 248000 });
+      expect(second.items).toHaveLength(2);
+
+      // Overtime only this month: the third keeps the original amounts.
+      const view = await batches.get(t.companyId, second.id);
+      await batches.update(t.companyId, second.id, {
+        reference: view.reference,
+        items: [
+          { recipientId: t.ana.id, amountCents: 170000 },
+          { recipientId: t.bruno.id, amountCents: 98000 },
+        ],
+        expectedVersion: view.version,
+      });
+      const secondDate = view.scheduledFor!;
+      await scheduler.requestDue(at8(secondDate));
+      await scheduler.createNextOccurrences();
+      const third = await prisma.disbursementBatch.findFirstOrThrow({
+        where: { scheduleId, scheduleOccurrence: 3 },
+      });
+      expect(third.totalCents).toBe(248000);
+
+      // Applying to the next ones changes what the repetition copies.
+      const thirdView = await batches.get(t.companyId, third.id);
+      await batches.update(t.companyId, third.id, {
+        reference: thirdView.reference,
+        items: [{ recipientId: t.ana.id, amountCents: 160000 }],
+        expectedVersion: thirdView.version,
+        applyToSchedule: true,
+      });
+      expect(
+        await prisma.disbursementScheduleItem.findMany({
+          where: { scheduleId },
+        }),
+      ).toEqual([expect.objectContaining({ amountCents: 160000 })]);
+
+      await scheduler.requestDue(at8(thirdView.scheduledFor!));
+      await scheduler.createNextOccurrences();
+      expect(
+        await prisma.disbursementSchedule.findUniqueOrThrow({
+          where: { id: scheduleId },
+        }),
+      ).toMatchObject({ status: 'ENDED', occurrencesCreated: 3 });
+      expect(
+        await prisma.disbursementBatch.count({ where: { scheduleId } }),
+      ).toBe(3);
+    });
+
+    it('ending a repetition cancels the occurrence still waiting; another company gets 404', async () => {
+      const t = await tenant();
+      const other = await tenant();
+      const first = await batches.create(t.companyId, 'user', {
+        reference: 'Quinzena',
+        items: [{ recipientId: t.ana.id, amountCents: 1000 }],
+        scheduledFor: tomorrow,
+        repeat: { unit: 'WEEK', every: 2 },
+      });
+      const schedule = first.schedule!;
+      await expect(
+        batches.endSchedule(other.companyId, schedule.id, schedule.version),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      await batches.endSchedule(t.companyId, schedule.id, schedule.version);
+      expect(await statusOf(first.id)).toBe('CANCELED');
+      await scheduler.createNextOccurrences();
+      expect(
+        await prisma.disbursementBatch.count({
+          where: { scheduleId: schedule.id },
+        }),
+      ).toBe(1);
+    });
   });
 });
 

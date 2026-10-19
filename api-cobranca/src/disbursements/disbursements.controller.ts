@@ -25,10 +25,13 @@ import {
 import { DisbursementBatchesService } from './disbursement-batches.service';
 import { DisbursementApprovalService } from './disbursement-approval.service';
 import { DisbursementSenderService } from './disbursement-sender.service';
+import { DisbursementSchedulerService } from './disbursement-scheduler.service';
 import {
   CreateDisbursementBatchDto,
   DisbursementBatchesQueryDto,
+  EndDisbursementScheduleDto,
   RequestDisbursementApprovalDto,
+  ScheduleDisbursementBatchDto,
   UpdateDisbursementBatchDto,
 } from './dto/disbursement-batch.dto';
 
@@ -42,6 +45,7 @@ export class DisbursementsController {
     private readonly batches: DisbursementBatchesService,
     private readonly approvals: DisbursementApprovalService,
     private readonly sender: DisbursementSenderService,
+    private readonly scheduler: DisbursementSchedulerService,
   ) {}
 
   @Get('status') status(@GetUser() user: AuthenticatedUser) {
@@ -91,19 +95,42 @@ export class DisbursementsController {
     return this.batches.get(user.companyId, id);
   }
 
-  @Post('batches') createBatch(
+  // A payment for today asks for approval right away; a later date waits for 08:00.
+  @Post('batches') async createBatch(
     @GetUser() user: AuthenticatedUser,
     @Body() dto: CreateDisbursementBatchDto,
   ) {
-    return this.batches.create(user.companyId, user.userId, dto);
+    const batch = await this.batches.create(user.companyId, user.userId, dto);
+    await this.scheduler.requestIfToday(user.companyId, batch.id);
+    return this.batches.get(user.companyId, batch.id);
   }
 
-  @Put('batches/:id') updateBatch(
+  @Put('batches/:id') async updateBatch(
     @GetUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateDisbursementBatchDto,
   ) {
-    return this.batches.update(user.companyId, id, dto);
+    await this.batches.update(user.companyId, id, dto);
+    await this.scheduler.requestIfToday(user.companyId, id);
+    return this.batches.get(user.companyId, id);
+  }
+
+  @Post('batches/:id/schedule') async scheduleBatch(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ScheduleDisbursementBatchDto,
+  ) {
+    await this.batches.schedule(user.companyId, id, dto);
+    await this.scheduler.requestIfToday(user.companyId, id);
+    return this.batches.get(user.companyId, id);
+  }
+
+  @Post('schedules/:id/end') endSchedule(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: EndDisbursementScheduleDto,
+  ) {
+    return this.batches.endSchedule(user.companyId, id, dto.expectedVersion);
   }
 
   @Post('batches/:id/cancel') cancelBatch(

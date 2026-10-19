@@ -21,6 +21,7 @@ describe('disbursement settings (admin)', () => {
       disbursementApproval: { updateMany: jest.fn() },
       disbursementBatch: { updateMany: jest.fn() },
       disbursementItem: { updateMany: jest.fn() },
+      disbursementSchedule: { updateMany: jest.fn() },
     };
     const prisma = {
       company: { findUnique: jest.fn().mockResolvedValue({ id: 'company' }) },
@@ -207,6 +208,15 @@ describe('disbursement settings (admin)', () => {
     });
     // Items already sent stay under verification: only PENDING is touched.
     expect(f.tx.disbursementItem.updateMany).toHaveBeenCalledTimes(1);
+    // Scheduled payments go back to draft and repetitions end: nothing asks by itself later.
+    expect(f.tx.disbursementBatch.updateMany).toHaveBeenCalledWith({
+      where: { companyId: 'company', status: 'SCHEDULED' },
+      data: expect.objectContaining({ status: 'DRAFT' }) as unknown,
+    });
+    expect(f.tx.disbursementSchedule.updateMany).toHaveBeenCalledWith({
+      where: { companyId: 'company', status: 'ACTIVE' },
+      data: expect.objectContaining({ status: 'ENDED' }) as unknown,
+    });
   });
 
   it('a new approver invalidates requests sent to the previous one', async () => {

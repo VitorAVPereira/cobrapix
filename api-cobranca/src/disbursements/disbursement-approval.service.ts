@@ -19,9 +19,9 @@ import {
   batchContentHash,
   itemSnapshot,
 } from './disbursement-batches.service';
+import { endOfSaoPauloDay, saoPauloDate } from './disbursement-schedule';
 
 type Tx = Prisma.TransactionClient;
-const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 // A tap sent just before the deadline may reach the webhook a little later.
 const EXPIRY_GRACE_MS = 2 * 60 * 1000;
 // A request whose message was never prepared (process lost mid-request) goes back to draft.
@@ -70,11 +70,16 @@ export class DisbursementApprovalService {
     private readonly crypto: PaymentCryptoService,
   ) {}
 
+  /**
+   * `expectedVersion` is the company's click on a draft; `null` is the scheduled request of
+   * a payment on its date. Either way the approver has until 23:59 of today (São Paulo).
+   */
   async request(
     companyId: string,
     userId: string,
     batchId: string,
-    expectedVersion: number,
+    expectedVersion: number | null,
+    now = new Date(),
   ) {
     await this.settings.assertEnabled(companyId);
     const readiness = await this.settings.readiness(companyId);
@@ -105,15 +110,18 @@ export class DisbursementApprovalService {
         },
       });
       if (!batch) throw new NotFoundException('Lote não encontrado.');
-      if (batch.status !== 'DRAFT')
+      const scheduled = expectedVersion === null;
+      if (batch.status !== (scheduled ? 'SCHEDULED' : 'DRAFT'))
         conflict(
           'BATCH_NOT_DRAFT',
-          'Só um lote em rascunho pode ser enviado para aprovação.',
+          scheduled
+            ? 'O pagamento não está mais agendado.'
+            : 'Só um pagamento em rascunho pode ser enviado para aprovação.',
         );
-      if (batch.version !== expectedVersion)
+      if (!scheduled && batch.version !== expectedVersion)
         conflict(
           'VERSION_CHANGED',
-          'O lote foi alterado por outra pessoa. Recarregue os dados.',
+          'O pagamento foi alterado por outra pessoa. Recarregue os dados.',
         );
       const settings = await this.settings.current(companyId, tx);
       if (!settings?.enabled)
@@ -164,7 +172,7 @@ export class DisbursementApprovalService {
           }).hash,
           approveLabel: labels.approve,
           rejectLabel: labels.reject,
-          expiresAt: new Date(Date.now() + APPROVAL_TTL_MS),
+          expiresAt: endOfSaoPauloDay(saoPauloDate(now)),
           requestedByUserId: userId,
         },
       });
@@ -172,6 +180,7 @@ export class DisbursementApprovalService {
         where: { id: batchId },
         data: {
           status: 'AWAITING_APPROVAL',
+          scheduleProblem: null,
           contentHash,
           issuerIdentityId: profile.issuerIdentityId,
           approvalRequests: requestNumber,

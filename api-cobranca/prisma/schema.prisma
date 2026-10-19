@@ -400,6 +400,7 @@ model Company {
   disbursementSettings     DisbursementSettings[]
   disbursementRecipients   DisbursementRecipient[]
   disbursementBatches      DisbursementBatch[]
+  disbursementSchedules    DisbursementSchedule[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1967,6 +1968,7 @@ enum DisbursementDocumentType {
 
 enum DisbursementBatchStatus {
   DRAFT
+  SCHEDULED
   AWAITING_APPROVAL
   PROCESSING
   COMPLETED
@@ -2026,6 +2028,7 @@ model DisbursementRecipient {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   items DisbursementItem[]
+  scheduleItems DisbursementScheduleItem[]
   @@unique([companyId, document])
   @@unique([id, companyId])
   @@index([companyId, active, name])
@@ -2048,6 +2051,13 @@ model DisbursementBatch {
   sendPausedUntil DateTime?
   // Batch whose failed items this one pays again; a double click reuses the open retry.
   retryOfBatchId String?
+  // Date (São Paulo) when the approval request goes to the approver, at 08:00.
+  scheduledFor DateTime? @db.Date
+  scheduleId String?
+  schedule DisbursementSchedule? @relation(fields: [scheduleId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  scheduleOccurrence Int?
+  // Why a scheduled request did not go out on its date; the batch is back to draft.
+  scheduleProblem String?
   version Int @default(1)
   createdByUserId String
   completedAt DateTime?
@@ -2056,6 +2066,8 @@ model DisbursementBatch {
   items DisbursementItem[]
   approvals DisbursementApproval[]
   @@unique([id, companyId])
+  @@unique([scheduleId, scheduleOccurrence])
+  @@index([status, scheduledFor])
   @@index([companyId, createdAt])
   @@index([companyId, retryOfBatchId])
   @@index([status])
@@ -2124,4 +2136,52 @@ model DisbursementApproval {
   @@unique([batchId, requestNumber])
   @@index([state, expiresAt])
   @@index([companyId, createdAt])
+}
+
+enum DisbursementScheduleUnit {
+  DAY
+  WEEK
+  MONTH
+}
+
+enum DisbursementScheduleStatus {
+  ACTIVE
+  ENDED
+}
+
+// Repetition of a payment: each occurrence is a batch with its own approval.
+model DisbursementSchedule {
+  id String @id @default(uuid())
+  companyId String
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  reference String
+  unit DisbursementScheduleUnit
+  every Int
+  // First date; occurrence N is computed from it, so day 31 is not lost after a short month.
+  firstDate DateTime @db.Date
+  endsOn DateTime? @db.Date
+  maxOccurrences Int?
+  occurrencesCreated Int @default(0)
+  status DisbursementScheduleStatus @default(ACTIVE)
+  version Int @default(1)
+  createdByUserId String
+  endedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  items DisbursementScheduleItem[]
+  batches DisbursementBatch[]
+  @@unique([id, companyId])
+  @@index([status])
+}
+
+// Amounts copied into the next occurrences.
+model DisbursementScheduleItem {
+  id String @id @default(uuid())
+  scheduleId String
+  companyId String
+  schedule DisbursementSchedule @relation(fields: [scheduleId, companyId], references: [id, companyId], onDelete: Cascade)
+  recipientId String
+  recipient DisbursementRecipient @relation(fields: [recipientId, companyId], references: [id, companyId], onDelete: Restrict)
+  amountCents Int
+  @@unique([scheduleId, recipientId])
 }

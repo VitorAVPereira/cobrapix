@@ -221,6 +221,20 @@ export class DisbursementSettingsService {
       where: { companyId, status: 'AWAITING_APPROVAL' },
       data: { status: 'CANCELED', version: { increment: 1 } },
     });
+    // Nothing may ask for approval by itself when the feature is turned back on.
+    await tx.disbursementBatch.updateMany({
+      where: { companyId, status: 'SCHEDULED' },
+      data: {
+        status: 'DRAFT',
+        scheduleProblem:
+          'Os pagamentos a colaboradores foram desligados. Agende de novo quando forem religados.',
+        version: { increment: 1 },
+      },
+    });
+    await tx.disbursementSchedule.updateMany({
+      where: { companyId, status: 'ACTIVE' },
+      data: { status: 'ENDED', endedAt: new Date(), version: { increment: 1 } },
+    });
   }
 
   private async returnPendingRequestsToDraft(

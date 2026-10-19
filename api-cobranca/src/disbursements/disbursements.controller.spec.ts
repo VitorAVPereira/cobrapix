@@ -14,19 +14,23 @@ describe('DisbursementsController', () => {
   const batches = {
     list: jest.fn(),
     get: jest.fn(),
-    create: jest.fn(),
+    create: jest.fn().mockResolvedValue({ id: 'id' }),
     update: jest.fn(),
+    schedule: jest.fn(),
+    endSchedule: jest.fn(),
     cancel: jest.fn(),
     retryFailed: jest.fn(),
   };
   const approvals = { request: jest.fn() };
   const sender = { receipt: jest.fn().mockResolvedValue(Buffer.from('%PDF')) };
+  const scheduler = { requestIfToday: jest.fn() };
   const controller = new DisbursementsController(
     settings as never,
     recipients as never,
     batches as never,
     approvals as never,
     sender as never,
+    scheduler as never,
   );
   const row = { name: 'Ana', document: '52998224725', pixKey: '52998224725' };
 
@@ -54,6 +58,11 @@ describe('DisbursementsController', () => {
     await controller.getBatch(user, 'id');
     await controller.createBatch(user, batch);
     await controller.updateBatch(user, 'id', { ...batch, expectedVersion: 1 });
+    await controller.scheduleBatch(user, 'id', {
+      expectedVersion: 1,
+      scheduledFor: '2026-11-05',
+    });
+    await controller.endSchedule(user, 'id', { expectedVersion: 1 });
     await controller.cancelBatch(user, 'id');
     await controller.retryFailed(user, 'id');
     await controller.requestApproval(user, 'id', { expectedVersion: 1 });
@@ -69,6 +78,7 @@ describe('DisbursementsController', () => {
       recipients.import,
       ...Object.values(batches),
       approvals.request,
+      scheduler.requestIfToday,
       sender.receipt,
     ])
       expect((call.mock.calls as unknown[][])[0]?.[0]).toBe('session-company');

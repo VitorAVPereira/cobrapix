@@ -13,6 +13,7 @@ import { DisbursementApprovalService } from './disbursement-approval.service';
 import { DisbursementSenderService } from './disbursement-sender.service';
 import { EfiDisbursementClient } from './efi-disbursement.client';
 import { DisbursementWorker } from './disbursement.worker';
+import { DisbursementSchedulerService } from './disbursement-scheduler.service';
 import { DisbursementsAdminController } from './disbursements-admin.controller';
 import { DisbursementsController } from './disbursements.controller';
 
@@ -33,6 +34,7 @@ import { DisbursementsController } from './disbursements.controller';
     DisbursementSenderService,
     EfiDisbursementClient,
     DisbursementWorker,
+    DisbursementSchedulerService,
     FinancialEligibilityService,
     PlatformAdminGuard,
   ],
