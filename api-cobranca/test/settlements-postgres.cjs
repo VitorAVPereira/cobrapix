@@ -231,15 +231,39 @@ let containerStarted = false;
     console.log('PASS summary, filtered list, detail totals and audit trail');
 
     // 8. Company view and financial history show only the tenant's own data.
-    const betaView = await settlements.companyOverview(beta.company.id, 1, 50);
+    const betaView = await settlements.companyOverview(beta.company.id, { page: 1, pageSize: 50 });
     assert.equal(betaView.total, 3);
     assert.equal(betaView.totals.receivedCents, 30000);
     assert.equal(betaView.totals.netCents, 30000 - 300 - 750);
     assert.ok(betaView.data.every((row) => row.debtorName === 'Pagador'));
     assert.equal(JSON.stringify(betaView).includes('extrato'), false, 'no evidence details for the company');
-    const alphaView = await settlements.companyOverview(alpha.company.id, 1, 50);
+    const alphaView = await settlements.companyOverview(alpha.company.id, { page: 1, pageSize: 100 });
     assert.ok(alphaView.data.some((row) => row.situation === 'IN_REVIEW'));
     assert.ok(alphaView.data.some((row) => row.situation === 'REFUNDED'));
+    // Filters: totals follow the list, so they always add up to its rows.
+    const view = (filter) => settlements.companyOverview(alpha.company.id, { page: 1, pageSize: 100, ...filter });
+    const rowsSum = (result, field) => result.data.reduce((total, row) => total + row[field], 0);
+    assert.equal(alphaView.totals.receivedCents, rowsSum(alphaView, 'paidAmountCents'));
+    assert.equal(alphaView.totals.netCents, rowsSum(alphaView, 'netCents'));
+    const bySituation = {};
+    for (const situation of ['RECEIVED', 'IN_REVIEW', 'REFUNDED']) {
+      bySituation[situation] = await view({ situation });
+      assert.equal(bySituation[situation].totals.netCents, rowsSum(bySituation[situation], 'netCents'), situation + ' totals add up');
+    }
+    assert.ok(bySituation.RECEIVED.data.every((row) => row.situation === 'RECEIVED'));
+    assert.ok(bySituation.IN_REVIEW.data.length > 0 && bySituation.IN_REVIEW.data.every((row) => row.situation === 'IN_REVIEW'));
+    assert.ok(bySituation.REFUNDED.data.length > 0 && bySituation.REFUNDED.data.every((row) => ['REFUNDED', 'PARTIALLY_REFUNDED'].includes(row.situation)));
+    assert.equal(bySituation.RECEIVED.total + bySituation.IN_REVIEW.total + bySituation.REFUNDED.total, alphaView.total);
+    assert.equal((await view({ period: 'today' })).total, alphaView.total);
+    const past = await view({ period: 'custom', startDate: '2020-01-01', endDate: '2020-01-31' });
+    assert.equal(past.total, 0);
+    assert.equal(past.totals.receivedCents, 0, 'totals of an empty period are zero');
+    assert.equal((await view({ search: '529.982.247-25' })).total, alphaView.total);
+    assert.equal((await view({ search: 'Fulano' })).total, 0);
+    assert.equal((await view({ billingType: 'BOLETO' })).total, 0);
+    assert.equal((await view({ billingType: 'PIX' })).total, alphaView.total);
+    assert.ok(alphaView.data.every((row) => row.debtorDocument === '52998224725'));
+    assert.equal((await settlements.companyOverview(beta.company.id, { page: 1, pageSize: 50, situation: 'IN_REVIEW' })).data.some((row) => row.situation !== 'IN_REVIEW'), false);
     const history = new FinancialHistoryService(prisma);
     const alphaHistory = await history.get(alpha.company.id);
     assert.equal(alphaHistory.versions.length, 1);
@@ -250,7 +274,7 @@ let containerStarted = false;
     assert.equal(JSON.stringify(alphaHistory).split('"').some((token) => betaIds.has(token)), false, 'no other tenant in the history');
     const gammaHistory = await history.get(gamma.company.id);
     assert.equal(gammaHistory.events.length, 0);
-    console.log('PASS company receipts and financial history are tenant-scoped and redacted');
+    console.log('PASS company receipts (with filters whose totals add up) and financial history are tenant-scoped and redacted');
     console.log(`PASS settlements on ${migrations.length} migrations in PostgreSQL 16`);
   } finally {
     if (prisma) await prisma.$disconnect();

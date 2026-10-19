@@ -3,6 +3,7 @@ import type { AuthenticatedUser } from '../auth/auth.types';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SettlementsService } from './settlements.service';
+import { CompanyReceiptsQueryDto } from './settlements.dto';
 
 // The company comes from the session, never from the request. Read-only.
 @Controller('financial')
@@ -13,17 +14,8 @@ export class CompanyFinancialController {
   @Get('receipts')
   receipts(
     @GetUser() user: AuthenticatedUser,
-    @Query('page') page?: string,
-    @Query('pageSize') pageSize?: string,
+    @Query() query: CompanyReceiptsQueryDto,
   ) {
-    const parse = (value: string | undefined, fallback: number) => {
-      const parsed = Number.parseInt(value ?? '', 10);
-      return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-    };
-    return this.settlements.companyOverview(
-      user.companyId,
-      parse(page, 1),
-      Math.min(parse(pageSize, 20), 100),
-    );
+    return this.settlements.companyOverview(user.companyId, query);
   }
 }

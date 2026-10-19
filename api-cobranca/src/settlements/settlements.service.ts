@@ -8,10 +8,13 @@ import {
   refreshSettlement,
 } from './settlement-ledger';
 import type {
+  CompanyReceiptsQueryDto,
   DivergenceDecision,
   RecordPlatformFeeEvidenceDto,
   ResolveDivergenceDto,
 } from './settlements.dto';
+import { resolvePeriodInstants } from '../billing/dashboard-period';
+import { searchDigits } from '../common/search-digits';
 
 const AUDIT_RETENTION_MS = 5 * 365.25 * 86_400_000;
 
@@ -227,18 +230,30 @@ export class SettlementsService {
 
   // The company's own receipts: read-only, without evidence or decision
   // details. A charge under administrative review shows as such.
-  async companyOverview(companyId: string, page: number, pageSize: number) {
-    const where = { companyId };
+  // Totals follow the same filter as the list. A later refund or fee
+  // adjustment belongs to the month the charge was paid, so totals always
+  // add up to the rows (decision of 18/10/2026).
+  async companyOverview(
+    companyId: string,
+    query: CompanyReceiptsQueryDto,
+    now = new Date(),
+  ) {
+    const { page, pageSize } = query;
+    const where = this.companyReceiptsWhere(companyId, query, now);
     const [byKind, total, rows] = await Promise.all([
       this.prisma.financialLedgerEntry.groupBy({
         by: ['kind'],
-        where,
+        where: { companyId, settlement: where },
         _sum: { amountCents: true },
       }),
       this.prisma.paymentSettlement.count({ where }),
       this.prisma.paymentSettlement.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        // The id tie-breaker keeps pages stable when many rows share a time.
+        orderBy: [
+          { paymentCharge: { paidAt: { sort: 'desc', nulls: 'last' } } },
+          { id: 'asc' },
+        ],
         skip: (page - 1) * pageSize,
         take: pageSize,
         include: {
@@ -249,7 +264,10 @@ export class SettlementsService {
               grossAmountCents: true,
               paidAt: true,
               invoice: {
-                select: { id: true, debtor: { select: { name: true } } },
+                select: {
+                  id: true,
+                  debtor: { select: { name: true, document: true } },
+                },
               },
             },
           },
@@ -284,6 +302,7 @@ export class SettlementsService {
         return {
           invoiceId: charge.invoice.id,
           debtorName: charge.invoice.debtor.name,
+          debtorDocument: charge.invoice.debtor.document,
           billingMethod: charge.billingMethod,
           paidAt: charge.paidAt,
           grossAmountCents: charge.grossAmountCents,
@@ -306,6 +325,56 @@ export class SettlementsService {
         };
       }),
     };
+  }
+
+  private companyReceiptsWhere(
+    companyId: string,
+    query: CompanyReceiptsQueryDto,
+    now: Date,
+  ): Prisma.PaymentSettlementWhereInput {
+    const charge: Prisma.PaymentChargeWhereInput = {};
+    const where: Prisma.PaymentSettlementWhereInput = { companyId };
+
+    if (query.period) {
+      charge.paidAt = resolvePeriodInstants(query.period, now, query);
+    }
+    if (query.billingType) {
+      // BOLIX is a boleto for the company and its payers.
+      charge.billingMethod =
+        query.billingType === 'BOLETO'
+          ? { in: ['BOLETO', 'BOLIX'] }
+          : query.billingType;
+    }
+    const search = query.search?.trim();
+    if (search) {
+      charge.invoice = {
+        debtor: {
+          OR: [
+            { name: { contains: search, mode: 'insensitive' } },
+            { document: { contains: searchDigits(search) } },
+            { email: { contains: search, mode: 'insensitive' } },
+          ],
+        },
+      };
+    }
+
+    // Same rules as the situation shown on each row.
+    if (query.situation === 'IN_REVIEW') {
+      where.status = 'DIVERGENT';
+    } else if (query.situation === 'REFUNDED') {
+      where.status = { not: 'DIVERGENT' };
+      where.OR = [
+        { paymentCharge: { status: 'REFUNDED' } },
+        { ledgerEntries: { some: { kind: 'REFUND' } } },
+      ];
+    } else if (query.situation === 'RECEIVED') {
+      where.status = { not: 'DIVERGENT' };
+      charge.status = { not: 'REFUNDED' };
+      where.ledgerEntries = { none: { kind: 'REFUND' } };
+    }
+
+    if (Object.keys(charge).length > 0) where.paymentCharge = charge;
+    return where;
   }
 
   // Confirms, against a statement entry, the CifraMais fees of the selected
