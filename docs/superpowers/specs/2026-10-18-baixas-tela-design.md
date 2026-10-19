@@ -118,12 +118,13 @@ Sem migration nem variável nova. O frontend publicado hoje continua funcionando
   `pageSize`, `search`, `status` e `billingType` (Boleto inclui BOLIX), ordenado por situação e nome do
   cliente. Sem `page`, mantém o formato antigo (todas em um array) para o frontend publicado hoje.
 
-## Gaps observados e não alterados
+## Gaps corrigidos a pedido (18/10/2026)
 
-- Ativar **uma** recorrência (ou salvar a edição) gera, na hora, as faturas de **todas** as
-  recorrências ativas da empresa com vencimento em 30 dias. No teste com 1.200 recorrências, foram 696
-  faturas e cerca de 10 s de espera. O cron da meia-noite as geraria de qualquer forma; muda o momento
-  e o tempo de resposta. Proposta: gerar só a recorrência ativada ou editada.
-- "Próxima fatura" considera só faturas em aberto (`PENDING`). As faturas que a recorrência gera nascem
-  como rascunho (`DRAFT`) até serem cobradas em Cobranças, então a coluna pula para o mês seguinte
-  enquanto o rascunho existe.
+- Criar, editar ou ativar **uma** recorrência gerava na hora as faturas de **todas** as recorrências
+  ativas da empresa com vencimento em 30 dias (no teste com 1.200 recorrências, 696 faturas e cerca de
+  10 s). Agora gera só a da recorrência em questão (63 ms, 1 fatura no mesmo teste). O cron da
+  meia-noite continua gerando as demais.
+- "Próxima fatura" considerava só faturas em aberto (`PENDING`) e pulava o rascunho (`DRAFT`) que a
+  recorrência já gerou. Agora o `pendingInvoice` da API também é o rascunho, e a tela mostra
+  "Rascunho" (ainda não cobrada; é cobrada a partir de Cobranças). Ao pausar, a confirmação diz que o
+  rascunho continua em Cobranças, sem envio.
