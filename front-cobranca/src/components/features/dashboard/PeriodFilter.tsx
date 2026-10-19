@@ -25,7 +25,7 @@ export function saoPauloToday(now = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(now);
 }
 
-function rangeError(startDate: string, endDate: string): string | null {
+export function rangeError(startDate: string, endDate: string): string | null {
   if (!startDate || !endDate) return "Informe a data inicial e a final.";
   if (endDate < startDate) return "A data final deve ser igual ou posterior à inicial.";
   if (endDate > saoPauloToday()) return "O período não pode terminar no futuro.";

@@ -427,6 +427,7 @@ export interface PaymentNotificationItem {
   errorMessage: string | null;
   debtorName: string;
   debtorEmail: string | null;
+  debtorDocument: string | null;
   amount: number;
   billingType: string;
   dueDate: string;
@@ -442,8 +443,27 @@ export interface PaymentNotificationItem {
 
 export interface PaymentNotificationListResponse {
   data: PaymentNotificationItem[];
+  /** Every unread notification of the company, whatever the filter. */
   unreadCount: number;
+  total: number;
+  page: number;
+  pageSize: number;
+  /** Unread notifications matching the filter. */
+  filteredUnread: number;
+  /** Moment of the list; "mark all" covers only what existed then. */
+  asOf: string;
 }
+
+export type PaymentNotificationState = "unread" | "read" | "email_failed";
+
+export type PaymentNotificationFilter = {
+  search?: string;
+  state?: PaymentNotificationState;
+  billingType?: InvoiceListBillingType;
+  period?: DashboardPeriod;
+  startDate?: string;
+  endDate?: string;
+};
 
 export type DebtorPaymentStatusFilter = "all" | "open" | "paid" | "no_open";
 
@@ -2146,19 +2166,24 @@ class ApiClient {
     });
   }
 
-  async getPaymentNotifications(): Promise<PaymentNotificationListResponse> {
+  async getPaymentNotifications(
+    params: PaymentNotificationFilter & { page: number; pageSize: number },
+    signal?: AbortSignal,
+  ): Promise<PaymentNotificationListResponse> {
     return this.fetch<PaymentNotificationListResponse>(
-      "/payment-notifications",
+      `/payment-notifications${this.buildQueryString(params)}`,
+      { signal },
     );
   }
 
-  async markPaymentNotificationAsRead(
-    notificationId: string,
-  ): Promise<PaymentNotificationItem> {
-    return this.fetch<PaymentNotificationItem>(
-      `/payment-notifications/${notificationId}/read`,
-      { method: "POST" },
-    );
+  /** Selected rows, or every unread row of the filter up to the list's `asOf`. */
+  async markPaymentNotificationsAsRead(
+    target: { ids: string[] } | (PaymentNotificationFilter & { asOf: string }),
+  ): Promise<{ count: number }> {
+    return this.fetch<{ count: number }>("/payment-notifications/read", {
+      method: "POST",
+      body: JSON.stringify(target),
+    });
   }
 
   async getDebtorBillingSettings(
