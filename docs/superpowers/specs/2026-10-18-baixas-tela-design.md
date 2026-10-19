@@ -88,3 +88,42 @@ a ver só as 20 baixas mais recentes. Publique backend e frontend em sequência.
 ## Publicação
 
 Sem migration nem variável nova. O frontend publicado hoje continua funcionando com o backend novo.
+
+# Tela de Recorrentes, mesma branch (18/10/2026)
+
+## Gaps encontrados
+
+- A API devolvia **todas** as recorrências de uma vez, com busca feita no navegador, e cada edição ou
+  pausa recarregava a lista inteira.
+- Sem filtro de situação ou forma de pagamento; pausar e ativar com um clique, sem confirmação nem
+  carregamento; erros da edição apareciam atrás do modal.
+- Textos sem acento, título "Devedores Recorrentes" e coluna "Devedor" (o sistema usa "Cliente").
+
+## Decisões do responsável pelo produto
+
+- Pausar e ativar **pedem confirmação**, explicando o efeito: ao pausar, a fatura já gerada continua
+  em aberto; ao ativar, as faturas que vencem nos próximos 30 dias são criadas na hora.
+- **Sem ações em lote** por enquanto.
+
+## Como ficou
+
+- Resumo da empresa (ativas, valor mensal das ativas, pausadas), filtros no endereço (busca por
+  cliente, CPF/CNPJ, WhatsApp ou e-mail; situação; forma de pagamento), lista paginada (20, 50 ou
+  100), tabela compacta em telas largas e cartões abaixo de 1.280 px, estados distintos.
+- Erros da edição aparecem dentro do modal.
+
+## API
+
+- `GET /invoices/recurring`: com `page`, responde `{ data, total, page, pageSize, summary }` e aceita
+  `pageSize`, `search`, `status` e `billingType` (Boleto inclui BOLIX), ordenado por situação e nome do
+  cliente. Sem `page`, mantém o formato antigo (todas em um array) para o frontend publicado hoje.
+
+## Gaps observados e não alterados
+
+- Ativar **uma** recorrência (ou salvar a edição) gera, na hora, as faturas de **todas** as
+  recorrências ativas da empresa com vencimento em 30 dias. No teste com 1.200 recorrências, foram 696
+  faturas e cerca de 10 s de espera. O cron da meia-noite as geraria de qualquer forma; muda o momento
+  e o tempo de resposta. Proposta: gerar só a recorrência ativada ou editada.
+- "Próxima fatura" considera só faturas em aberto (`PENDING`). As faturas que a recorrência gera nascem
+  como rascunho (`DRAFT`) até serem cobradas em Cobranças, então a coluna pula para o mês seguinte
+  enquanto o rascunho existe.
