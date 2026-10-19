@@ -178,4 +178,193 @@ describe('PaymentNotificationsService', () => {
       }),
     );
   });
+  describe('list and mark as read', () => {
+    const now = new Date('2026-10-18T15:00:00.000Z');
+
+    function listPrisma() {
+      const findMany = jest.fn().mockResolvedValue([
+        {
+          id: 'notification-1',
+          invoiceId: 'invoice-1',
+          status: 'FAILED',
+          recipientEmails: ['tesouraria@escola.com'],
+          errorMessage: 'Caixa cheia',
+          summary: {},
+          sentAt: null,
+          readAt: null,
+          createdAt: now,
+          invoice: {
+            originalAmount: decimal(150.5),
+            dueDate: new Date('2026-10-10T00:00:00.000Z'),
+            paidAt: now,
+            billingType: 'BOLIX',
+            studentName: null,
+            studentEnrollment: null,
+            studentGroup: null,
+            debtor: {
+              name: 'Ana Souza',
+              email: null,
+              document: '52998224725',
+            },
+          },
+        },
+      ]);
+      const count = jest
+        .fn()
+        .mockResolvedValueOnce(1234)
+        .mockResolvedValueOnce(40)
+        .mockResolvedValueOnce(57);
+      const updateMany = jest.fn().mockResolvedValue({ count: 3 });
+      const prisma = {
+        paymentNotification: { findMany, count, updateMany },
+      } as unknown as PrismaService;
+      return { prisma, findMany, count, updateMany };
+    }
+
+    it('pages the company notifications with totals for the filter', async () => {
+      const { prisma, findMany, count } = listPrisma();
+      const { service } = buildService(prisma);
+
+      const result = await service.list(
+        'company-1',
+        { page: 3, pageSize: 50 },
+        now,
+      );
+
+      expect(findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { companyId: 'company-1' },
+          orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+          skip: 100,
+          take: 50,
+        }),
+      );
+      expect(count).toHaveBeenLastCalledWith({
+        where: { companyId: 'company-1', status: { not: 'READ' } },
+      });
+      expect(result).toEqual(
+        expect.objectContaining({
+          total: 1234,
+          filteredUnread: 40,
+          unreadCount: 57,
+          page: 3,
+          pageSize: 50,
+          asOf: now.toISOString(),
+        }),
+      );
+      expect(result.data[0]).toEqual(
+        expect.objectContaining({
+          debtorName: 'Ana Souza',
+          debtorDocument: '52998224725',
+          billingType: 'BOLIX',
+          errorMessage: 'Caixa cheia',
+        }),
+      );
+    });
+
+    it('filters by state, payment method, São Paulo payment date and document', async () => {
+      const { prisma, findMany } = listPrisma();
+      const { service } = buildService(prisma);
+
+      await service.list(
+        'company-1',
+        {
+          page: 1,
+          pageSize: 20,
+          state: 'email_failed',
+          billingType: 'BOLETO',
+          period: 'today',
+          search: '529.982.247-25',
+        },
+        now,
+      );
+
+      const { where } = (findMany.mock.calls as unknown[][])[0][0] as {
+        where: Record<string, unknown>;
+      };
+      expect(where).toEqual({
+        companyId: 'company-1',
+        errorMessage: { not: null },
+        invoice: {
+          billingType: { in: ['BOLETO', 'BOLIX'] },
+          // 18/10 in São Paulo (UTC-3), from midnight to midnight.
+          paidAt: {
+            gte: new Date('2026-10-18T03:00:00.000Z'),
+            lt: new Date('2026-10-19T03:00:00.000Z'),
+          },
+          OR: expect.arrayContaining([
+            { debtor: { document: { contains: '52998224725' } } },
+          ]) as unknown,
+        },
+      });
+    });
+
+    it('searches a name with numbers as a name, not as a document', async () => {
+      const { prisma, findMany } = listPrisma();
+      const { service } = buildService(prisma);
+
+      await service.list(
+        'company-1',
+        { page: 1, pageSize: 20, state: 'unread', search: 'Ana 33' },
+        now,
+      );
+
+      const { where } = (findMany.mock.calls as unknown[][])[0][0] as {
+        where: { status: unknown; invoice: { OR: unknown[] } };
+      };
+      expect(where.status).toEqual({ not: 'READ' });
+      expect(where.invoice.OR).toContainEqual({
+        debtor: { document: { contains: 'Ana 33' } },
+      });
+    });
+
+    it('marks only the selected unread rows of the company', async () => {
+      const { prisma, updateMany } = listPrisma();
+      const { service } = buildService(prisma);
+
+      const result = await service.markManyAsRead('company-1', {
+        ids: ['notification-1', 'notification-2'],
+      });
+
+      expect(result).toEqual({ count: 3 });
+      expect(updateMany).toHaveBeenCalledWith({
+        where: {
+          AND: [
+            {
+              companyId: 'company-1',
+              id: { in: ['notification-1', 'notification-2'] },
+            },
+            { status: { not: 'READ' } },
+          ],
+        },
+        data: { status: 'READ', readAt: expect.any(Date) as unknown },
+      });
+    });
+
+    it('marks every unread row of the filter, but not what arrived after the list', async () => {
+      const { prisma, updateMany } = listPrisma();
+      const { service } = buildService(prisma);
+
+      await service.markManyAsRead('company-1', {
+        filter: { billingType: 'PIX' },
+        asOf: now,
+      });
+
+      expect(updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            AND: [
+              {
+                AND: [
+                  { companyId: 'company-1', invoice: { billingType: 'PIX' } },
+                  { createdAt: { lte: now } },
+                ],
+              },
+              { status: { not: 'READ' } },
+            ],
+          },
+        }),
+      );
+    });
+  });
 });

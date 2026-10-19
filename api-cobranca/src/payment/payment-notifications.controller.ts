@@ -1,10 +1,13 @@
 import {
+  BadRequestException,
+  Body,
   Controller,
   Get,
   HttpException,
   HttpStatus,
   Param,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { GetUser } from '../auth/decorators/get-user.decorator';
@@ -15,6 +18,10 @@ import {
   PaymentNotificationListResponse,
   PaymentNotificationsService,
 } from './payment-notifications.service';
+import {
+  MarkPaymentNotificationsReadDto,
+  PaymentNotificationListQueryDto,
+} from './dto/payment-notification.dto';
 
 interface AuthenticatedUser {
   companyId: string;
@@ -30,8 +37,28 @@ export class PaymentNotificationsController {
   @Get()
   async list(
     @GetUser() user: AuthenticatedUser,
+    @Query() query: PaymentNotificationListQueryDto,
   ): Promise<PaymentNotificationListResponse> {
-    return this.paymentNotificationsService.list(user.companyId);
+    return this.paymentNotificationsService.list(user.companyId, query);
+  }
+
+  /** Selected rows (`ids`) or every unread row of a filter up to `asOf`. */
+  @Post('read')
+  async markManyAsRead(
+    @GetUser() user: AuthenticatedUser,
+    @Body() dto: MarkPaymentNotificationsReadDto,
+  ): Promise<{ count: number }> {
+    const { ids, asOf, ...filter } = dto;
+    if (Boolean(ids) === Boolean(asOf)) {
+      throw new BadRequestException({
+        code: 'INVALID_READ_TARGET',
+        message: 'Escolha as baixas ou marque todas as do filtro.',
+      });
+    }
+    return this.paymentNotificationsService.markManyAsRead(
+      user.companyId,
+      ids ? { ids } : { filter, asOf: new Date(asOf as string) },
+    );
   }
 
   @Post(':id/read')

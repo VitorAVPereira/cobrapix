@@ -12,9 +12,15 @@ import {
   Length,
   Matches,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ToBoolean } from '../common/to-boolean';
+import {
+  DASHBOARD_PERIODS,
+  type DashboardPeriodKey,
+} from '../billing/dashboard-period';
 
 export const SETTLEMENT_STATUSES = [
   'AWAITING_EVIDENCE',
@@ -82,4 +88,59 @@ export class SettlementOptionsDto {
   @ToBoolean()
   @IsBoolean()
   refundPlatformFeeOnRefund!: boolean;
+}
+
+export const COMPANY_RECEIPT_SITUATIONS = [
+  'RECEIVED',
+  'IN_REVIEW',
+  'REFUNDED',
+] as const;
+export type CompanyReceiptSituation =
+  (typeof COMPANY_RECEIPT_SITUATIONS)[number];
+
+export const COMPANY_RECEIPT_BILLING_TYPES = [
+  'PIX',
+  'BOLETO',
+  'CREDIT_CARD',
+] as const;
+
+// Receipts of the session company. Without a period, the whole history.
+export class CompanyReceiptsQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page = 1;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @IsIn([20, 50, 100])
+  pageSize = 20;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  search?: string;
+
+  @IsOptional()
+  @IsIn(COMPANY_RECEIPT_SITUATIONS)
+  situation?: CompanyReceiptSituation;
+
+  @IsOptional()
+  @IsIn(COMPANY_RECEIPT_BILLING_TYPES)
+  billingType?: (typeof COMPANY_RECEIPT_BILLING_TYPES)[number];
+
+  /** Payment date in São Paulo. */
+  @IsOptional()
+  @IsIn(DASHBOARD_PERIODS)
+  period?: DashboardPeriodKey;
+
+  @IsOptional()
+  @IsString()
+  startDate?: string;
+
+  @IsOptional()
+  @IsString()
+  endDate?: string;
 }

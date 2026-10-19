@@ -203,6 +203,7 @@ export const LEDGER_KIND_LABELS: Record<string, string> = {
 export interface CompanyReceipt {
   invoiceId: string;
   debtorName: string;
+  debtorDocument: string | null;
   billingMethod: string;
   paidAt: string | null;
   grossAmountCents: number;
@@ -214,6 +215,20 @@ export interface CompanyReceipt {
   netCents: number;
   situation: "RECEIVED" | "IN_REVIEW" | "REFUNDED" | "PARTIALLY_REFUNDED";
 }
+
+export type CompanyReceiptSituationFilter = "RECEIVED" | "IN_REVIEW" | "REFUNDED";
+
+export type CompanyReceiptsQuery = {
+  page: number;
+  pageSize: number;
+  search?: string;
+  situation?: CompanyReceiptSituationFilter;
+  billingType?: "PIX" | "BOLETO" | "CREDIT_CARD";
+  /** Payment date in São Paulo; without it, the whole history. */
+  period?: "today" | "7d" | "30d" | "month" | "year" | "custom";
+  startDate?: string;
+  endDate?: string;
+};
 
 export interface CompanyReceipts {
   totals: {

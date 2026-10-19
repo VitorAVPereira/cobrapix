@@ -47,6 +47,7 @@ import {
   resolveLateTerms,
   toLateTermsView,
 } from './late-terms';
+import { searchDigits } from '../common/search-digits';
 
 export type InvoiceListStatus = 'PENDING' | 'OVERDUE' | 'PAID' | 'CANCELED';
 export type InvoiceListBillingType = 'PIX' | 'BOLETO' | 'CREDIT_CARD';
@@ -59,16 +60,16 @@ export const INVOICE_LIST_ORDER = {
 } as const satisfies Record<string, Prisma.InvoiceOrderByWithRelationInput>;
 export type InvoiceListSort = keyof typeof INVOICE_LIST_ORDER;
 
-/**
- * Documents and phones are stored as digits, so "123.456.789-09" must match.
- * A search with letters is a name: its numbers ("Ana 33") are not a document.
- */
-function searchDigits(search: string): string {
-  const digits = search.replace(/\D/g, '');
-  return digits && !/\p{L}/u.test(search) ? digits : search;
-}
-
 const RECURRING_GENERATION_LOOKAHEAD_DAYS = 30;
+
+// Next invoice of a recurrence: the open one or the draft it generated and
+// the company has not charged yet (drafts are charged from Cobranças).
+const RECURRING_NEXT_INVOICE = (companyId: string) =>
+  ({
+    where: { companyId, status: { in: ['DRAFT', 'PENDING'] } },
+    orderBy: { dueDate: 'asc' },
+    take: 1,
+  }) satisfies Prisma.RecurringInvoice$invoicesArgs;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const PAYMENT_HISTORY_TIME_ZONE = 'America/Sao_Paulo';
 
@@ -1342,11 +1343,7 @@ export class InvoicesService {
       where: { companyId },
       include: {
         debtor: true,
-        invoices: {
-          where: { companyId, status: 'PENDING' },
-          orderBy: { dueDate: 'asc' },
-          take: 1,
-        },
+        invoices: RECURRING_NEXT_INVOICE(companyId),
       },
       orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
     });
@@ -1354,6 +1351,89 @@ export class InvoicesService {
     return recurrences.map((recurrence) =>
       this.mapRecurringInvoiceListItem(recurrence),
     );
+  }
+
+  async findRecurringPaginated(
+    companyId: string,
+    params: {
+      page: number;
+      pageSize: number;
+      search?: string;
+      status?: RecurringInvoiceStatus;
+      billingType?: 'PIX' | 'BOLETO' | 'CREDIT_CARD';
+    },
+  ): Promise<{
+    data: RecurringInvoiceListItem[];
+    total: number;
+    page: number;
+    pageSize: number;
+    /** Whole company, whatever the filter. */
+    summary: { active: number; paused: number; activeMonthlyAmount: number };
+  }> {
+    const where: Prisma.RecurringInvoiceWhereInput = { companyId };
+    if (params.status) where.status = params.status;
+    if (params.billingType) {
+      // BOLIX is a boleto for the company and its payers.
+      where.billingType =
+        params.billingType === 'BOLETO'
+          ? { in: ['BOLETO', 'BOLIX'] }
+          : params.billingType;
+    }
+    const search = params.search?.trim();
+    if (search) {
+      const digits = searchDigits(search);
+      where.debtor = {
+        OR: [
+          { name: { contains: search, mode: 'insensitive' } },
+          { document: { contains: digits } },
+          { phoneNumber: { contains: digits } },
+          { email: { contains: search, mode: 'insensitive' } },
+        ],
+      };
+    }
+
+    const [recurrences, total, byStatus] = await Promise.all([
+      this.prisma.recurringInvoice.findMany({
+        where,
+        include: {
+          debtor: true,
+          invoices: RECURRING_NEXT_INVOICE(companyId),
+        },
+        // Active first, then by client; the id keeps pages stable.
+        orderBy: [
+          { status: 'asc' },
+          { debtor: { name: 'asc' } },
+          { id: 'asc' },
+        ],
+        skip: (params.page - 1) * params.pageSize,
+        take: params.pageSize,
+      }),
+      this.prisma.recurringInvoice.count({ where }),
+      this.prisma.recurringInvoice.groupBy({
+        by: ['status'],
+        where: { companyId },
+        _count: { _all: true },
+        _sum: { amount: true },
+      }),
+    ]);
+    const active = byStatus.find((row) => row.status === 'ACTIVE');
+    const paused = byStatus.find((row) => row.status === 'PAUSED');
+
+    return {
+      data: recurrences.map((recurrence) =>
+        this.mapRecurringInvoiceListItem(recurrence),
+      ),
+      total,
+      page: params.page,
+      pageSize: params.pageSize,
+      summary: {
+        active: active?._count._all ?? 0,
+        paused: paused?._count._all ?? 0,
+        activeMonthlyAmount: Number(
+          (active?._sum.amount?.toNumber() ?? 0).toFixed(2),
+        ),
+      },
+    };
   }
 
   async updateRecurringInvoice(
@@ -1399,7 +1479,10 @@ export class InvoicesService {
       },
     });
 
-    await this.generateRecurringInvoices(companyId);
+    await this.generateRecurringInvoices({
+      companyId,
+      recurrenceId: recurringInvoiceId,
+    });
 
     return this.getRecurringInvoice(companyId, recurringInvoiceId);
   }
@@ -1430,7 +1513,10 @@ export class InvoicesService {
     });
 
     if (status === 'ACTIVE') {
-      await this.generateRecurringInvoices(companyId);
+      await this.generateRecurringInvoices({
+        companyId,
+        recurrenceId: recurringInvoiceId,
+      });
     }
 
     return this.getRecurringInvoice(companyId, recurringInvoiceId);
@@ -1868,7 +1954,10 @@ export class InvoicesService {
       },
     });
 
-    await this.generateRecurringInvoices(companyId);
+    await this.generateRecurringInvoices({
+      companyId,
+      recurrenceId: recurrence.id,
+    });
 
     const created = await this.getRecurringInvoice(companyId, recurrence.id);
     if (!created) {
@@ -1909,25 +1998,29 @@ export class InvoicesService {
       where: { id: recurringInvoiceId, companyId },
       include: {
         debtor: true,
-        invoices: {
-          where: { companyId, status: 'PENDING' },
-          orderBy: { dueDate: 'asc' },
-          take: 1,
-        },
+        invoices: RECURRING_NEXT_INVOICE(companyId),
       },
     });
 
     return recurrence ? this.mapRecurringInvoiceListItem(recurrence) : null;
   }
 
-  private async generateRecurringInvoices(companyId?: string): Promise<number> {
+  // Without a scope (the daily cron) every active recurrence is generated.
+  // Creating, editing or activating one recurrence generates only that one,
+  // so the answer does not wait for the whole company.
+  private async generateRecurringInvoices(scope?: {
+    companyId: string;
+    recurrenceId: string;
+  }): Promise<number> {
     const horizon = this.addDays(
       this.startOfDay(new Date()),
       RECURRING_GENERATION_LOOKAHEAD_DAYS,
     );
     const recurrences = await this.prisma.recurringInvoice.findMany({
       where: {
-        ...(companyId ? { companyId } : {}),
+        ...(scope
+          ? { companyId: scope.companyId, id: scope.recurrenceId }
+          : {}),
         status: 'ACTIVE',
         OR: [{ nextDueDate: null }, { nextDueDate: { lte: horizon } }],
       },

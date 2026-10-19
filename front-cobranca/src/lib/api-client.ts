@@ -13,6 +13,7 @@ import type {
 } from "./financial-activation";
 import type {
   CompanyReceipts,
+  CompanyReceiptsQuery,
   DivergenceDecision,
   FinancialHistory,
   PlatformFeeEvidenceResult,
@@ -410,6 +411,23 @@ export interface RecurringInvoice {
   updatedAt: string;
 }
 
+export type RecurringInvoiceListQuery = {
+  page: number;
+  pageSize: number;
+  search?: string;
+  status?: RecurringInvoiceStatus;
+  billingType?: InvoiceListBillingType;
+};
+
+export interface RecurringInvoiceListResponse {
+  data: RecurringInvoice[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** Whole company, whatever the filter. */
+  summary: { active: number; paused: number; activeMonthlyAmount: number };
+}
+
 export interface UpdateRecurringInvoiceInput {
   amount: number;
   billingType: BillingMethod;
@@ -427,6 +445,7 @@ export interface PaymentNotificationItem {
   errorMessage: string | null;
   debtorName: string;
   debtorEmail: string | null;
+  debtorDocument: string | null;
   amount: number;
   billingType: string;
   dueDate: string;
@@ -442,8 +461,27 @@ export interface PaymentNotificationItem {
 
 export interface PaymentNotificationListResponse {
   data: PaymentNotificationItem[];
+  /** Every unread notification of the company, whatever the filter. */
   unreadCount: number;
+  total: number;
+  page: number;
+  pageSize: number;
+  /** Unread notifications matching the filter. */
+  filteredUnread: number;
+  /** Moment of the list; "mark all" covers only what existed then. */
+  asOf: string;
 }
+
+export type PaymentNotificationState = "unread" | "read" | "email_failed";
+
+export type PaymentNotificationFilter = {
+  search?: string;
+  state?: PaymentNotificationState;
+  billingType?: InvoiceListBillingType;
+  period?: DashboardPeriod;
+  startDate?: string;
+  endDate?: string;
+};
 
 export type DebtorPaymentStatusFilter = "all" | "open" | "paid" | "no_open";
 
@@ -1389,8 +1427,13 @@ class ApiClient {
       { method: "PUT", body: JSON.stringify({ refundPlatformFeeOnRefund }) },
     );
   }
-  getCompanyReceipts(page = 1, pageSize = 20): Promise<CompanyReceipts> {
-    return this.fetch(`/financial/receipts?page=${page}&pageSize=${pageSize}`);
+  getCompanyReceipts(
+    query: CompanyReceiptsQuery,
+    signal?: AbortSignal,
+  ): Promise<CompanyReceipts> {
+    return this.fetch(`/financial/receipts${this.buildQueryString(query)}`, {
+      signal,
+    });
   }
   getFinancialActivation(id: string): Promise<FinancialProfile> {
     return this.fetch(`/admin/financial-activations/${encodeURIComponent(id)}`);
@@ -1834,8 +1877,14 @@ class ApiClient {
     });
   }
 
-  async getRecurringInvoices(): Promise<RecurringInvoice[]> {
-    return this.fetch<RecurringInvoice[]>("/invoices/recurring");
+  async getRecurringInvoices(
+    query: RecurringInvoiceListQuery,
+    signal?: AbortSignal,
+  ): Promise<RecurringInvoiceListResponse> {
+    return this.fetch<RecurringInvoiceListResponse>(
+      `/invoices/recurring${this.buildQueryString(query)}`,
+      { signal },
+    );
   }
 
   async updateRecurringInvoice(
@@ -2146,19 +2195,24 @@ class ApiClient {
     });
   }
 
-  async getPaymentNotifications(): Promise<PaymentNotificationListResponse> {
+  async getPaymentNotifications(
+    params: PaymentNotificationFilter & { page: number; pageSize: number },
+    signal?: AbortSignal,
+  ): Promise<PaymentNotificationListResponse> {
     return this.fetch<PaymentNotificationListResponse>(
-      "/payment-notifications",
+      `/payment-notifications${this.buildQueryString(params)}`,
+      { signal },
     );
   }
 
-  async markPaymentNotificationAsRead(
-    notificationId: string,
-  ): Promise<PaymentNotificationItem> {
-    return this.fetch<PaymentNotificationItem>(
-      `/payment-notifications/${notificationId}/read`,
-      { method: "POST" },
-    );
+  /** Selected rows, or every unread row of the filter up to the list's `asOf`. */
+  async markPaymentNotificationsAsRead(
+    target: { ids: string[] } | (PaymentNotificationFilter & { asOf: string }),
+  ): Promise<{ count: number }> {
+    return this.fetch<{ count: number }>("/payment-notifications/read", {
+      method: "POST",
+      body: JSON.stringify(target),
+    });
   }
 
   async getDebtorBillingSettings(

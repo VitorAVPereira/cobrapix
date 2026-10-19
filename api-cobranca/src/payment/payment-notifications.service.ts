@@ -6,6 +6,24 @@ import {
   formatResendFromAddress,
   ResendMailerService,
 } from '../common/resend-mailer.service';
+import { resolvePeriodInstants } from '../billing/dashboard-period';
+import { searchDigits } from '../common/search-digits';
+import type { PaymentNotificationFilterDto } from './dto/payment-notification.dto';
+
+const notificationInclude = {
+  invoice: {
+    select: {
+      originalAmount: true,
+      dueDate: true,
+      paidAt: true,
+      billingType: true,
+      studentName: true,
+      studentEnrollment: true,
+      studentGroup: true,
+      debtor: { select: { name: true, email: true, document: true } },
+    },
+  },
+} satisfies Prisma.PaymentNotificationInclude;
 
 interface PaidInvoiceRecord {
   id: string;
@@ -52,6 +70,7 @@ interface PaymentNotificationListRecord {
     debtor: {
       name: string;
       email: string | null;
+      document: string | null;
     };
   };
 }
@@ -64,6 +83,7 @@ export interface PaymentNotificationListItem {
   errorMessage: string | null;
   debtorName: string;
   debtorEmail: string | null;
+  debtorDocument: string | null;
   amount: number;
   billingType: string;
   dueDate: string;
@@ -79,8 +99,20 @@ export interface PaymentNotificationListItem {
 
 export interface PaymentNotificationListResponse {
   data: PaymentNotificationListItem[];
+  /** Every unread notification of the company, whatever the filter. */
   unreadCount: number;
+  total: number;
+  page: number;
+  pageSize: number;
+  /** Unread notifications matching the filter: what "mark all" would change. */
+  filteredUnread: number;
+  /** Moment of the list; "mark all" covers only notifications created until then. */
+  asOf: string;
 }
+
+export type MarkReadTarget =
+  | { ids: string[] }
+  | { filter: PaymentNotificationFilterDto; asOf: Date };
 
 @Injectable()
 export class PaymentNotificationsService {
@@ -169,43 +201,104 @@ export class PaymentNotificationsService {
     }
   }
 
-  async list(companyId: string): Promise<PaymentNotificationListResponse> {
-    const [notifications, unreadCount] = await Promise.all([
-      this.prisma.paymentNotification.findMany({
-        where: { companyId },
-        include: {
-          invoice: {
-            select: {
-              originalAmount: true,
-              dueDate: true,
-              paidAt: true,
-              billingType: true,
-              studentName: true,
-              studentEnrollment: true,
-              studentGroup: true,
-              debtor: {
-                select: {
-                  name: true,
-                  email: true,
-                },
-              },
-            },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 100,
-      }),
-      this.prisma.paymentNotification.count({
-        where: { companyId, status: { not: 'READ' } },
-      }),
-    ]);
+  async list(
+    companyId: string,
+    params: PaymentNotificationFilterDto & { page: number; pageSize: number },
+    now = new Date(),
+  ): Promise<PaymentNotificationListResponse> {
+    const where = this.buildWhere(companyId, params, now);
+    const [notifications, total, filteredUnread, unreadCount] =
+      await Promise.all([
+        this.prisma.paymentNotification.findMany({
+          where,
+          include: notificationInclude,
+          // The id tie-breaker keeps pages stable when many rows share a time.
+          orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+          skip: (params.page - 1) * params.pageSize,
+          take: params.pageSize,
+        }),
+        this.prisma.paymentNotification.count({ where }),
+        this.prisma.paymentNotification.count({
+          where: { AND: [where, { status: { not: 'READ' } }] },
+        }),
+        this.prisma.paymentNotification.count({
+          where: { companyId, status: { not: 'READ' } },
+        }),
+      ]);
 
     return {
       data: notifications.map((notification) =>
         this.mapNotification(notification),
       ),
       unreadCount,
+      total,
+      page: params.page,
+      pageSize: params.pageSize,
+      filteredUnread,
+      asOf: now.toISOString(),
     };
+  }
+
+  /** Marks the selected rows, or every unread row of a filter, as read. */
+  async markManyAsRead(
+    companyId: string,
+    target: MarkReadTarget,
+  ): Promise<{ count: number }> {
+    const scope: Prisma.PaymentNotificationWhereInput =
+      'ids' in target
+        ? { companyId, id: { in: target.ids } }
+        : {
+            AND: [
+              this.buildWhere(companyId, target.filter, target.asOf),
+              { createdAt: { lte: target.asOf } },
+            ],
+          };
+    const { count } = await this.prisma.paymentNotification.updateMany({
+      // Already read rows keep their original read time.
+      where: { AND: [scope, { status: { not: 'READ' } }] },
+      data: { status: 'READ', readAt: new Date() },
+    });
+    return { count };
+  }
+
+  private buildWhere(
+    companyId: string,
+    filter: PaymentNotificationFilterDto,
+    now: Date,
+  ): Prisma.PaymentNotificationWhereInput {
+    const where: Prisma.PaymentNotificationWhereInput = { companyId };
+    const invoice: Prisma.InvoiceWhereInput = {};
+
+    if (filter.state === 'unread') where.status = { not: 'READ' };
+    if (filter.state === 'read') where.status = 'READ';
+    // Reading keeps the error, so a failed e-mail stays findable after it.
+    if (filter.state === 'email_failed') where.errorMessage = { not: null };
+
+    if (filter.billingType) {
+      // BOLIX is a boleto for the company and its payers.
+      invoice.billingType =
+        filter.billingType === 'BOLETO'
+          ? { in: ['BOLETO', 'BOLIX'] }
+          : filter.billingType;
+    }
+
+    if (filter.period) {
+      invoice.paidAt = resolvePeriodInstants(filter.period, now, filter);
+    }
+
+    const search = filter.search?.trim();
+    if (search) {
+      invoice.OR = [
+        { debtor: { name: { contains: search, mode: 'insensitive' } } },
+        { debtor: { document: { contains: searchDigits(search) } } },
+        { debtor: { email: { contains: search, mode: 'insensitive' } } },
+        { studentName: { contains: search, mode: 'insensitive' } },
+        { studentEnrollment: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    if (Object.keys(invoice).length > 0) where.invoice = invoice;
+    return where;
   }
 
   async markAsRead(
@@ -224,25 +317,7 @@ export class PaymentNotificationsService {
 
     const notification = await this.prisma.paymentNotification.findFirst({
       where: { id: notificationId, companyId },
-      include: {
-        invoice: {
-          select: {
-            originalAmount: true,
-            dueDate: true,
-            paidAt: true,
-            billingType: true,
-            studentName: true,
-            studentEnrollment: true,
-            studentGroup: true,
-            debtor: {
-              select: {
-                name: true,
-                email: true,
-              },
-            },
-          },
-        },
-      },
+      include: notificationInclude,
     });
 
     return notification ? this.mapNotification(notification) : null;
@@ -402,6 +477,7 @@ export class PaymentNotificationsService {
       errorMessage: notification.errorMessage,
       debtorName: notification.invoice.debtor.name,
       debtorEmail: notification.invoice.debtor.email,
+      debtorDocument: notification.invoice.debtor.document,
       amount: this.toMoney(notification.invoice.originalAmount),
       billingType: notification.invoice.billingType,
       dueDate: notification.invoice.dueDate.toISOString(),
