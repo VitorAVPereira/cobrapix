@@ -2,18 +2,75 @@ import type {
   DisbursementBatchStatus,
   DisbursementItemStatus,
   DisbursementRecipientInput,
+  DisbursementScheduleUnit,
 } from "./api-client";
 
 export const BATCH_STATUS_LABELS: Record<DisbursementBatchStatus, string> = {
   DRAFT: "Rascunho",
-  AWAITING_APPROVAL: "Aguardando aprovação",
-  PROCESSING: "Em envio",
-  COMPLETED: "Concluído",
-  COMPLETED_WITH_FAILURES: "Concluído com falhas",
-  REJECTED: "Recusado pelo aprovador",
-  EXPIRED: "Expirado",
+  SCHEDULED: "Agendado",
+  AWAITING_APPROVAL: "Aguardando confirmação",
+  PROCESSING: "Enviando Pix",
+  COMPLETED: "Pago",
+  COMPLETED_WITH_FAILURES: "Pago com falhas",
+  REJECTED: "Recusado",
+  EXPIRED: "Não confirmado",
   CANCELED: "Cancelado",
 };
+
+export const BATCH_STATUS_TONES: Record<DisbursementBatchStatus, string> = {
+  DRAFT: "border-slate-200 bg-slate-50 text-slate-600",
+  SCHEDULED: "border-sky-200 bg-sky-50 text-sky-700",
+  AWAITING_APPROVAL: "border-amber-200 bg-amber-50 text-amber-700",
+  PROCESSING: "border-indigo-200 bg-indigo-50 text-indigo-700",
+  COMPLETED: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  COMPLETED_WITH_FAILURES: "border-rose-200 bg-rose-50 text-rose-700",
+  REJECTED: "border-rose-200 bg-rose-50 text-rose-700",
+  EXPIRED: "border-rose-200 bg-rose-50 text-rose-700",
+  CANCELED: "border-slate-200 bg-slate-100 text-slate-500",
+};
+
+const UNIT_LABELS: Record<DisbursementScheduleUnit, [string, string]> = {
+  DAY: ["dia", "dias"],
+  WEEK: ["semana", "semanas"],
+  MONTH: ["mês", "meses"],
+};
+
+/** "a cada 1 mês", "a cada 2 semanas". */
+export function repeatLabel(unit: DisbursementScheduleUnit, every: number): string {
+  return `a cada ${every} ${UNIT_LABELS[unit][every === 1 ? 0 : 1]}`;
+}
+
+/** Plain-language end of a repetition. */
+export function repeatEndLabel(schedule: {
+  endsOn: string | null;
+  maxOccurrences: number | null;
+}): string {
+  if (schedule.endsOn) return `até ${formatDate(schedule.endsOn)}`;
+  if (schedule.maxOccurrences) return `${schedule.maxOccurrences} vezes`;
+  return "sem data para terminar";
+}
+
+/** "05/11/2026" from a São Paulo date "2026-11-05". */
+export function formatDate(date: string): string {
+  return `${date.slice(8, 10)}/${date.slice(5, 7)}/${date.slice(0, 4)}`;
+}
+
+/** Today in São Paulo, the calendar of the scheduled dates. */
+export function saoPauloToday(now = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(now);
+}
+
+/** Hours left until 23:59 today in São Paulo, when a request made now expires. */
+export function hoursLeftToday(now = new Date()): number {
+  const hour = Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Sao_Paulo",
+      hour: "numeric",
+      hourCycle: "h23",
+    }).format(now),
+  );
+  return 24 - hour;
+}
 
 export const ITEM_STATUS_LABELS: Record<DisbursementItemStatus, string> = {
   PENDING: "A enviar",

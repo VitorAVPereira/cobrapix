@@ -12,12 +12,22 @@ import {
   CreateDisbursementBatchDto,
   DisbursementBatchItemDto,
   DisbursementBatchesQueryDto,
+  DisbursementRepeatDto,
+  ScheduleDisbursementBatchDto,
   UpdateDisbursementBatchDto,
 } from './dto/disbursement-batch.dto';
+import { dateOnly, parsePaymentDate, toDbDate } from './disbursement-schedule';
 
 type Tx = Prisma.TransactionClient;
 const MAX_TOTAL_CENTS = 2147483647;
-const OPEN_STATUSES: string[] = ['DRAFT', 'AWAITING_APPROVAL', 'PROCESSING'];
+const OPEN_STATUSES: string[] = [
+  'DRAFT',
+  'SCHEDULED',
+  'AWAITING_APPROVAL',
+  'PROCESSING',
+];
+// Nothing has been requested yet: the company may still change or cancel it.
+const EDITABLE_STATUSES: string[] = ['DRAFT', 'SCHEDULED'];
 // Batches that paid nothing; only after one of these may the same failures be retried again.
 const UNPAID_FINAL_STATUSES = ['CANCELED', 'EXPIRED', 'REJECTED'] as const;
 
@@ -51,7 +61,42 @@ const BATCH_SELECT = {
   createdAt: true,
   updatedAt: true,
   completedAt: true,
+  scheduledFor: true,
+  scheduleProblem: true,
+  scheduleOccurrence: true,
+  schedule: {
+    select: {
+      id: true,
+      unit: true,
+      every: true,
+      endsOn: true,
+      maxOccurrences: true,
+      occurrencesCreated: true,
+      status: true,
+      version: true,
+    },
+  },
 } satisfies Prisma.DisbursementBatchSelect;
+
+type BatchRow = Prisma.DisbursementBatchGetPayload<{
+  select: typeof BATCH_SELECT;
+}>;
+
+/** Dates of the screen are São Paulo calendar dates, not instants. */
+function batchView<T extends BatchRow>(batch: T) {
+  return {
+    ...batch,
+    scheduledFor: batch.scheduledFor ? dateOnly(batch.scheduledFor) : null,
+    schedule: batch.schedule
+      ? {
+          ...batch.schedule,
+          endsOn: batch.schedule.endsOn
+            ? dateOnly(batch.schedule.endsOn)
+            : null,
+        }
+      : null,
+  };
+}
 
 export interface HashedItem {
   documentType: string;
@@ -143,7 +188,12 @@ export class DisbursementBatchesService {
       }),
       this.prisma.disbursementBatch.count({ where }),
     ]);
-    return { items, total, page: query.page, pageSize: query.pageSize };
+    return {
+      items: items.map(batchView),
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+    };
   }
 
   async get(companyId: string, id: string) {
@@ -167,23 +217,54 @@ export class DisbursementBatchesService {
     });
     if (!batch) throw new NotFoundException('Lote não encontrado.');
     const { approvals, ...rest } = batch;
-    return { ...rest, approval: approvals[0] ?? null };
+    return { ...batchView(rest), approval: approvals[0] ?? null };
   }
 
+  /**
+   * Without a date the batch is a draft (as before). With a date it is scheduled; for
+   * today the caller requests the approval right away. A repetition starts with it.
+   */
   async create(
     companyId: string,
     userId: string,
     dto: CreateDisbursementBatchDto,
+    now = new Date(),
   ) {
     await this.settings.assertEnabled(companyId);
+    const scheduledFor =
+      dto.scheduledFor !== undefined
+        ? parsePaymentDate(dto.scheduledFor, now)
+        : null;
+    if (dto.repeat && !scheduledFor)
+      throw new BadRequestException({
+        code: 'PAYMENT_DATE_REQUIRED',
+        message: 'Informe a data do primeiro pagamento para repetir.',
+      });
     const id = await this.prisma.$transaction(async (tx) => {
       const items = await this.buildItems(tx, companyId, dto.items);
+      const schedule =
+        dto.repeat && scheduledFor
+          ? await this.createSchedule(
+              tx,
+              companyId,
+              userId,
+              dto,
+              dto.repeat,
+              scheduledFor,
+            )
+          : null;
       const batch = await tx.disbursementBatch.create({
         data: {
           companyId,
           reference: dto.reference.trim(),
           createdByUserId: userId,
           ...this.totals(items),
+          ...(scheduledFor
+            ? { status: 'SCHEDULED', scheduledFor: toDbDate(scheduledFor) }
+            : {}),
+          ...(schedule
+            ? { scheduleId: schedule.id, scheduleOccurrence: 1 }
+            : {}),
         },
       });
       await tx.disbursementItem.createMany({
@@ -195,14 +276,28 @@ export class DisbursementBatchesService {
   }
 
   /** Only a draft is edited; its items are replaced as a whole. */
-  async update(companyId: string, id: string, dto: UpdateDisbursementBatchDto) {
+  async update(
+    companyId: string,
+    id: string,
+    dto: UpdateDisbursementBatchDto,
+    now = new Date(),
+  ) {
     await this.settings.assertEnabled(companyId);
+    if (dto.repeat)
+      throw new BadRequestException({
+        code: 'REPEAT_ON_CREATE_ONLY',
+        message: 'A repetição é definida ao criar o pagamento.',
+      });
+    const scheduledFor =
+      dto.scheduledFor !== undefined
+        ? parsePaymentDate(dto.scheduledFor, now)
+        : null;
     await this.prisma.$transaction(async (tx) => {
       const batch = await this.lock(tx, companyId, id);
-      if (batch.status !== 'DRAFT')
+      if (!EDITABLE_STATUSES.includes(batch.status))
         conflict(
           'BATCH_NOT_EDITABLE',
-          'Só é possível alterar um lote em rascunho.',
+          'Só é possível alterar um pagamento que ainda não pediu aprovação.',
         );
       if (batch.version !== dto.expectedVersion)
         conflict(
@@ -221,6 +316,50 @@ export class DisbursementBatchesService {
         data: {
           reference: dto.reference.trim(),
           ...this.totals(items),
+          // A date (re)schedules it and clears the problem of a missed date.
+          ...(scheduledFor
+            ? {
+                status: 'SCHEDULED',
+                scheduledFor: toDbDate(scheduledFor),
+                scheduleProblem: null,
+              }
+            : {}),
+          version: { increment: 1 },
+        },
+      });
+      if (dto.applyToSchedule && batch.scheduleId)
+        await this.replaceScheduleItems(tx, companyId, batch.scheduleId, items);
+    });
+    return this.get(companyId, id);
+  }
+
+  /** Draft to scheduled; for today the caller requests the approval right away. */
+  async schedule(
+    companyId: string,
+    id: string,
+    dto: ScheduleDisbursementBatchDto,
+    now = new Date(),
+  ) {
+    await this.settings.assertEnabled(companyId);
+    const scheduledFor = parsePaymentDate(dto.scheduledFor, now);
+    await this.prisma.$transaction(async (tx) => {
+      const batch = await this.lock(tx, companyId, id);
+      if (!EDITABLE_STATUSES.includes(batch.status))
+        conflict(
+          'BATCH_NOT_EDITABLE',
+          'Só é possível agendar um pagamento que ainda não pediu aprovação.',
+        );
+      if (batch.version !== dto.expectedVersion)
+        conflict(
+          'VERSION_CHANGED',
+          'O pagamento foi alterado por outra pessoa. Recarregue os dados.',
+        );
+      await tx.disbursementBatch.update({
+        where: { id },
+        data: {
+          status: 'SCHEDULED',
+          scheduledFor: toDbDate(scheduledFor),
+          scheduleProblem: null,
           version: { increment: 1 },
         },
       });
@@ -228,30 +367,147 @@ export class DisbursementBatchesService {
     return this.get(companyId, id);
   }
 
+  /** Ends a repetition; its occurrence still waiting for the date is canceled too. */
+  async endSchedule(
+    companyId: string,
+    scheduleId: string,
+    expectedVersion: number,
+  ) {
+    await this.settings.assertEnabled(companyId);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "DisbursementSchedule" WHERE id=${scheduleId} AND "companyId"=${companyId} FOR UPDATE`;
+      const schedule = await tx.disbursementSchedule.findFirst({
+        where: { id: scheduleId, companyId },
+        select: { status: true, version: true },
+      });
+      if (!schedule) throw new NotFoundException('Repetição não encontrada.');
+      if (schedule.version !== expectedVersion)
+        conflict(
+          'VERSION_CHANGED',
+          'A repetição foi alterada por outra pessoa. Recarregue os dados.',
+        );
+      if (schedule.status === 'ENDED') return;
+      await tx.disbursementSchedule.update({
+        where: { id: scheduleId },
+        data: {
+          status: 'ENDED',
+          endedAt: new Date(),
+          version: { increment: 1 },
+        },
+      });
+      const upcoming = await tx.disbursementBatch.findMany({
+        where: { companyId, scheduleId, status: 'SCHEDULED' },
+        select: { id: true },
+      });
+      for (const { id } of upcoming) {
+        await this.lock(tx, companyId, id);
+        await this.cancelUnrequested(tx, companyId, id);
+      }
+    });
+    return { id: scheduleId, status: 'ENDED' as const };
+  }
+
   /** Nothing has been sent yet; a batch being paid is never canceled by the company. */
   async cancel(companyId: string, id: string) {
     await this.settings.assertEnabled(companyId);
     await this.prisma.$transaction(async (tx) => {
       const batch = await this.lock(tx, companyId, id);
-      if (batch.status !== 'DRAFT' && batch.status !== 'AWAITING_APPROVAL')
+      if (
+        batch.status !== 'DRAFT' &&
+        batch.status !== 'SCHEDULED' &&
+        batch.status !== 'AWAITING_APPROVAL'
+      )
         conflict(
           'BATCH_NOT_CANCELABLE',
-          'Lote em envio ou encerrado não pode ser cancelado.',
+          'Pagamento em envio ou encerrado não pode ser cancelado.',
         );
-      await tx.disbursementItem.updateMany({
-        where: { batchId: id, companyId, status: 'PENDING' },
-        data: { status: 'CANCELED' },
-      });
-      await tx.disbursementApproval.updateMany({
-        where: { batchId: id, companyId, state: 'AWAITING' },
-        data: { state: 'INVALIDATED' },
-      });
-      await tx.disbursementBatch.update({
-        where: { id },
-        data: { status: 'CANCELED', version: { increment: 1 } },
-      });
+      await this.cancelUnrequested(tx, companyId, id);
     });
     return this.get(companyId, id);
+  }
+
+  private async cancelUnrequested(tx: Tx, companyId: string, id: string) {
+    await tx.disbursementItem.updateMany({
+      where: { batchId: id, companyId, status: 'PENDING' },
+      data: { status: 'CANCELED' },
+    });
+    await tx.disbursementApproval.updateMany({
+      where: { batchId: id, companyId, state: 'AWAITING' },
+      data: { state: 'INVALIDATED' },
+    });
+    await tx.disbursementBatch.update({
+      where: { id },
+      data: { status: 'CANCELED', version: { increment: 1 } },
+    });
+  }
+
+  private async createSchedule(
+    tx: Tx,
+    companyId: string,
+    userId: string,
+    dto: CreateDisbursementBatchDto,
+    repeat: DisbursementRepeatDto,
+    firstDate: string,
+  ) {
+    if (repeat.endsOn !== undefined && repeat.occurrences !== undefined)
+      throw new BadRequestException({
+        code: 'REPEAT_END_AMBIGUOUS',
+        message:
+          'Escolha terminar em uma data ou depois de algumas vezes, não os dois.',
+      });
+    if (repeat.endsOn !== undefined && repeat.endsOn <= firstDate)
+      throw new BadRequestException({
+        code: 'REPEAT_END_BEFORE_START',
+        message:
+          'A data final da repetição deve ser depois do primeiro pagamento.',
+      });
+    const schedule = await tx.disbursementSchedule.create({
+      data: {
+        companyId,
+        reference: dto.reference.trim(),
+        unit: repeat.unit,
+        every: repeat.every,
+        firstDate: toDbDate(firstDate),
+        endsOn: repeat.endsOn ? toDbDate(repeat.endsOn) : null,
+        maxOccurrences: repeat.occurrences ?? null,
+        occurrencesCreated: 1,
+        createdByUserId: userId,
+      },
+      select: { id: true },
+    });
+    await tx.disbursementScheduleItem.createMany({
+      data: dto.items.map((item) => ({
+        scheduleId: schedule.id,
+        companyId,
+        recipientId: item.recipientId,
+        amountCents: item.amountCents,
+      })),
+    });
+    return schedule;
+  }
+
+  /** "Apply to the next ones": the next repetitions copy these amounts. */
+  private async replaceScheduleItems(
+    tx: Tx,
+    companyId: string,
+    scheduleId: string,
+    items: { recipientId: string; amountCents: number }[],
+  ) {
+    await tx.disbursementScheduleItem.deleteMany({
+      where: { scheduleId, companyId },
+    });
+    await tx.disbursementScheduleItem.createMany({
+      data: items.map((item) => ({
+        scheduleId,
+        companyId,
+        recipientId: item.recipientId,
+        amountCents: item.amountCents,
+      })),
+    });
+    await tx.disbursementSchedule.update({
+      where: { id: scheduleId },
+      data: { version: { increment: 1 } },
+    });
   }
 
   /**
@@ -320,7 +576,12 @@ export class DisbursementBatchesService {
     await tx.$queryRaw`SELECT id FROM "DisbursementBatch" WHERE id=${id} AND "companyId"=${companyId} FOR UPDATE`;
     const batch = await tx.disbursementBatch.findFirst({
       where: { id, companyId },
-      select: { status: true, version: true, reference: true },
+      select: {
+        status: true,
+        version: true,
+        reference: true,
+        scheduleId: true,
+      },
     });
     if (!batch) throw new NotFoundException('Lote não encontrado.');
     return batch;
@@ -358,7 +619,7 @@ export class DisbursementBatchesService {
       if (!recipient.active)
         conflict(
           'RECIPIENT_INACTIVE',
-          `${recipient.name} está desativado e não pode entrar em um lote.`,
+          `${recipient.name} está desativado e não pode entrar em um pagamento.`,
         );
       return this.item(recipient, input.amountCents);
     });

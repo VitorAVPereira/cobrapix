@@ -36,7 +36,7 @@ const dashboardItem = {
 const mainItems = [
   {
     href: "/cobrancas",
-    label: "Cobrancas",
+    label: "Cobranças",
     icon: HandCoins,
   },
   {
@@ -267,7 +267,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                 >
                   <span className="flex items-center gap-2">
                     <Settings size={15} />
-                    Configuracoes
+                    Configurações
                   </span>
                   <ChevronDown
                     size={15}

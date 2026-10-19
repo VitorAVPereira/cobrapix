@@ -47,15 +47,15 @@ describe("Pagamentos a colaboradores", () => {
     expect(screen.queryByText(/não estão liberados/)).toBeNull();
   });
 
-  it("shows batches and collaborators of a released company with its approver", async () => {
+  it("shows payments and collaborators of a released company with its approver", async () => {
     mockApi.getDisbursementStatus.mockResolvedValue({
       enabled: true,
       approverName: "Maria",
       approverPhoneMasked: "(11) •••••-7777",
     });
     render(<CollaboratorPaymentsPage />);
-    expect(await screen.findByText(/aprovação no WhatsApp de Maria/)).toBeVisible();
-    expect(await screen.findByText(/Nenhum lote ainda/)).toBeVisible();
+    expect(await screen.findByText(/confirmação no WhatsApp de Maria/)).toBeVisible();
+    expect(await screen.findByText(/Nenhum pagamento ainda/)).toBeVisible();
     fireEvent.click(screen.getByRole("tab", { name: "Colaboradores" }));
     expect(await screen.findByText("Nenhum colaborador cadastrado ainda.")).toBeVisible();
   });
@@ -77,7 +77,7 @@ describe("Pagamentos a colaboradores", () => {
     mockApi.getDisbursementStatus.mockResolvedValue(released);
     mockClient = mockApi;
     rerender(<CollaboratorPaymentsPage />);
-    expect(await screen.findByRole("tab", { name: "Lotes" })).toBeVisible();
+    expect(await screen.findByRole("tab", { name: "Pagamentos" })).toBeVisible();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });

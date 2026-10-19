@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { DisbursementApprovalService } from './disbursement-approval.service';
 import { DisbursementSenderService } from './disbursement-sender.service';
+import { DisbursementSchedulerService } from './disbursement-scheduler.service';
 
 /**
  * Decisions run before deadlines, so a tap that arrived in time is never expired, and
@@ -13,10 +14,14 @@ export class DisbursementWorker {
   constructor(
     private readonly approvals: DisbursementApprovalService,
     private readonly sender: DisbursementSenderService,
+    private readonly scheduler: DisbursementSchedulerService,
   ) {}
 
   @Cron(CronExpression.EVERY_30_SECONDS, { waitForCompletion: true })
   async tick(): Promise<void> {
+    // Scheduled payments whose date arrived ask for approval; repetitions stay one ahead.
+    await this.step('schedule', () => this.scheduler.requestDue());
+    await this.step('repeat', () => this.scheduler.createNextOccurrences());
     await this.step('decide', () => this.approvals.decideAwaiting());
     await this.step('send', () => this.sender.sendApproved());
     await this.step('reconcile', () => this.sender.reconcile());

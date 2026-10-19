@@ -33,63 +33,71 @@ export default function CollaboratorPaymentsPage() {
   }, [api]);
 
   return (
-    <main className="min-h-full space-y-6 bg-slate-50 p-4 lg:p-8">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">
-          Pagamentos a colaboradores
-        </h1>
-        <p className="text-sm text-slate-600">
-          Pix da conta Efí da empresa para os colaboradores, enviados só depois
-          da aprovação no WhatsApp
-          {status?.approverName
-            ? ` de ${status.approverName}, no celular ${status.approverPhoneMasked}`
-            : ""}
-          .
-        </p>
+    <main className="min-h-full bg-slate-50">
+      <div className="mx-auto max-w-6xl space-y-5 p-4 lg:p-8">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+            Pagamentos a colaboradores
+          </h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Pix da conta Efí da empresa, enviados só depois da confirmação no
+            WhatsApp
+            {status?.approverName
+              ? ` de ${status.approverName} (${status.approverPhoneMasked})`
+              : " do responsável"}
+            .
+          </p>
+        </div>
+        {error ? (
+          <p
+            role="alert"
+            className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700"
+          >
+            {error}
+          </p>
+        ) : !status ? (
+          <p className="text-sm text-slate-500">Carregando…</p>
+        ) : !status.enabled ? (
+          <p className="rounded-md border border-slate-200 bg-white p-4 text-sm text-slate-600">
+            Pagamentos a colaboradores não estão liberados para a sua empresa.
+            Fale com o suporte CifraMais para contratar.
+          </p>
+        ) : (
+          <>
+            <div
+              role="tablist"
+              className="flex gap-2 border-b border-slate-200"
+            >
+              {(
+                [
+                  ["batches", "Pagamentos"],
+                  ["recipients", "Colaboradores"],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === value}
+                  onClick={() => setTab(value)}
+                  className={`-mb-px px-3 py-2 text-sm ${
+                    tab === value
+                      ? "border-b-2 border-emerald-600 font-semibold text-emerald-700"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {tab === "batches" ? (
+              <BatchesPanel status={status} />
+            ) : (
+              <RecipientsPanel />
+            )}
+          </>
+        )}
       </div>
-      {error ? (
-        <p role="alert" className="text-sm text-red-800">
-          {error}
-        </p>
-      ) : !status ? (
-        <p className="text-sm text-slate-500">Carregando…</p>
-      ) : !status.enabled ? (
-        <p className="rounded-lg bg-slate-50 p-4 text-sm">
-          Pagamentos a colaboradores não estão liberados para a sua empresa.
-          Fale com o suporte CifraMais para contratar.
-        </p>
-      ) : (
-        <>
-          <div role="tablist" className="flex gap-2 border-b">
-            {(
-              [
-                ["batches", "Lotes"],
-                ["recipients", "Colaboradores"],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                role="tab"
-                aria-selected={tab === value}
-                onClick={() => setTab(value)}
-                className={`px-3 py-2 text-sm ${
-                  tab === value
-                    ? "border-b-2 border-indigo-600 font-semibold text-indigo-700"
-                    : "text-slate-600"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          {tab === "batches" ? (
-            <BatchesPanel status={status} />
-          ) : (
-            <RecipientsPanel />
-          )}
-        </>
-      )}
     </main>
   );
 }

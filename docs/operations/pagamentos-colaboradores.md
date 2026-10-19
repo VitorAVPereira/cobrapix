@@ -7,7 +7,8 @@ publicada e sem empresa liberada.
 [validação](../implementation/efi-disbursement-validation.md).
 
 **Decisões de produto:**
-[especificação](../superpowers/specs/2026-10-12-pagamentos-colaboradores-design.md).
+[especificação](../superpowers/specs/2026-10-12-pagamentos-colaboradores-design.md) e
+[agendamento e repetição](../superpowers/specs/2026-10-19-pagamentos-agendados-design.md).
 
 ## O que é
 
@@ -16,19 +17,24 @@ líquidos já vêm calculados; o CifraMais não calcula folha.
 
 - **Liberação:** desligada por padrão. Só o admin CifraMais libera, por empresa.
 - **Aprovação:** nenhum Pix sai sem o toque do aprovador em "Aprovar pagamento" no WhatsApp. O
-  aprovador é cadastrado pelo admin, e o pedido vale 24 horas. Sem resposta, o lote expira e o
-  aprovador é avisado para pagar manualmente.
+  aprovador é cadastrado pelo admin, e o pedido vale **até 23:59 do dia** em que foi enviado. Sem
+  resposta, o pagamento expira e o aprovador é avisado para pagar manualmente.
+- **Agendamento:** a empresa escolhe a data. Para hoje, o pedido sai na hora; para outra data, às
+  **08:00** (Brasília) daquele dia. O pagamento pode se repetir a cada N dias, semanas ou meses.
 - **Cobrança:** a mensalidade da funcionalidade é cobrada fora do sistema.
 
 ## Publicação
 
 1. Publicar o backend antes do frontend.
-2. Aplicar `prisma migrate deploy`. As duas migrations são aditivas:
+2. Aplicar `prisma migrate deploy`. As migrations são aditivas:
    - `20261015120000_add_employee_disbursements`: tabelas, enums e três finalidades novas em
      `WhatsappTemplatePurpose`;
    - `20261016120000_disbursement_template_pending_origin`: amplia
-     `WhatsappTemplatePendingSend_origin_check` para aceitar `DISBURSEMENT`.
-3. Não há variável de ambiente nova. O worker roda dentro da API a cada 30 segundos (`@Cron`).
+     `WhatsappTemplatePendingSend_origin_check` para aceitar `DISBURSEMENT`;
+   - `20261019120000_add_disbursement_schedules`: estado `SCHEDULED`, data agendada nos lotes e as
+     tabelas de repetição.
+3. Não há variável de ambiente nova. O worker roda dentro da API a cada 30 segundos (`@Cron`) e
+   também envia os pedidos agendados e cria as próximas repetições.
 4. O webhook de Pix enviado usa a mesma URL do webhook Pix de cobranças
    (`/webhooks/efi/pix?ignorar=`), já cadastrada na chave pela ativação financeira.
 
@@ -58,7 +64,9 @@ líquidos já vêm calculados; o CifraMais não calcula folha.
 
 1. Criar na Meta, categoria **utilidade**, os três templates da especificação:
    - **pedido de aprovação**, com duas **respostas rápidas** ("Aprovar pagamento" e "Recusar");
-   - **lote expirado**;
+   - **lote expirado**: com a validade até o fim do dia, o texto não pode dizer "em 24 horas" (ex.:
+     "não foi aprovado até o fim do dia"). Quem já tem o texto antigo precisa criar o novo na Meta e
+     trocar o padrão da finalidade;
    - **falhas no lote**.
 
    O total já vem com "R$"; não escreva "R$ {{n}}" no texto.
@@ -97,11 +105,20 @@ líquidos já vêm calculados; o CifraMais não calcula folha.
 
 1. A empresa cadastra colaboradores (chave Pix ou conta corrente, poupança ou de pagamento; conta
    salário não é aceita pela Efí) ou importa uma planilha.
-2. Monta o lote (rascunho) e clica em **Pedir aprovação**. O lote é congelado com o cadastro atual
-   e a conta Efí ativa, e o aprovador recebe o template.
+2. Clica em **Novo pagamento**: descrição, data (e repetição, se quiser), colaboradores e valores.
+   - **Data de hoje:** o pedido de aprovação sai na hora.
+   - **Outra data:** o pagamento fica **Agendado** e pode ser editado ou cancelado até lá. Às 08:00
+     da data, o pagamento é congelado com o cadastro atual e a conta Efí ativa, e o aprovador recebe
+     o template.
+   - **Não saiu na data** (colaborador desativado, template retido, WhatsApp indisponível, conta
+     não apta, ou a data passou com o sistema fora do ar): o pagamento volta a rascunho com o motivo
+     na tela, e nada é pago. A empresa corrige e agenda de novo.
+   - **Repetição:** a próxima ocorrência é criada agendada assim que a atual pede aprovação, com os
+     valores da repetição. A empresa ajusta cada uma até a data; "usar também nas próximas" muda os
+     valores das seguintes. Encerrar a repetição cancela a ocorrência ainda agendada.
 3. **O aprovador toca em "Aprovar pagamento":**
    - o toque vale se citar o pedido, vier do celular do aprovador (com ou sem o nono dígito), for
-     enviado em até 24 horas e o lote estiver inalterado;
+     enviado até 23:59 do dia do pedido e o lote estiver inalterado;
    - o envio começa em até 30 segundos;
    - o aprovador recebe "Aprovação registrada".
 
@@ -111,8 +128,8 @@ líquidos já vêm calculados; o CifraMais não calcula folha.
    **uma vez** a lista com os motivos, e a empresa pode criar um **novo lote com os pagamentos que
    falharam** (nova aprovação).
 
-**Sem resposta em 24 horas:** o lote expira, nada é pago e o aprovador recebe o aviso de pagamento
-manual.
+**Sem resposta até 23:59 do dia:** o pagamento expira, nada é pago e o aprovador recebe o aviso de
+pagamento manual.
 
 ## Pagamentos em verificação
 
@@ -133,6 +150,8 @@ perdeu: timeout, erro 5xx ou "identificador já utilizado".
 
 - **Desligar:**
   - cancela os lotes aguardando aprovação e os pagamentos ainda não enviados;
+  - devolve os agendados a rascunho (com o motivo) e encerra as repetições, para nada pedir aprovação
+    sozinho quando a funcionalidade for religada;
   - Pix já enviados continuam sendo acompanhados;
   - rascunhos ficam guardados;
   - a empresa deixa de ver o menu, e as rotas respondem 404.
@@ -153,7 +172,7 @@ Todas respondem 200 à Efí, que não reenvia.
 
 - **Devoluções** de Pix já pagos não são tratadas: o aviso é ignorado e o pagamento continua
   "Pago" (decisão do produto).
-- **Agendamento:** não há. O envio é no momento da aprovação.
+- **Envio:** sempre no momento da aprovação; o que se agenda é o pedido de aprovação.
 - **Comprovante em PDF:** só em produção; a homologação Efí desabilita.
 - **Saldo:**
   - antes do primeiro Pix, o lote inteiro precisa caber no saldo, senão nada é enviado;

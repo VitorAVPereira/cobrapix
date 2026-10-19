@@ -1,39 +1,93 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, ArrowLeft, CalendarClock, CheckCircle2, Loader2, MessageSquare, Repeat, Send } from "lucide-react";
 import { useApiClient } from "@/lib/use-api-client";
 import type { DisbursementBatch, DisbursementStatus } from "@/lib/api-client";
 import {
   BATCH_STATUS_LABELS,
+  BATCH_STATUS_TONES,
   ITEM_STATUS_LABELS,
   errorCode,
   formatCents,
+  formatDate,
   formatDateTime,
   maskDocument,
+  repeatEndLabel,
+  repeatLabel,
 } from "@/lib/disbursements";
 import { BatchEditor } from "./BatchEditor";
 
-/** What the company needs to know about the batch now, in plain words. */
-function situation(batch: DisbursementBatch, status: DisbursementStatus): string {
+type Step = "done" | "current" | "todo" | "stopped";
+
+/** The three steps of a payment and where this one is. */
+function steps(batch: DisbursementBatch): [Step, Step, Step] {
   switch (batch.status) {
     case "DRAFT":
-      return "Rascunho: nada foi enviado. Revise e peça a aprovação.";
+    case "SCHEDULED":
+      return ["current", "todo", "todo"];
     case "AWAITING_APPROVAL":
-      return `Aguardando aprovação no WhatsApp de ${status.approverName ?? "aprovador"}${
-        batch.approval ? ` até ${formatDateTime(batch.approval.expiresAt)}` : ""
-      }. Ao aprovar, os Pix são enviados na hora.`;
+      return ["done", "current", "todo"];
     case "PROCESSING":
-      return "Aprovado: os Pix estão sendo enviados.";
+      return ["done", "done", "current"];
     case "COMPLETED":
-      return "Concluído: todos os pagamentos foram feitos.";
     case "COMPLETED_WITH_FAILURES":
-      return "Concluído com falhas: veja o motivo de cada pagamento não feito. Eles só são pagos em um novo lote, com nova aprovação.";
+      return ["done", "done", "done"];
     case "REJECTED":
-      return "Recusado pelo aprovador: nenhum pagamento foi feito.";
     case "EXPIRED":
-      return "Expirado: o aprovador não respondeu em 24 horas. Nada foi pago pelo CifraMais; faça o pagamento manualmente.";
+      return ["done", "stopped", "todo"];
     case "CANCELED":
-      return "Cancelado: nenhum pagamento deste lote foi enviado.";
+      return ["stopped", "todo", "todo"];
   }
+}
+
+/** What the company needs to know now, in plain words. */
+function situation(batch: DisbursementBatch, approver: string): string {
+  switch (batch.status) {
+    case "DRAFT":
+      return batch.scheduleProblem
+        ? "Edite o pagamento e escolha uma data para agendar de novo. Nada foi pago."
+        : "Ainda sem data: edite e escolha quando pagar. Nada foi enviado.";
+    case "SCHEDULED":
+      return `Em ${formatDate(batch.scheduledFor!)}, às 08:00, ${approver} recebe o pedido de confirmação no WhatsApp. Até lá, você pode editar ou cancelar.`;
+    case "AWAITING_APPROVAL":
+      return `Aguardando a confirmação de ${approver} no WhatsApp${
+        batch.approval ? ` até ${formatDateTime(batch.approval.expiresAt)}` : ""
+      }. Ao confirmar, os Pix saem na hora.`;
+    case "PROCESSING":
+      return "Confirmado: os Pix estão sendo enviados.";
+    case "COMPLETED":
+      return "Pago: todos os Pix foram feitos.";
+    case "COMPLETED_WITH_FAILURES":
+      return "Pago com falhas: veja o motivo de cada Pix não feito. Eles só são pagos em um novo pagamento, com nova confirmação.";
+    case "REJECTED":
+      return `${approver} recusou no WhatsApp: nenhum Pix foi feito.`;
+    case "EXPIRED":
+      return `${approver} não confirmou até o fim do dia. Nada foi pago pelo CifraMais; se ainda for devido, pague manualmente.`;
+    case "CANCELED":
+      return "Cancelado: nenhum Pix deste pagamento foi enviado.";
+  }
+}
+
+function StepItem({ state, icon: Icon, title, text }: { state: Step; icon: typeof Send; title: string; text: string }) {
+  const tone =
+    state === "done"
+      ? "bg-emerald-600 text-white"
+      : state === "current"
+        ? "bg-emerald-100 text-emerald-700 ring-2 ring-emerald-500"
+        : state === "stopped"
+          ? "bg-rose-100 text-rose-700"
+          : "bg-slate-100 text-slate-400";
+  return (
+    <li className="flex flex-1 items-start gap-3">
+      <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${tone}`}>
+        <Icon size={16} />
+      </span>
+      <span>
+        <span className={`block text-sm font-semibold ${state === "todo" ? "text-slate-400" : "text-slate-900"}`}>{title}</span>
+        <span className="block text-xs text-slate-500">{text}</span>
+      </span>
+    </li>
+  );
 }
 
 export function BatchDetail({
@@ -54,6 +108,7 @@ export function BatchDetail({
   const [notice, setNotice] = useState("");
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const approver = status.approverName ?? "O responsável";
 
   const reload = useCallback(
     async (signal?: AbortSignal) => {
@@ -67,28 +122,27 @@ export function BatchDetail({
   useEffect(() => {
     const controller = new AbortController();
     reload(controller.signal).catch(() => {
-      if (!controller.signal.aborted)
-        setLoadError("Não foi possível carregar o lote.");
+      if (!controller.signal.aborted) setLoadError("Não foi possível carregar o pagamento.");
     });
     return () => controller.abort();
   }, [reload]);
 
-  async function act(run: () => Promise<DisbursementBatch>, done: string) {
+  async function act(run: () => Promise<unknown>, done: string) {
     setBusy(true);
     setError("");
     setNotice("");
     try {
-      const updated = await run();
-      setBatch(updated);
+      const result = await run();
+      await reload();
       setNotice(done);
-      return updated;
+      return result;
     } catch (e) {
       const code = errorCode(e);
-      if (code === "VERSION_CHANGED" || code === "BATCH_NOT_DRAFT")
+      if (code === "VERSION_CHANGED" || code === "BATCH_NOT_DRAFT" || code === "BATCH_NOT_EDITABLE")
         await reload().catch(() => undefined);
       setError(
         code === "VERSION_CHANGED"
-          ? "O lote foi alterado por outra pessoa. Os dados foram recarregados; confira antes de continuar."
+          ? "O pagamento foi alterado por outra pessoa. Os dados foram recarregados; confira antes de continuar."
           : e instanceof Error
             ? e.message
             : "Não foi possível concluir a ação.",
@@ -110,145 +164,203 @@ export function BatchDetail({
       link.click();
       document.body.removeChild(link);
     } catch (e) {
-      setError(
-        e instanceof Error ? e.message : "Comprovante indisponível no momento.",
-      );
+      setError(e instanceof Error ? e.message : "Comprovante indisponível no momento.");
     }
   }
 
+  const back = (
+    <button
+      type="button"
+      onClick={onClose}
+      className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+    >
+      <ArrowLeft size={15} /> Voltar aos pagamentos
+    </button>
+  );
+
   if (loadError)
     return (
-      <div className="space-y-2">
-        <p role="alert" className="text-sm text-red-800">
+      <div className="space-y-3">
+        <p role="alert" className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
           {loadError}
         </p>
-        <button type="button" onClick={onClose} className="rounded border px-3 py-1 text-sm">
-          Voltar
-        </button>
+        {back}
       </div>
     );
-  if (!batch) return <p className="text-sm text-slate-500">Carregando lote…</p>;
+  if (!batch)
+    return (
+      <p className="flex items-center gap-2 text-sm text-slate-500">
+        <Loader2 size={16} className="animate-spin" /> Carregando pagamento…
+      </p>
+    );
   if (editing)
     return (
       <BatchEditor
         batch={batch}
-        onCancel={() => setEditing(false)}
+        status={status}
+        onCancel={() => {
+          setEditing(false);
+          // A save that scheduled but could not ask may have changed it.
+          void reload().catch(() => undefined);
+        }}
         onSaved={(saved) => {
           setBatch(saved);
           setEditing(false);
           setError("");
-          setNotice("Rascunho salvo.");
+          setNotice(saved.status === "AWAITING_APPROVAL" ? "Pedido de confirmação enviado." : "Pagamento agendado.");
         }}
       />
     );
+
+  const [scheduled, confirmed, sent] = steps(batch);
+  const editable = batch.status === "DRAFT" || batch.status === "SCHEDULED";
+  const cancelable = editable || batch.status === "AWAITING_APPROVAL";
   return (
     <section className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-2">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">{batch.reference}</h2>
-          <p className="text-sm text-slate-600">
-            {BATCH_STATUS_LABELS[batch.status]} · {batch.itemCount} pagamento(s)
-            · total {formatCents(batch.totalCents)}
+          <h2 className="flex flex-wrap items-center gap-2 text-lg font-semibold text-slate-900">
+            {batch.reference}
+            <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${BATCH_STATUS_TONES[batch.status]}`}>
+              {BATCH_STATUS_LABELS[batch.status]}
+            </span>
+          </h2>
+          <p className="text-sm text-slate-500">
+            {batch.itemCount} {batch.itemCount === 1 ? "colaborador" : "colaboradores"} · total {formatCents(batch.totalCents)}
+            {batch.schedule &&
+              ` · repete ${repeatLabel(batch.schedule.unit, batch.schedule.every)}${
+                batch.schedule.status === "ENDED" ? " (repetição encerrada)" : `, ${repeatEndLabel(batch.schedule)}`
+              }`}
           </p>
         </div>
-        <button type="button" onClick={onClose} className="rounded border px-3 py-1 text-sm">
-          Voltar aos lotes
-        </button>
+        {back}
       </div>
-      <p className="rounded-lg border border-slate-200 bg-white p-3 text-sm">{situation(batch, status)}</p>
+
+      <ol className="flex flex-col gap-4 rounded-md border border-slate-200 bg-white p-4 sm:flex-row">
+        <StepItem
+          state={scheduled}
+          icon={CalendarClock}
+          title={batch.status === "DRAFT" ? "Agendar" : "Agendado"}
+          text={
+            batch.status === "DRAFT" || !batch.scheduledFor
+              ? "Escolha a data do pagamento"
+              : `${formatDate(batch.scheduledFor)}, às 08:00`
+          }
+        />
+        <StepItem state={confirmed} icon={MessageSquare} title="Confirmação no WhatsApp" text={`${approver}, até 23:59 da data`} />
+        <StepItem state={sent} icon={CheckCircle2} title="Pix enviado" text="Na hora da confirmação" />
+      </ol>
+
+      {batch.scheduleProblem && batch.status === "DRAFT" && (
+        <p role="alert" className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+          <span>
+            <strong>Não foi para confirmação na data.</strong> {batch.scheduleProblem}
+          </span>
+        </p>
+      )}
+      <p className="rounded-md border border-slate-200 bg-white p-3 text-sm text-slate-700">{situation(batch, approver)}</p>
       {notice && (
         <p role="status" className="text-sm text-emerald-700">
           {notice}
         </p>
       )}
       {error && (
-        <p role="alert" className="text-sm text-red-800">
+        <p role="alert" className="text-sm text-rose-700">
           {error}
         </p>
       )}
+
       <div className="flex flex-wrap gap-2 text-sm">
-        {batch.status === "DRAFT" && (
-          <>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => setEditing(true)}
-              className="rounded-lg border px-3 py-2"
-            >
-              Editar
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => {
-                if (
-                  window.confirm(
-                    `Enviar o pedido de aprovação de ${batch.itemCount} pagamento(s), total ${formatCents(batch.totalCents)}, para o WhatsApp de ${status.approverName} ${status.approverPhoneMasked}? Ao aprovar, os Pix saem na hora.`,
-                  )
-                )
-                  void act(
-                    () => api.requestDisbursementApproval(batch.id, batch.version),
-                    "Pedido de aprovação enviado ao WhatsApp do aprovador.",
-                  );
-              }}
-              className="rounded-lg bg-indigo-600 px-3 py-2 font-semibold text-white disabled:opacity-50"
-            >
-              Pedir aprovação
-            </button>
-          </>
+        {editable && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setEditing(true)}
+            className="rounded-md bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {batch.status === "DRAFT" ? "Editar e agendar" : "Editar"}
+          </button>
         )}
-        {(batch.status === "DRAFT" || batch.status === "AWAITING_APPROVAL") && (
+        {cancelable && (
           <button
             type="button"
             disabled={busy}
             onClick={() => {
-              if (window.confirm("Cancelar este lote? Nenhum pagamento dele será feito."))
-                void act(() => api.cancelDisbursementBatch(batch.id), "Lote cancelado.");
+              if (window.confirm("Cancelar este pagamento? Nenhum Pix dele será feito."))
+                void act(() => api.cancelDisbursementBatch(batch.id), "Pagamento cancelado.");
             }}
-            className="rounded-lg border px-3 py-2"
+            className="rounded-md border border-slate-200 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-100"
           >
-            Cancelar lote
+            Cancelar pagamento
           </button>
         )}
-        {batch.status === "COMPLETED_WITH_FAILURES" &&
-          batch.items.some((item) => item.status === "FAILED") && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() =>
+        {batch.schedule?.status === "ACTIVE" && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              if (
+                window.confirm(
+                  "Encerrar a repetição? Não serão criados novos pagamentos, e o próximo que ainda não pediu confirmação será cancelado.",
+                )
+              )
                 void act(
-                  () => api.retryDisbursementFailures(batch.id),
-                  "Novo lote criado com os pagamentos que falharam.",
-                ).then((created) => {
-                  if (created) onOpen(created.id);
-                })
-              }
-              className="rounded-lg border px-3 py-2"
-            >
-              Novo lote com os pagamentos que falharam
-            </button>
-          )}
+                  () => api.endDisbursementSchedule(batch.schedule!.id, batch.schedule!.version),
+                  "Repetição encerrada.",
+                );
+            }}
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-100"
+          >
+            <Repeat size={15} /> Encerrar repetição
+          </button>
+        )}
+        {batch.status === "COMPLETED_WITH_FAILURES" && batch.items.some((item) => item.status === "FAILED") && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              void act(
+                () => api.retryDisbursementFailures(batch.id),
+                "Novo pagamento criado com os Pix que falharam.",
+              ).then((created) => {
+                if (created) onOpen((created as DisbursementBatch).id);
+              })
+            }
+            className="rounded-md border border-slate-200 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-100"
+          >
+            Novo pagamento com os que falharam
+          </button>
+        )}
       </div>
-      <ul className="divide-y rounded-xl border bg-white">
+
+      <ul className="divide-y divide-slate-100 rounded-md border border-slate-200 bg-white">
         {batch.items.map((item) => (
-          <li key={item.id} className="flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
-            <span>
-              <strong>{item.recipientName}</strong> · {maskDocument(item.document)} ·{" "}
-              {formatCents(item.amountCents)} ·{" "}
-              <span className={item.status === "FAILED" ? "text-red-800" : undefined}>
-                {ITEM_STATUS_LABELS[item.status]}
+          <li key={item.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-sm">
+            <span className="min-w-0">
+              <span className="block font-medium text-slate-900">{item.recipientName}</span>
+              <span className="block text-xs text-slate-500">
+                {maskDocument(item.document)}
+                {item.failureReason && <span className="text-rose-600"> · {item.failureReason}</span>}
               </span>
-              {item.failureReason && ` · ${item.failureReason}`}
             </span>
-            {item.status === "PAID" && (
-              <button
-                type="button"
-                onClick={() => void receipt(item.id)}
-                className="rounded border px-3 py-1"
-              >
-                Comprovante
-              </button>
-            )}
+            <span className="flex items-center gap-3">
+              <span className="font-semibold tabular-nums text-slate-900">{formatCents(item.amountCents)}</span>
+              {!editable && (
+                <span className={`text-xs ${item.status === "FAILED" ? "text-rose-600" : "text-slate-500"}`}>
+                  {ITEM_STATUS_LABELS[item.status]}
+                </span>
+              )}
+              {item.status === "PAID" && (
+                <button
+                  type="button"
+                  onClick={() => void receipt(item.id)}
+                  className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Comprovante
+                </button>
+              )}
+            </span>
           </li>
         ))}
       </ul>
