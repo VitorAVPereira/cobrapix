@@ -47,6 +47,7 @@ import {
   resolveLateTerms,
   toLateTermsView,
 } from './late-terms';
+import { searchDigits } from '../common/search-digits';
 
 export type InvoiceListStatus = 'PENDING' | 'OVERDUE' | 'PAID' | 'CANCELED';
 export type InvoiceListBillingType = 'PIX' | 'BOLETO' | 'CREDIT_CARD';
@@ -58,15 +59,6 @@ export const INVOICE_LIST_ORDER = {
   amount_asc: { originalAmount: 'asc' },
 } as const satisfies Record<string, Prisma.InvoiceOrderByWithRelationInput>;
 export type InvoiceListSort = keyof typeof INVOICE_LIST_ORDER;
-
-/**
- * Documents and phones are stored as digits, so "123.456.789-09" must match.
- * A search with letters is a name: its numbers ("Ana 33") are not a document.
- */
-function searchDigits(search: string): string {
-  const digits = search.replace(/\D/g, '');
-  return digits && !/\p{L}/u.test(search) ? digits : search;
-}
 
 const RECURRING_GENERATION_LOOKAHEAD_DAYS = 30;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;

@@ -163,3 +163,16 @@ export function dashboardBuckets(range: DashboardRange): string[] {
   }
   return buckets;
 }
+
+/** Instants of a period: from the first São Paulo midnight to the one after the last day. */
+export function resolvePeriodInstants(
+  key: DashboardPeriodKey,
+  now: Date,
+  custom: { startDate?: string; endDate?: string } = {},
+): { gte: Date; lt: Date } {
+  const range = resolveDashboardRange(key, now, custom);
+  return {
+    gte: saoPauloStart(range.startDate),
+    lt: saoPauloStart(addDays(range.endDate, 1)),
+  };
+}

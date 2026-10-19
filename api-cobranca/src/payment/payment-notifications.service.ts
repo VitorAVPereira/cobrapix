@@ -6,21 +6,9 @@ import {
   formatResendFromAddress,
   ResendMailerService,
 } from '../common/resend-mailer.service';
-import {
-  addDays,
-  resolveDashboardRange,
-  saoPauloStart,
-} from '../billing/dashboard-period';
+import { resolvePeriodInstants } from '../billing/dashboard-period';
+import { searchDigits } from '../common/search-digits';
 import type { PaymentNotificationFilterDto } from './dto/payment-notification.dto';
-
-/**
- * Digits of a CPF/CNPJ search, ignoring punctuation. A search with letters
- * is a name: its numbers ("Ana 33") are not a document.
- */
-function searchDigits(search: string): string {
-  const digits = search.replace(/\D/g, '');
-  return digits && !/\p{L}/u.test(search) ? digits : search;
-}
 
 const notificationInclude = {
   invoice: {
@@ -295,11 +283,7 @@ export class PaymentNotificationsService {
     }
 
     if (filter.period) {
-      const range = resolveDashboardRange(filter.period, now, filter);
-      invoice.paidAt = {
-        gte: saoPauloStart(range.startDate),
-        lt: saoPauloStart(addDays(range.endDate, 1)),
-      };
+      invoice.paidAt = resolvePeriodInstants(filter.period, now, filter);
     }
 
     const search = filter.search?.trim();
