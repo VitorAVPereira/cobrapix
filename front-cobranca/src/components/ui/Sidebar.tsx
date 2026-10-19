@@ -69,12 +69,12 @@ const mainItems = [
 const settingsItems = [
   {
     href: "/configuracoes/cobranca",
-    label: "Cobranca",
+    label: "Cobrança",
     icon: CalendarClock,
   },
   {
     href: "/configuracoes/regua",
-    label: "Regua de Cobranca",
+    label: "Régua de Cobrança",
     icon: SlidersHorizontal,
   },
   {
