@@ -14,9 +14,11 @@ import {
   Length,
   Matches,
   Max,
+  MaxLength,
   Min,
   ValidateIf,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ToBoolean } from '../../common/to-boolean';
 import {
   LATE_FINE_MAX_PERCENTAGE,
@@ -321,4 +323,33 @@ export class UpdateDebtorSettingsDto {
   @IsOptional()
   @IsUUID('4')
   collectionProfileId?: string;
+}
+
+// Without `page`, the list keeps the old shape (every recurrence in an
+// array) for the frontend published before the paginated screen.
+export class RecurringInvoiceListQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @IsIn([20, 50, 100])
+  pageSize?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  search?: string;
+
+  @IsOptional()
+  @IsIn(['ACTIVE', 'PAUSED'])
+  status?: 'ACTIVE' | 'PAUSED';
+
+  @IsOptional()
+  @IsIn(['PIX', 'BOLETO', 'CREDIT_CARD'])
+  billingType?: 'PIX' | 'BOLETO' | 'CREDIT_CARD';
 }

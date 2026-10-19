@@ -1348,6 +1348,93 @@ export class InvoicesService {
     );
   }
 
+  async findRecurringPaginated(
+    companyId: string,
+    params: {
+      page: number;
+      pageSize: number;
+      search?: string;
+      status?: RecurringInvoiceStatus;
+      billingType?: 'PIX' | 'BOLETO' | 'CREDIT_CARD';
+    },
+  ): Promise<{
+    data: RecurringInvoiceListItem[];
+    total: number;
+    page: number;
+    pageSize: number;
+    /** Whole company, whatever the filter. */
+    summary: { active: number; paused: number; activeMonthlyAmount: number };
+  }> {
+    const where: Prisma.RecurringInvoiceWhereInput = { companyId };
+    if (params.status) where.status = params.status;
+    if (params.billingType) {
+      // BOLIX is a boleto for the company and its payers.
+      where.billingType =
+        params.billingType === 'BOLETO'
+          ? { in: ['BOLETO', 'BOLIX'] }
+          : params.billingType;
+    }
+    const search = params.search?.trim();
+    if (search) {
+      const digits = searchDigits(search);
+      where.debtor = {
+        OR: [
+          { name: { contains: search, mode: 'insensitive' } },
+          { document: { contains: digits } },
+          { phoneNumber: { contains: digits } },
+          { email: { contains: search, mode: 'insensitive' } },
+        ],
+      };
+    }
+
+    const [recurrences, total, byStatus] = await Promise.all([
+      this.prisma.recurringInvoice.findMany({
+        where,
+        include: {
+          debtor: true,
+          invoices: {
+            where: { companyId, status: 'PENDING' },
+            orderBy: { dueDate: 'asc' },
+            take: 1,
+          },
+        },
+        // Active first, then by client; the id keeps pages stable.
+        orderBy: [
+          { status: 'asc' },
+          { debtor: { name: 'asc' } },
+          { id: 'asc' },
+        ],
+        skip: (params.page - 1) * params.pageSize,
+        take: params.pageSize,
+      }),
+      this.prisma.recurringInvoice.count({ where }),
+      this.prisma.recurringInvoice.groupBy({
+        by: ['status'],
+        where: { companyId },
+        _count: { _all: true },
+        _sum: { amount: true },
+      }),
+    ]);
+    const active = byStatus.find((row) => row.status === 'ACTIVE');
+    const paused = byStatus.find((row) => row.status === 'PAUSED');
+
+    return {
+      data: recurrences.map((recurrence) =>
+        this.mapRecurringInvoiceListItem(recurrence),
+      ),
+      total,
+      page: params.page,
+      pageSize: params.pageSize,
+      summary: {
+        active: active?._count._all ?? 0,
+        paused: paused?._count._all ?? 0,
+        activeMonthlyAmount: Number(
+          (active?._sum.amount?.toNumber() ?? 0).toFixed(2),
+        ),
+      },
+    };
+  }
+
   async updateRecurringInvoice(
     companyId: string,
     recurringInvoiceId: string,

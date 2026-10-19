@@ -40,6 +40,7 @@ import {
   CreateInvoiceDto,
   UpdateDebtorDto,
   UpdateDebtorSettingsDto,
+  RecurringInvoiceListQueryDto,
   UpdateRecurringInvoiceDto,
 } from './dto/invoice.dto';
 
@@ -172,8 +173,16 @@ export class InvoicesController {
   @Get('recurring')
   async listRecurringInvoices(
     @GetUser() user: AuthenticatedUser,
+    @Query() query: RecurringInvoiceListQueryDto,
   ): Promise<unknown> {
-    return this.invoicesService.listRecurringInvoices(user.companyId);
+    if (query.page === undefined) {
+      return this.invoicesService.listRecurringInvoices(user.companyId);
+    }
+    return this.invoicesService.findRecurringPaginated(user.companyId, {
+      ...query,
+      page: query.page,
+      pageSize: query.pageSize ?? 20,
+    });
   }
 
   @Put('recurring/:recurringInvoiceId')
