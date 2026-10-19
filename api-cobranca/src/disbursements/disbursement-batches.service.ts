@@ -619,7 +619,7 @@ export class DisbursementBatchesService {
       if (!recipient.active)
         conflict(
           'RECIPIENT_INACTIVE',
-          `${recipient.name} está desativado e não pode entrar em um lote.`,
+          `${recipient.name} está desativado e não pode entrar em um pagamento.`,
         );
       return this.item(recipient, input.amountCents);
     });

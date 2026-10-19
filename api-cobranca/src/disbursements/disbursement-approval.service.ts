@@ -136,7 +136,7 @@ export class DisbursementApprovalService {
       if (inactive)
         conflict(
           'RECIPIENT_INACTIVE',
-          `${inactive.recipient.name} está desativado. Retire do lote antes de pedir aprovação.`,
+          `${inactive.recipient.name} está desativado. Retire do pagamento ou reative o colaborador.`,
         );
       // The approver authorizes what is registered now; from here on nothing changes.
       const snapshots = items.map((item) => ({

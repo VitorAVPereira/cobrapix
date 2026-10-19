@@ -24,7 +24,7 @@ export class DisbursementBatchItemDto {
   @IsInt() @Min(1) @Max(2147483647) amountCents!: number;
 }
 
-const DATE = /^d{4}-d{2}-d{2}$/;
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Repeat every N days, weeks or months; ends on a date, after N times, or never. */
 export class DisbursementRepeatDto {
