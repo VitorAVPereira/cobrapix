@@ -34,7 +34,9 @@ export default function DashboardLayout({
             <BrandLogo width={104} height={34} priority />
           </header>
 
-          <main className="flex-1 overflow-y-auto">
+          {/* relative: absolute descendants (e.g. sr-only labels) stay inside the
+              scrolling area instead of stretching the document past the sidebar. */}
+          <main className="relative flex-1 overflow-y-auto">
             <FinancialActivationBanner />
             {children}
           </main>
