@@ -12,7 +12,6 @@ import {
   SearchX,
 } from "lucide-react";
 import type {
-  DashboardPeriod,
   InvoiceListBillingType,
   PaymentNotificationFilter,
   PaymentNotificationItem,
@@ -22,7 +21,9 @@ import type {
 import { useApiClient } from "@/lib/use-api-client";
 import { formatDebtorDocument } from "@/lib/debtor-document";
 import { TablePagination } from "@/components/ui/TablePagination";
-import { rangeError } from "@/components/features/dashboard/PeriodFilter";
+import { PeriodSelect, readPeriod, writePeriod } from "@/components/ui/PeriodSelect";
+import type { PeriodValue } from "@/components/ui/PeriodSelect";
+import { billingMethodLabel, formatDateTime, plural } from "@/lib/list-format";
 
 const STATE_OPTIONS: { value: PaymentNotificationState | ""; label: string }[] = [
   { value: "", label: "Todas as baixas" },
@@ -38,32 +39,12 @@ const BILLING_OPTIONS: { value: InvoiceListBillingType | ""; label: string }[] =
   { value: "CREDIT_CARD", label: "Cartão" },
 ];
 
-const PERIOD_OPTIONS: { value: DashboardPeriod | ""; label: string }[] = [
-  { value: "", label: "Qualquer data" },
-  { value: "today", label: "Pagas hoje" },
-  { value: "7d", label: "Últimos 7 dias" },
-  { value: "30d", label: "Últimos 30 dias" },
-  { value: "month", label: "Este mês" },
-  { value: "year", label: "Este ano" },
-  { value: "custom", label: "Escolher datas" },
-];
-
-const BILLING_LABELS: Record<string, string> = {
-  PIX: "Pix",
-  BOLETO: "Boleto",
-  BOLIX: "Bolix",
-  CREDIT_CARD: "Cartão",
-};
-
 const PAGE_SIZES = [20, 50, 100];
 
-interface NotificationQuery {
+interface NotificationQuery extends PeriodValue {
   search: string;
   state: PaymentNotificationState | "";
   billingType: InvoiceListBillingType | "";
-  period: DashboardPeriod | "";
-  startDate: string;
-  endDate: string;
   page: number;
   pageSize: number;
 }
@@ -87,18 +68,12 @@ function readQuery(params: URLSearchParams): NotificationQuery {
     options.find((option) => option.value === value)?.value ?? fallback;
   const page = Number(params.get("page"));
   const pageSize = Number(params.get("pageSize"));
-  const period = pick(params.get("period"), PERIOD_OPTIONS, "");
-  const startDate = params.get("startDate") ?? "";
-  const endDate = params.get("endDate") ?? "";
-  // A custom period only counts with a valid range; otherwise it is "any date".
-  const customOk = period !== "custom" || rangeError(startDate, endDate) === null;
   return {
     search: params.get("search") ?? "",
     state: pick(params.get("state"), STATE_OPTIONS, ""),
     billingType: pick(params.get("billingType"), BILLING_OPTIONS, ""),
-    period: customOk ? period : "",
-    startDate: customOk && period === "custom" ? startDate : "",
-    endDate: customOk && period === "custom" ? endDate : "",
+    // Without a period, any date.
+    ...readPeriod(params, "", null),
     page: Number.isInteger(page) && page > 0 ? page : 1,
     pageSize: PAGE_SIZES.includes(pageSize) ? pageSize : 20,
   };
@@ -109,11 +84,7 @@ function writeQuery(query: NotificationQuery): string {
   if (query.search) params.set("search", query.search);
   if (query.state) params.set("state", query.state);
   if (query.billingType) params.set("billingType", query.billingType);
-  if (query.period) params.set("period", query.period);
-  if (query.period === "custom") {
-    params.set("startDate", query.startDate);
-    params.set("endDate", query.endDate);
-  }
+  writePeriod(params, query, "", null);
   if (query.page > 1) params.set("page", String(query.page));
   if (query.pageSize !== 20) params.set("pageSize", String(query.pageSize));
   const value = params.toString();
@@ -133,25 +104,6 @@ function toFilter(query: NotificationQuery): PaymentNotificationFilter {
 
 function formatBRL(value: number): string {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
-}
-
-function formatDateTime(value: string | null): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
-  return new Intl.DateTimeFormat("pt-BR", {
-    dateStyle: "short",
-    timeStyle: "short",
-    timeZone: "America/Sao_Paulo",
-  }).format(date);
-}
-
-function count(value: number): string {
-  return value.toLocaleString("pt-BR");
-}
-
-function plural(value: number, one: string, many: string): string {
-  return `${count(value)} ${value === 1 ? one : many}`;
 }
 
 /** What happened to the e-mail alert; reading the baixa does not change it. */
@@ -228,11 +180,6 @@ function BaixasContent() {
   const [markingIds, setMarkingIds] = useState<Set<string>>(new Set());
   const [confirmAll, setConfirmAll] = useState(false);
   const [markingAll, setMarkingAll] = useState(false);
-  // Custom dates are typed here and only reach the URL when applied.
-  const [customOpen, setCustomOpen] = useState(query.period === "custom");
-  const [startDate, setStartDate] = useState(query.startDate);
-  const [endDate, setEndDate] = useState(query.endDate);
-  const [dateError, setDateError] = useState<string | null>(null);
   const listRequest = useRef<AbortController | null>(null);
 
   const hasFilters = Boolean(query.search || query.state || query.billingType || query.period);
@@ -248,7 +195,6 @@ function BaixasContent() {
 
   function clearFilters(): void {
     setSearchInput("");
-    setCustomOpen(false);
     updateQuery({ search: "", state: "", billingType: "", period: "", startDate: "", endDate: "" });
   }
 
@@ -357,22 +303,6 @@ function BaixasContent() {
     }
   }
 
-  function changePeriod(value: DashboardPeriod | ""): void {
-    setDateError(null);
-    if (value === "custom") {
-      setCustomOpen(true);
-      return;
-    }
-    setCustomOpen(false);
-    updateQuery({ period: value, startDate: "", endDate: "" });
-  }
-
-  function applyDates(): void {
-    const problem = rangeError(startDate, endDate);
-    setDateError(problem);
-    if (!problem) updateQuery({ period: "custom", startDate, endDate });
-  }
-
   const firstLoad = loading && response.asOf === "" && !listError;
 
   return (
@@ -465,40 +395,11 @@ function BaixasContent() {
                 ))}
               </select>
             </label>
-            <label>
-              <span className="sr-only">Filtrar por data do pagamento</span>
-              <select
-                value={customOpen ? "custom" : query.period}
-                onChange={(event) => changePeriod(event.target.value as NotificationQuery["period"])}
-                className={selectClass}
-              >
-                {PERIOD_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-            {customOpen && (
-              <div className="flex flex-col gap-2 md:col-span-2 xl:col-span-4">
-                <div className="flex flex-wrap items-end gap-2 text-sm">
-                  <label className="flex flex-col gap-1 text-xs font-medium text-slate-500">
-                    Pagas de
-                    <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className={`${selectClass} w-auto`} />
-                  </label>
-                  <label className="flex flex-col gap-1 text-xs font-medium text-slate-500">
-                    até
-                    <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} className={`${selectClass} w-auto`} />
-                  </label>
-                  <button
-                    type="button"
-                    onClick={applyDates}
-                    className="h-10 rounded-md bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800"
-                  >
-                    Aplicar
-                  </button>
-                </div>
-                {dateError && <p role="alert" className="text-xs text-rose-600">{dateError}</p>}
-              </div>
-            )}
+            <PeriodSelect
+              value={query}
+              onChange={(period) => updateQuery(period)}
+              datesClassName="md:col-span-2 xl:col-span-4"
+            />
           </div>
 
           {selected.size > 0 && (
@@ -613,7 +514,7 @@ function BaixasContent() {
                             {formatBRL(notification.amount)}
                           </td>
                           <td className="px-4 py-2.5 text-slate-600">
-                            {BILLING_LABELS[notification.billingType] ?? notification.billingType}
+                            {billingMethodLabel(notification.billingType)}
                           </td>
                           <td className="px-4 py-2.5 tabular-nums text-slate-600">{formatDateTime(notification.paidAt)}</td>
                           <td className="px-4 py-2.5"><EmailStatus notification={notification} /></td>
@@ -660,7 +561,7 @@ function BaixasContent() {
                           <p className="shrink-0 font-semibold tabular-nums text-slate-900">{formatBRL(notification.amount)}</p>
                         </div>
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
-                          <span>{BILLING_LABELS[notification.billingType] ?? notification.billingType}</span>
+                          <span>{billingMethodLabel(notification.billingType)}</span>
                           <span aria-hidden>·</span>
                           <span>{formatDateTime(notification.paidAt)}</span>
                           <EmailStatus notification={notification} />
