@@ -411,6 +411,23 @@ export interface RecurringInvoice {
   updatedAt: string;
 }
 
+export type RecurringInvoiceListQuery = {
+  page: number;
+  pageSize: number;
+  search?: string;
+  status?: RecurringInvoiceStatus;
+  billingType?: InvoiceListBillingType;
+};
+
+export interface RecurringInvoiceListResponse {
+  data: RecurringInvoice[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** Whole company, whatever the filter. */
+  summary: { active: number; paused: number; activeMonthlyAmount: number };
+}
+
 export interface UpdateRecurringInvoiceInput {
   amount: number;
   billingType: BillingMethod;
@@ -1860,8 +1877,14 @@ class ApiClient {
     });
   }
 
-  async getRecurringInvoices(): Promise<RecurringInvoice[]> {
-    return this.fetch<RecurringInvoice[]>("/invoices/recurring");
+  async getRecurringInvoices(
+    query: RecurringInvoiceListQuery,
+    signal?: AbortSignal,
+  ): Promise<RecurringInvoiceListResponse> {
+    return this.fetch<RecurringInvoiceListResponse>(
+      `/invoices/recurring${this.buildQueryString(query)}`,
+      { signal },
+    );
   }
 
   async updateRecurringInvoice(
