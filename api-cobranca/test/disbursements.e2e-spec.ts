@@ -1256,7 +1256,7 @@ describe('Approval on WhatsApp (disposable PostgreSQL, simulated transport)', ()
       expect(await scheduledOf(inactive.id)).toMatchObject({
         status: 'DRAFT',
         scheduleProblem:
-          'Bruno Lima está desativado. Retire do lote antes de pedir aprovação.',
+          'Bruno Lima está desativado. Retire do pagamento ou reative o colaborador.',
       });
       expect(await statusOf(onTime.id)).toBe('AWAITING_APPROVAL');
 
