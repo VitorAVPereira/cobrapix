@@ -9,6 +9,8 @@ const PLATFORM_ADMIN_ALLOWED_PATHS = [
   "/admin/ativacao-financeira",
   "/admin/payment-fees",
   "/admin/conciliacao",
+  "/admin/comunicacoes",
+  // Old address of the central inbox; the page only redirects to the new one.
   "/admin/communications",
   "/admin/templates",
 ] as const;

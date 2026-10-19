@@ -245,6 +245,7 @@ describe("financial onboarding route authorization", () => {
     "/admin/efi-onboarding",
     "/admin/payment-fees",
     "/admin/conciliacao",
+    "/admin/comunicacoes",
     "/admin/communications",
     "/admin/templates",
   ])("permits platform admins and rejects tenant access to %s", (path) => {
