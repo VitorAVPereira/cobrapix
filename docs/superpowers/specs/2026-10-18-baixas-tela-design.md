@@ -48,3 +48,43 @@ operações com mais de 1.000 cobranças por mês, sem limite fixo, com navegaç
 
 Sem migration nem variável nova. O frontend antigo continua funcionando com o backend novo, mas passa
 a ver só as 20 baixas mais recentes. Publique backend e frontend em sequência.
+
+# Tela de Financeiro, mesma branch (18/10/2026)
+
+## Gaps encontrados
+
+- Os totais somavam **todo o histórico** da empresa, sem período: com o volume esperado, o fechamento
+  do mês ficava impossível.
+- Só havia "Anterior/Próxima", sem tamanho de página, filtros, busca nem estado no endereço.
+- Tela em branco enquanto carregava; falha só como texto no topo; cada troca de página recarregava
+  também a conta de recebimento.
+- Forma de pagamento crua ("PIX", "BOLIX") e sem o documento do cliente.
+
+## Decisões do responsável pelo produto
+
+- Devoluções e ajustes de tarifa contam no **mês do pagamento** da cobrança: lista e totais olham as
+  cobranças pagas no período, e os totais sempre batem com a soma das linhas. O total de um mês já
+  fechado pode mudar se houver devolução depois.
+- A tela abre em **Este mês**; "Qualquer data" (`?period=all`) mostra todo o histórico.
+
+## Como ficou
+
+- Filtros no endereço: busca por cliente, CPF/CNPJ ou e-mail; situação (recebidas, em análise, com
+  devolução); forma de pagamento (Boleto inclui BOLIX); data do pagamento no horário de Brasília.
+- Totais (recebido, tarifa Efí, remuneração CifraMais, devolvido, líquido) seguem os mesmos filtros.
+- Tabela compacta e cartões curtos no celular, paginação de 20, 50 ou 100, conta de recebimento numa
+  faixa carregada uma vez, estados distintos de carregando, erro (sem totais antigos) e vazio.
+- O filtro de data é o mesmo componente em Baixas e Financeiro (`PeriodSelect`).
+
+## API
+
+- `GET /financial/receipts`: aceita `page`, `pageSize` (20, 50 ou 100), `search`, `situation`
+  (`RECEIVED`, `IN_REVIEW`, `REFUNDED`), `billingType`, `period`, `startDate` e `endDate`; cada linha
+  traz `debtorDocument` e a lista vem ordenada pela data do pagamento. Sem período, todo o histórico,
+  como antes. Tamanho de página fora de 20, 50 ou 100 agora responde 400 (antes era ajustado).
+- Coberto pelo teste em PostgreSQL descartável (`node test/settlements-postgres.cjs`), inclusive
+  isolamento entre empresas e totais que batem com as linhas em cada filtro.
+
+## Publicação
+
+Sem migration nem variável nova. O frontend publicado hoje continua funcionando com o backend novo.
