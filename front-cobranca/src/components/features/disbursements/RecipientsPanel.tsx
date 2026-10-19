@@ -368,7 +368,7 @@ export function RecipientsPanel() {
                   name="active"
                   defaultChecked={current.active}
                 />
-                Ativo (desativado não entra em lotes novos)
+                Ativo (desativado não entra em pagamentos novos)
               </label>
             )}
           </fieldset>

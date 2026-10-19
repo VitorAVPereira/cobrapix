@@ -229,7 +229,7 @@ export interface DisbursementRecipient extends DisbursementRecipientInput {
 }
 export interface Page<T> { items: T[]; total: number; page: number; pageSize: number }
 export type DisbursementBatchStatus =
-  | "DRAFT" | "AWAITING_APPROVAL" | "PROCESSING" | "COMPLETED"
+  | "DRAFT" | "SCHEDULED" | "AWAITING_APPROVAL" | "PROCESSING" | "COMPLETED"
   | "COMPLETED_WITH_FAILURES" | "REJECTED" | "EXPIRED" | "CANCELED";
 export type DisbursementItemStatus =
   | "PENDING" | "SENDING" | "IN_PROCESSING" | "PAID" | "FAILED" | "UNCERTAIN" | "CANCELED";
@@ -237,6 +237,21 @@ export interface DisbursementBatchSummary {
   id: string; reference: string; status: DisbursementBatchStatus; totalCents: number;
   itemCount: number; retryOfBatchId: string | null; version: number; createdAt: string;
   updatedAt: string; completedAt: string | null;
+  /** São Paulo date (YYYY-MM-DD) when the approval request goes out at 08:00. */
+  scheduledFor: string | null;
+  /** Why a scheduled request did not go out on its date (the payment is back to draft). */
+  scheduleProblem: string | null;
+  scheduleOccurrence: number | null;
+  schedule: DisbursementSchedule | null;
+}
+export type DisbursementScheduleUnit = "DAY" | "WEEK" | "MONTH";
+export interface DisbursementSchedule {
+  id: string; unit: DisbursementScheduleUnit; every: number; endsOn: string | null;
+  maxOccurrences: number | null; occurrencesCreated: number; status: "ACTIVE" | "ENDED";
+  version: number;
+}
+export interface DisbursementRepeatInput {
+  unit: DisbursementScheduleUnit; every: number; endsOn?: string; occurrences?: number;
 }
 export interface DisbursementItem {
   id: string; recipientId: string; recipientName: string; documentType: DisbursementDocumentType;
@@ -252,6 +267,7 @@ export interface DisbursementBatch extends DisbursementBatchSummary {
 }
 export interface DisbursementBatchInput {
   reference: string; items: { recipientId: string; amountCents: number }[];
+  scheduledFor?: string; repeat?: DisbursementRepeatInput;
 }
 export interface DisbursementItemUnderVerification {
   id: string; batchId: string; recipientName: string; amountCents: number; status: string;
@@ -1609,11 +1625,20 @@ class ApiClient {
   createDisbursementBatch(body: DisbursementBatchInput): Promise<DisbursementBatch> {
     return this.fetch("/disbursements/batches", { method: "POST", body: JSON.stringify(body) });
   }
-  updateDisbursementBatch(id: string, body: DisbursementBatchInput & { expectedVersion: number }): Promise<DisbursementBatch> {
+  updateDisbursementBatch(
+    id: string,
+    body: DisbursementBatchInput & { expectedVersion: number; applyToSchedule?: boolean },
+  ): Promise<DisbursementBatch> {
     return this.fetch(`/disbursements/batches/${id}`, { method: "PUT", body: JSON.stringify(body) });
   }
   cancelDisbursementBatch(id: string): Promise<DisbursementBatch> {
     return this.fetch(`/disbursements/batches/${id}/cancel`, { method: "POST" });
+  }
+  endDisbursementSchedule(id: string, expectedVersion: number): Promise<{ id: string; status: "ENDED" }> {
+    return this.fetch(`/disbursements/schedules/${id}/end`, {
+      method: "POST",
+      body: JSON.stringify({ expectedVersion }),
+    });
   }
   retryDisbursementFailures(id: string): Promise<DisbursementBatch> {
     return this.fetch(`/disbursements/batches/${id}/retry-failed`, { method: "POST" });
