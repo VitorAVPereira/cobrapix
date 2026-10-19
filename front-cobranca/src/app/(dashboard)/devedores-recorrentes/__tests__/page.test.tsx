@@ -174,4 +174,26 @@ describe("RecorrentesPage", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Limpar filtros" }));
     expect(replace).toHaveBeenCalledWith("/devedores-recorrentes", { scroll: false });
   });
+  it("marks a generated draft as not charged yet, also when pausing", async () => {
+    getRecurringInvoices.mockResolvedValue(
+      listResponse({
+        data: [
+          recurrence({
+            pendingInvoice: { invoiceId: "invoice-9", dueDate: "2026-11-10", amount: 250, status: "DRAFT" },
+          }),
+        ],
+        total: 1,
+      }),
+    );
+    render(<RecorrentesPage />);
+
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("10/11/2026")).toBeInTheDocument();
+    expect(within(table).getByText("Rascunho")).toHaveAttribute("title", expect.stringContaining("ainda não cobrada"));
+
+    await userEvent.click(screen.getByLabelText("Pausar recorrência de Ana Souza"));
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "A fatura de 10/11/2026 (R$ 250,00) já foi gerada como rascunho e continua em Cobranças, sem envio.",
+    );
+  });
 });

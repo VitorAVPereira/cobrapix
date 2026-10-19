@@ -137,9 +137,14 @@ function formatDate(value: string | null): string {
   return `${day}/${month}/${year}`;
 }
 
-/** The next invoice: the one already generated and open, or the next one to be generated. */
+/** The next invoice: the one already generated (open or draft), or the next one to be generated. */
 function nextInvoiceDate(recurrence: RecurringInvoice): string {
   return formatDate(recurrence.pendingInvoice?.dueDate ?? recurrence.nextDueDate);
+}
+
+// Generated invoices start as drafts and are charged from Cobranças.
+function isDraft(recurrence: RecurringInvoice): boolean {
+  return recurrence.pendingInvoice?.status === "DRAFT";
 }
 
 function StatusBadge({ status }: { status: RecurringInvoiceStatus }) {
@@ -519,7 +524,14 @@ function RecorrentesContent() {
                         </td>
                         <td className="px-4 py-2.5 text-slate-600">{billingMethodLabel(recurrence.billingType)}</td>
                         <td className="px-4 py-2.5 text-slate-600">Dia {recurrence.dueDay}</td>
-                        <td className="px-4 py-2.5 tabular-nums text-slate-600">{nextInvoiceDate(recurrence)}</td>
+                        <td className="px-4 py-2.5">
+                          <p className="tabular-nums text-slate-600">{nextInvoiceDate(recurrence)}</p>
+                          {isDraft(recurrence) && (
+                            <p title="Gerada como rascunho e ainda não cobrada; é cobrada a partir da tela de Cobranças." className="text-xs text-amber-700">
+                              Rascunho
+                            </p>
+                          )}
+                        </td>
                         <td className="px-4 py-2.5"><StatusBadge status={recurrence.status} /></td>
                         <td className="px-4 py-2.5">
                           <div className="flex justify-end gap-1">
@@ -566,7 +578,10 @@ function RecorrentesContent() {
                       <span aria-hidden>·</span>
                       <span>Dia {recurrence.dueDay}</span>
                       <span aria-hidden>·</span>
-                      <span>Próxima {nextInvoiceDate(recurrence)}</span>
+                      <span>
+                        Próxima {nextInvoiceDate(recurrence)}
+                        {isDraft(recurrence) && " (rascunho, não cobrada)"}
+                      </span>
                       <StatusBadge status={recurrence.status} />
                     </div>
                     <div className="flex gap-4 pt-0.5">
@@ -613,7 +628,9 @@ function RecorrentesContent() {
               <p className="mt-2 text-sm text-slate-600">
                 Nenhuma nova fatura será gerada enquanto estiver pausada.
                 {statusTarget.pendingInvoice &&
-                  ` A fatura de ${formatDate(statusTarget.pendingInvoice.dueDate)} (${formatCurrency(statusTarget.pendingInvoice.amount)}) já foi gerada e continua em aberto.`}
+                  (statusTarget.pendingInvoice.status === "DRAFT"
+                    ? ` A fatura de ${formatDate(statusTarget.pendingInvoice.dueDate)} (${formatCurrency(statusTarget.pendingInvoice.amount)}) já foi gerada como rascunho e continua em Cobranças, sem envio.`
+                    : ` A fatura de ${formatDate(statusTarget.pendingInvoice.dueDate)} (${formatCurrency(statusTarget.pendingInvoice.amount)}) já foi gerada e continua em aberto.`)}
               </p>
             ) : (
               <p className="mt-2 text-sm text-slate-600">
