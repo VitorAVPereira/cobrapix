@@ -138,4 +138,78 @@ describe('recurring invoices list', () => {
       status: 'ACTIVE',
     });
   });
+  it('counts a generated draft as the next invoice', async () => {
+    const { service, findMany } = build();
+    findMany.mockResolvedValueOnce([
+      {
+        ...recurrence,
+        invoices: [
+          {
+            id: 'invoice-9',
+            dueDate: new Date('2026-11-10T00:00:00.000Z'),
+            originalAmount: decimal(250),
+            status: 'DRAFT',
+          },
+        ],
+      },
+    ]);
+
+    const result = await service.findRecurringPaginated('company-1', {
+      page: 1,
+      pageSize: 20,
+    });
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: expect.objectContaining({
+          invoices: expect.objectContaining({
+            where: {
+              companyId: 'company-1',
+              status: { in: ['DRAFT', 'PENDING'] },
+            },
+          }) as unknown,
+        }) as unknown,
+      }),
+    );
+    expect(result.data[0].pendingInvoice).toEqual({
+      invoiceId: 'invoice-9',
+      dueDate: '2026-11-10',
+      amount: 250,
+      status: 'DRAFT',
+    });
+  });
+
+  it('activating one recurrence generates only that recurrence', async () => {
+    const findMany = jest.fn().mockResolvedValue([]);
+    const prisma = {
+      recurringInvoice: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({
+            id: 'recurrence-1',
+            dueDay: 10,
+            nextDueDate: null,
+          })
+          .mockResolvedValueOnce(recurrence),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany,
+      },
+    } as unknown as PrismaService;
+    const service = new InvoicesService(
+      prisma,
+      {} as MessageQueueService,
+      {} as PaymentService,
+    );
+
+    await service.updateRecurringStatus('company-1', 'recurrence-1', 'ACTIVE');
+
+    expect(findMany).toHaveBeenCalledTimes(1);
+    expect(findMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        companyId: 'company-1',
+        id: 'recurrence-1',
+        status: 'ACTIVE',
+      }) as unknown,
+    });
+  });
 });

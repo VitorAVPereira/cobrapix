@@ -61,6 +61,15 @@ export const INVOICE_LIST_ORDER = {
 export type InvoiceListSort = keyof typeof INVOICE_LIST_ORDER;
 
 const RECURRING_GENERATION_LOOKAHEAD_DAYS = 30;
+
+// Next invoice of a recurrence: the open one or the draft it generated and
+// the company has not charged yet (drafts are charged from Cobranças).
+const RECURRING_NEXT_INVOICE = (companyId: string) =>
+  ({
+    where: { companyId, status: { in: ['DRAFT', 'PENDING'] } },
+    orderBy: { dueDate: 'asc' },
+    take: 1,
+  }) satisfies Prisma.RecurringInvoice$invoicesArgs;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const PAYMENT_HISTORY_TIME_ZONE = 'America/Sao_Paulo';
 
@@ -1334,11 +1343,7 @@ export class InvoicesService {
       where: { companyId },
       include: {
         debtor: true,
-        invoices: {
-          where: { companyId, status: 'PENDING' },
-          orderBy: { dueDate: 'asc' },
-          take: 1,
-        },
+        invoices: RECURRING_NEXT_INVOICE(companyId),
       },
       orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
     });
@@ -1392,11 +1397,7 @@ export class InvoicesService {
         where,
         include: {
           debtor: true,
-          invoices: {
-            where: { companyId, status: 'PENDING' },
-            orderBy: { dueDate: 'asc' },
-            take: 1,
-          },
+          invoices: RECURRING_NEXT_INVOICE(companyId),
         },
         // Active first, then by client; the id keeps pages stable.
         orderBy: [
@@ -1478,7 +1479,10 @@ export class InvoicesService {
       },
     });
 
-    await this.generateRecurringInvoices(companyId);
+    await this.generateRecurringInvoices({
+      companyId,
+      recurrenceId: recurringInvoiceId,
+    });
 
     return this.getRecurringInvoice(companyId, recurringInvoiceId);
   }
@@ -1509,7 +1513,10 @@ export class InvoicesService {
     });
 
     if (status === 'ACTIVE') {
-      await this.generateRecurringInvoices(companyId);
+      await this.generateRecurringInvoices({
+        companyId,
+        recurrenceId: recurringInvoiceId,
+      });
     }
 
     return this.getRecurringInvoice(companyId, recurringInvoiceId);
@@ -1947,7 +1954,10 @@ export class InvoicesService {
       },
     });
 
-    await this.generateRecurringInvoices(companyId);
+    await this.generateRecurringInvoices({
+      companyId,
+      recurrenceId: recurrence.id,
+    });
 
     const created = await this.getRecurringInvoice(companyId, recurrence.id);
     if (!created) {
@@ -1988,25 +1998,29 @@ export class InvoicesService {
       where: { id: recurringInvoiceId, companyId },
       include: {
         debtor: true,
-        invoices: {
-          where: { companyId, status: 'PENDING' },
-          orderBy: { dueDate: 'asc' },
-          take: 1,
-        },
+        invoices: RECURRING_NEXT_INVOICE(companyId),
       },
     });
 
     return recurrence ? this.mapRecurringInvoiceListItem(recurrence) : null;
   }
 
-  private async generateRecurringInvoices(companyId?: string): Promise<number> {
+  // Without a scope (the daily cron) every active recurrence is generated.
+  // Creating, editing or activating one recurrence generates only that one,
+  // so the answer does not wait for the whole company.
+  private async generateRecurringInvoices(scope?: {
+    companyId: string;
+    recurrenceId: string;
+  }): Promise<number> {
     const horizon = this.addDays(
       this.startOfDay(new Date()),
       RECURRING_GENERATION_LOOKAHEAD_DAYS,
     );
     const recurrences = await this.prisma.recurringInvoice.findMany({
       where: {
-        ...(companyId ? { companyId } : {}),
+        ...(scope
+          ? { companyId: scope.companyId, id: scope.recurrenceId }
+          : {}),
         status: 'ACTIVE',
         OR: [{ nextDueDate: null }, { nextDueDate: { lte: horizon } }],
       },
