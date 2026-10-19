@@ -321,12 +321,12 @@ export function CompanyFinancialView(): ReactNode {
         {totals && !listError && (
           <dl
             aria-label="Totais"
-            className={`grid grid-cols-2 gap-px border-b border-slate-200 bg-slate-200 lg:grid-cols-5 ${loading ? "opacity-60" : ""}`}
+            className={`grid grid-cols-2 gap-px border-b border-slate-200 bg-slate-200 xl:grid-cols-5 ${loading ? "opacity-60" : ""}`}
           >
             {totalCards.map(([label, value]) => (
               <div
                 key={label}
-                className={`bg-slate-50 px-4 py-3 ${label === "Líquido" ? "col-span-2 lg:col-span-1" : ""}`}
+                className={`bg-slate-50 px-4 py-3 ${label === "Líquido" ? "col-span-2 xl:col-span-1" : ""}`}
               >
                 <dt className="text-xs font-medium text-slate-500">{label}</dt>
                 <dd
@@ -385,29 +385,30 @@ export function CompanyFinancialView(): ReactNode {
           </div>
         ) : receipts ? (
           <div className={loading ? "opacity-60 transition-opacity" : "transition-opacity"}>
-            <div className="hidden overflow-x-auto lg:block">
-              <table className="w-full min-w-[960px] table-fixed text-left text-sm">
+            <div className="hidden overflow-x-auto xl:block">
+              <table className="w-full min-w-[900px] table-fixed text-left text-sm">
                 <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold uppercase tracking-wider text-slate-500">
                   <tr>
                     <th className="px-4 py-2.5">Cliente</th>
-                    <th className="w-24 px-4 py-2.5">Forma</th>
                     <th className="w-40 px-4 py-2.5">Pago em</th>
-                    <th className="w-32 px-4 py-2.5 text-right">Pago</th>
-                    <th className="w-28 px-4 py-2.5 text-right">Tarifa Efí</th>
-                    <th className="w-32 px-4 py-2.5 text-right">Remuneração</th>
-                    <th className="w-32 px-4 py-2.5 text-right">Líquido</th>
-                    <th className="w-40 px-4 py-2.5">Situação</th>
+                    <th className="w-28 px-4 py-2.5 text-right">Pago</th>
+                    <th className="w-28 whitespace-nowrap px-4 py-2.5 text-right">Tarifa Efí</th>
+                    <th className="w-28 px-4 py-2.5 text-right">Remuneração</th>
+                    <th className="w-28 px-4 py-2.5 text-right">Líquido</th>
+                    <th className="w-36 px-4 py-2.5">Situação</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {receipts.data.map((row) => (
                     <tr key={row.invoiceId}>
                       <td className="px-4 py-2.5">
-                        <p className="truncate font-medium text-slate-900">{row.debtorName}</p>
+                        <p title={row.debtorName} className="truncate font-medium text-slate-900">{row.debtorName}</p>
                         <p className="truncate text-xs text-slate-500">{formatDebtorDocument(row.debtorDocument)}</p>
                       </td>
-                      <td className="px-4 py-2.5 text-slate-600">{billingMethodLabel(row.billingMethod)}</td>
-                      <td className="px-4 py-2.5 tabular-nums text-slate-600">{formatDateTime(row.paidAt)}</td>
+                      <td className="px-4 py-2.5">
+                        <p className="whitespace-nowrap tabular-nums text-slate-600">{formatDateTime(row.paidAt)}</p>
+                        <p className="text-xs text-slate-500">{billingMethodLabel(row.billingMethod)}</p>
+                      </td>
                       <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">{formatCents(row.paidAmountCents)}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums text-slate-600">
                         {formatCents(row.efiFeeCents)}
@@ -427,7 +428,7 @@ export function CompanyFinancialView(): ReactNode {
               </table>
             </div>
 
-            <ul className="divide-y divide-slate-100 lg:hidden">
+            <ul className="divide-y divide-slate-100 xl:hidden">
               {receipts.data.map((row) => (
                 <li key={row.invoiceId} className="space-y-1.5 px-4 py-3">
                   <div className="flex items-start justify-between gap-3">
