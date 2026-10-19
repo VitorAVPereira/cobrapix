@@ -397,7 +397,7 @@ function BaixasContent() {
               type="button"
               onClick={() => void fetchNotifications()}
               disabled={loading}
-              className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex whitespace-nowrap items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <RefreshCw size={16} className={loading ? "animate-spin" : undefined} />
               Atualizar
@@ -406,7 +406,7 @@ function BaixasContent() {
               <button
                 type="button"
                 onClick={() => setConfirmAll(true)}
-                className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
+                className="inline-flex whitespace-nowrap items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
               >
                 <CheckCheck size={16} />
                 Marcar todas como lidas
