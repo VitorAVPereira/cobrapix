@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useRef, useState } from "react";
+import { Eye } from "lucide-react";
 import type { ReactNode } from "react";
 import type {
   CommunicationChannel,
@@ -8,13 +9,29 @@ import type {
   ConversationMessage,
 } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
+import { formatWhatsAppNumber } from "@/lib/whatsapp-number";
 import { useVisiblePolling } from "@/lib/use-visible-polling";
 import { ListPagination } from "@/components/ui/ListPagination";
 import { SearchForm } from "@/components/ui/SearchForm";
 import { ConversationMessages } from "./ConversationMessages";
-import { errorMessage, formatDateTime, isAbort } from "./format";
+import { errorMessage, isAbort } from "./format";
+import {
+  Avatar,
+  BackToList,
+  ChannelBadge,
+  ConversationListItem,
+  InboxShell,
+  fieldClass,
+  useStickToBottom,
+} from "./InboxParts";
 
 const LIST_PAGE_SIZE = 10;
+
+/** A WhatsApp contact reads as a phone number; an e-mail stays as it is. */
+function address(channel: CommunicationChannel, value: string | null | undefined): string | null {
+  if (!value) return null;
+  return channel === "WHATSAPP" && /^\d{10,15}$/.test(value) ? formatWhatsAppNumber(value) : value;
+}
 const MESSAGE_PAGE_SIZE = 25;
 
 /** Newest page merged into what is loaded, oldest first, without duplicates. */
@@ -56,6 +73,8 @@ export function CompanyConversations(): ReactNode {
   const [loaded, setLoaded] = useState(false);
   // Once older messages are loaded, polling only refreshes the newest page and keeps them.
   const pagedMessages = useRef(false);
+  const scroller = useRef<HTMLDivElement>(null);
+  useStickToBottom(scroller, selectedId, messages.at(-1)?.id ?? null);
 
   const refresh = useCallback(
     async (signal: AbortSignal): Promise<void> => {
@@ -155,112 +174,129 @@ export function CompanyConversations(): ReactNode {
     }
   }
 
-  return (
-    <section className="space-y-4" aria-label="Conversas da empresa">
-      <p className="text-sm text-slate-600">
-        Somente leitura. As respostas são feitas pelo atendimento CifraMais.
-      </p>
-      <div className="flex flex-wrap items-center gap-3">
-        <SearchForm
-          label="Buscar cliente"
-          placeholder="Buscar por nome, telefone, CPF/CNPJ ou e-mail do cliente"
-          onSearch={(term) => {
-            setSearch(term);
-            restart();
-          }}
-        />
-        <label className="text-sm">
-          Canal
-          <select
-            className="ml-2 rounded-lg border p-2"
-            value={channel}
-            onChange={(event) => {
-              setChannel(event.target.value as CommunicationChannel | "");
-              restart();
-            }}
-          >
-            <option value="">Todos</option>
-            <option value="WHATSAPP">WhatsApp</option>
-            <option value="EMAIL">E-mail</option>
-          </select>
-        </label>
-      </div>
+  const listPane = (
+    <>
       {error && (
-        <p role="alert" className="rounded-lg bg-red-50 p-3 text-red-800">
+        <p role="alert" className="m-3 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
           {error}
         </p>
       )}
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-        <div className="space-y-2">
-          {conversations.map((item) => (
-            <button
-              key={item.id}
-              aria-pressed={item.id === selectedId}
-              onClick={() => select(item.id)}
-              className={`w-full rounded-xl border p-4 text-left ${item.id === selectedId ? "border-indigo-500 bg-indigo-50" : "bg-white"}`}
-            >
-              <div className="flex justify-between gap-2">
-                <strong className="truncate">
-                  {item.contact.name ?? item.contact.address ?? "Contato"}
-                </strong>
-                <span className="shrink-0 text-xs text-slate-500">
-                  {item.channel === "WHATSAPP" ? "WhatsApp" : "E-mail"}
-                </span>
-              </div>
-              {item.contact.name && item.contact.address && (
-                <p className="text-xs text-slate-500 wrap-anywhere">
-                  {item.contact.address}
-                </p>
-              )}
-              <p className="mt-2 truncate text-sm text-slate-600">
-                {item.lastMessage?.preview}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                {formatDateTime(item.lastMessageAt)} · {item.messageCount}{" "}
-                {item.messageCount === 1 ? "mensagem" : "mensagens"}
-              </p>
-            </button>
-          ))}
-          {loaded && conversations.length === 0 && !error && (
-            <p className="rounded-xl border bg-white p-6 text-slate-500">
-              {search
-                ? "Nenhuma conversa encontrada para esta busca."
-                : "Nenhuma conversa com mensagens da sua empresa."}
-            </p>
-          )}
-          {total > 0 && (
-            <ListPagination
-              page={cursors.length + 1}
-              pageSize={LIST_PAGE_SIZE}
-              total={total}
-              hasNext={Boolean(nextCursor)}
-              label={["conversa", "conversas"]}
-              onPrevious={() => setCursors((current) => current.slice(0, -1))}
-              onNext={() => {
-                if (nextCursor) setCursors((current) => [...current, nextCursor]);
-              }}
-            />
-          )}
-        </div>
-        {selectedId && (
-          <section
-            className="space-y-4 rounded-xl border bg-white p-4"
-            aria-label="Mensagens da conversa"
-          >
-            {header && (
-              <h2 className="font-semibold wrap-anywhere">
-                {header.contact.name ?? header.contact.address ?? "Contato"}
-              </h2>
-            )}
-            <ConversationMessages
-              messages={messages}
-              hasOlder={Boolean(olderCursor)}
-              loadingOlder={loadingOlder}
-              onLoadOlder={() => void loadOlder()}
-            />
-          </section>
+      <div className="min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto">
+        {conversations.map((item) => (
+          <ConversationListItem
+            key={item.id}
+            active={item.id === selectedId}
+            title={item.contact.name ?? address(item.channel, item.contact.address) ?? "Contato"}
+            subtitle={item.contact.name ? address(item.channel, item.contact.address) : null}
+            preview={item.lastMessage?.preview}
+            time={item.lastMessageAt}
+            channel={item.channel}
+            chips={
+              <span className="text-xs text-slate-400">
+                · {item.messageCount} {item.messageCount === 1 ? "mensagem" : "mensagens"}
+              </span>
+            }
+            onClick={() => select(item.id)}
+          />
+        ))}
+        {loaded && conversations.length === 0 && !error && (
+          <p className="p-6 text-center text-sm text-slate-500">
+            {search
+              ? "Nenhuma conversa encontrada para esta busca."
+              : "Nenhuma conversa com mensagens da sua empresa."}
+          </p>
         )}
       </div>
+      {total > 0 && (
+        <div className="border-t border-slate-200 p-3">
+          <ListPagination
+            page={cursors.length + 1}
+            pageSize={LIST_PAGE_SIZE}
+            total={total}
+            hasNext={Boolean(nextCursor)}
+            label={["conversa", "conversas"]}
+            onPrevious={() => setCursors((current) => current.slice(0, -1))}
+            onNext={() => {
+              if (nextCursor) setCursors((current) => [...current, nextCursor]);
+            }}
+          />
+        </div>
+      )}
+    </>
+  );
+
+  const contactName = header
+    ? (header.contact.name ?? address(header.channel, header.contact.address) ?? "Contato")
+    : "";
+  const detailPane = selectedId ? (
+    <section className="flex h-full min-h-0 flex-col" aria-label="Mensagens da conversa">
+      <header className="flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-3">
+        <BackToList onClick={() => setSelectedId(null)} />
+        {header && <Avatar name={contactName} />}
+        <div className="min-w-0 flex-1">
+          {header && (
+            <>
+              <h2 className="truncate font-semibold text-slate-900">{contactName}</h2>
+              <p className="flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
+                {header.contact.name && header.contact.address && (
+                  <span className="wrap-anywhere">{address(header.channel, header.contact.address)}</span>
+                )}
+                <ChannelBadge channel={header.channel} />
+              </p>
+            </>
+          )}
+        </div>
+      </header>
+      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+        <ConversationMessages
+          messages={messages}
+          hasOlder={Boolean(olderCursor)}
+          loadingOlder={loadingOlder}
+          onLoadOlder={() => void loadOlder()}
+        />
+      </div>
+      <p className="flex items-center gap-2 border-t border-slate-200 bg-white px-4 py-2.5 text-xs text-slate-500">
+        <Eye size={14} className="shrink-0" />
+        Somente leitura. As respostas são feitas pelo atendimento CifraMais.
+      </p>
+    </section>
+  ) : null;
+
+  return (
+    <section aria-label="Conversas da empresa">
+      <InboxShell
+        open={Boolean(selectedId)}
+        toolbar={
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <SearchForm
+              label="Buscar cliente"
+              placeholder="Buscar por nome, telefone, CPF/CNPJ ou e-mail do cliente"
+              onSearch={(term) => {
+                setSearch(term);
+                restart();
+              }}
+            />
+            <label className="flex items-center gap-2 text-sm text-slate-600">
+              <span className="sr-only sm:not-sr-only">Canal</span>
+              <select
+                aria-label="Canal"
+                className={`${fieldClass} w-full sm:w-40`}
+                value={channel}
+                onChange={(event) => {
+                  setChannel(event.target.value as CommunicationChannel | "");
+                  restart();
+                }}
+              >
+                <option value="">Todos os canais</option>
+                <option value="WHATSAPP">WhatsApp</option>
+                <option value="EMAIL">E-mail</option>
+              </select>
+            </label>
+          </div>
+        }
+        list={listPane}
+        detail={detailPane}
+      />
     </section>
   );
 }

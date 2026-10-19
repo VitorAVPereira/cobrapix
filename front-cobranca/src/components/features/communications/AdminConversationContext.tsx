@@ -12,6 +12,7 @@ import type {
   TemplateReplyContext,
 } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
+import { Loader2, Send } from "lucide-react";
 import {
   errorMessage,
   formatInvoice,
@@ -84,10 +85,10 @@ function ContextSelect({
   emptyLabel: string;
 }): ReactNode {
   return (
-    <label className="block text-sm">
+    <label className="block text-xs font-medium text-slate-600">
       {label}
       <select
-        className="mt-1 w-full rounded-lg border p-2"
+        className="mt-1 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
         value={value}
         onChange={(event) => onChange(event.target.value)}
       >
@@ -120,7 +121,7 @@ export function AdminMessageDetails({
       ? reasonLabel(intent.lastErrorCode)
       : null;
   return (
-    <div className="mt-2 space-y-1 border-t border-slate-200 pt-2 text-xs text-slate-600">
+    <div className="mt-1.5 space-y-1 border-t border-slate-200/70 pt-1.5 text-[11px] text-slate-500">
       <p>
         {message.company
           ? (message.company.tradeName ?? message.company.corporateName)
@@ -146,7 +147,7 @@ export function AdminMessageDetails({
       <div className="flex gap-3">
         {!intent && (
           <button
-            className="font-medium text-indigo-700"
+            className="font-medium text-emerald-700 hover:underline"
             onClick={() => onClassify(message)}
           >
             Classificar
@@ -154,7 +155,7 @@ export function AdminMessageDetails({
         )}
         {canQuote && message.externalMessageId && (
           <button
-            className="font-medium text-indigo-700"
+            className="font-medium text-emerald-700 hover:underline"
             onClick={() => onQuote(message)}
           >
             Responder citando
@@ -241,9 +242,9 @@ export function AdminConversationContext({
   }
 
   return (
-    <div className="space-y-4 border-t pt-4">
+    <div className="space-y-3">
       {error && (
-        <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">
+        <p role="alert" className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
           {error}
         </p>
       )}
@@ -256,7 +257,7 @@ export function AdminConversationContext({
       {classifying && (
         <form
           aria-label="Classificar mensagem"
-          className="space-y-2 rounded-lg border p-3"
+          className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3"
           onSubmit={(event) => {
             event.preventDefault();
             void run(
@@ -290,7 +291,7 @@ export function AdminConversationContext({
             Motivo
             <textarea
               aria-label="Motivo da classificação"
-              className="mt-1 w-full rounded-lg border p-2"
+              className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
               maxLength={500}
               required
               value={attribution.reason}
@@ -306,13 +307,13 @@ export function AdminConversationContext({
             <button
               type="submit"
               disabled={busy || !attribution.reason.trim()}
-              className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
             >
               Salvar classificação
             </button>
             <button
               type="button"
-              className="rounded-lg border px-3 py-2 text-sm"
+              className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
               onClick={onCancelClassify}
             >
               Cancelar
@@ -324,7 +325,7 @@ export function AdminConversationContext({
       {windowOpen ? (
         <form
           aria-label="Responder"
-          className="space-y-2"
+          className="flex flex-col gap-2"
           onSubmit={(event) => {
             event.preventDefault();
             replyDraft.current ??= crypto.randomUUID();
@@ -359,20 +360,23 @@ export function AdminConversationContext({
             />
           )}
           {quoting && (
-            <p className="flex justify-between gap-2 rounded bg-slate-100 p-2 text-xs">
+            <p className="flex justify-between gap-2 rounded-md border-l-4 border-emerald-400 bg-slate-50 p-2 text-xs text-slate-600">
               <span className="min-w-0 wrap-anywhere">
                 Citando: “{quoting.content.slice(0, 80)}”
               </span>
-              <button type="button" className="shrink-0" onClick={onCancelQuote}>
+              <button type="button" className="shrink-0 font-medium text-slate-500 hover:text-slate-800" onClick={onCancelQuote}>
                 Remover citação
               </button>
             </p>
           )}
-          <label className="block text-sm font-medium">
-            Resposta do atendimento central
+          <div className="flex items-end gap-2">
+          <label className="block min-w-0 flex-1">
+            <span className="sr-only">Resposta do atendimento central</span>
             <textarea
               aria-label="Resposta do atendimento central"
-              className="mt-2 min-h-28 w-full rounded-lg border p-3 font-normal"
+              placeholder="Escreva a resposta do atendimento central"
+              rows={2}
+              className="block max-h-40 min-h-[2.75rem] w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
               maxLength={4000}
               value={reply.content}
               onChange={(event) => {
@@ -387,10 +391,13 @@ export function AdminConversationContext({
           <button
             type="submit"
             disabled={busy || !reply.content.trim()}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            aria-label="Enviar resposta"
+            className="inline-flex h-11 shrink-0 items-center gap-2 rounded-md bg-emerald-600 px-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50 sm:px-4"
           >
-            {busy ? "Enviando…" : "Enviar resposta"}
+            {busy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+            <span className="hidden sm:inline">{busy ? "Enviando…" : "Enviar resposta"}</span>
           </button>
+          </div>
         </form>
       ) : (
         <TemplateReplyForm
@@ -474,7 +481,7 @@ function TemplateReplyForm({
   return (
     <form
       aria-label="Responder com template"
-      className="space-y-2"
+      className="flex flex-col gap-2"
       onSubmit={(event) => {
         event.preventDefault();
         if (!selected?.usable || !context) return;
@@ -494,7 +501,7 @@ function TemplateReplyForm({
         );
       }}
     >
-      <p className="text-sm text-amber-700">
+      <p className="rounded-md bg-amber-50 p-2 text-xs text-amber-800">
         A janela de atendimento do WhatsApp está fechada. Somente templates
         aprovados e liberados para a empresa podem ser enviados; o envio não
         reabre a janela.
@@ -523,10 +530,10 @@ function TemplateReplyForm({
         </p>
       )}
       {context && options && options.length > 0 && (
-        <label className="block text-sm">
+        <label className="block text-xs font-medium text-slate-600">
           Template
           <select
-            className="mt-1 w-full rounded-lg border p-2"
+            className="mt-1 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
             value={templateId}
             onChange={(event) => {
               draft.current = null;
@@ -551,7 +558,7 @@ function TemplateReplyForm({
       {selected?.previewBody && (
         <p
           aria-label="Prévia do template"
-          className="whitespace-pre-wrap wrap-anywhere rounded bg-slate-50 p-2 text-xs"
+          className="whitespace-pre-wrap wrap-anywhere rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700"
         >
           {selected.previewBody}
         </p>
@@ -559,7 +566,7 @@ function TemplateReplyForm({
       <button
         type="submit"
         disabled={busy || !selected?.usable}
-        className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+        className="self-end rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
       >
         Enviar template
       </button>

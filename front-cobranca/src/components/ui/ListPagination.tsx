@@ -1,5 +1,6 @@
 "use client";
 import type { ReactNode } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 /**
  * Numbered navigation for server-paged lists. `hasNext` comes from the server (next cursor
@@ -27,26 +28,30 @@ export function ListPagination({
   return (
     <nav
       aria-label="Paginação"
-      className="flex flex-wrap items-center justify-between gap-2 text-sm"
+      className="flex items-center justify-between gap-2 text-sm"
     >
       <button
         type="button"
         disabled={page <= 1}
-        className="rounded-lg border px-3 py-1.5 disabled:opacity-40"
+        className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
         onClick={onPrevious}
+        aria-label="Anterior"
+        title="Anterior"
       >
-        Anterior
+        <ChevronLeft size={16} />
       </button>
-      <span className="text-slate-600">
+      <span className="text-xs text-slate-500">
         Página {page} de {pages} · {total} {total === 1 ? label[0] : label[1]}
       </span>
       <button
         type="button"
         disabled={!hasNext}
-        className="rounded-lg border px-3 py-1.5 disabled:opacity-40"
+        className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
         onClick={onNext}
+        aria-label="Próxima"
+        title="Próxima"
       >
-        Próxima
+        <ChevronRight size={16} />
       </button>
     </nav>
   );

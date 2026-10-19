@@ -87,7 +87,7 @@ describe("CommunicationsHistory admin list", () => {
     const company = screen.getByRole("combobox", { name: "Empresa" });
     expect(
       [...company.querySelectorAll("option")].map((option) => option.text),
-    ).toEqual(["Todas", "Empresa A", "Empresa B"]);
+    ).toEqual(["Todas as empresas", "Empresa A", "Empresa B"]);
     fireEvent.change(company, { target: { value: "company-b" } });
     await waitFor(() =>
       expect(lastQuery()).toMatchObject({ page: 1, companyId: "company-b" }),
@@ -130,7 +130,7 @@ describe("CommunicationsHistory admin list", () => {
     mockApi.getAdminClients.mockRejectedValue(new Error("falha"));
     render(<CommunicationsHistory admin />);
     expect(
-      await screen.findByRole("button", { name: /5511999999999/i }),
+      await screen.findByRole("button", { name: /99999-9999/ }),
     ).toBeInTheDocument();
     expect(await screen.findByRole("alert")).toHaveTextContent("falha");
   });
@@ -140,7 +140,7 @@ describe("CommunicationsHistory admin replies", () => {
   it("sends only content and a frontend id when no company context is chosen", async () => {
     render(<CommunicationsHistory admin />);
     fireEvent.click(
-      await screen.findByRole("button", { name: /5511999999999/i }),
+      await screen.findByRole("button", { name: /99999-9999/ }),
     );
     fireEvent.change(
       await screen.findByLabelText("Resposta do atendimento central"),

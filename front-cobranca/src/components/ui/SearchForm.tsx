@@ -31,7 +31,7 @@ export function SearchForm({
         placeholder={placeholder}
         maxLength={100}
         value={draft}
-        className="min-w-0 flex-1 rounded-lg border p-2 text-sm"
+        className="h-10 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
         onChange={(event) => {
           setDraft(event.target.value);
           if (!event.target.value) onSearch("");
@@ -41,7 +41,7 @@ export function SearchForm({
       <button
         type="submit"
         aria-label={label}
-        className="rounded-lg border px-3 py-2 text-sm"
+        className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
       >
         Buscar
       </button>

@@ -139,7 +139,7 @@ export function MessageAttachment({
         <a
           href={file.url}
           download={`anexo-${attachment.id.slice(0, 8)}.pdf`}
-          className="font-medium text-indigo-700 underline"
+          className="font-medium text-emerald-700 underline"
         >
           Baixar PDF
         </a>
