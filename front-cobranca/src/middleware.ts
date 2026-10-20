@@ -87,7 +87,7 @@ const routesFor = (requestUrl: string) => auth((req) => {
 
   // WhatsApp is the central Datafy channel; the old per-company settings page is gone.
   if (pathname.startsWith("/configuracoes/whatsapp")) {
-    return NextResponse.redirect(new URL("/configuracoes/cobranca", req.url));
+    return NextResponse.redirect(new URL("/configuracoes/geral", req.url));
   }
 
   return NextResponse.next();

@@ -68,29 +68,29 @@ describe("automatic discounts after login", () => {
     const user = userEvent.setup();
     render(<BillingSettingsPage />);
     await waitFor(() => expect(screen.getByRole("button", { name: /^salvar$/i })).toBeEnabled());
-    const toggle = screen.getByRole("checkbox", { name: /ativar desconto automatico/i });
+    const toggle = screen.getByRole("switch", { name: /ativar desconto automático/i });
     expect(toggle).not.toBeChecked();
-    expect(screen.queryByLabelText("Dias apos o vencimento")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Dias após o vencimento")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Percentual de desconto")).not.toBeInTheDocument();
 
     await user.click(toggle);
-    await user.clear(screen.getByLabelText("Dias apos o vencimento"));
-    await user.type(screen.getByLabelText("Dias apos o vencimento"), "3");
+    await user.clear(screen.getByLabelText("Dias após o vencimento"));
+    await user.type(screen.getByLabelText("Dias após o vencimento"), "3");
     await user.type(screen.getByLabelText("Percentual de desconto"), "10");
     await user.click(screen.getByRole("button", { name: /^salvar$/i }));
 
     await waitFor(() => expect(mockUpdateBillingSettings).toHaveBeenCalledWith(expect.objectContaining({
       autoDiscountEnabled: true, autoDiscountDaysAfterDue: 3, autoDiscountPercentage: 10,
     })));
-    await screen.findByText("Configuracoes de cobranca salvas.");
+    await screen.findByText("Configurações salvas.");
     await user.click(toggle);
-    expect(screen.queryByLabelText("Dias apos o vencimento")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Dias após o vencimento")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Percentual de desconto")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^salvar$/i }));
     await waitFor(() => expect(mockUpdateBillingSettings).toHaveBeenLastCalledWith(expect.objectContaining({
       autoDiscountEnabled: false, autoDiscountDaysAfterDue: null, autoDiscountPercentage: null,
     })));
-    await screen.findByText("Configuracoes de cobranca salvas.");
+    await screen.findByText("Configurações salvas.");
   });
 
   it("restores an enabled discount previously saved by the user", async () => {
@@ -99,9 +99,9 @@ describe("automatic discounts after login", () => {
     });
     render(<BillingSettingsPage />);
     await waitFor(() => expect(screen.getByRole("button", { name: /^salvar$/i })).toBeEnabled());
-    expect(screen.getByLabelText("Dias apos o vencimento")).toHaveValue(5);
+    expect(screen.getByLabelText("Dias após o vencimento")).toHaveValue(5);
     expect(screen.getByLabelText("Percentual de desconto")).toHaveValue(15);
-    expect(screen.getByRole("checkbox", { name: /ativar desconto automatico/i })).toBeChecked();
+    expect(screen.getByRole("switch", { name: /ativar desconto automático/i })).toBeChecked();
   });
 });
 
@@ -143,5 +143,43 @@ describe("late terms defaults", () => {
     await user.click(screen.getByRole("button", { name: /^salvar$/i }));
     expect(await screen.findByText(/multa deve estar entre 0 e 10%/i)).toBeInTheDocument();
     expect(mockUpdateBillingSettings).not.toHaveBeenCalled();
+  });
+});
+
+describe("loading and saving state", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUpdateBillingSettings.mockImplementation(async (input) => ({ ...settings, ...input }));
+  });
+
+  it("does not offer to save defaults when the settings could not be loaded", async () => {
+    const user = userEvent.setup();
+    mockGetBillingSettings.mockRejectedValueOnce(new Error("Falha de rede"));
+    mockGetBillingSettings.mockResolvedValueOnce(settings);
+    render(<BillingSettingsPage />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Falha de rede");
+    expect(screen.queryByRole("button", { name: /^salvar$/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /tentar novamente/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^salvar$/i })).toBeEnabled());
+    expect(mockUpdateBillingSettings).not.toHaveBeenCalled();
+  });
+
+  it("flags unsaved changes until they are saved", async () => {
+    const user = userEvent.setup();
+    mockGetBillingSettings.mockResolvedValue(settings);
+    render(<BillingSettingsPage />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^salvar$/i })).toBeEnabled());
+    expect(screen.getByText("Nenhuma alteração")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^bolix/i }));
+    expect(screen.getByText("Alterações não salvas")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^bolix/i })).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: /^salvar$/i }));
+    await screen.findByText("Configurações salvas.");
+    expect(mockUpdateBillingSettings).toHaveBeenCalledWith(expect.objectContaining({ preferredBillingMethod: "BOLIX" }));
+    expect(screen.queryByText("Alterações não salvas")).not.toBeInTheDocument();
   });
 });

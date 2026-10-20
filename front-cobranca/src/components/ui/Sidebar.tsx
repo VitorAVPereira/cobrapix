@@ -17,6 +17,7 @@ import {
   MessageSquareText,
   MessageSquare,
   Settings,
+  Settings2,
   SlidersHorizontal,
   Scale,
   Send,
@@ -68,9 +69,9 @@ const mainItems = [
 
 const settingsItems = [
   {
-    href: "/configuracoes/cobranca",
-    label: "Cobrança",
-    icon: CalendarClock,
+    href: "/configuracoes/geral",
+    label: "Geral",
+    icon: Settings2,
   },
   {
     href: "/configuracoes/regua",
