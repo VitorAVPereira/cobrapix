@@ -701,6 +701,7 @@ describe('BillingService', () => {
     expect(emailQueue.addBulk).toHaveBeenCalledWith([
       expect.objectContaining({
         email: 'maria@example.com',
+        pixCopyPaste: 'pix-copia-e-cola',
         subject: expect.stringMatching(
           /^Empresa Teste: cobranca de R\$\s150,00$/,
         ) as string,

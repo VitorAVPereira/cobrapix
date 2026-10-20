@@ -532,3 +532,100 @@ describe('EmailService', () => {
     expect(prisma.collectionAttemptUpdateMany).not.toHaveBeenCalled();
   });
 });
+
+describe('EmailService collection e-mail', () => {
+  const base = {
+    debtorName: 'Maria Silva',
+    companyName: 'Escola Teste',
+    amount: 'R$ 1,50',
+    dueDate: '09/10/2026',
+    paymentLink: 'https://app.test/pagar/token',
+  };
+
+  it('shows the PIX QR Code above the copia e cola', () => {
+    const { service } = createService({
+      corporateName: 'Escola Teste',
+      resendApiKeyEncrypted: null,
+      resendFromEmail: null,
+    });
+    const html = service.buildCollectionEmailHtml({
+      ...base,
+      billingType: 'PIX',
+      pixCopyPaste: '000201pix',
+    });
+
+    expect(html).toContain('Cobrança via PIX');
+    expect(html.indexOf('src="cid:pix-qrcode"')).toBeGreaterThan(-1);
+    expect(html.indexOf('src="cid:pix-qrcode"')).toBeLessThan(
+      html.indexOf('000201pix'),
+    );
+    expect(html).not.toContain('Linha digitável');
+  });
+
+  it('offers boleto or PIX on a BOLIX charge, with the QR Code', () => {
+    const { service } = createService({
+      corporateName: 'Escola Teste',
+      resendApiKeyEncrypted: null,
+      resendFromEmail: null,
+    });
+    const html = service.buildCollectionEmailHtml({
+      ...base,
+      billingType: 'BOLIX',
+      pixCopyPaste: '000201bolix',
+      boletoLine: '00190000090',
+    });
+
+    expect(html).toContain('Cobrança via Boleto ou PIX');
+    expect(html).toContain('src="cid:pix-qrcode"');
+    expect(html).toContain('000201bolix');
+    expect(html).toContain('Linha digitável do boleto');
+    expect(html).toContain('00190000090');
+  });
+
+  it('has no QR Code when the charge has no PIX', () => {
+    const { service } = createService({
+      corporateName: 'Escola Teste',
+      resendApiKeyEncrypted: null,
+      resendFromEmail: null,
+    });
+    const html = service.buildCollectionEmailHtml({
+      ...base,
+      billingType: 'BOLETO',
+      boletoLine: '00190000090',
+    });
+
+    expect(html).toContain('Cobrança via Boleto');
+    expect(html).not.toContain('cid:pix-qrcode');
+  });
+
+  it('sends the QR Code as an inline PNG the HTML refers to', async () => {
+    const { service, resendMailer } = createService({
+      corporateName: 'Escola Teste',
+      resendApiKeyEncrypted: null,
+      resendFromEmail: null,
+    });
+
+    await service.send({
+      ...buildEmailInput(),
+      html: '<img src="cid:pix-qrcode">',
+      pixCopyPaste: '000201pix',
+    });
+
+    type Sent = {
+      attachments?: { filename: string; content: Buffer; contentId: string }[];
+    };
+    const sendEmail = (
+      resendMailer as unknown as { sendEmail: jest.Mock<unknown, [Sent]> }
+    ).sendEmail;
+    const sent = sendEmail.mock.calls[0]?.[0] as Sent;
+    expect(sent.attachments).toHaveLength(1);
+    expect(sent.attachments?.[0]).toMatchObject({
+      filename: 'qrcode-pix.png',
+      contentId: 'pix-qrcode',
+    });
+    // PNG signature.
+    expect(sent.attachments?.[0]?.content.subarray(1, 4).toString()).toBe(
+      'PNG',
+    );
+  });
+});

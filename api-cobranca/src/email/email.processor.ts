@@ -17,6 +17,7 @@ export interface SendEmailJob {
   subject: string;
   html: string;
   ruleStepId?: string;
+  pixCopyPaste?: string;
 }
 
 @Injectable()

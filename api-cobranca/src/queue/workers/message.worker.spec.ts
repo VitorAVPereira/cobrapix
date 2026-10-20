@@ -125,6 +125,7 @@ function setup() {
     sender,
     pending,
     emailTemplates,
+    emailService,
   };
 }
 
@@ -188,7 +189,7 @@ const automatic: InitialChargeJob = {
 };
 const paymentData = {
   billingType: 'BOLIX',
-  billingTypeLabel: 'Bolix',
+  billingTypeLabel: 'Boleto ou PIX',
   paymentLink: 'https://app.test/pagar/token',
   paymentPageToken: 'token',
   pixCopiaECola: '000201',
@@ -431,6 +432,24 @@ describe('First message follows the rule "Inicial" step', () => {
     expect(prisma.collectionLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ actionType: 'EMAIL_QUEUED' }) as unknown,
     });
+  });
+
+  it('the first e-mail names the payment method once, without repeating the link', async () => {
+    const { worker, emailQueue, emailService } = setup();
+    await worker.queueInitialEmail(
+      automatic,
+      withRule,
+      'maria@exemplo.test',
+      paymentData,
+    );
+    const rendered = emailService.buildCollectionEmailHtml.mock
+      .calls[0] as unknown as [{ bodyText: string; billingType: string }];
+    expect(rendered[0].billingType).toBe('BOLIX');
+    expect(rendered[0].bodyText).toContain('Forma de pagamento: Boleto ou PIX');
+    expect(rendered[0].bodyText).not.toContain('https://app.test/pagar/token');
+    expect(emailQueue.addJob).toHaveBeenCalledWith(
+      expect.objectContaining({ pixCopyPaste: '000201' }),
+    );
   });
 
   it('without an Inicial e-mail step the default template is used, as before', async () => {

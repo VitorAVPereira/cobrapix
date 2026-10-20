@@ -331,19 +331,21 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         year: 'numeric',
         timeZone: 'America/Sao_Paulo',
       }).format(invoice.dueDate);
-      const method = invoice.billingType === 'BOLETO' ? 'BOLETO' : 'PIX';
-      const paymentLink =
-        invoice.efiPixCopiaECola ??
-        invoice.boletoLink ??
-        invoice.boletoLinhaDigitavel ??
-        '';
+      const billingType = this.isBillingMethod(invoice.billingType)
+        ? invoice.billingType
+        : 'PIX';
+      // The button opens the charge's payment page, like the other collection e-mails.
+      const paymentLink = this.paymentLinkService.createInvoicePaymentPage({
+        companyId: data.companyId,
+        invoiceId: data.invoiceId,
+      }).url;
 
       const html = this.emailService.buildCollectionEmailHtml({
         debtorName: invoice.debtor.name,
         companyName: invoice.company.tradeName ?? invoice.company.corporateName,
         amount,
         dueDate,
-        paymentMethod: method,
+        billingType,
         paymentLink,
         pixCopyPaste: invoice.efiPixCopiaECola ?? '',
         boletoLine: invoice.boletoLinhaDigitavel ?? '',
@@ -373,6 +375,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         subject: `[${invoice.company.tradeName ?? invoice.company.corporateName}] Cobranca pendente`,
         html,
         ruleStepId: data.ruleStepId,
+        pixCopyPaste: invoice.efiPixCopiaECola ?? '',
       });
 
       this.logger.log(
@@ -724,7 +727,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         year: 'numeric',
         timeZone: 'America/Sao_Paulo',
       }).format(invoice.dueDate),
-      paymentMethod: paymentData.billingTypeLabel,
+      billingType: paymentData.billingType,
       paymentLink: paymentData.paymentLink,
       pixCopyPaste: paymentData.pixCopiaECola,
       boletoLine: paymentData.boletoLinhaDigitavel,
@@ -740,6 +743,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
         email,
         subject,
         html,
+        pixCopyPaste: paymentData.pixCopiaECola,
         // Only the send that claimed the step records it: sent, failed or deduplicated.
         ...(step && claimed ? { ruleStepId: step.id } : {}),
       });
@@ -1131,7 +1135,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       CREDIT_CARD: 'Cartão de crédito',
       PIX: 'PIX',
       BOLETO: 'Boleto',
-      BOLIX: 'Bolix',
+      BOLIX: 'Boleto ou PIX',
     };
 
     return labels[billingType];
@@ -1226,12 +1230,8 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       return message;
     }
 
-    return [
-      message,
-      '',
-      `Forma de pagamento: ${paymentData.billingTypeLabel}`,
-      `Acesse/pague por aqui: ${paymentData.paymentLink}`,
-    ]
+    // The payment link is not repeated here: the e-mail already shows it under the button.
+    return [message, '', `Forma de pagamento: ${paymentData.billingTypeLabel}`]
       .filter((line) => line !== '')
       .join('\n');
   }
