@@ -1,7 +1,6 @@
 import { CollectionChannel, CollectionProfileType } from '@prisma/client';
 import { CollectionProfileService } from './collection-profile.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { TemplatePolicyService } from '../templates/template-policy.service';
 import { EmailTemplatesService } from '../email/email-templates.service';
 
 const EMAIL_KINDS = [
@@ -58,7 +57,6 @@ function createService() {
       ),
     },
   } as unknown as PrismaService;
-  const policy = { resolve: jest.fn() } as unknown as TemplatePolicyService;
   const emailTemplatesService = {
     ensureDefaultTemplates: jest.fn().mockResolvedValue(
       EMAIL_KINDS.map((template) => ({
@@ -69,11 +67,7 @@ function createService() {
   } as unknown as EmailTemplatesService;
 
   return {
-    service: new CollectionProfileService(
-      prisma,
-      policy,
-      emailTemplatesService,
-    ),
+    service: new CollectionProfileService(prisma, emailTemplatesService),
     prisma: prisma as unknown as {
       collectionProfile: {
         create: jest.Mock;
@@ -128,15 +122,15 @@ describe('CollectionProfileService defaults', () => {
     const email = selectedByDay('EMAIL');
     const whatsapp = selectedByDay('WHATSAPP');
 
-    expect(email.get(-30)).toBe('email-emissao');
-    expect(email.get(-2)).toBe('email-pre');
+    // The emission message is asked for when registering the invoice, not by the rule.
+    expect(days.some((day) => day <= -30)).toBe(false);
+    expect([...new Set(days)]).toEqual([-3, 0, 2, 7, 15]);
     expect(email.get(0)).toBe('email-vencimento');
-    expect(email.get(2)).toBe('email-primeiro-atraso');
-    expect(email.get(30)).toBe('email-critico');
+    expect(email.get(15)).toBe('email-recorrente');
     // WhatsApp steps follow the company's purpose default; no template is picked.
+    expect(whatsapp.get(-3)).toBe('BEFORE_DUE');
     expect(whatsapp.get(0)).toBe('DUE_TODAY');
-    expect(whatsapp.get(4)).toBe('RECURRING_OVERDUE');
-    expect(whatsapp.get(20)).toBe('RECURRING_OVERDUE');
+    expect(whatsapp.get(2)).toBe('FIRST_OVERDUE');
     expect(
       steps.every((step) =>
         step.channel === 'EMAIL'
@@ -150,27 +144,11 @@ describe('CollectionProfileService defaults', () => {
   });
 });
 
-/** Ready decision of a template whose mapping reads the given sources. */
-function ready(templateId: string, sources: string[]) {
-  return {
-    allowed: true,
-    template: {
-      snapshot: { templateId },
-      mapping: {
-        body: Object.fromEntries(
-          sources.map((source, index) => [
-            String(index + 1),
-            { kind: 'SOURCE', source },
-          ]),
-        ),
-      },
-    },
-  };
-}
-
 function stepsService(existing: Array<Record<string, unknown>> = []) {
   const stored = existing.map((step) => ({
     profileId: 'profile-1',
+    stepOrder: 0,
+    channel: 'WHATSAPP',
     templateId: null,
     emailTemplateId: null,
     whatsappSelectionMode: 'DEFAULT',
@@ -178,6 +156,7 @@ function stepsService(existing: Array<Record<string, unknown>> = []) {
     pixTemplateId: null,
     boletoTemplateId: null,
     bolixTemplateId: null,
+    cardTemplateId: null,
     delayDays: 0,
     sendTimeStart: null,
     sendTimeEnd: null,
@@ -186,6 +165,7 @@ function stepsService(existing: Array<Record<string, unknown>> = []) {
     ...step,
   }));
   const written: Array<Record<string, unknown>> = [];
+  const updates: Array<{ id: string; data: Record<string, unknown> }> = [];
   const prisma = {
     collectionProfile: {
       findFirst: jest.fn().mockResolvedValue({ id: 'profile-1' }),
@@ -195,147 +175,132 @@ function stepsService(existing: Array<Record<string, unknown>> = []) {
         .fn()
         .mockResolvedValueOnce(stored)
         .mockImplementation(() => Promise.resolve(written)),
-      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
-      update: jest.fn(({ data }: { data: Record<string, unknown> }) => {
-        if ('channel' in data) written.push({ id: 'step-1', ...data });
-        return Promise.resolve({});
-      }),
+      delete: jest.fn().mockResolvedValue({}),
+      update: jest.fn(
+        ({
+          where,
+          data,
+        }: {
+          where: { id: string };
+          data: Record<string, unknown>;
+        }) => {
+          updates.push({ id: where.id, data });
+          if ('channel' in data) written.push({ id: where.id, ...data });
+          return Promise.resolve({});
+        },
+      ),
       create: jest.fn(({ data }: { data: Record<string, unknown> }) => {
         written.push({ id: 'step-new', ...data });
         return Promise.resolve({});
       }),
     },
+    collectionAttempt: {
+      groupBy: jest.fn().mockResolvedValue([{ ruleStepId: 'step-1' }]),
+    },
+    collectionStepTemplateOverride: {
+      findMany: jest.fn().mockResolvedValue([
+        {
+          ruleStepId: 'step-1',
+          billingMethod: 'PIX',
+          templateId: 'template-custom',
+          template: { metaTemplateName: 'lembrete_escola', name: 'x' },
+        },
+      ]),
+    },
   };
   Object.assign(prisma, {
     $transaction: jest.fn((run: (tx: unknown) => unknown) => run(prisma)),
   });
-  const catalog: Record<string, unknown> = {
-    'template-base': ready('template-base', ['DEBTOR_NAME', 'PIX_COPY_PASTE']),
-    'template-bolix': ready('template-bolix', [
-      'PIX_COPY_PASTE',
-      'BOLETO_LINE',
-    ]),
-    'template-boleto': ready('template-boleto', ['BOLETO_LINE']),
-  };
-  const policy = {
-    resolve: jest.fn(
-      (_tx: unknown, _company: string, selection: { templateId?: string }) =>
-        Promise.resolve(
-          (selection.templateId && catalog[selection.templateId]) ?? {
-            allowed: false,
-            code: 'NOT_GRANTED',
-          },
-        ),
-    ),
-  };
   const service = new CollectionProfileService(
     prisma as unknown as PrismaService,
-    policy as unknown as TemplatePolicyService,
     {} as EmailTemplatesService,
   );
-  return { service, prisma, policy, written };
+  return { service, prisma, written, updates };
 }
 
-const whatsappStep = {
-  id: 'step-1',
-  stepOrder: 0,
-  channel: 'WHATSAPP' as const,
-  delayDays: -30,
-  whatsappSelection: { mode: 'EXPLICIT' as const, templateId: 'template-base' },
-};
-
-describe('CollectionProfileService templates by billing method', () => {
-  it('saves a template per billing method and shows each status', async () => {
-    const { service, written } = stepsService([{ id: 'step-1' }]);
-    const [presented] = await service.setSteps('company-1', 'profile-1', [
+describe('CollectionProfileService schedule without template choices', () => {
+  it('a new WhatsApp step gets no template; choices sent by older screens are ignored', async () => {
+    const { service, written } = stepsService([]);
+    await service.setSteps('company-1', 'profile-1', [
       {
-        ...whatsappStep,
-        whatsappMethodTemplates: {
-          BOLIX: 'template-bolix',
-          BOLETO: 'template-boleto',
-        },
+        stepOrder: 0,
+        channel: 'WHATSAPP',
+        delayDays: -2,
+        whatsappSelection: { mode: 'EXPLICIT', templateId: 'template-old' },
+        whatsappMethodTemplates: { PIX: 'template-old' },
+      },
+      {
+        stepOrder: 1,
+        channel: 'EMAIL',
+        delayDays: 2,
+        emailTemplateId: 'email-old',
       },
     ]);
     expect(written[0]).toMatchObject({
-      templateId: 'template-base',
+      channel: 'WHATSAPP',
+      templateId: null,
       pixTemplateId: null,
-      boletoTemplateId: 'template-boleto',
-      bolixTemplateId: 'template-bolix',
+      whatsappSelectionMode: 'DEFAULT',
+      whatsappPurpose: 'BEFORE_DUE',
     });
-    expect(presented).toMatchObject({
-      whatsappMethodTemplates: {
-        PIX: null,
-        BOLETO: 'template-boleto',
-        BOLIX: 'template-bolix',
-      },
-      whatsappMethodStatus: {
-        BOLETO: { ready: true, code: null },
-        BOLIX: { ready: true, code: null },
-      },
-      whatsappIncompatibleMethods: ['CREDIT_CARD'],
+    expect(written[1]).toMatchObject({
+      channel: 'EMAIL',
+      emailTemplateId: null,
+      whatsappSelectionMode: null,
     });
   });
 
-  it('warns which methods cannot fill the step template', async () => {
-    const { service } = stepsService([{ id: 'step-1' }]);
-    const [presented] = await service.setSteps('company-1', 'profile-1', [
-      whatsappStep,
+  it('a step already sent keeps its day and channel', async () => {
+    const { service, written } = stepsService([
+      { id: 'step-1', delayDays: 2, _count: { attempts: 3 } },
     ]);
-    // The base template reads the Pix code: a boleto charge would stay pending.
-    expect(presented?.whatsappIncompatibleMethods).toEqual([
-      'BOLETO',
-      'CREDIT_CARD',
-    ]);
-  });
-
-  it('refuses a template that reads data the billing method never has', async () => {
-    const { service, written } = stepsService([{ id: 'step-1' }]);
     await expect(
       service.setSteps('company-1', 'profile-1', [
-        { ...whatsappStep, whatsappMethodTemplates: { PIX: 'template-bolix' } },
+        { id: 'step-1', stepOrder: 0, channel: 'WHATSAPP', delayDays: 3 },
       ]),
-    ).rejects.toThrow('O template escolhido para Pix usa dados');
+    ).rejects.toThrow('A etapa do dia 2 ja foi enviada');
+    await expect(
+      stepsService([
+        { id: 'step-1', delayDays: 2, _count: { attempts: 3 } },
+      ]).service.setSteps('company-1', 'profile-1', [
+        { id: 'step-1', stepOrder: 0, channel: 'EMAIL', delayDays: 2 },
+      ]),
+    ).rejects.toThrow('nao pode mudar de dia nem de canal');
     expect(written).toHaveLength(0);
   });
 
-  it('refuses a template not available to the company', async () => {
-    const { service } = stepsService([{ id: 'step-1' }]);
-    await expect(
-      service.setSteps('company-1', 'profile-1', [
-        {
-          ...whatsappStep,
-          whatsappMethodTemplates: { BOLIX: 'template-other' },
-        },
-      ]),
-    ).rejects.toThrow('nao estao disponiveis');
-  });
-
-  it('an older client without the field keeps the choices; null clears one', async () => {
-    const existing = [{ id: 'step-1', bolixTemplateId: 'template-bolix' }];
-    const kept = stepsService(existing);
-    await kept.service.setSteps('company-1', 'profile-1', [whatsappStep]);
-    expect(kept.written[0]).toMatchObject({
-      bolixTemplateId: 'template-bolix',
-    });
-
-    const cleared = stepsService(existing);
-    await cleared.service.setSteps('company-1', 'profile-1', [
-      { ...whatsappStep, whatsappMethodTemplates: { BOLIX: null } },
+  it('new steps can be added around a step already sent, which keeps its id', async () => {
+    const { service, written } = stepsService([
+      { id: 'step-1', delayDays: 2, _count: { attempts: 3 } },
     ]);
-    expect(cleared.written[0]).toMatchObject({ bolixTemplateId: null });
+    await service.setSteps('company-1', 'profile-1', [
+      { stepOrder: 0, channel: 'EMAIL', delayDays: -1 },
+      { id: 'step-1', stepOrder: 1, channel: 'WHATSAPP', delayDays: 3 },
+    ]);
+    expect(written.map((step) => step.id)).toEqual(['step-new', 'step-1']);
   });
 
-  it('e-mail steps never take WhatsApp templates by billing method', async () => {
+  it('removing a step already sent retires it; a step never sent is deleted', async () => {
+    const { service, prisma, updates } = stepsService([
+      { id: 'step-1', stepOrder: 0, delayDays: 0, _count: { attempts: 1 } },
+      { id: 'step-2', stepOrder: 1, delayDays: 2, _count: { attempts: 0 } },
+    ]);
+    await service.setSteps('company-1', 'profile-1', []);
+    expect(updates).toContainEqual({
+      id: 'step-1',
+      data: { isActive: false, stepOrder: -1001 },
+    });
+    expect(prisma.collectionRuleStep.delete).toHaveBeenCalledWith({
+      where: { id: 'step-2' },
+    });
+  });
+
+  it('presents the day, whether the step was sent and its custom templates', async () => {
     const { service } = stepsService([]);
-    await expect(
-      service.setSteps('company-1', 'profile-1', [
-        {
-          stepOrder: 0,
-          channel: 'EMAIL',
-          delayDays: -30,
-          whatsappMethodTemplates: { PIX: 'template-base' },
-        },
-      ]),
-    ).rejects.toThrow('nao corresponde ao canal');
+    const [presented] = await service.setSteps('company-1', 'profile-1', [
+      { stepOrder: 0, channel: 'WHATSAPP', delayDays: -3 },
+    ]);
+    expect(presented).toMatchObject({ scheduleDay: -3, attempted: false });
+    expect(presented?.customTemplates).toEqual([]);
   });
 });

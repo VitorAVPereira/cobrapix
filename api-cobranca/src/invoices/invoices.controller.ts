@@ -24,7 +24,11 @@ import {
   parseOptionalCsvDays,
   parseOptionalCsvPercentage,
 } from './late-terms';
-import { groupImportRows, parseImportDecisions } from './invoice-import';
+import {
+  groupImportRows,
+  parseEmissionRequest,
+  parseImportDecisions,
+} from './invoice-import';
 import {
   DebtorPaymentHistoryResponse,
   DebtorSettingsResponse,
@@ -159,6 +163,8 @@ export class InvoicesController {
         late_fine_percentage: dto.late_fine_percentage,
         late_interest_monthly_percentage: dto.late_interest_monthly_percentage,
         payment_days_after_due: dto.payment_days_after_due,
+        send_now: dto.send_now,
+        send_channels: dto.send_channels,
       });
     } catch (error) {
       throw new HttpException(
@@ -295,6 +301,8 @@ export class InvoicesController {
           late_interest_monthly_percentage:
             dto.late_interest_monthly_percentage,
           payment_days_after_due: dto.payment_days_after_due,
+          send_now: dto.send_now,
+          send_channels: dto.send_channels,
         },
       );
     } catch (error) {
@@ -527,13 +535,19 @@ export class InvoicesController {
     @GetUser() user: AuthenticatedUser,
     @Body() body: unknown,
   ): Promise<unknown> {
-    const { rows, decisions } = Array.isArray(body)
-      ? { rows: body, decisions: undefined }
-      : ((body ?? {}) as { rows?: unknown; decisions?: unknown });
+    const { rows, decisions, send_now, send_channels } = Array.isArray(body)
+      ? { rows: body }
+      : ((body ?? {}) as {
+          rows?: unknown;
+          decisions?: unknown;
+          send_now?: unknown;
+          send_channels?: unknown;
+        });
     return this.invoicesService.importCsv(
       user.companyId,
       this.validateImportRows(rows),
       parseImportDecisions(decisions),
+      parseEmissionRequest(send_now, send_channels),
     );
   }
 

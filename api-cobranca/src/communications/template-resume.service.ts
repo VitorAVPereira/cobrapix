@@ -15,11 +15,13 @@ import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TemplateContextService } from '../templates/template-context.service';
 import {
+  COLLECTION_PURPOSES,
   ReadyTemplate,
   ResumeItem,
   ResumeResult,
   ResumeReview,
   TemplateSelection,
+  TemplatePurpose,
   TemplateSendRequest,
   TemplateSnapshot,
 } from '../templates/template-contracts';
@@ -391,7 +393,11 @@ export class TemplateResumeService {
     };
   }
 
-  /** Explicit replacement, else the rule step's current choice, else the stored one. */
+  /**
+   * Explicit replacement; else, for a collection message, the automatic choice of its
+   * moment with the charge's current method (custom template of the step, else the
+   * global one); else the rule step's choice or the stored one (older holds).
+   */
   private async selectionFor(
     tx: Tx,
     request: TemplateSendRequest,
@@ -399,6 +405,21 @@ export class TemplateResumeService {
   ): Promise<TemplateSelection> {
     if (replacementTemplateId)
       return { mode: 'EXPLICIT', templateId: replacementTemplateId };
+    const purpose = await this.collectionPurpose(tx, request);
+    if (purpose) {
+      const billingMethod =
+        (await this.billingMethod(tx, request.context)) ??
+        (request.selection.mode === 'AUTOMATIC'
+          ? request.selection.billingMethod
+          : null);
+      if (billingMethod)
+        return {
+          mode: 'AUTOMATIC',
+          purpose,
+          billingMethod,
+          ...(request.ruleStepId ? { ruleStepId: request.ruleStepId } : {}),
+        };
+    }
     if (request.ruleStepId) {
       const step = await tx.collectionRuleStep.findFirst({
         where: {
@@ -414,6 +435,30 @@ export class TemplateResumeService {
         );
     }
     return request.selection;
+  }
+
+  /** Moment of a held collection message: stored with it, or its rule step's purpose. */
+  private async collectionPurpose(
+    tx: Tx,
+    request: TemplateSendRequest,
+  ): Promise<TemplatePurpose | null> {
+    if (request.origin !== 'COLLECTION' || !request.context.invoiceId)
+      return null;
+    const isCollection = (purpose: TemplatePurpose | null | undefined) =>
+      purpose && COLLECTION_PURPOSES.includes(purpose) ? purpose : null;
+    const { selection } = request;
+    if (selection.mode === 'AUTOMATIC' || selection.mode === 'DEFAULT')
+      return isCollection(selection.purpose);
+    if (!request.ruleStepId) return null;
+    const step = await tx.collectionRuleStep.findFirst({
+      where: {
+        id: request.ruleStepId,
+        channel: 'WHATSAPP',
+        profile: { companyId: request.context.companyId },
+      },
+      select: { whatsappPurpose: true },
+    });
+    return isCollection(step?.whatsappPurpose);
   }
 
   /** Billing method of the charge the message carries now, which may have been replaced. */

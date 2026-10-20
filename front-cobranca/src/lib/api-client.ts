@@ -28,10 +28,16 @@ import type {
   AdminCatalogQuery,
   AdminWhatsappTemplate,
   CatalogPage,
+  CollectionSlotMethod,
+  CollectionTemplateSlots,
+  CompanyCollectionStep,
+  CompanyCollectionTemplates,
+  CreateTemplateRequestInput,
+  TemplateRequest,
+  TemplateRequestStatus,
   CompanyTemplateAccess,
   CompanyWhatsappTemplate,
   CountedCatalogPage,
-  Readiness,
   ResumeItem,
   ResumeResult,
   ResumeReview,
@@ -399,6 +405,9 @@ export interface CreateInvoiceInput {
   late_fine_percentage?: number | null;
   late_interest_monthly_percentage?: number | null;
   payment_days_after_due?: number | null;
+  /** "Enviar cobrança agora"; absent keeps the client or company default. */
+  send_now?: boolean;
+  send_channels?: Array<"WHATSAPP" | "EMAIL">;
 }
 
 export interface RecurringInvoice {
@@ -710,54 +719,40 @@ export interface CentralChannelCapacity {
   nextAvailableAt: string | null;
 }
 
-/** WhatsApp choice of a rule step; UNCONFIGURED marks a legacy step that sends nothing. */
-export type WhatsappSelection =
-  | { mode: "EXPLICIT"; templateId: string }
-  | { mode: "DEFAULT"; purpose: TemplatePurpose }
-  | { mode: "UNCONFIGURED" };
-
+/**
+ * Step of a collection profile. The message is not chosen here: when sending, it follows
+ * the moment of the collection and the payment method of the charge.
+ */
 export interface CollectionRuleStep {
   id: string;
   profileId: string;
   stepOrder: number;
   channel: "EMAIL" | "WHATSAPP";
-  /** EMAIL only: null uses the default email model. */
-  emailTemplateId: string | null;
-  /** WHATSAPP only. */
-  whatsappSelection: WhatsappSelection | null;
-  /** WHATSAPP only: whether the choice can send right now, and why not. */
-  whatsappStatus: Readiness | null;
-  /** WHATSAPP only: template per billing method; null uses the step's choice. */
-  whatsappMethodTemplates?: MethodTemplates | null;
-  /** WHATSAPP only: status of each billing method's own template. */
-  whatsappMethodStatus?: Partial<Record<BillingMethod, Readiness>> | null;
-  /** WHATSAPP only: methods whose charges lack data the step's template reads. */
-  whatsappIncompatibleMethods?: BillingMethod[] | null;
   delayDays: number;
   sendTimeStart: string | null;
   sendTimeEnd: string | null;
   isActive: boolean;
+  /** Cumulative day relative to the due date (negative before it). */
+  scheduleDay: number;
+  /** Some invoice already got it: its day and channel are fixed. */
+  attempted: boolean;
+  /** Templates linked by the CifraMais team to this step after a support request. */
+  customTemplates: Array<{
+    billingMethod: "PIX" | "BOLIX" | "CREDIT_CARD";
+    templateId: string;
+    templateName: string;
+  }>;
 }
 
-/** Each channel carries only its own choice; the step id keeps history on attempted steps. */
-export type RuleStepInput = {
+/** The step id keeps the history of a step already sent. */
+export interface RuleStepInput {
   id?: string;
   stepOrder: number;
+  channel: "EMAIL" | "WHATSAPP";
   delayDays: number;
   sendTimeStart?: string;
   sendTimeEnd?: string;
-} & (
-  | { channel: "EMAIL"; emailTemplateId?: string }
-  | {
-      channel: "WHATSAPP";
-      whatsappSelection: WhatsappSelection;
-      /** Absent keeps the saved templates; null clears one. */
-      whatsappMethodTemplates?: MethodTemplates;
-    }
-);
-
-/** Template of a WhatsApp step for each billing method; null uses the step's choice. */
-export type MethodTemplates = Partial<Record<BillingMethod, string | null>>;
+}
 
 export interface CollectionRuleProfile {
   id: string;
@@ -1835,10 +1830,11 @@ class ApiClient {
   importInvoices(
     rows: ReadonlyArray<unknown>,
     decisions: ImportDecision[],
+    emission?: { send_now: boolean; send_channels?: Array<"WHATSAPP" | "EMAIL"> },
   ): Promise<ImportResult> {
     return this.fetch("/invoices/import", {
       method: "POST",
-      body: JSON.stringify({ rows, decisions }),
+      body: JSON.stringify({ rows, decisions, ...emission }),
     });
   }
 
@@ -2279,19 +2275,6 @@ class ApiClient {
     );
   }
 
-  /** Every page of the company catalog; grants are few, so selectors see all of them. */
-  async getAllTemplates(): Promise<CompanyWhatsappTemplate[]> {
-    const items: CompanyWhatsappTemplate[] = [];
-    let cursor: string | undefined;
-    for (let page = 0; page < 20; page++) {
-      const result = await this.getTemplates({ cursor, limit: 100 });
-      items.push(...result.items);
-      if (!result.nextCursor) break;
-      cursor = result.nextCursor;
-    }
-    return items;
-  }
-
   async getTemplatePreview(id: string): Promise<TemplateRenderResult> {
     return this.fetch<TemplateRenderResult>(
       `/templates/${encodeURIComponent(id)}/preview`,
@@ -2419,6 +2402,82 @@ class ApiClient {
     return this.fetch<{ version: number }>(
       `/admin/whatsapp-templates/companies/${encodeURIComponent(companyId)}/defaults/${encodeURIComponent(purpose)}`,
       { method: "PUT", body: JSON.stringify(data) },
+    );
+  }
+
+  async getCollectionTemplateSlots(): Promise<CollectionTemplateSlots> {
+    return this.fetch<CollectionTemplateSlots>(
+      "/admin/whatsapp-templates/collection-slots",
+    );
+  }
+
+  async setCollectionTemplateSlot(
+    purpose: TemplatePurpose,
+    method: CollectionSlotMethod,
+    data: SetTemplateDefaultInput,
+  ): Promise<{ version: number }> {
+    return this.fetch<{ version: number }>(
+      `/admin/whatsapp-templates/collection-slots/${encodeURIComponent(purpose)}/${encodeURIComponent(method)}`,
+      { method: "PUT", body: JSON.stringify(data) },
+    );
+  }
+
+  async getCollectionTemplates(): Promise<CompanyCollectionTemplates> {
+    return this.fetch<CompanyCollectionTemplates>("/templates/collection");
+  }
+
+  async getTemplateRequests(): Promise<TemplateRequest[]> {
+    return this.fetch<TemplateRequest[]>("/templates/requests");
+  }
+
+  async createTemplateRequest(
+    data: CreateTemplateRequestInput,
+  ): Promise<TemplateRequest> {
+    return this.fetch<TemplateRequest>("/templates/requests", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getAdminTemplateRequests(
+    status?: TemplateRequestStatus,
+  ): Promise<TemplateRequest[]> {
+    return this.fetch<TemplateRequest[]>(
+      `/admin/whatsapp-templates/requests${status ? `?status=${status}` : ""}`,
+    );
+  }
+
+  async updateTemplateRequest(
+    id: string,
+    data: {
+      status: TemplateRequestStatus;
+      adminNote?: string;
+      expectedVersion: number;
+    },
+  ): Promise<TemplateRequest> {
+    return this.fetch<TemplateRequest>(
+      `/admin/whatsapp-templates/requests/${encodeURIComponent(id)}`,
+      { method: "PUT", body: JSON.stringify(data) },
+    );
+  }
+
+  async getCompanyCollectionSteps(
+    companyId: string,
+  ): Promise<CompanyCollectionStep[]> {
+    return this.fetch<CompanyCollectionStep[]>(
+      `/admin/whatsapp-templates/companies/${encodeURIComponent(companyId)}/collection-steps`,
+    );
+  }
+
+  async setCompanyCollectionStepTemplate(
+    companyId: string,
+    ruleStepId: string,
+    method: CollectionSlotMethod,
+    templateId: string | null,
+  ): Promise<{ templateId: string | null }> {
+    return this.fetch<{ templateId: string | null }>(
+      `/admin/whatsapp-templates/companies/${encodeURIComponent(companyId)}/collection-steps/${encodeURIComponent(ruleStepId)}/${encodeURIComponent(method)}`,
+      { method: "PUT", body: JSON.stringify({ templateId }) },
     );
   }
 

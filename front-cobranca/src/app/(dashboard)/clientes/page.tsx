@@ -37,6 +37,13 @@ import { TablePagination } from "@/components/ui/TablePagination";
 import { useApiClient } from "@/lib/use-api-client";
 import { LateTermsFields } from "@/components/features/LateTermsFields";
 import {
+  SendNowFields,
+  initialSendNow,
+  sendNowPayload,
+  sendNowProblem,
+  type SendNowValue,
+} from "@/components/features/SendNowFields";
+import {
   EMPTY_LATE_TERMS,
   isIndividualDocument,
   lateTermsFormFromValues,
@@ -240,6 +247,11 @@ function ClientesContent() {
   );
   const [chargeTarget, setChargeTarget] = useState<DebtorListItem | null>(null);
   const [chargeForm, setChargeForm] = useState<ChargeForm>(emptyChargeForm);
+  const [sendNow, setSendNow] = useState<SendNowValue>(() =>
+    initialSendNow(undefined),
+  );
+  // Company "primeira cobrança" setting: the starting answer of "Enviar cobrança agora".
+  const [companySendsNow, setCompanySendsNow] = useState<boolean | undefined>();
   // Company defaults for fine, interest and days after due.
   const [companyLateTerms, setCompanyLateTerms] =
     useState<LateTermsFormValues>(EMPTY_LATE_TERMS);
@@ -363,6 +375,7 @@ function ClientesContent() {
       try {
         const settings = await apiClient.getBillingSettings();
         if (!active) return;
+        setCompanySendsNow(settings.autoGenerateFirstCharge);
         setCompanyLateTerms(
           lateTermsFormFromValues({
             fine: settings.lateFinePercentage ?? 0,
@@ -430,6 +443,7 @@ function ClientesContent() {
     setOpenAction(null);
     setChargeTarget(debtor);
     setChargeForm({ ...emptyChargeForm, lateTerms: companyLateTerms });
+    setSendNow(initialSendNow(companySendsNow));
   }
 
   function closeChargeModal(): void {
@@ -499,6 +513,9 @@ function ClientesContent() {
         throw new Error("Informe a data de vencimento.");
       }
 
+      const sendProblem = sendNowProblem(sendNow);
+      if (sendProblem) throw new Error(sendProblem);
+
       const parsedLateTerms = parseLateTermsForm(chargeForm.lateTerms);
       if ("error" in parsedLateTerms) {
         throw new Error(parsedLateTerms.error);
@@ -511,6 +528,7 @@ function ClientesContent() {
         late_fine_percentage: parsedLateTerms.terms.fine,
         late_interest_monthly_percentage: parsedLateTerms.terms.interest,
         payment_days_after_due: parsedLateTerms.terms.days,
+        ...sendNowPayload(sendNow),
       });
 
       setSuccess(`Cobrança criada para ${chargeTarget.name}.`);
@@ -1117,6 +1135,13 @@ function ClientesContent() {
                     )}
                   />
                 </fieldset>
+                <div className="sm:col-span-2">
+                  <SendNowFields
+                    value={sendNow}
+                    onChange={setSendNow}
+                    disabled={savingCharge}
+                  />
+                </div>
               </div>
 
               <div className="flex flex-col-reverse gap-2 border-t border-slate-200 px-5 py-4 sm:flex-row sm:justify-end">

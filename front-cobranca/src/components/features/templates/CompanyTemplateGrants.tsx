@@ -5,6 +5,7 @@ import { useApiClient } from "@/lib/use-api-client";
 import type { AdminClientAnalyticsRow } from "@/lib/api-client";
 import {
   BLOCK_LABELS,
+  COLLECTION_PURPOSES,
   PURPOSE_LABELS,
   errorText,
   isConflict,
@@ -353,71 +354,79 @@ export function CompanyTemplateGrants(): ReactNode {
           <div className="space-y-2">
             <h4 className="font-medium">Padrão por finalidade</h4>
             <p className="text-xs text-slate-500">
-              Etapas configuradas como “padrão da finalidade” usam este
-              template. Só templates liberados e prontos podem ser escolhidos.
+              Avisos de ativação financeira e de pagamentos a colaboradores usam
+              este template. As mensagens de cobrança usam os “Templates da
+              régua”. Só templates liberados e prontos podem ser escolhidos.
             </p>
-            {access.defaults.map((row) => {
-              const label = PURPOSE_LABELS[row.purpose];
-              const draft = drafts[row.purpose] ?? row.templateId ?? "";
-              return (
-                <div
-                  key={row.purpose}
-                  className="flex flex-wrap items-end gap-2 rounded-lg border p-3"
-                >
-                  <label className="text-sm">
-                    {label}
-                    <select
-                      className="ml-2 rounded-lg border p-2"
-                      value={draft}
-                      onChange={(event) =>
-                        setDrafts((current) => ({
-                          ...current,
-                          [row.purpose]: event.target.value,
-                        }))
+            {access.defaults
+              .filter(
+                (row) =>
+                  !(COLLECTION_PURPOSES as readonly string[]).includes(
+                    row.purpose,
+                  ),
+              )
+              .map((row) => {
+                const label = PURPOSE_LABELS[row.purpose];
+                const draft = drafts[row.purpose] ?? row.templateId ?? "";
+                return (
+                  <div
+                    key={row.purpose}
+                    className="flex flex-wrap items-end gap-2 rounded-lg border p-3"
+                  >
+                    <label className="text-sm">
+                      {label}
+                      <select
+                        className="ml-2 rounded-lg border p-2"
+                        value={draft}
+                        onChange={(event) =>
+                          setDrafts((current) => ({
+                            ...current,
+                            [row.purpose]: event.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">Sem padrão</option>
+                        {defaultOptions(row).map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      aria-label={`Salvar padrão: ${label}`}
+                      disabled={busy || draft === (row.templateId ?? "")}
+                      className="rounded-lg border px-3 py-1 text-sm disabled:opacity-50"
+                      onClick={() =>
+                        void write(
+                          () =>
+                            api.setCompanyWhatsappTemplateDefault(
+                              company.companyId,
+                              row.purpose,
+                              {
+                                templateId: draft || null,
+                                expectedVersion: row.version,
+                              },
+                            ),
+                          `Padrão de “${label}” atualizado.`,
+                        )
                       }
                     >
-                      <option value="">Sem padrão</option>
-                      {defaultOptions(row).map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {option.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <button
-                    type="button"
-                    aria-label={`Salvar padrão: ${label}`}
-                    disabled={busy || draft === (row.templateId ?? "")}
-                    className="rounded-lg border px-3 py-1 text-sm disabled:opacity-50"
-                    onClick={() =>
-                      void write(
-                        () =>
-                          api.setCompanyWhatsappTemplateDefault(
-                            company.companyId,
-                            row.purpose,
-                            {
-                              templateId: draft || null,
-                              expectedVersion: row.version,
-                            },
-                          ),
-                        `Padrão de “${label}” atualizado.`,
-                      )
-                    }
-                  >
-                    Salvar
-                  </button>
-                  {row.templateId &&
-                    !row.available.ready &&
-                    row.available.code && (
-                      <p className="w-full text-xs text-amber-800">
-                        O padrão atual está indisponível:{" "}
-                        {BLOCK_LABELS[row.available.code]}. Envios dessa
-                        finalidade ficarão pendentes.
-                      </p>
-                    )}
-                </div>
-              );
-            })}
+                      Salvar
+                    </button>
+                    {row.templateId &&
+                      !row.available.ready &&
+                      row.available.code && (
+                        <p className="w-full text-xs text-amber-800">
+                          O padrão atual está indisponível:{" "}
+                          {BLOCK_LABELS[row.available.code]}. Envios dessa
+                          finalidade ficarão pendentes.
+                        </p>
+                      )}
+                  </div>
+                );
+              })}
           </div>
         </div>
       )}

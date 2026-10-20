@@ -13,6 +13,8 @@ import {
   EMAIL_TEMPLATE_DEFINITIONS,
   TEMPLATE_VARIABLE_TAGS,
 } from './email-template-catalog';
+import { TEMPLATE_DEFINITIONS } from '../templates/template-catalog';
+import type { TemplatePurpose } from '../templates/template-contracts';
 
 export interface ResolvedEmailTemplate {
   id: string | null;
@@ -199,6 +201,19 @@ export class EmailTemplatesService {
       },
     });
     return this.toResolved(template, preference);
+  }
+
+  /**
+   * Email of a collection moment: the catalog model of that moment with the company's
+   * greeting, instructions and signature. A model the company turned off stays off
+   * (isActive false); callers skip the e-mail instead of using another model.
+   */
+  async resolveForPurpose(
+    companyId: string,
+    purpose: TemplatePurpose,
+  ): Promise<ResolvedEmailTemplate> {
+    const kind = TEMPLATE_DEFINITIONS.find((item) => item.purpose === purpose);
+    return this.findActiveOrDefault(companyId, kind?.slug ?? null);
   }
 
   /**

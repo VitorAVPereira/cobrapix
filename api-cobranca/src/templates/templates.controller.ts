@@ -1,4 +1,5 @@
 import {
+  Body,
   Controller,
   Get,
   HttpException,
@@ -16,7 +17,8 @@ import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { TemplateCatalogSyncService } from './template-catalog-sync.service';
 import { TemplateCatalogQueryService } from './template-catalog-query.service';
-import { CatalogPageQueryDto } from './dto';
+import { CatalogPageQueryDto, CreateTemplateRequestDto } from './dto';
+import { TemplateRequestService } from './template-request.service';
 
 /** WhatsApp templates are authored in Meta; the old authoring routes never reach the provider. */
 function authoringMoved(): never {
@@ -40,7 +42,27 @@ export class TemplatesController {
   constructor(
     private readonly catalog: TemplateCatalogQueryService,
     private readonly catalogSync: TemplateCatalogSyncService,
+    private readonly requests: TemplateRequestService,
   ) {}
+
+  /** The collection templates the company's payers receive, with a fictitious preview. */
+  @Get('collection')
+  collection(@GetUser() user: AuthenticatedUser) {
+    return this.catalog.companyCollectionTemplates(user.companyId);
+  }
+
+  @Get('requests')
+  listRequests(@GetUser() user: AuthenticatedUser) {
+    return this.requests.listForCompany(user.companyId);
+  }
+
+  @Post('requests')
+  createRequest(
+    @GetUser() user: AuthenticatedUser,
+    @Body() dto: CreateTemplateRequestDto,
+  ) {
+    return this.requests.create(user.companyId, user.userId, dto);
+  }
 
   @Get()
   list(

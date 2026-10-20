@@ -1,8 +1,8 @@
 /**
- * First message of a charge chosen by the rule's "Inicial" step and by the billing method,
- * over real HTTP, the initial-charge queue and the dispatcher: the company picks a Pix
- * template and a BOLIX one on the same step; each charge sends its own; the scheduler
- * does not send the step again. Disposable PostgreSQL/Redis; Datafy simulated at `fetch`.
+ * Emission message by the global collection templates, over real HTTP, the initial-charge
+ * queue and the dispatcher: the admin chooses the EMISSION template of each payment method
+ * once for every company (no grant); each charge sends the one of its method, once; the
+ * scheduler never repeats the emission. Disposable PostgreSQL/Redis; Datafy simulated.
  */
 import { INestApplication } from '@nestjs/common';
 import type { Server } from 'node:http';
@@ -20,7 +20,6 @@ import {
   createTemplateApp,
   fakeDatafy,
   seedTenants,
-  setGrant,
   sleep,
   untilState,
 } from './support/template-e2e';
@@ -49,7 +48,6 @@ describe('First message by the rule "Inicial" step and billing method (HTTP)', (
     a: '',
     debtorA: '',
     profile: '',
-    inicial: '',
     pix: '',
     bolix: '',
   };
@@ -60,7 +58,7 @@ describe('First message by the rule "Inicial" step and billing method (HTTP)', (
     data_vencimento: { kind: 'SOURCE', source: 'DUE_DATE' },
   };
 
-  async function mapAndGrant(
+  async function mapTemplate(
     name: string,
     buttons: Record<string, unknown>,
   ): Promise<AdminTemplate> {
@@ -79,7 +77,6 @@ describe('First message by the rule "Inicial" step and billing method (HTTP)', (
         mapping: { body, ...buttons },
       })
       .expect(200);
-    await setGrant(app, tokens.admin, ids.a, template.id, true);
     return template;
   }
 
@@ -157,7 +154,7 @@ describe('First message by the rule "Inicial" step and billing method (HTTP)', (
   });
 
   it('the BOLIX template with Pix, boleto and link buttons is supported and mapped', async () => {
-    const pix = await mapAndGrant('emissao_pix', {
+    const pix = await mapTemplate('emissao_pix', {
       pixButton: { index: 0, source: 'PIX_COPY_PASTE' },
     });
     // The boleto button is bound to the invoice line, never left implicit.
@@ -188,7 +185,7 @@ describe('First message by the rule "Inicial" step and billing method (HTTP)', (
         },
       });
     expect(refused.status).toBe(400);
-    const bolix = await mapAndGrant('emissao_bolix', {
+    const bolix = await mapTemplate('emissao_bolix', {
       pixButton: { index: 0, source: 'PIX_COPY_PASTE' },
       boletoButton: { index: 1, source: 'BOLETO_LINE' },
       paymentButton: { index: 2, source: 'PAYMENT_URL_SUFFIX' },
@@ -197,54 +194,51 @@ describe('First message by the rule "Inicial" step and billing method (HTTP)', (
     ids.bolix = bolix.id;
   });
 
-  it('the company picks one template per billing method on the Inicial step', async () => {
+  it('the admin chooses the EMISSION template of each payment method, once for every company', async () => {
+    // Other suites of the same run may have chosen these already: use the current version.
+    const slot = async (method: string, templateId: string) => {
+      const view = await request(http)
+        .get('/admin/whatsapp-templates/collection-slots')
+        .set(auth(tokens.admin))
+        .expect(200);
+      const expectedVersion = (
+        view.body as {
+          slots: Array<{
+            purpose: string;
+            billingMethod: string;
+            version: number;
+          }>;
+        }
+      ).slots.find(
+        (row) => row.purpose === 'EMISSION' && row.billingMethod === method,
+      )!.version;
+      return request(http)
+        .put(`/admin/whatsapp-templates/collection-slots/EMISSION/${method}`)
+        .set(auth(tokens.admin))
+        .send({ templateId, expectedVersion });
+    };
+    // A template reading the boleto never serves Pix charges; a Pix one never the card.
+    expect((await slot('PIX', ids.bolix)).status).toBe(422);
+    expect((await slot('CREDIT_CARD', ids.pix)).status).toBe(422);
+    expect((await slot('PIX', ids.pix)).status).toBe(200);
+    expect((await slot('BOLIX', ids.bolix)).status).toBe(200);
+    // Companies never choose: the rule only has days and channels.
     const created = await request(http)
       .post('/billing/rules')
       .set(auth(tokens.a))
-      .send({ name: 'Emissao por forma de pagamento', profileType: 'NEW' });
+      .send({ name: 'Emissao automatica', profileType: 'NEW' });
     expect(created.status).toBe(201);
     ids.profile = (created.body as { id: string }).id;
-    const steps = (bolix: string | null, pix?: string) => ({
-      steps: [
-        {
-          stepOrder: 0,
-          channel: 'WHATSAPP',
-          delayDays: -30,
-          whatsappSelection: { mode: 'EXPLICIT', templateId: ids.pix },
-          whatsappMethodTemplates: {
-            BOLIX: bolix,
-            ...(pix ? { PIX: pix } : {}),
-          },
-        },
-        {
-          stepOrder: 1,
-          channel: 'WHATSAPP',
-          delayDays: 60,
-          whatsappSelection: { mode: 'DEFAULT', purpose: 'CRITICAL_OVERDUE' },
-        },
-      ],
-    });
-    // A template reading the boleto never serves Pix charges.
-    const incompatible = await request(http)
-      .put(`/billing/rules/${ids.profile}/steps`)
-      .set(auth(tokens.a))
-      .send(steps(null, ids.bolix));
-    expect(incompatible.status).toBe(400);
     const saved = await request(http)
       .put(`/billing/rules/${ids.profile}/steps`)
       .set(auth(tokens.a))
-      .send(steps(ids.bolix));
+      .send({ steps: [{ stepOrder: 0, channel: 'WHATSAPP', delayDays: 60 }] });
     expect(saved.status).toBe(200);
-    const inicial = (saved.body as Array<Record<string, unknown>>)[0]!;
-    expect(inicial).toMatchObject({
-      whatsappSelection: { mode: 'EXPLICIT', templateId: ids.pix },
-      whatsappStatus: { ready: true, code: null },
-      whatsappMethodTemplates: { PIX: null, BOLETO: null, BOLIX: ids.bolix },
-      whatsappMethodStatus: { BOLIX: { ready: true, code: null } },
-      // A Pix button cannot serve pure boleto or card charges.
-      whatsappIncompatibleMethods: ['BOLETO', 'CREDIT_CARD'],
+    expect((saved.body as Array<Record<string, unknown>>)[0]).toMatchObject({
+      scheduleDay: 60,
+      templateId: null,
+      attempted: false,
     });
-    ids.inicial = inicial.id as string;
     await prisma.debtor.update({
       where: { id: ids.debtorA },
       data: { collectionProfileId: ids.profile },
@@ -303,12 +297,17 @@ describe('First message by the rule "Inicial" step and billing method (HTTP)', (
         ],
       },
     });
-    // The first message fulfilled the Inicial step.
-    await expect(
-      prisma.collectionAttempt.findFirst({
-        where: { invoiceId: bolixCharge.id, ruleStepId: ids.inicial },
+    // No grant was needed, and the emission claims no step of the rule.
+    expect(
+      await prisma.companyWhatsappTemplateGrant.count({
+        where: { companyId: ids.a },
       }),
-    ).resolves.toMatchObject({ channel: 'WHATSAPP', status: 'SENT' });
+    ).toBe(0);
+    expect(
+      await prisma.collectionAttempt.count({
+        where: { invoiceId: bolixCharge.id },
+      }),
+    ).toBe(0);
 
     const pixCharge = await invoice('PIX');
     await firstCharge(pixCharge.id);
@@ -336,16 +335,11 @@ describe('First message by the rule "Inicial" step and billing method (HTTP)', (
       },
     });
 
-    // The scheduler finds both Inicial steps fulfilled: no second emission message.
+    // The scheduler never repeats the emission (the only step is 60 days after the due date).
     const sent = provider.sends.length;
     await app.get(BillingService).executeBilling(ids.a);
     await app.get(OutboundDispatcherService).recover();
     await sleep(1500);
     expect(provider.sends.length).toBe(sent);
-    expect(
-      await prisma.communicationOutboundIntent.count({
-        where: { companyId: ids.a, logicalKey: { contains: ids.inicial } },
-      }),
-    ).toBe(0);
   });
 });

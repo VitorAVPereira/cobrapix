@@ -18,6 +18,8 @@ import {
   AdminCatalogQueryDto,
   PreviewTemplateMappingDto,
   SaveTemplateMappingDto,
+  SetCollectionStepTemplateDto,
+  UpdateTemplateRequestDto,
   SetTemplateDefaultDto,
   SetTemplateGrantDto,
 } from './dto';
@@ -25,7 +27,16 @@ import { TemplateCatalogQueryService } from './template-catalog-query.service';
 import { TemplateCatalogSyncService } from './template-catalog-sync.service';
 import { TemplateMappingService } from './template-mapping.service';
 import { CompanyTemplateAccessService } from './company-template-access.service';
-import { TEMPLATE_PURPOSES, TemplatePurpose } from './template-contracts';
+import { CollectionTemplateSlotService } from './collection-template-slot.service';
+import { CollectionStepTemplateService } from './collection-step-template.service';
+import { TemplateRequestService } from './template-request.service';
+import {
+  COLLECTION_PURPOSES,
+  COLLECTION_SLOT_METHODS,
+  TEMPLATE_PURPOSES,
+  TemplatePurpose,
+  type CollectionSlotMethod,
+} from './template-contracts';
 
 /**
  * Global catalog administration. The actor always comes from the session; static routes
@@ -39,7 +50,32 @@ export class AdminTemplatesController {
     private readonly sync: TemplateCatalogSyncService,
     private readonly mappings: TemplateMappingService,
     private readonly access: CompanyTemplateAccessService,
+    private readonly slots: CollectionTemplateSlotService,
+    private readonly stepTemplates: CollectionStepTemplateService,
+    private readonly requests: TemplateRequestService,
   ) {}
+
+  @Get('requests')
+  listRequests(@Query('status') status?: string) {
+    if (status && !['OPEN', 'IN_PROGRESS', 'DONE', 'REJECTED'].includes(status))
+      throw new BadRequestException('Situação inválida.');
+    return this.requests.listForAdmin(
+      status as 'OPEN' | 'IN_PROGRESS' | 'DONE' | 'REJECTED' | undefined,
+    );
+  }
+
+  @Put('requests/:id')
+  updateRequest(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateTemplateRequestDto,
+  ) {
+    return this.requests.updateStatus(
+      id,
+      dto.status,
+      dto.adminNote ?? null,
+      dto.expectedVersion,
+    );
+  }
 
   @Get()
   list(@Query() query: AdminCatalogQueryDto) {
@@ -56,9 +92,58 @@ export class AdminTemplatesController {
     return this.sync.sync('MANUAL');
   }
 
+  @Get('collection-slots')
+  collectionSlots() {
+    return this.slots.list();
+  }
+
+  @Put('collection-slots/:purpose/:method')
+  setCollectionSlot(
+    @GetUser() user: AuthenticatedUser,
+    @Param('purpose') purpose: string,
+    @Param('method') method: string,
+    @Body() dto: SetTemplateDefaultDto,
+  ) {
+    if (!COLLECTION_PURPOSES.includes(purpose as TemplatePurpose))
+      throw new BadRequestException('Momento de cobrança inválido.');
+    if (!(COLLECTION_SLOT_METHODS as readonly string[]).includes(method))
+      throw new BadRequestException('Forma de pagamento inválida.');
+    return this.slots.set(
+      purpose as TemplatePurpose,
+      method as CollectionSlotMethod,
+      dto.templateId,
+      dto.expectedVersion,
+      user.userId,
+    );
+  }
+
   @Get('companies/:companyId')
   company(@Param('companyId', ParseUUIDPipe) companyId: string) {
     return this.catalog.companyAccess(companyId);
+  }
+
+  @Get('companies/:companyId/collection-steps')
+  collectionSteps(@Param('companyId', ParseUUIDPipe) companyId: string) {
+    return this.stepTemplates.list(companyId);
+  }
+
+  @Put('companies/:companyId/collection-steps/:ruleStepId/:method')
+  setCollectionStepTemplate(
+    @GetUser() user: AuthenticatedUser,
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+    @Param('ruleStepId', ParseUUIDPipe) ruleStepId: string,
+    @Param('method') method: string,
+    @Body() dto: SetCollectionStepTemplateDto,
+  ) {
+    if (!(COLLECTION_SLOT_METHODS as readonly string[]).includes(method))
+      throw new BadRequestException('Forma de pagamento inválida.');
+    return this.stepTemplates.set(
+      companyId,
+      ruleStepId,
+      method as CollectionSlotMethod,
+      dto.templateId,
+      user.userId,
+    );
   }
 
   @Put('companies/:companyId/grants/:templateId')

@@ -17,17 +17,17 @@ import { PaymentService } from '../payment/payment.service';
 import { PublicPaymentLinkService } from '../payment/payment-link.service';
 import { MessageQueueService } from '../queue/message.queue';
 import { SpintaxService } from '../queue/services/spintax.service';
-import { CollectionRuleEngine } from './collection-rule-engine';
+import {
+  CollectionRuleEngine,
+  type Contact,
+  type ContactClaim,
+} from './collection-rule-engine';
 import { EmailQueueService } from '../email/email.queue';
 import { EmailService } from '../email/email.service';
 import { EmailTemplatesService } from '../email/email-templates.service';
 import { TemplateSendPreparerService } from '../templates/template-send-preparer.service';
-import type { TemplateSelection } from '../templates/template-contracts';
-import {
-  MethodTemplates,
-  collectionLogicalKey,
-  selectionForMethod,
-} from '../templates/template-selection';
+import type { TemplatePurpose } from '../templates/template-contracts';
+import { collectionLogicalKey } from '../templates/template-selection';
 import { assertChannelAvailable } from '../communications/channel-availability';
 
 const DEFAULT_COLLECTION_REMINDER_DAYS = [0];
@@ -503,46 +503,38 @@ export class BillingService {
         },
       });
 
-      interface ResolvedInvoice {
+      interface PlannedInvoice {
         invoice: ScheduledInvoice;
-        ruleStepId: string;
-        channel: CollectionChannel;
-        whatsappSelection: TemplateSelection;
-        whatsappMethodTemplates: MethodTemplates;
-        emailTemplateId: string | null;
-        delayDays: number;
+        contact: Contact;
+        moment: TemplatePurpose;
       }
 
-      const resolved: ResolvedInvoice[] = [];
+      const planned: PlannedInvoice[] = [];
       let skippedPre = 0;
 
       for (const invoice of pendingInvoices) {
-        const nextStep = await this.ruleEngine.getNextStep(invoice);
-        if (!nextStep) {
+        const plan = await this.ruleEngine.planContact(invoice);
+        if (plan.kind !== 'SEND') {
           skippedPre++;
           continue;
         }
 
-        resolved.push({
+        planned.push({
           invoice: invoice as never,
-          ruleStepId: nextStep.ruleStepId,
-          channel: nextStep.channel,
-          whatsappSelection: nextStep.whatsappSelection,
-          whatsappMethodTemplates: nextStep.whatsappMethodTemplates,
-          emailTemplateId: nextStep.emailTemplateId,
-          delayDays: nextStep.delayDays,
+          contact: plan.contact,
+          moment: plan.moment,
         });
       }
 
-      if (resolved.length === 0) {
+      if (planned.length === 0) {
         return { queued: 0, skipped: skippedPre };
       }
 
       const CHUNK_SIZE = 10;
       const paymentResults = new Map<string, PaymentMessageData | null>();
 
-      for (let i = 0; i < resolved.length; i += CHUNK_SIZE) {
-        const chunk = resolved.slice(i, i + CHUNK_SIZE);
+      for (let i = 0; i < planned.length; i += CHUNK_SIZE) {
+        const chunk = planned.slice(i, i + CHUNK_SIZE);
         const settled = await Promise.allSettled(
           chunk.map(async ({ invoice }) => {
             const data = await this.ensureInvoicePayment(invoice, company);
@@ -584,91 +576,115 @@ export class BillingService {
       }> = [];
       let skippedCount = skippedPre;
 
-      for (const {
-        invoice,
-        ruleStepId,
-        channel,
-        whatsappSelection,
-        whatsappMethodTemplates,
-        emailTemplateId,
-      } of resolved) {
+      for (const { invoice, contact, moment } of planned) {
         const paymentData = paymentResults.get(invoice.id);
         if (!paymentData) {
           skippedCount++;
           continue;
         }
 
-        if (channel === 'WHATSAPP') {
-          if (!invoice.debtor.whatsappOptIn) {
-            await this.recordSkippedWhatsapp(
-              company.id,
-              invoice.id,
-              ruleStepId,
-              invoice.debtor.name,
-            );
-            skippedCount++;
-            continue;
-          }
-          const attemptCreated = await this.createQueuedAttempt(
-            company.id,
-            invoice.id,
-            ruleStepId,
-            'WHATSAPP',
-          );
-          if (!attemptCreated) {
-            skippedCount++;
-            continue;
-          }
-          // The step's choice for this charge's billing method, else its own choice
-          // (explicit or purpose default); never another template.
-          const prepared = await this.templateSender.prepare({
-            logicalKey: collectionLogicalKey({
-              companyId: company.id,
-              invoiceId: invoice.id,
-              ruleStepId,
-            }),
-            origin: 'COLLECTION',
-            context: {
-              companyId: company.id,
-              invoiceId: invoice.id,
-              debtorId: invoice.debtor.id,
-            },
-            selection: selectionForMethod(
-              whatsappSelection,
-              whatsappMethodTemplates,
-              paymentData.billingType,
-            ),
-            ruleStepId,
-          });
-          if (prepared.status === 'BLOCKED') {
+        const debtorEmail = invoice.debtor.email ?? null;
+        // The whole contact is claimed at once. WhatsApp without opt-in is recorded as
+        // failed (it never counts as a contact); e-mail without an address is left out.
+        const claims = contact.steps.flatMap((step): ContactClaim[] => {
+          if (step.channel === 'WHATSAPP')
+            return [
+              invoice.debtor.whatsappOptIn
+                ? { ...step, status: 'QUEUED' }
+                : {
+                    ...step,
+                    status: 'FAILED',
+                    errorDetails: 'Opt-in WhatsApp ausente.',
+                  },
+            ];
+          return debtorEmail ? [{ ...step, status: 'QUEUED' }] : [];
+        });
+        if (!(await this.ruleEngine.claimContact(invoice, claims))) {
+          skippedCount++;
+          continue;
+        }
+
+        for (const claim of claims) {
+          if (claim.status === 'FAILED') {
             await this.createCollectionLog(
               company.id,
               invoice.id,
-              'WHATSAPP_TEMPLATE_HELD',
-              `Mensagem WhatsApp retida para revisao administrativa do template${prepared.code ? ` (${prepared.code})` : ''}.`,
+              'WHATSAPP_OPT_IN_REQUIRED',
+              `Envio oficial bloqueado para ${invoice.debtor.name}: opt-in WhatsApp ausente.`,
               'SKIPPED',
             );
             skippedCount++;
             continue;
           }
-          whatsAppIntents.push({
-            intentId: prepared.intentId,
-            companyId: company.id,
-            invoiceId: invoice.id,
-            debtorName: invoice.debtor.name,
-          });
-        } else if (channel === 'EMAIL') {
-          const debtorEmail = invoice.debtor.email as string | undefined;
-          if (!debtorEmail) {
-            skippedCount++;
+
+          if (claim.channel === 'WHATSAPP') {
+            // The step's custom template for the charge's method, else the global one of
+            // (moment, method); missing, the message is held, never replaced.
+            const prepared = await this.templateSender.prepare({
+              logicalKey: collectionLogicalKey({
+                companyId: company.id,
+                invoiceId: invoice.id,
+                ruleStepId: claim.ruleStepId,
+              }),
+              origin: 'COLLECTION',
+              context: {
+                companyId: company.id,
+                invoiceId: invoice.id,
+                debtorId: invoice.debtor.id,
+              },
+              selection: {
+                mode: 'AUTOMATIC',
+                purpose: moment,
+                billingMethod: paymentData.billingType,
+                ruleStepId: claim.ruleStepId,
+              },
+              ruleStepId: claim.ruleStepId,
+            });
+            if (prepared.status === 'BLOCKED') {
+              await this.createCollectionLog(
+                company.id,
+                invoice.id,
+                'WHATSAPP_TEMPLATE_HELD',
+                `Mensagem WhatsApp retida para revisao administrativa do template${prepared.code ? ` (${prepared.code})` : ''}.`,
+                'SKIPPED',
+              );
+              skippedCount++;
+              continue;
+            }
+            whatsAppIntents.push({
+              intentId: prepared.intentId,
+              companyId: company.id,
+              invoiceId: invoice.id,
+              debtorName: invoice.debtor.name,
+            });
             continue;
           }
 
-          // An unavailable explicit email template skips the step; it never falls back.
+          // The e-mail model of the moment; one the company turned off is not replaced.
           const emailTemplate = await this.emailTemplatesService
-            .resolveForRule(company.id, emailTemplateId)
+            .resolveForPurpose(company.id, moment)
             .catch(() => null);
-          if (!emailTemplate || !emailTemplate.isActive) {
+          if (!emailTemplate || !emailTemplate.isActive || !debtorEmail) {
+            await this.prisma.collectionAttempt.updateMany({
+              where: {
+                companyId: company.id,
+                invoiceId: invoice.id,
+                ruleStepId: claim.ruleStepId,
+                channel: 'EMAIL',
+                status: 'QUEUED',
+              },
+              data: {
+                status: 'FAILED',
+                errorDetails: 'Modelo de e-mail do momento desativado.',
+              },
+            });
+            await this.createCollectionLog(
+              company.id,
+              invoice.id,
+              'EMAIL_SKIPPED',
+              'E-mail de cobranca nao enviado: modelo do momento desativado pela empresa.',
+              'SKIPPED',
+            );
             skippedCount++;
             continue;
           }
@@ -691,16 +707,6 @@ export class BillingService {
             emailTemplate.subject,
             renderParams,
           );
-          const attemptCreated = await this.createQueuedAttempt(
-            company.id,
-            invoice.id,
-            ruleStepId,
-            'EMAIL',
-          );
-          if (!attemptCreated) {
-            skippedCount++;
-            continue;
-          }
 
           const html = this.emailService.buildCollectionEmailHtml({
             debtorName: invoice.debtor.name,
@@ -730,7 +736,7 @@ export class BillingService {
             email: debtorEmail,
             subject,
             html,
-            ruleStepId,
+            ruleStepId: claim.ruleStepId,
             pixCopyPaste: paymentData.pixCopiaECola,
           });
         }
@@ -1003,70 +1009,6 @@ export class BillingService {
     };
 
     return labels[billingType];
-  }
-
-  /** Without opt-in the step is recorded as attempted and failed, as before. */
-  private async recordSkippedWhatsapp(
-    companyId: string,
-    invoiceId: string,
-    ruleStepId: string,
-    debtorName: string,
-  ): Promise<void> {
-    await this.createCollectionLog(
-      companyId,
-      invoiceId,
-      'WHATSAPP_OPT_IN_REQUIRED',
-      `Envio oficial bloqueado para ${debtorName}: opt-in WhatsApp ausente.`,
-      'SKIPPED',
-    );
-    await this.prisma.collectionAttempt
-      .create({
-        data: {
-          companyId,
-          invoiceId,
-          ruleStepId,
-          channel: 'WHATSAPP',
-          status: 'FAILED',
-          errorDetails: 'Opt-in WhatsApp ausente.',
-        },
-      })
-      .catch((error: unknown) => {
-        if (!this.isUniqueConstraintError(error)) throw error;
-      });
-  }
-
-  private async createQueuedAttempt(
-    companyId: string,
-    invoiceId: string,
-    ruleStepId: string,
-    channel: CollectionChannel,
-  ): Promise<boolean> {
-    try {
-      await this.prisma.collectionAttempt.create({
-        data: {
-          companyId,
-          invoiceId,
-          ruleStepId,
-          channel,
-          status: 'QUEUED',
-        },
-      });
-
-      return true;
-    } catch (error) {
-      if (this.isUniqueConstraintError(error)) {
-        return false;
-      }
-
-      throw error;
-    }
-  }
-
-  private isUniqueConstraintError(error: unknown): boolean {
-    return (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === 'P2002'
-    );
   }
 
   private async createCollectionLog(

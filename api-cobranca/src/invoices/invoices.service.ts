@@ -13,6 +13,7 @@ import {
 import { Cron, CronExpression } from '@nestjs/schedule';
 import {
   BillingMethod,
+  CollectionChannel,
   CollectionProfileType,
   Prisma,
   RecurringInvoiceStatus,
@@ -38,6 +39,7 @@ import {
   type ImportClientGroup,
   type ImportClientReview,
   type ImportDecision,
+  type EmissionRequest,
 } from './invoice-import';
 import {
   CompanyLateDefaults,
@@ -186,6 +188,8 @@ interface CreateInvoiceInput {
   late_fine_percentage?: number | null;
   late_interest_monthly_percentage?: number | null;
   payment_days_after_due?: number | null;
+  send_now?: boolean;
+  send_channels?: CollectionChannel[];
 }
 
 interface RecurringInvoiceListItem {
@@ -648,6 +652,7 @@ export class InvoicesService {
     companyId: string,
     rows: ImportRow[],
     decisions?: ImportDecision[],
+    emission?: EmissionRequest,
   ): Promise<{
     success: boolean;
     count: number;
@@ -770,10 +775,11 @@ export class InvoicesService {
         throw error;
       });
 
-    const initialChargeQueued = await this.queueInitialChargeJobs(
+    const initialChargeQueued = await this.queueEmission(
       companyId,
       result.invoiceIds,
       'CSV',
+      emission ?? {},
     );
 
     return {
@@ -1134,12 +1140,12 @@ export class InvoicesService {
           throw new Error('Nao foi possivel carregar a fatura recorrente.');
         }
 
-        await this.queueInitialChargeJobs(companyId, [invoice.id], 'RECURRING');
+        await this.queueEmission(companyId, [invoice.id], 'RECURRING', input);
 
         return this.mapInvoiceListItem(refreshedInvoice);
       }
 
-      await this.queueInitialChargeJobs(companyId, [invoice.id], 'RECURRING');
+      await this.queueEmission(companyId, [invoice.id], 'RECURRING', input);
 
       return this.mapInvoiceListItem(invoice);
     }
@@ -1187,7 +1193,7 @@ export class InvoicesService {
       });
     });
 
-    await this.queueInitialChargeJobs(companyId, [invoice.id], 'MANUAL');
+    await this.queueEmission(companyId, [invoice.id], 'MANUAL', input);
 
     return this.mapInvoiceListItem(invoice);
   }
@@ -1892,10 +1898,38 @@ export class InvoicesService {
     };
   }
 
+  /**
+   * Emission message of new invoices: sent on the chosen channels when the user asked for
+   * it, skipped when the user declined; with no answer (older screens) the client or
+   * company "primeira cobrança" default still decides in the worker.
+   */
+  private async queueEmission(
+    companyId: string,
+    invoiceIds: string[],
+    source: InitialChargeJob['source'],
+    request: EmissionRequest,
+  ): Promise<number> {
+    if (request.send_now === false) return 0;
+    return this.queueInitialChargeJobs(
+      companyId,
+      invoiceIds,
+      source,
+      request.send_now === true
+        ? {
+            requested: true,
+            channels: request.send_channels?.length
+              ? request.send_channels
+              : ['WHATSAPP'],
+          }
+        : {},
+    );
+  }
+
   private async queueInitialChargeJobs(
     companyId: string,
     invoiceIds: string[],
     source: InitialChargeJob['source'],
+    options: Pick<InitialChargeJob, 'requested' | 'channels'> = {},
   ): Promise<number> {
     const uniqueInvoiceIds = Array.from(new Set(invoiceIds));
 
@@ -1911,6 +1945,7 @@ export class InvoicesService {
         invoiceId,
         companyId,
         source,
+        ...options,
       })),
     );
 

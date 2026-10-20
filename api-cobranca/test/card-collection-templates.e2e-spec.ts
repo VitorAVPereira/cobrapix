@@ -1,4 +1,8 @@
-/** Real HTTP, financial snapshots, BullMQ and dispatch; external providers simulated. */
+/**
+ * Card collection with the global templates: real HTTP, financial snapshots, BullMQ and
+ * dispatch; external providers simulated. The card template comes from the 18 global ones
+ * (link only, no grant); the emission is asked for at registration, not by the rule.
+ */
 import { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { getQueueToken } from '@nestjs/bullmq';
@@ -23,7 +27,6 @@ import {
   fakeDatafy,
   importAndMap,
   seedTenants,
-  setGrant,
   sleep,
   untilState,
 } from './support/template-e2e';
@@ -136,16 +139,42 @@ describe('Card collection rules and templates (disposable infrastructure)', () =
     return { invoice, debtor, profileId, ruleSteps };
   }
 
-  const whatsappStep = (
-    delayDays: number,
-    override: string | null = cardTemplate,
-  ) => ({
+  const whatsappStep = (delayDays: number) => ({
     stepOrder: 0,
     channel: 'WHATSAPP',
     delayDays,
-    whatsappSelection: { mode: 'EXPLICIT', templateId: pixTemplate },
-    whatsappMethodTemplates: { CREDIT_CARD: override },
   });
+
+  async function slotVersion(purpose: string, method: string): Promise<number> {
+    const view = await request(http)
+      .get('/admin/whatsapp-templates/collection-slots')
+      .set(auth(admin))
+      .expect(200);
+    return (
+      view.body as {
+        slots: Array<{
+          purpose: string;
+          billingMethod: string;
+          version: number;
+        }>;
+      }
+    ).slots.find(
+      (slot) => slot.purpose === purpose && slot.billingMethod === method,
+    )!.version;
+  }
+
+  /** One of the 18 global templates, written like the admin grid does. */
+  async function setSlot(
+    purpose: string,
+    method: string,
+    templateId: string | null,
+  ) {
+    await request(http)
+      .put(`/admin/whatsapp-templates/collection-slots/${purpose}/${method}`)
+      .set(auth(admin))
+      .send({ templateId, expectedVersion: await slotVersion(purpose, method) })
+      .expect(200);
+  }
 
   async function initial(
     invoiceId: string,
@@ -244,7 +273,6 @@ describe('Card collection rules and templates (disposable infrastructure)', () =
     otherToken = tenants.tokens.b;
     admin = tenants.tokens.admin;
     cardTemplate = await importAndMap(app, admin);
-    await setGrant(app, admin, companyId, cardTemplate, true);
     const list = await request(http)
       .get('/admin/whatsapp-templates')
       .set(auth(admin))
@@ -276,7 +304,12 @@ describe('Card collection rules and templates (disposable infrastructure)', () =
         },
       })
       .expect(200);
-    await setGrant(app, admin, companyId, pix.id, true);
+    // The card uses the link-only template; Pix and BOLIX the one with the Pix button.
+    for (const purpose of ['EMISSION', 'FIRST_OVERDUE']) {
+      await setSlot(purpose, 'CREDIT_CARD', cardTemplate);
+      await setSlot(purpose, 'PIX', pix.id);
+      await setSlot(purpose, 'BOLIX', pix.id);
+    }
 
     const company = await prisma.company.update({
       where: { id: companyId },
@@ -392,41 +425,22 @@ describe('Card collection rules and templates (disposable infrastructure)', () =
     restore();
   });
 
-  it('saves the card override, sends the Inicial template and a usable signed link once', async () => {
-    const { invoice, profileId, ruleSteps } = await fixture([
-      whatsappStep(-30),
-    ]);
-    expect(ruleSteps[0].whatsappMethodTemplates.CREDIT_CARD).toBe(cardTemplate);
-    const profiles = await request(http)
-      .get('/billing/rules')
-      .set(auth(companyToken))
-      .expect(200);
-    expect(
-      (profiles.body as Array<{ id: string; steps: unknown[] }>).find(
-        (p) => p.id === profileId,
-      )?.steps,
-    ).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ cardTemplateId: cardTemplate }),
-      ]),
-    );
+  it('the emission of a card charge uses the global card template and a usable signed link, once', async () => {
+    // A Pix template can never be the card template: the card has no Pix code.
+    await request(http)
+      .put('/admin/whatsapp-templates/collection-slots/EMISSION/CREDIT_CARD')
+      .set(auth(admin))
+      .send({
+        templateId: pixTemplate,
+        expectedVersion: await slotVersion('EMISSION', 'CREDIT_CARD'),
+      })
+      .expect(422);
+    const { invoice, profileId } = await fixture([]);
     await request(http)
       .put(`/billing/rules/${profileId}/steps`)
       .set(auth(otherToken))
-      .send({ steps: [whatsappStep(-30)] })
+      .send({ steps: [{ stepOrder: 0, channel: 'WHATSAPP', delayDays: 0 }] })
       .expect(404);
-    await request(http)
-      .put(`/billing/rules/${profileId}/steps`)
-      .set(auth(companyToken))
-      .send({
-        steps: [
-          {
-            ...whatsappStep(-30),
-            whatsappMethodTemplates: { CREDIT_CARD: pixTemplate },
-          },
-        ],
-      })
-      .expect(400);
     const before = provider.sends.length;
     await initial(invoice.id);
     expect(
@@ -452,11 +466,15 @@ describe('Card collection rules and templates (disposable infrastructure)', () =
     const token = payload.template.components.find((c) => c.sub_type === 'url')!
       .parameters[0].text!;
     await assertCardLink(invoice.id, token);
+    // No company grant was needed and the emission claims no rule step.
     expect(
-      await prisma.collectionAttempt.findFirst({
-        where: { invoiceId: invoice.id, ruleStepId: ruleSteps[0].id },
+      await prisma.companyWhatsappTemplateGrant.count({ where: { companyId } }),
+    ).toBe(0);
+    expect(
+      await prisma.collectionAttempt.count({
+        where: { invoiceId: invoice.id },
       }),
-    ).toMatchObject({ channel: 'WHATSAPP', status: 'SENT' });
+    ).toBe(0);
     await initial(invoice.id);
     await app.get(BillingService).executeBilling(companyId);
     await app.get(OutboundDispatcherService).recover();
@@ -471,7 +489,7 @@ describe('Card collection rules and templates (disposable infrastructure)', () =
     expect(provider.sends.length - before).toBe(1);
   });
 
-  it('scheduled concurrent runs select the card override and reserve only one charge and message', async () => {
+  it('scheduled concurrent runs pick the card template of the moment and reserve only one charge and message', async () => {
     const { invoice, ruleSteps } = await fixture([whatsappStep(0)]);
     await prisma.invoice.update({
       where: { id: invoice.id },
@@ -483,6 +501,7 @@ describe('Card collection rules and templates (disposable infrastructure)', () =
     );
     await accepted(invoice.id, ruleSteps[0].id);
     expect(provider.sends.length - before).toBe(1);
+    // Sent one day after the due date: the first overdue message of the card.
     expect(provider.sends.at(-1)).toMatchObject({
       template: { name: 'lembrete_real' },
     });
@@ -502,16 +521,18 @@ describe('Card collection rules and templates (disposable infrastructure)', () =
     expect(submit).not.toHaveBeenCalled();
   });
 
-  it('a card charge with a Pix-only base template is held without fallback or automatic resume', async () => {
-    const { invoice } = await fixture([whatsappStep(-30, null)]);
+  it('without the card template of the moment the message is held, never replaced nor resumed alone', async () => {
+    await setSlot('EMISSION', 'CREDIT_CARD', null);
+    const { invoice } = await fixture([]);
     const before = provider.sends.length;
     await initial(invoice.id);
     expect(
       await prisma.whatsappTemplatePendingSend.findFirst({
         where: { invoiceId: invoice.id },
       }),
-    ).toMatchObject({ state: 'BLOCKED', code: 'VALUE_MISSING' });
-    await setGrant(app, admin, companyId, cardTemplate, true);
+    ).toMatchObject({ state: 'BLOCKED', code: 'COLLECTION_TEMPLATE_MISSING' });
+    // Choosing the template again does not resume held sends: the admin reviews them.
+    await setSlot('EMISSION', 'CREDIT_CARD', cardTemplate);
     await app.get(BillingService).executeBilling(companyId);
     await app.get(OutboundDispatcherService).recover();
     expect(
@@ -525,8 +546,8 @@ describe('Card collection rules and templates (disposable infrastructure)', () =
     expect(provider.sends.length).toBe(before);
   });
 
-  it('does not send an initial WhatsApp without opt-in', async () => {
-    const { invoice, debtor } = await fixture([whatsappStep(-30)]);
+  it('does not send an emission WhatsApp without opt-in', async () => {
+    const { invoice, debtor } = await fixture([]);
     await prisma.debtor.update({
       where: { id: debtor.id },
       data: { whatsappOptIn: false },
@@ -550,9 +571,9 @@ describe('Card collection rules and templates (disposable infrastructure)', () =
   });
 
   it.each(['PAID', 'CANCELED'] as const)(
-    'does not issue or send when the invoice becomes %s before the initial worker',
+    'does not issue or send when the invoice becomes %s before the emission worker',
     async (status) => {
-      const { invoice } = await fixture([whatsappStep(-30)]);
+      const { invoice } = await fixture([]);
       await prisma.invoice.update({
         where: { id: invoice.id },
         data: { status },
@@ -572,38 +593,34 @@ describe('Card collection rules and templates (disposable infrastructure)', () =
   );
 
   it.each([
-    { method: 'CREDIT_CARD' as const, label: 'Cartão de crédito', day: -30 },
-    { method: 'CREDIT_CARD' as const, label: 'Cartão de crédito', day: 0 },
-    { method: 'PIX' as const, label: 'PIX', day: -30 },
-    { method: 'PIX' as const, label: 'PIX', day: 0 },
-    { method: 'BOLIX' as const, label: 'Bolix', day: -30 },
-    { method: 'BOLIX' as const, label: 'Bolix', day: 0 },
+    {
+      method: 'CREDIT_CARD' as const,
+      label: 'Cartão de crédito',
+      emission: true,
+    },
+    {
+      method: 'CREDIT_CARD' as const,
+      label: 'Cartão de crédito',
+      emission: false,
+    },
+    { method: 'PIX' as const, label: 'PIX', emission: true },
+    { method: 'PIX' as const, label: 'PIX', emission: false },
+    { method: 'BOLIX' as const, label: 'Boleto ou PIX', emission: true },
+    { method: 'BOLIX' as const, label: 'Boleto ou PIX', emission: false },
   ])(
-    'sends the $method email template at day $day, counting the step once',
-    async ({ method, label, day }) => {
-      const template = await prisma.globalEmailTemplate.create({
-        data: {
-          name: 'Email da regua',
-          slug: `card-email-${randomUUID()}`,
-          subject: 'Aviso da regua {{nome_devedor}}',
-          content:
-            'Texto exclusivo da regua {{metodo_pagamento}} {{payment_link}} {{nome_devedor}} {{valor}}',
-        },
-      });
+    'sends the $method e-mail of the moment (emission: $emission), counted once',
+    async ({ method, label, emission }) => {
       const { invoice, debtor, ruleSteps } = await fixture(
-        [
-          {
-            stepOrder: 0,
-            channel: 'EMAIL',
-            delayDays: day,
-            emailTemplateId: template.id,
-          },
-        ],
+        emission ? [] : [{ stepOrder: 0, channel: 'EMAIL', delayDays: 0 }],
         method,
       );
       const before = emails.length;
-      if (day === -30) await initial(invoice.id, ['EMAIL']);
-      else {
+      const mine = () =>
+        emails.slice(before).filter((e) => e.to.includes(debtor.email!));
+      if (emission) {
+        await initial(invoice.id, ['EMAIL']);
+        await eventually(() => Promise.resolve(mine().length ? true : null));
+      } else {
         await prisma.invoice.update({
           where: { id: invoice.id },
           data: { dueDate: new Date(Date.now() - 86_400_000) },
@@ -613,21 +630,18 @@ describe('Card collection rules and templates (disposable infrastructure)', () =
             app.get(BillingService).executeBilling(companyId),
           ),
         );
+        await eventually(() =>
+          prisma.collectionAttempt.findFirst({
+            where: {
+              invoiceId: invoice.id,
+              ruleStepId: ruleSteps[0].id,
+              status: 'SENT',
+            },
+          }),
+        );
       }
-      await eventually(() =>
-        prisma.collectionAttempt.findFirst({
-          where: {
-            invoiceId: invoice.id,
-            ruleStepId: ruleSteps[0].id,
-            status: 'SENT',
-          },
-        }),
-      );
-      const sent = emails
-        .slice(before)
-        .find((e) => e.to.includes(debtor.email!))!;
-      expect(sent).toMatchObject({ subject: 'Aviso da regua Pagador Cartao' });
-      expect(sent.html).toContain(`Texto exclusivo da regua ${label}`);
+      const sent = mine()[0]!;
+      expect(sent.html).toContain(`Cobrança via ${label}`);
       expect(sent.html).not.toContain('{{');
       const token = sent.html.match(
         /https:\/\/app\.e2e\.test\/pagar\/([A-Za-z0-9_.-]+)/,
@@ -641,12 +655,9 @@ describe('Card collection rules and templates (disposable infrastructure)', () =
           invoiceId: invoice.id,
           billingType: method,
           canPay: true,
-        });
-        expect(page.body).toMatchObject({
           pixCopyPaste: invoice.efiPixCopiaECola,
         });
-        if (method === 'PIX')
-          expect(sent.html).toContain(invoice.efiPixCopiaECola!);
+        expect(sent.html).toContain(invoice.efiPixCopiaECola!);
         if (method === 'BOLIX')
           expect(sent.html).toContain(invoice.boletoLinhaDigitavel!);
       }
@@ -655,75 +666,24 @@ describe('Card collection rules and templates (disposable infrastructure)', () =
         await prisma.collectionAttempt.count({
           where: { invoiceId: invoice.id },
         }),
-      ).toBe(1);
+      ).toBe(emission ? 0 : 1);
       expect(emails.filter((e) => e.to.includes(debtor.email!))).toHaveLength(
         1,
       );
     },
   );
 
-  it('uses the company EMISSION default when there is no Inicial WhatsApp step', async () => {
-    await request(http)
-      .put(`/admin/whatsapp-templates/companies/${companyId}/defaults/EMISSION`)
-      .set(auth(admin))
-      .send({ templateId: cardTemplate, expectedVersion: 0 })
-      .expect(200);
-    const { invoice } = await fixture([whatsappStep(0)]);
-    const before = provider.sends.length;
-    await initial(invoice.id);
-    await accepted(invoice.id);
-    expect(provider.sends.length - before).toBe(1);
-    expect(provider.sends.at(-1)).toMatchObject({
-      template: { name: 'lembrete_real' },
-    });
-    expect(
-      await prisma.collectionAttempt.count({
-        where: { invoiceId: invoice.id },
-      }),
-    ).toBe(0);
-    await app.get(BillingService).executeBilling(companyId);
-    expect(
-      await prisma.communicationOutboundIntent.count({
-        where: { invoiceId: invoice.id },
-      }),
-    ).toBe(1);
-  });
-
-  it('fulfills both Inicial channels with distinct templates and reuses the same card charge', async () => {
-    const template = await prisma.globalEmailTemplate.create({
-      data: {
-        name: 'Email dos dois canais',
-        slug: `dual-email-${randomUUID()}`,
-        subject: 'Email exclusivo {{nome_devedor}}',
-        content: '{{payment_link}}',
-      },
-    });
-    const { invoice, debtor } = await fixture([
-      whatsappStep(-30),
-      {
-        stepOrder: 1,
-        channel: 'EMAIL',
-        delayDays: 0,
-        emailTemplateId: template.id,
-      },
-    ]);
+  it('the emission on both channels reuses the same card charge', async () => {
+    const { invoice, debtor } = await fixture([]);
     const before = provider.sends.length;
     await initial(invoice.id, ['WHATSAPP', 'EMAIL']);
     await accepted(invoice.id);
     await eventually(() =>
-      prisma.collectionAttempt.findFirst({
-        where: { invoiceId: invoice.id, channel: 'EMAIL', status: 'SENT' },
-      }),
+      Promise.resolve(
+        emails.some((e) => e.to.includes(debtor.email!)) ? true : null,
+      ),
     );
-    expect(
-      await prisma.collectionAttempt.count({
-        where: { invoiceId: invoice.id, status: 'SENT' },
-      }),
-    ).toBe(2);
     expect(emails.filter((e) => e.to.includes(debtor.email!))).toHaveLength(1);
-    expect(emails.find((e) => e.to.includes(debtor.email!))!.subject).toBe(
-      'Email exclusivo Pagador Cartao',
-    );
     await app.get(BillingService).executeBilling(companyId);
     expect(
       await prisma.paymentCharge.count({ where: { invoiceId: invoice.id } }),
@@ -736,48 +696,54 @@ describe('Card collection rules and templates (disposable infrastructure)', () =
     expect(provider.sends.length - before).toBe(1);
   });
 
-  it.each([-30, 0])(
-    'does not send a rule email disabled by the company at day %s',
-    async (day) => {
-      const template = await prisma.globalEmailTemplate.create({
-        data: {
-          name: 'Email desativado',
-          slug: `disabled-email-${randomUUID()}`,
-          subject: 'Nao enviar',
-          content: '{{payment_link}}',
-        },
+  it.each([
+    { emission: true, slug: 'cobranca-emissao' },
+    { emission: false, slug: 'atraso-primeiro-aviso' },
+  ])(
+    'does not send the e-mail of a moment the company turned off (emission: $emission)',
+    async ({ emission, slug }) => {
+      await request(http)
+        .get('/email/templates')
+        .set(auth(companyToken))
+        .expect(200);
+      const model = await prisma.globalEmailTemplate.findFirstOrThrow({
+        where: { slug },
       });
-      const { invoice, debtor } = await fixture([
-        {
-          stepOrder: 0,
-          channel: 'EMAIL',
-          delayDays: day,
-          emailTemplateId: template.id,
-        },
-      ]);
+      const { invoice, debtor } = await fixture(
+        emission ? [] : [{ stepOrder: 0, channel: 'EMAIL', delayDays: 0 }],
+      );
       // Same HTTP operation as unchecking "Usar este modelo" in the company editor.
       const disabled = await request(http)
-        .patch(`/email/templates/${template.id}`)
+        .patch(`/email/templates/${model.id}`)
         .set(auth(companyToken))
         .send({ isActive: false })
         .expect(200);
       expect(disabled.body).toMatchObject({ isActive: false });
-      if (day === -30) await initial(invoice.id, ['EMAIL']);
-      else {
-        await prisma.invoice.update({
-          where: { id: invoice.id },
-          data: { dueDate: new Date(Date.now() - 86_400_000) },
-        });
-        await app.get(BillingService).executeBilling(companyId);
+      try {
+        if (emission) await initial(invoice.id, ['EMAIL']);
+        else {
+          await prisma.invoice.update({
+            where: { id: invoice.id },
+            data: { dueDate: new Date(Date.now() - 86_400_000) },
+          });
+          await app.get(BillingService).executeBilling(companyId);
+          // The contact is recorded as failed and never retried with another model.
+          await expect(
+            prisma.collectionAttempt.findFirst({
+              where: { invoiceId: invoice.id },
+            }),
+          ).resolves.toMatchObject({ status: 'FAILED' });
+        }
+        expect(emails.filter((e) => e.to.includes(debtor.email!))).toHaveLength(
+          0,
+        );
+      } finally {
+        await request(http)
+          .patch(`/email/templates/${model.id}`)
+          .set(auth(companyToken))
+          .send({ isActive: true })
+          .expect(200);
       }
-      expect(
-        await prisma.collectionAttempt.count({
-          where: { invoiceId: invoice.id },
-        }),
-      ).toBe(0);
-      expect(emails.filter((e) => e.to.includes(debtor.email!))).toHaveLength(
-        0,
-      );
     },
   );
 });

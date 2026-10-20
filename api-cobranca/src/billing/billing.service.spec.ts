@@ -130,7 +130,7 @@ function createService(input: {
       create: jest.fn().mockResolvedValue({ id: 'log-1' }),
     },
     collectionAttempt: {
-      create: jest.fn().mockResolvedValue({ id: 'attempt-1' }),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
   } as unknown as PrismaService;
 
@@ -151,14 +151,12 @@ function createService(input: {
   } as unknown as PaymentService;
 
   const ruleEngine = {
-    getNextStep: jest.fn().mockResolvedValue({
-      ruleStepId: 'step-1',
-      channel: 'WHATSAPP',
-      templateId: null,
-      emailTemplateId: null,
-      whatsappSelection: { mode: 'DEFAULT', purpose: 'DUE_TODAY' },
-      delayDays: 0,
-    }),
+    planContact: jest
+      .fn()
+      .mockResolvedValue(
+        contact([{ ruleStepId: 'step-1', channel: 'WHATSAPP' }]),
+      ),
+    claimContact: jest.fn().mockResolvedValue(true),
   } as unknown as CollectionRuleEngine;
 
   const emailQueue = {
@@ -182,8 +180,7 @@ function createService(input: {
     signature: 'Equipe Empresa Teste',
   };
   const emailTemplatesService = {
-    findActiveOrDefault: jest.fn().mockResolvedValue(resolvedEmail),
-    resolveForRule: jest.fn().mockResolvedValue(resolvedEmail),
+    resolveForPurpose: jest.fn().mockResolvedValue(resolvedEmail),
   } as unknown as EmailTemplatesService;
   const templateSender = {
     prepare: jest
@@ -206,7 +203,7 @@ function createService(input: {
     prisma: prisma as unknown as {
       platformIntegrationState: { findUnique: jest.Mock };
       collectionLog: { create: jest.Mock };
-      collectionAttempt: { create: jest.Mock };
+      collectionAttempt: { updateMany: jest.Mock };
       debtor: { updateMany: jest.Mock };
       invoice: {
         findMany: jest.Mock;
@@ -220,7 +217,8 @@ function createService(input: {
       addSelectedInitialChargeJobs: jest.Mock;
     },
     ruleEngine: ruleEngine as unknown as {
-      getNextStep: jest.Mock;
+      planContact: jest.Mock;
+      claimContact: jest.Mock;
     },
     emailQueue: emailQueue as unknown as {
       addBulk: jest.Mock;
@@ -229,11 +227,19 @@ function createService(input: {
       buildCollectionEmailHtml: jest.Mock;
     },
     emailTemplatesService: emailTemplatesService as unknown as {
-      findActiveOrDefault: jest.Mock;
-      resolveForRule: jest.Mock;
+      resolveForPurpose: jest.Mock;
     },
+    resolvedEmail,
     createPayment,
   };
+}
+
+/** A contact of the rule as the engine plans it. */
+function contact(
+  steps: Array<{ ruleStepId: string; channel: 'WHATSAPP' | 'EMAIL' }>,
+  moment = 'DUE_TODAY',
+) {
+  return { kind: 'SEND', contact: { day: 0, steps }, moment };
 }
 
 function logged(
@@ -261,22 +267,20 @@ describe('BillingService', () => {
     jest.useRealTimers();
   });
 
-  it('prepara a etapa WhatsApp com a escolha explicita da regua', async () => {
+  it('prepares the WhatsApp step with the automatic template of the moment and the charge method', async () => {
     const fixture = createService({ invoices: [buildInvoice(paidPix)] });
-    const selection = { mode: 'EXPLICIT', templateId: 'template-a' };
-    fixture.ruleEngine.getNextStep.mockResolvedValue({
-      ruleStepId: 'step-1',
-      channel: 'WHATSAPP',
-      templateId: 'template-a',
-      emailTemplateId: null,
-      whatsappSelection: selection,
-      delayDays: -2,
-    });
+    fixture.ruleEngine.planContact.mockResolvedValue(
+      contact([{ ruleStepId: 'step-1', channel: 'WHATSAPP' }], 'BEFORE_DUE'),
+    );
 
     expect(await fixture.service.executeBilling('company-1')).toEqual({
       queued: 1,
       skipped: 0,
     });
+    expect(fixture.ruleEngine.claimContact).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'invoice-1' }),
+      [{ ruleStepId: 'step-1', channel: 'WHATSAPP', status: 'QUEUED' }],
+    );
     expect(fixture.templateSender.prepare).toHaveBeenCalledWith({
       logicalKey: 'collection:company-1:invoice-1:step-1:WHATSAPP',
       origin: 'COLLECTION',
@@ -285,7 +289,12 @@ describe('BillingService', () => {
         invoiceId: 'invoice-1',
         debtorId: 'debtor-1',
       },
-      selection,
+      selection: {
+        mode: 'AUTOMATIC',
+        purpose: 'BEFORE_DUE',
+        billingMethod: 'PIX',
+        ruleStepId: 'step-1',
+      },
       ruleStepId: 'step-1',
     });
     expect(fixture.messageQueue.addOutboundIntentJob).toHaveBeenCalledWith(
@@ -294,14 +303,63 @@ describe('BillingService', () => {
     expect(logged(fixture.prisma, 'WHATSAPP_QUEUED')).toBe(true);
   });
 
-  it('explicit_template_never_falls_back: an unavailable choice is held, nothing else is tried', async () => {
+  it('sends every channel of the contact together', async () => {
+    const fixture = createService({
+      invoices: [buildInvoice({ ...paidPix, email: 'maria@example.test' })],
+    });
+    fixture.ruleEngine.planContact.mockResolvedValue(
+      contact([
+        { ruleStepId: 'step-email', channel: 'EMAIL' },
+        { ruleStepId: 'step-whatsapp', channel: 'WHATSAPP' },
+      ]),
+    );
+
+    expect(await fixture.service.executeBilling('company-1')).toEqual({
+      queued: 2,
+      skipped: 0,
+    });
+    expect(fixture.ruleEngine.claimContact).toHaveBeenCalledTimes(1);
+    expect(fixture.templateSender.prepare).toHaveBeenCalledTimes(1);
+    expect(fixture.emailQueue.addBulk).toHaveBeenCalledWith([
+      expect.objectContaining({ ruleStepId: 'step-email' }),
+    ]);
+  });
+
+  it('sends nothing when another run already claimed a contact in the last 24 h', async () => {
+    const fixture = createService({ invoices: [buildInvoice(paidPix)] });
+    fixture.ruleEngine.claimContact.mockResolvedValue(false);
+
+    expect(await fixture.service.executeBilling('company-1')).toEqual({
+      queued: 0,
+      skipped: 1,
+    });
+    expect(fixture.templateSender.prepare).not.toHaveBeenCalled();
+    expect(fixture.emailQueue.addBulk).not.toHaveBeenCalled();
+  });
+
+  it('a contact waiting for the 24 h interval generates no charge and no message', async () => {
+    const fixture = createService({ invoices: [buildInvoice()] });
+    fixture.ruleEngine.planContact.mockResolvedValue({
+      kind: 'WAIT',
+      reason: 'MIN_INTERVAL',
+    });
+
+    expect(await fixture.service.executeBilling('company-1')).toEqual({
+      queued: 0,
+      skipped: 1,
+    });
+    expect(fixture.createPayment).not.toHaveBeenCalled();
+    expect(fixture.ruleEngine.claimContact).not.toHaveBeenCalled();
+  });
+
+  it('a missing template is held for review; nothing else is tried', async () => {
     const fixture = createService({
       invoices: [buildInvoice({ ...paidPix, email: 'maria@example.test' })],
     });
     fixture.templateSender.prepare.mockResolvedValue({
       status: 'BLOCKED',
       pendingId: 'pending-1',
-      code: 'NOT_GRANTED',
+      code: 'COLLECTION_TEMPLATE_MISSING',
     });
 
     expect(await fixture.service.executeBilling('company-1')).toEqual({
@@ -311,75 +369,51 @@ describe('BillingService', () => {
     expect(fixture.templateSender.prepare).toHaveBeenCalledTimes(1);
     expect(fixture.messageQueue.addOutboundIntentJob).not.toHaveBeenCalled();
     expect(fixture.emailQueue.addBulk).not.toHaveBeenCalled();
+    expect(fixture.prisma.invoice.update).not.toHaveBeenCalled();
     expect(logged(fixture.prisma, 'WHATSAPP_TEMPLATE_HELD')).toBe(true);
   });
 
-  it('missing_default_keeps_invoice_and_blocks_only_whatsapp', async () => {
-    const fixture = createService({ invoices: [buildInvoice(paidPix)] });
-    fixture.templateSender.prepare.mockResolvedValue({
-      status: 'BLOCKED',
-      pendingId: 'pending-1',
-      code: 'DEFAULT_MISSING',
-    });
-
-    await fixture.service.executeBilling('company-1');
-
-    expect(fixture.prisma.invoice.update).not.toHaveBeenCalled();
-    expect(fixture.prisma.invoice.updateMany).not.toHaveBeenCalled();
-    expect(fixture.emailQueue.addBulk).not.toHaveBeenCalled();
-    expect(fixture.prisma.collectionAttempt.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        ruleStepId: 'step-1',
-        channel: 'WHATSAPP',
-      }) as unknown,
-    });
-  });
-
-  it('keeps the email step on its own template and never prepares WhatsApp for it', async () => {
+  it('e-mail uses the model of the moment and never prepares WhatsApp for it', async () => {
     const fixture = createService({
       invoices: [buildInvoice({ ...paidPix, email: 'maria@example.test' })],
     });
-    fixture.ruleEngine.getNextStep.mockResolvedValue({
-      ruleStepId: 'step-2',
-      channel: 'EMAIL',
-      templateId: null,
-      emailTemplateId: 'email-pre-vencimento',
-      whatsappSelection: { mode: 'UNCONFIGURED' },
-      delayDays: -2,
-    });
+    fixture.ruleEngine.planContact.mockResolvedValue(
+      contact([{ ruleStepId: 'step-2', channel: 'EMAIL' }], 'BEFORE_DUE'),
+    );
 
     expect(await fixture.service.executeBilling('company-1')).toEqual({
       queued: 1,
       skipped: 0,
     });
-    expect(fixture.emailTemplatesService.resolveForRule).toHaveBeenCalledWith(
-      'company-1',
-      'email-pre-vencimento',
-    );
+    expect(
+      fixture.emailTemplatesService.resolveForPurpose,
+    ).toHaveBeenCalledWith('company-1', 'BEFORE_DUE');
     expect(fixture.templateSender.prepare).not.toHaveBeenCalled();
   });
 
-  it('nao substitui uma selecao de email indisponivel por outro template', async () => {
+  it('an e-mail model the company turned off is not replaced by another one', async () => {
     const fixture = createService({
       invoices: [buildInvoice({ ...paidPix, email: 'maria@example.test' })],
     });
-    fixture.ruleEngine.getNextStep.mockResolvedValue({
-      ruleStepId: 'step-2',
-      channel: 'EMAIL',
-      templateId: null,
-      emailTemplateId: 'email-unavailable',
-      whatsappSelection: { mode: 'UNCONFIGURED' },
-      delayDays: 0,
-    });
-    fixture.emailTemplatesService.resolveForRule.mockRejectedValue(
-      new Error('unavailable'),
+    fixture.ruleEngine.planContact.mockResolvedValue(
+      contact([{ ruleStepId: 'step-2', channel: 'EMAIL' }]),
     );
+    fixture.emailTemplatesService.resolveForPurpose.mockResolvedValue({
+      ...fixture.resolvedEmail,
+      isActive: false,
+    });
 
     expect(await fixture.service.executeBilling('company-1')).toEqual({
       queued: 0,
       skipped: 1,
     });
     expect(fixture.emailQueue.addBulk).not.toHaveBeenCalled();
+    expect(fixture.prisma.collectionAttempt.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'FAILED' }) as unknown,
+      }),
+    );
+    expect(logged(fixture.prisma, 'EMAIL_SKIPPED')).toBe(true);
   });
 
   it('records a missing opt-in as a failed attempt without preparing a message', async () => {
@@ -393,9 +427,17 @@ describe('BillingService', () => {
     });
     expect(fixture.templateSender.prepare).not.toHaveBeenCalled();
     expect(logged(fixture.prisma, 'WHATSAPP_OPT_IN_REQUIRED')).toBe(true);
-    expect(fixture.prisma.collectionAttempt.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ status: 'FAILED' }) as unknown,
-    });
+    expect(fixture.ruleEngine.claimContact).toHaveBeenCalledWith(
+      expect.anything(),
+      [
+        {
+          ruleStepId: 'step-1',
+          channel: 'WHATSAPP',
+          status: 'FAILED',
+          errorDetails: 'Opt-in WhatsApp ausente.',
+        },
+      ],
+    );
   });
 
   it('gera pagamento antes de preparar a mensagem de cobranca', async () => {
@@ -422,7 +464,7 @@ describe('BillingService', () => {
     expect(logged(prisma, 'WHATSAPP_QUEUED')).toBe(true);
   });
 
-  it('usa o template da etapa para a forma de pagamento da cobranca', async () => {
+  it('chooses the template by the payment method of the charge', async () => {
     const boleto = buildInvoice({
       billingType: 'BOLETO',
       gatewayId: '12345',
@@ -431,34 +473,20 @@ describe('BillingService', () => {
       boletoLink: 'https://boleto.example/12345',
     });
     const fixture = createService({ invoices: [buildInvoice(paidPix)] });
-    const step = {
-      ruleStepId: 'step-1',
-      channel: 'WHATSAPP',
-      templateId: null,
-      emailTemplateId: null,
-      whatsappSelection: { mode: 'DEFAULT', purpose: 'DUE_TODAY' },
-      whatsappMethodTemplates: {
-        PIX: null,
-        BOLETO: 'template-boleto',
-        BOLIX: null,
-      },
-      delayDays: 0,
-    };
-    fixture.ruleEngine.getNextStep.mockResolvedValue(step);
     await fixture.service.executeBilling('company-1');
-    // A Pix charge has no own template: the step's choice applies.
     expect(fixture.templateSender.prepare).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        selection: { mode: 'DEFAULT', purpose: 'DUE_TODAY' },
+        selection: expect.objectContaining({ billingMethod: 'PIX' }) as unknown,
       }),
     );
 
     const boletoFixture = createService({ invoices: [boleto] });
-    boletoFixture.ruleEngine.getNextStep.mockResolvedValue(step);
     await boletoFixture.service.executeBilling('company-1');
     expect(boletoFixture.templateSender.prepare).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        selection: { mode: 'EXPLICIT', templateId: 'template-boleto' },
+        selection: expect.objectContaining({
+          billingMethod: 'BOLETO',
+        }) as unknown,
       }),
     );
   });
@@ -678,20 +706,16 @@ describe('BillingService', () => {
     } = createService({
       invoices: [invoice],
     });
-    ruleEngine.getNextStep.mockResolvedValue({
-      ruleStepId: 'step-1',
-      channel: 'EMAIL',
-      templateId: null,
-      emailTemplateId: null,
-      delayDays: 0,
-    });
+    ruleEngine.planContact.mockResolvedValue(
+      contact([{ ruleStepId: 'step-1', channel: 'EMAIL' }]),
+    );
 
     const result = await service.executeBilling('company-1');
 
     expect(result).toEqual({ queued: 1, skipped: 0 });
-    expect(emailTemplatesService.resolveForRule).toHaveBeenCalledWith(
+    expect(emailTemplatesService.resolveForPurpose).toHaveBeenCalledWith(
       'company-1',
-      null,
+      'DUE_TODAY',
     );
     expect(emailService.buildCollectionEmailHtml).toHaveBeenCalledWith(
       expect.objectContaining({

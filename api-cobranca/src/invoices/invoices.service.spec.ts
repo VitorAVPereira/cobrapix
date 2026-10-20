@@ -2,6 +2,7 @@ import { InvoicesService } from './invoices.service.ts';
 import { PrismaService } from '../prisma/prisma.service';
 import { MessageQueueService } from '../queue/message.queue';
 import { PaymentService } from '../payment/payment.service';
+import { parseEmissionRequest } from './invoice-import';
 
 function decimal(value: number): { toNumber(): number } {
   return { toNumber: () => value };
@@ -1304,5 +1305,92 @@ describe('InvoicesService', () => {
         }) as unknown,
       });
     });
+  });
+});
+
+describe('InvoicesService emission requested at registration', () => {
+  function importService() {
+    const messageQueue = {
+      addInitialChargeJobs: jest.fn().mockResolvedValue(undefined),
+    };
+    const invoiceCreate = jest.fn().mockResolvedValue([{ id: 'invoice-1' }]);
+    const prisma = {
+      collectionProfile: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'profile-new' }),
+      },
+      company: {
+        findUnique: jest.fn().mockResolvedValue({
+          defaultLateFineBasisPoints: 0,
+          defaultLateInterestMonthlyBasisPoints: 0,
+          defaultPaymentDaysAfterDue: 30,
+        }),
+      },
+      $transaction: jest.fn((callback: (tx: unknown) => Promise<unknown>) =>
+        callback({
+          debtor: {
+            findMany: jest.fn().mockResolvedValue([]),
+            createManyAndReturn: jest
+              .fn()
+              .mockResolvedValue([{ id: 'debtor-1', document: '12345678909' }]),
+          },
+          invoice: { createManyAndReturn: invoiceCreate },
+        }),
+      ),
+    };
+    const service = new InvoicesService(
+      prisma as unknown as PrismaService,
+      messageQueue as unknown as MessageQueueService,
+      {
+        hasActiveFinancialProfile: jest.fn().mockResolvedValue(true),
+      } as unknown as PaymentService,
+    );
+    const rows = [
+      {
+        name: 'Maria Silva',
+        document: '12345678909',
+        phone_number: '+5511999999999',
+        email: 'maria@email.com',
+        original_amount: 10,
+        due_date: '2026-05-10',
+        billing_type: 'PIX' as const,
+      },
+    ];
+    return { service, messageQueue, rows };
+  }
+
+  it('declined: no emission message and no first-charge job', async () => {
+    const { service, messageQueue, rows } = importService();
+    await expect(
+      service.importCsv('company-1', rows, undefined, { send_now: false }),
+    ).resolves.toMatchObject({ initialChargeQueued: 0 });
+    expect(messageQueue.addInitialChargeJobs).not.toHaveBeenCalled();
+  });
+
+  it('requested: sent on the chosen channels, whatever the default', async () => {
+    const { service, messageQueue, rows } = importService();
+    await service.importCsv('company-1', rows, undefined, {
+      send_now: true,
+      send_channels: ['EMAIL', 'WHATSAPP'],
+    });
+    expect(messageQueue.addInitialChargeJobs).toHaveBeenCalledWith([
+      {
+        invoiceId: 'invoice-1',
+        companyId: 'company-1',
+        source: 'CSV',
+        requested: true,
+        channels: ['EMAIL', 'WHATSAPP'],
+      },
+    ]);
+  });
+
+  it('reads the import choice from the free JSON body', () => {
+    expect(parseEmissionRequest(undefined, undefined)).toEqual({});
+    expect(parseEmissionRequest(false, undefined)).toEqual({ send_now: false });
+    expect(parseEmissionRequest(true, ['EMAIL', 'EMAIL'])).toEqual({
+      send_now: true,
+      send_channels: ['EMAIL'],
+    });
+    expect(() => parseEmissionRequest('yes', undefined)).toThrow();
+    expect(() => parseEmissionRequest(true, ['SMS'])).toThrow();
   });
 });

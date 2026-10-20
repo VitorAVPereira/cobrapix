@@ -286,6 +286,8 @@ enum CollectionAttemptStatus {
   OPENED
   CLICKED
   BLOCKED
+  /// Superseded by a more recent contact or dated before the invoice existed: never sent.
+  SKIPPED
 }
 
 enum ConversationStatus {
@@ -396,6 +398,7 @@ model Company {
   financialValidations     FinancialValidationAttempt[]
   whatsappTemplateGrants   CompanyWhatsappTemplateGrant[]
   whatsappTemplateDefaults CompanyWhatsappTemplateDefault[]
+  templateRequests         TemplateRequest[]
   whatsappTemplatePending  WhatsappTemplatePendingSend[]
   disbursementSettings     DisbursementSettings[]
   disbursementRecipients   DisbursementRecipient[]
@@ -1414,6 +1417,8 @@ model GlobalMessageTemplate {
   mappingRevisions      WhatsappTemplateMappingRevision[]
   grants                CompanyWhatsappTemplateGrant[]
   defaults              CompanyWhatsappTemplateDefault[]
+  collectionSlots       CollectionTemplateSlot[]
+  stepOverrides         CollectionStepTemplateOverride[]
   createdAt             DateTime                          @default(now())
   updatedAt             DateTime                          @updatedAt
 
@@ -1498,6 +1503,71 @@ model CompanyWhatsappTemplateDefault {
 
   @@unique([companyId, purpose])
   @@index([templateId])
+}
+
+/// One of the 18 global collection templates (moment x payment method), chosen by the
+/// platform admin and used by every company. Version 0 means "no record yet".
+model CollectionTemplateSlot {
+  id              String                  @id @default(uuid())
+  purpose         WhatsappTemplatePurpose
+  billingMethod   BillingMethod
+  templateId      String?
+  template        GlobalMessageTemplate?  @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  version         Int                     @default(0)
+  updatedByUserId String?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  @@unique([purpose, billingMethod])
+  @@index([templateId])
+}
+
+/// Custom template of one rule step for one payment method, linked by the platform admin
+/// after a support request. It replaces the global template for that step only.
+model CollectionStepTemplateOverride {
+  id              String                @id @default(uuid())
+  companyId       String
+  ruleStepId      String
+  ruleStep        CollectionRuleStep    @relation(fields: [ruleStepId], references: [id], onDelete: Cascade)
+  billingMethod   BillingMethod
+  templateId      String
+  template        GlobalMessageTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  createdByUserId String?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@unique([ruleStepId, billingMethod])
+  @@index([companyId])
+  @@index([templateId])
+}
+
+enum TemplateRequestStatus {
+  OPEN
+  IN_PROGRESS
+  DONE
+  REJECTED
+}
+
+/// A company asks the platform for a custom WhatsApp template (support form). The text is
+/// what the company wants to say; it never carries debtor data.
+model TemplateRequest {
+  id                String                   @id @default(uuid())
+  companyId         String
+  company           Company                  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  requestedByUserId String
+  /// Step the request is about; kept as a plain ID because steps can be removed.
+  ruleStepId        String?
+  purpose           WhatsappTemplatePurpose?
+  billingMethod     BillingMethod?
+  message           String                   @db.Text
+  status            TemplateRequestStatus    @default(OPEN)
+  adminNote         String?                  @db.Text
+  version           Int                      @default(1)
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  @@index([status, createdAt])
+  @@index([companyId, createdAt])
 }
 
 /// Catalog, mapping, grant and default changes. Never stores rendered values.
@@ -1647,6 +1717,7 @@ model CollectionRuleStep {
   sendTimeEnd           String?
   isActive              Boolean                  @default(true)
   attempts              CollectionAttempt[]
+  templateOverrides     CollectionStepTemplateOverride[]
   createdAt             DateTime                 @default(now())
   updatedAt             DateTime                 @updatedAt
 

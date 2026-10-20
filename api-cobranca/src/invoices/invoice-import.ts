@@ -333,3 +333,32 @@ export function parseImportDecisions(
     };
   });
 }
+
+/** "Enviar cobrança agora" of new invoices; absent keeps the client or company default. */
+export interface EmissionRequest {
+  send_now?: boolean;
+  send_channels?: Array<'WHATSAPP' | 'EMAIL'>;
+}
+
+/** The import's emission choice arrives in the same free JSON body as the rows. */
+export function parseEmissionRequest(
+  sendNow: unknown,
+  sendChannels: unknown,
+): EmissionRequest {
+  const invalid = () =>
+    new BadRequestException('Envio da cobrança na importação inválido.');
+  if (sendNow === undefined) return {};
+  if (typeof sendNow !== 'boolean') throw invalid();
+  if (sendChannels === undefined) return { send_now: sendNow };
+  if (
+    !Array.isArray(sendChannels) ||
+    sendChannels.some(
+      (channel) => channel !== 'WHATSAPP' && channel !== 'EMAIL',
+    )
+  )
+    throw invalid();
+  return {
+    send_now: sendNow,
+    send_channels: [...new Set(sendChannels as Array<'WHATSAPP' | 'EMAIL'>)],
+  };
+}
