@@ -234,6 +234,48 @@ describe('CollectionRuleEngine.planContact', () => {
     ]);
   });
 
+  it('contacts on consecutive days both go out in the morning round', async () => {
+    const t = setup([
+      step('d-1', 0, 'WHATSAPP', -1),
+      step('d0', 1, 'WHATSAPP', 1),
+    ]);
+    // Yesterday the message left a few minutes into the 09:00 round.
+    t.attempts.push({
+      ruleStepId: 'd-1',
+      channel: 'WHATSAPP',
+      status: 'QUEUED',
+      createdAt: sp('2026-10-22', '09:04'),
+    });
+    await expect(
+      t.engine.planContact(t.invoice, t.at('2026-10-23', '09:00')),
+    ).resolves.toMatchObject({ kind: 'SEND', contact: { day: 0 } });
+  });
+
+  it('a contact added before the day of the last rule message is never sent', async () => {
+    // The payer got the old +10 message; the rule now has a +7 contact that never ran.
+    const t = setup([step('d7', 0, 'WHATSAPP', 7)]);
+    t.attempts.push({
+      ruleStepId: 'old-d10',
+      channel: 'WHATSAPP',
+      status: 'QUEUED',
+      createdAt: sp('2026-11-02', '09:00'),
+    });
+    await expect(
+      t.engine.planContact(t.invoice, t.at('2026-11-04', '09:00')),
+    ).resolves.toEqual({ kind: 'NONE' });
+    expect(t.attempts).toContainEqual(
+      expect.objectContaining({
+        ruleStepId: 'd7',
+        status: 'SKIPPED',
+        errorDetails:
+          'A fatura já recebeu uma mensagem da régua nesse dia ou depois.',
+      }),
+    );
+    expect(t.logs[0]?.description).toBe(
+      'Etapa do dia 7 não enviada: a fatura já recebeu uma mensagem da régua nesse dia ou depois.',
+    );
+  });
+
   it('a reminder that waited until the due date reads "Vence hoje"', async () => {
     const t = setup([step('d-1', 0, 'WHATSAPP', -1)]);
     t.intents.push({ createdAt: sp('2026-10-22', '17:00'), state: 'ACCEPTED' });
