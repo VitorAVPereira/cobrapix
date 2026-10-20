@@ -56,7 +56,7 @@ const PROFILE_VIEW_META: Record<CollectionProfileType, ProfileViewMeta> = {
   NEW: {
     label: "Novo Cliente",
     description:
-      "Uma sequência de boas-vindas e lembretes leves para quem está começando a pagar com você.",
+      "Lembretes de boas-vindas e um acompanhamento firme, sem exagero, enquanto você conhece o cliente.",
     icon: UserPlus,
   },
   GOOD: {
@@ -68,13 +68,13 @@ const PROFILE_VIEW_META: Record<CollectionProfileType, ProfileViewMeta> = {
   DOUBTFUL: {
     label: "Pagador Duvidoso",
     description:
-      "Mais pontos de contato para acompanhar pagamentos que precisam de atenção.",
+      "O acompanhamento mais próximo: mais lembretes antes do vencimento e contatos regulares depois.",
     icon: Meh,
   },
   BAD: {
     label: "Mau Pagador",
     description:
-      "Uma sequência de cobrança mais frequente e direta para pagamentos em atraso.",
+      "Lembretes antes do vencimento e poucos contatos depois: insistir demais não recupera o pagamento.",
     icon: Frown,
   },
 };
@@ -129,7 +129,7 @@ function contactCount(profile: CollectionRuleProfile): number {
 const RULES = [
   "A mensagem de cada contato é escolhida sozinha, pelo momento da cobrança e pela forma de pagamento.",
   "A mensagem de emissão é enviada quando você pede no cadastro da cobrança.",
-  "Entre duas mensagens da mesma cobrança há pelo menos 24 horas.",
+  "Entre duas mensagens da mesma cobrança passa pelo menos um dia.",
   "Se um contato atrasou e o próximo já chegou, só o mais recente é enviado.",
 ];
 

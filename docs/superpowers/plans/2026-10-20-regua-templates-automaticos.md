@@ -20,6 +20,11 @@ Especificação: [régua de cobrança com templates automáticos](../specs/2026-
   - Etapa já enviada aparece como "Já enviada: só é possível remover"; remover desativa e mantém no histórico (o backend da Fase 2 faz isso), com confirmação antes. Remover etapa com mensagem personalizada também pede confirmação.
   - "Enviar cobrança agora" entrou na nova cobrança (Cobranças e Clientes) e na importação, marcado conforme o padrão da empresa e com WhatsApp por padrão.
   - Os tipos e chamadas antigos de seleção de template por etapa saíram de `api-client.ts`; o backend ignora esses campos se uma tela antiga ainda os enviar.
+- [x] Ajustes de 20/10/2026 (pedido do responsável pelo produto):
+  - Linha do tempo de cada régua por fase (Emissão, Antes, No vencimento, Depois), com dias e canais.
+  - Réguas padrão revistas (Bom 3, Novo 5, Duvidoso 7, Mau 5 contatos), aplicadas também às empresas existentes pelo script `collection-rules:apply-standard` (`--preview`/`--apply`).
+  - Intervalo mínimo com 1 h de folga (23 h), para contatos em dias seguidos saírem na rodada das 09:00.
+  - Contato com data igual ou anterior à última mensagem da régua recebida pela fatura é pulado (`ALREADY_PASSED`): editar a régua, aplicar os novos padrões ou reclassificar o cliente não reenvia um momento já superado.
 
 ## Regras de envio (o coração da mudança)
 

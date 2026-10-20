@@ -47,24 +47,38 @@ Ordem segura da publicação (o backend novo já usa os 18 templates):
    build, `prisma migrate deploy`, subir a API (passos 3, 5 e 7, sem
    `templates:transition`, que já foi aplicada). Pausar o canal não impede a régua de
    preparar mensagens: só o despacho e o envio manual.
-2. Logo em seguida, em **Templates da régua**, escolher os 18 templates. Para Cartão só
+2. Ainda antes das 09:00, levar os 4 perfis padrão de todas as empresas às novas réguas
+   (perfis criados pela empresa não mudam; etapa já enviada é desativada e fica no histórico;
+   etapa no mesmo dia e canal mantém o ID). Primeiro a prévia, sem escrita; depois aplicar:
+
+   ```bash
+   sudo bash infra/interserver/compose.sh run --rm --no-deps api npm run collection-rules:apply-standard -- --preview
+   sudo bash infra/interserver/compose.sh run --rm --no-deps api npm run collection-rules:apply-standard -- --apply
+   ```
+
+   Esperado no `--apply`: `replaced` igual ao `toReplace` da prévia. Rodar de novo dá
+   `toReplace: 0` (idempotente). Contato com data anterior à última mensagem que a fatura já
+   recebeu é pulado, então faturas em andamento não recebem uma mensagem "voltando no tempo".
+3. Logo em seguida, em **Templates da régua**, escolher os 18 templates. Para Cartão só
    servem templates com o link de pagamento (sem Pix e sem boleto). Uma mensagem preparada
    antes disso (ex.: cobrança cadastrada com envio imediato) fica em **Envios pendentes**
    com "Sem template da régua"; revise e retome depois de escolher.
-3. Conferir, sem escrita, antes da rodada das 09:00:
+4. Conferir, sem escrita, antes da rodada das 09:00:
 
    ```bash
    sudo bash infra/interserver/compose.sh run --rm --no-deps api npm run collection-templates:preflight
    ```
 
-   Esperado: `"ok": true` e `"ready": 18`. Com `missing`, volte ao passo 2.
-4. Publicar o frontend (Vercel). Fazer um envio controlado para um
+   Esperado: `"ok": true` e `"ready": 18`. Com `missing`, volte ao passo 3.
+5. Publicar o frontend (Vercel). Fazer um envio controlado para um
    telefone próprio: cadastrar uma cobrança de teste com **Enviar cobrança agora**.
 
 Mudanças visíveis ao cliente final, para as notas da publicação:
 
 - A mensagem de emissão só sai quando pedida no cadastro da fatura (ou na importação).
-- Entre duas mensagens da mesma fatura há pelo menos 24 h; etapas atrasadas não saem
+- Os perfis padrão (Novo Cliente, Bom Pagador, Pagador Duvidoso, Mau Pagador) passam às
+  novas réguas, com menos contatos; perfis criados pela empresa não mudam.
+- Entre duas mensagens da mesma fatura passa pelo menos um dia; etapas atrasadas não saem
   em sequência: só a mais recente (as anteriores ficam registradas como puladas).
 - Fatura recorrente vencida usa "Atraso recorrente"; avulsa usa "Primeiro atraso" e
   depois "Atraso crítico".

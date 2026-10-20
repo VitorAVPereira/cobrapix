@@ -124,14 +124,13 @@ describe('CollectionProfileService defaults', () => {
 
     // The emission message is asked for when registering the invoice, not by the rule.
     expect(days.some((day) => day <= -30)).toBe(false);
-    expect(email.get(-2)).toBe('email-pre');
+    expect([...new Set(days)]).toEqual([-3, 0, 2, 7, 15]);
     expect(email.get(0)).toBe('email-vencimento');
-    expect(email.get(2)).toBe('email-primeiro-atraso');
-    expect(email.get(30)).toBe('email-critico');
+    expect(email.get(15)).toBe('email-recorrente');
     // WhatsApp steps follow the company's purpose default; no template is picked.
+    expect(whatsapp.get(-3)).toBe('BEFORE_DUE');
     expect(whatsapp.get(0)).toBe('DUE_TODAY');
-    expect(whatsapp.get(4)).toBe('RECURRING_OVERDUE');
-    expect(whatsapp.get(20)).toBe('RECURRING_OVERDUE');
+    expect(whatsapp.get(2)).toBe('FIRST_OVERDUE');
     expect(
       steps.every((step) =>
         step.channel === 'EMAIL'

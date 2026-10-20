@@ -31,6 +31,9 @@ escolhida pelo sistema, pelo **momento da cobrança** e pela **forma de pagament
 9. **Intervalo mínimo de 24 h** entre duas mensagens da mesma fatura. A mensagem que não cumpre o
    intervalo espera a próxima rodada. Lembrete com data anterior ao cadastro é ignorado. Se a espera
    alcançar a data da próxima etapa, só a mais recente é enviada.
+10. **Réguas padrão revistas (20/10/2026)**, para todas as empresas, inclusive as existentes
+    (os 4 perfis padrão, mesmo editados; perfis criados pela empresa não mudam). O intervalo
+    tem 1 h de folga para a rodada do dia seguinte sempre valer.
 
 ## Regras de envio
 
@@ -57,7 +60,27 @@ retida. O momento usa o dia real: um lembrete adiado pelas 24 h que sai no venci
 - Em cada rodada (09:00 e 17:00), entre os contatos com data até hoje ainda não enviados, só o **mais
   recente** é considerado; os anteriores ficam registrados como pulados e não saem mais.
 - Contato antes do vencimento com data anterior ao dia do cadastro da fatura é ignorado.
-- Se a última mensagem da fatura (emissão ou contato) foi há menos de 24 h, o contato espera.
+- Se a última mensagem da fatura (emissão ou contato) foi há menos de 23 h, o contato espera. É
+  o "pelo menos um dia" da tela: 24 h com 1 h de folga, para que um contato em dias seguidos saia
+  na rodada das 09:00 mesmo que a mensagem da véspera tenha saído alguns minutos depois na rodada.
+- Contato com data igual ou anterior ao dia em que a fatura recebeu a última mensagem da régua é
+  pulado: editar a régua ou mudar o cliente de perfil nunca volta no tempo.
+
+### Réguas padrão
+
+| Perfil | Contatos (dia: canais) | Total |
+| --- | --- | --- |
+| Bom Pagador | -3 e-mail · 0 WhatsApp · +3 WhatsApp e e-mail | 3 |
+| Novo Cliente | -3 WhatsApp · 0 WhatsApp e e-mail · +2 WhatsApp · +7 WhatsApp e e-mail · +15 e-mail | 5 |
+| Pagador Duvidoso | -5 e-mail · -2 WhatsApp · 0 WhatsApp e e-mail · +3 WhatsApp · +7 WhatsApp e e-mail · +15 WhatsApp · +30 e-mail | 7 |
+| Mau Pagador | -5 WhatsApp · -2 e-mail · 0 WhatsApp e e-mail · +7 WhatsApp e e-mail · +20 e-mail | 5 |
+
+O esforço vai para quem ainda recupera: o Duvidoso tem o acompanhamento mais próximo; o Mau
+Pagador recebe lembretes antes do vencimento e poucos contatos depois, porque insistir não
+recupera, custa por mensagem e desgasta o canal WhatsApp compartilhado (bloqueios e denúncias
+reduzem a qualidade para todas as empresas). Nenhum padrão tem contatos em dias seguidos.
+As empresas existentes recebem esses valores pelo script `collection-rules:apply-standard`
+(ver runbook).
 
 Exemplo: cadastro e emissão em 20/10 às 15h, vencimento em 23/10, lembrete em 21/10. O lembrete sai
 na rodada das 17h de 21/10. Se só pudesse sair em 23/10 e houver contato no vencimento, sai só o do
@@ -86,12 +109,13 @@ de ativação financeira e de pagamentos a colaboradores não mudam.
 
 As quatro fases vão num único PR. A ordem segura está no runbook
 [catálogo WhatsApp](../../operations/whatsapp-template-catalog.md#atualização-de-20102026-régua-com-templates-automáticos):
-backend depois da rodada das 17:00, escolha dos 18 templates, `collection-templates:preflight`
+backend depois da rodada das 17:00, réguas padrão nas empresas existentes
+(`collection-rules:apply-standard`), escolha dos 18 templates, `collection-templates:preflight`
 antes da rodada das 09:00 e então o frontend.
 
 Etapas já enviadas para alguma fatura mantêm dia e canal; removê-las só as desativa. As
 demais etapas mudam livremente (antes, um perfil com qualquer envio ficava travado).
 
 Mudanças visíveis ao cliente final (registrar nas notas de publicação): etapas atrasadas não saem
-mais em sequência (só a mais recente), a emissão depende do pedido no cadastro e há intervalo
-mínimo de 24 h entre mensagens.
+mais em sequência (só a mais recente), a emissão depende do pedido no cadastro, há intervalo
+mínimo de um dia entre mensagens e os 4 perfis padrão passam às novas réguas.

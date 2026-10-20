@@ -94,6 +94,16 @@ interface StandardProfile {
   steps: readonly StandardProfileStep[];
 }
 
+export interface StandardScheduleChange {
+  companyId: string;
+  profileId: string;
+  profileType: CollectionProfileType;
+  /** Contacts as "day:channels", e.g. "-3:W 0:E+W". */
+  before: string;
+  after: string;
+  action: 'UNCHANGED' | 'WOULD_REPLACE' | 'REPLACED';
+}
+
 interface ExistingProfile {
   id: string;
   companyId: string;
@@ -108,6 +118,12 @@ interface ExistingProfile {
   updatedAt: Date;
 }
 
+/**
+ * Effort goes where it still recovers: good payers get a light touch, doubtful payers the
+ * closest follow-up, and bad payers mostly reminders before the due date with few contacts
+ * after it (insisting does not recover and wears out the shared WhatsApp channel). No two
+ * contacts fall on consecutive days, so the minimum interval never delays one.
+ */
 const STANDARD_COLLECTION_PROFILES: readonly StandardProfile[] = [
   {
     name: 'Novo Cliente',
@@ -116,16 +132,13 @@ const STANDARD_COLLECTION_PROFILES: readonly StandardProfile[] = [
     daysOverdueMin: null,
     daysOverdueMax: null,
     steps: [
-      { day: -2, channel: 'EMAIL' },
-      { day: 0, channel: 'EMAIL' },
+      { day: -3, channel: 'WHATSAPP' },
       { day: 0, channel: 'WHATSAPP' },
-      { day: 2, channel: 'EMAIL' },
-      { day: 4, channel: 'WHATSAPP' },
+      { day: 0, channel: 'EMAIL' },
+      { day: 2, channel: 'WHATSAPP' },
+      { day: 7, channel: 'WHATSAPP' },
       { day: 7, channel: 'EMAIL' },
-      { day: 10, channel: 'WHATSAPP' },
       { day: 15, channel: 'EMAIL' },
-      { day: 20, channel: 'WHATSAPP' },
-      { day: 30, channel: 'EMAIL' },
     ],
   },
   {
@@ -135,10 +148,10 @@ const STANDARD_COLLECTION_PROFILES: readonly StandardProfile[] = [
     daysOverdueMin: null,
     daysOverdueMax: null,
     steps: [
-      { day: -2, channel: 'EMAIL' },
-      { day: 0, channel: 'EMAIL' },
+      { day: -3, channel: 'EMAIL' },
       { day: 0, channel: 'WHATSAPP' },
-      { day: 2, channel: 'WHATSAPP' },
+      { day: 3, channel: 'WHATSAPP' },
+      { day: 3, channel: 'EMAIL' },
     ],
   },
   {
@@ -148,22 +161,15 @@ const STANDARD_COLLECTION_PROFILES: readonly StandardProfile[] = [
     daysOverdueMin: 6,
     daysOverdueMax: 60,
     steps: [
-      { day: -7, channel: 'WHATSAPP' },
-      { day: -2, channel: 'EMAIL' },
-      { day: 0, channel: 'EMAIL' },
+      { day: -5, channel: 'EMAIL' },
+      { day: -2, channel: 'WHATSAPP' },
       { day: 0, channel: 'WHATSAPP' },
-      { day: 2, channel: 'WHATSAPP' },
+      { day: 0, channel: 'EMAIL' },
+      { day: 3, channel: 'WHATSAPP' },
+      { day: 7, channel: 'WHATSAPP' },
       { day: 7, channel: 'EMAIL' },
       { day: 15, channel: 'WHATSAPP' },
-      { day: 20, channel: 'EMAIL' },
-      { day: 30, channel: 'WHATSAPP' },
-      { day: 45, channel: 'EMAIL' },
-      { day: 60, channel: 'EMAIL' },
-      { day: 60, channel: 'WHATSAPP' },
-      { day: 75, channel: 'EMAIL' },
-      { day: 75, channel: 'WHATSAPP' },
-      { day: 90, channel: 'EMAIL' },
-      { day: 90, channel: 'WHATSAPP' },
+      { day: 30, channel: 'EMAIL' },
     ],
   },
   {
@@ -173,16 +179,13 @@ const STANDARD_COLLECTION_PROFILES: readonly StandardProfile[] = [
     daysOverdueMin: 61,
     daysOverdueMax: null,
     steps: [
+      { day: -5, channel: 'WHATSAPP' },
       { day: -2, channel: 'EMAIL' },
-      { day: 0, channel: 'EMAIL' },
       { day: 0, channel: 'WHATSAPP' },
-      { day: 2, channel: 'EMAIL' },
-      { day: 4, channel: 'WHATSAPP' },
+      { day: 0, channel: 'EMAIL' },
+      { day: 7, channel: 'WHATSAPP' },
       { day: 7, channel: 'EMAIL' },
-      { day: 10, channel: 'WHATSAPP' },
-      { day: 15, channel: 'EMAIL' },
-      { day: 30, channel: 'WHATSAPP' },
-      { day: 40, channel: 'EMAIL' },
+      { day: 20, channel: 'EMAIL' },
     ],
   },
 ];
@@ -536,6 +539,88 @@ export class CollectionProfileService {
       bolixTemplateId: null,
       cardTemplateId: null,
     };
+  }
+
+  /**
+   * Moves every company's standard profiles (the first active one of each type, as
+   * `ensureStandardProfiles` finds it) to the current standard schedule; profiles the
+   * company created stay as they are. Through `setSteps`: a step already sent is retired,
+   * never moved, and a step on the same day and channel keeps its ID and history.
+   */
+  async syncStandardSchedules(
+    apply: boolean,
+  ): Promise<StandardScheduleChange[]> {
+    const profiles = await this.prisma.collectionProfile.findMany({
+      orderBy: { createdAt: 'asc' },
+      include: {
+        steps: { where: { isActive: true }, orderBy: { stepOrder: 'asc' } },
+      },
+    });
+    const byCompany = new Map<string, typeof profiles>();
+    for (const profile of profiles)
+      byCompany.set(profile.companyId, [
+        ...(byCompany.get(profile.companyId) ?? []),
+        profile,
+      ]);
+
+    const changes: StandardScheduleChange[] = [];
+    for (const [companyId, companyProfiles] of byCompany) {
+      for (const standard of STANDARD_COLLECTION_PROFILES) {
+        const profile = this.findReusableProfile(companyProfiles, standard);
+        if (!profile?.isActive) continue;
+        const current = companyProfiles
+          .find((item) => item.id === profile.id)!
+          .steps.reduce<Array<StandardProfileStep & { id: string }>>(
+            (list, step) => [
+              ...list,
+              {
+                id: step.id,
+                channel: step.channel,
+                day: (list.at(-1)?.day ?? 0) + step.delayDays,
+              },
+            ],
+            [],
+          );
+        const change = {
+          companyId,
+          profileId: profile.id,
+          profileType: standard.profileType,
+          before: describeSchedule(current),
+          after: describeSchedule(standard.steps),
+        };
+        if (change.before === change.after) {
+          changes.push({ ...change, action: 'UNCHANGED' });
+          continue;
+        }
+        if (apply) {
+          const kept = new Set<string>();
+          await this.setSteps(
+            companyId,
+            profile.id,
+            standard.steps.map((step, index) => {
+              const same = current.find(
+                (item) =>
+                  item.day === step.day &&
+                  item.channel === step.channel &&
+                  !kept.has(item.id),
+              );
+              if (same) kept.add(same.id);
+              return {
+                ...(same ? { id: same.id } : {}),
+                stepOrder: index,
+                channel: step.channel,
+                delayDays: step.day - (standard.steps[index - 1]?.day ?? 0),
+              };
+            }),
+          );
+        }
+        changes.push({
+          ...change,
+          action: apply ? 'REPLACED' : 'WOULD_REPLACE',
+        });
+      }
+    }
+    return changes;
   }
 
   async classifyDebtors(companyId: string) {
@@ -969,4 +1054,20 @@ export class CollectionProfileService {
   private isTime(value: string): boolean {
     return /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
   }
+}
+
+/** "-3:W 0:E+W 7:E": one entry per day, channels in a fixed order. */
+function describeSchedule(steps: readonly StandardProfileStep[]): string {
+  const days = new Map<number, Set<string>>();
+  for (const step of steps)
+    days.set(
+      step.day,
+      (days.get(step.day) ?? new Set()).add(
+        step.channel === 'EMAIL' ? 'E' : 'W',
+      ),
+    );
+  return [...days.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([day, channels]) => `${day}:${[...channels].sort().join('+')}`)
+    .join(' ');
 }

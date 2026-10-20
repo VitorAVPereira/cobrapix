@@ -104,7 +104,7 @@ async function seedLegacy() {
     const profiles = concurrentReads[0];
     assert.ok(concurrentReads.every(result => result.length === 4), 'concurrent first page loads share the same default profiles');
     assert.equal(await prisma.collectionProfile.count({ where: { companyId: company.id } }), 4);
-    assert.equal(profiles.flatMap(profile => profile.steps).length, 40, 'no "Inicial" steps: the emission is asked for at registration');
+    assert.equal(profiles.flatMap(profile => profile.steps).length, 27, 'no "Inicial" steps: the emission is asked for at registration');
     assert.ok(profiles.every(profile => profile.steps.every(step => step.scheduleDay > -30 && step.attempted === false)));
     assert.equal(await prisma.globalMessageTemplate.count(), templateCountBefore, 'no internal WhatsApp template is seeded');
     assert.ok(profiles.every(profile => profile.steps.every(step => step.templateId === null && step.pixTemplateId === null)), 'no template is chosen per step');
@@ -199,6 +199,28 @@ async function seedLegacy() {
     await service.setSteps(company.id, profileId, []);
     assert.equal(await prisma.collectionStepTemplateOverride.count({ where: { ruleStepId } }), 0, 'deleted with its step');
     console.log('PASS custom templates of a step: before the global one, inside the company, deleted with the step');
+    // Standard schedules of existing companies: preview writes nothing; apply moves only the
+    // first profile of each type; a sent step on a kept day and channel keeps its ID; idempotent.
+    const older = await prisma.company.create({ data: { corporateName: 'Older tenant', email: 'older@example.test', phoneNumber: '5511866666666', document: '11222333000181' } });
+    await service.listProfiles(older.id);
+    const olderNew = await prisma.collectionProfile.findFirstOrThrow({ where: { companyId: older.id, profileType: 'NEW' } });
+    const oldSchedule = await service.setSteps(older.id, olderNew.id, [{ stepOrder: 0, channel: 'EMAIL', delayDays: -2 }, { stepOrder: 1, channel: 'WHATSAPP', delayDays: 2 }]);
+    const olderDebtor = await prisma.debtor.create({ data: { companyId: older.id, name: 'Older', phoneNumber: '5511955555555', collectionProfileId: olderNew.id } });
+    const olderInvoice = await prisma.invoice.create({ data: { companyId: older.id, debtorId: olderDebtor.id, originalAmount: 10, dueDate: due, status: 'PENDING' } });
+    for (const step of oldSchedule) await prisma.collectionAttempt.create({ data: { companyId: older.id, invoiceId: olderInvoice.id, ruleStepId: step.id, channel: step.channel, status: 'SENT' } });
+    const vip = await service.createProfile(older.id, { name: 'Clientes VIP', profileType: 'NEW' });
+    await service.setSteps(older.id, vip.id, [{ stepOrder: 0, channel: 'EMAIL', delayDays: 1 }]);
+    const forOlder = changes => changes.filter(change => change.companyId === older.id).map(change => [change.profileType, change.action, change.before]);
+    assert.deepEqual(forOlder(await service.syncStandardSchedules(false)), [['NEW', 'WOULD_REPLACE', '-2:E 0:W'], ['GOOD', 'UNCHANGED', '-3:E 0:W 3:E+W'], ['DOUBTFUL', 'UNCHANGED', '-5:E -2:W 0:E+W 3:W 7:E+W 15:W 30:E'], ['BAD', 'UNCHANGED', '-5:W -2:E 0:E+W 7:E+W 20:E']]);
+    assert.equal(await prisma.collectionRuleStep.count({ where: { profileId: olderNew.id, isActive: true } }), 2, 'preview writes nothing');
+    assert.deepEqual(forOlder(await service.syncStandardSchedules(true)).map(([type, action]) => [type, action]), [['NEW', 'REPLACED'], ['GOOD', 'UNCHANGED'], ['DOUBTFUL', 'UNCHANGED'], ['BAD', 'UNCHANGED']]);
+    const moved = await service.getProfile(older.id, olderNew.id);
+    assert.deepEqual(moved.steps.map(step => [step.scheduleDay, step.channel]), [[-3, 'WHATSAPP'], [0, 'WHATSAPP'], [0, 'EMAIL'], [2, 'WHATSAPP'], [7, 'WHATSAPP'], [7, 'EMAIL'], [15, 'EMAIL']]);
+    assert.equal(moved.steps[1].id, oldSchedule[1].id, 'the sent day-0 WhatsApp keeps its ID and history');
+    assert.equal((await prisma.collectionRuleStep.findUnique({ where: { id: oldSchedule[0].id } })).isActive, false, 'the sent -2 e-mail is retired');
+    assert.deepEqual((await service.getProfile(older.id, vip.id)).steps.map(step => [step.scheduleDay, step.channel]), [[1, 'EMAIL']], 'a profile the company created is not touched');
+    assert.ok(forOlder(await service.syncStandardSchedules(true)).every(([, action]) => action === 'UNCHANGED'), 'idempotent');
+    console.log('PASS standard schedules of existing companies: preview, apply on standard profiles only, sent steps kept, idempotent');
     console.log(`PASS collection rules on PostgreSQL 16 with ${migrations.length} migrations`);
   } finally {
     if (prisma) await prisma.$disconnect();
