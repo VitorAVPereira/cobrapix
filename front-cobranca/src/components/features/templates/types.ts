@@ -243,6 +243,67 @@ export interface SetTemplateDefaultInput {
   expectedVersion: number;
 }
 
+/** The six collection moments: each has one global template per payment method. */
+export const COLLECTION_PURPOSES = [
+  "EMISSION",
+  "BEFORE_DUE",
+  "DUE_TODAY",
+  "FIRST_OVERDUE",
+  "RECURRING_OVERDUE",
+  "CRITICAL_OVERDUE",
+] as const satisfies readonly TemplatePurpose[];
+
+export type CollectionPurpose = (typeof COLLECTION_PURPOSES)[number];
+
+/** Names of the collection moments as the company reads them. */
+export const MOMENT_LABELS: Record<CollectionPurpose, string> = {
+  EMISSION: "Emissão",
+  BEFORE_DUE: "Lembrete",
+  DUE_TODAY: "Vence hoje",
+  FIRST_OVERDUE: "Primeiro atraso",
+  RECURRING_OVERDUE: "Atraso recorrente",
+  CRITICAL_OVERDUE: "Atraso crítico",
+};
+
+/** When each moment is used, in the words of the collection rules. */
+export const MOMENT_HINTS: Record<CollectionPurpose, string> = {
+  EMISSION: "Enviado no cadastro da fatura, quando o envio imediato é pedido.",
+  BEFORE_DUE: "Enviado antes do vencimento.",
+  DUE_TODAY: "Enviado no dia do vencimento.",
+  FIRST_OVERDUE: "Primeira mensagem após o vencimento de uma fatura avulsa.",
+  RECURRING_OVERDUE: "Mensagens após o vencimento de uma fatura recorrente.",
+  CRITICAL_OVERDUE:
+    "Mensagens seguintes após o vencimento de uma fatura avulsa.",
+};
+
+export const COLLECTION_SLOT_METHODS = ["PIX", "BOLIX", "CREDIT_CARD"] as const;
+export type CollectionSlotMethod = (typeof COLLECTION_SLOT_METHODS)[number];
+
+export const SLOT_METHOD_LABELS: Record<CollectionSlotMethod, string> = {
+  PIX: "Pix",
+  BOLIX: "Bolix",
+  CREDIT_CARD: "Cartão",
+};
+
+export interface CollectionTemplateSlot {
+  purpose: CollectionPurpose;
+  billingMethod: CollectionSlotMethod;
+  templateId: string | null;
+  templateName: string | null;
+  /** 0 while the slot was never saved. */
+  version: number;
+  available: Readiness;
+}
+
+export interface CollectionTemplateSlots {
+  slots: CollectionTemplateSlot[];
+  /** Approved, ready templates that fit each method. */
+  options: Record<
+    CollectionSlotMethod,
+    Array<{ id: string; name: string; language: string }>
+  >;
+}
+
 /** What a company reads: approved content, no mapping, grants or diagnostics. */
 export interface CompanyWhatsappTemplate {
   id: string;

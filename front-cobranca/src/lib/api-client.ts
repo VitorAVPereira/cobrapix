@@ -28,6 +28,8 @@ import type {
   AdminCatalogQuery,
   AdminWhatsappTemplate,
   CatalogPage,
+  CollectionSlotMethod,
+  CollectionTemplateSlots,
   CompanyTemplateAccess,
   CompanyWhatsappTemplate,
   CountedCatalogPage,
@@ -2418,6 +2420,23 @@ class ApiClient {
   ): Promise<{ version: number }> {
     return this.fetch<{ version: number }>(
       `/admin/whatsapp-templates/companies/${encodeURIComponent(companyId)}/defaults/${encodeURIComponent(purpose)}`,
+      { method: "PUT", body: JSON.stringify(data) },
+    );
+  }
+
+  async getCollectionTemplateSlots(): Promise<CollectionTemplateSlots> {
+    return this.fetch<CollectionTemplateSlots>(
+      "/admin/whatsapp-templates/collection-slots",
+    );
+  }
+
+  async setCollectionTemplateSlot(
+    purpose: TemplatePurpose,
+    method: CollectionSlotMethod,
+    data: SetTemplateDefaultInput,
+  ): Promise<{ version: number }> {
+    return this.fetch<{ version: number }>(
+      `/admin/whatsapp-templates/collection-slots/${encodeURIComponent(purpose)}/${encodeURIComponent(method)}`,
       { method: "PUT", body: JSON.stringify(data) },
     );
   }

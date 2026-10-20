@@ -5,7 +5,8 @@ Especificação: [régua de cobrança com templates automáticos](../specs/2026-
 ## Registro de execução
 
 - [x] Fase 0: especificação e plano.
-- [ ] Fase 1: os 18 templates globais e a grade no admin (não muda envios).
+- [x] Fase 1: os 18 templates globais e a grade no admin (não muda envios).
+  - Desvio: os padrões por finalidade de cada empresa continuam na tela do admin até a Fase 2, porque ainda controlam os envios; a grade nova entra ao lado deles e os substitui na Fase 2.
 - [ ] Fase 2: novas regras de envio no backend.
 - [ ] Fase 3: tela de templates da empresa e pedido ao suporte.
 - [ ] Fase 4: nova régua e "Enviar cobrança agora" no cadastro.

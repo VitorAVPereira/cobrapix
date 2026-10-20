@@ -7,6 +7,7 @@ import type { EmailTemplate } from "@/lib/api-client";
 import { WhatsappCatalog } from "@/components/features/templates/WhatsappCatalog";
 import { TemplateMappingEditor } from "@/components/features/templates/TemplateMappingEditor";
 import { CompanyTemplateGrants } from "@/components/features/templates/CompanyTemplateGrants";
+import { CollectionTemplateSlots } from "@/components/features/templates/CollectionTemplateSlots";
 import { TemplatePendingSends } from "@/components/features/templates/TemplatePendingSends";
 
 export default function AdminTemplatesPage(): ReactNode {
@@ -91,6 +92,7 @@ export default function AdminTemplatesPage(): ReactNode {
           onSaved={() => setRefreshKey((value) => value + 1)}
         />
       )}
+      <CollectionTemplateSlots />
       <CompanyTemplateGrants />
       <TemplatePendingSends scope="ADMIN" />
       <section className="space-y-4">

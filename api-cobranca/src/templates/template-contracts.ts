@@ -35,6 +35,10 @@ export const COLLECTION_PURPOSES: readonly TemplatePurpose[] = [
   'CRITICAL_OVERDUE',
 ];
 
+/** Methods still issued: each collection moment has one global template per method. */
+export const COLLECTION_SLOT_METHODS = ['PIX', 'BOLIX', 'CREDIT_CARD'] as const;
+export type CollectionSlotMethod = (typeof COLLECTION_SLOT_METHODS)[number];
+
 export type TemplateSelection =
   | { mode: 'EXPLICIT'; templateId: string }
   | { mode: 'DEFAULT'; purpose: TemplatePurpose }

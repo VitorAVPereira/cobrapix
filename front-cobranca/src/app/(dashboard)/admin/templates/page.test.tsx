@@ -18,6 +18,8 @@ const mockApi = {
   getCompanyTemplatePending: jest.fn(),
   previewTemplateResume: jest.fn(),
   confirmTemplateResume: jest.fn(),
+  getCollectionTemplateSlots: jest.fn(),
+  setCollectionTemplateSlot: jest.fn(),
 };
 let mockRole = "PLATFORM_ADMIN";
 jest.mock("@/lib/use-api-client", () => ({ useApiClient: () => mockApi }));
@@ -52,6 +54,10 @@ const imported = {
 beforeEach(() => {
   jest.clearAllMocks();
   mockRole = "PLATFORM_ADMIN";
+  mockApi.getCollectionTemplateSlots.mockResolvedValue({
+    slots: [],
+    options: { PIX: [], BOLIX: [], CREDIT_CARD: [] },
+  });
   mockApi.getAdminWhatsappTemplates.mockResolvedValue({
     items: [imported],
     nextCursor: null,

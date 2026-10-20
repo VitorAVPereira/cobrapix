@@ -11,6 +11,7 @@ import { TemplateMappingService } from './template-mapping.service';
 import { TemplateRenderingModule } from './template-rendering.module';
 import { TemplatePolicyModule } from './template-policy.module';
 import { CompanyTemplateAccessService } from './company-template-access.service';
+import { CollectionTemplateSlotService } from './collection-template-slot.service';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { CompanyTemplateAccessService } from './company-template-access.service'
     TemplateCatalogSyncService,
     TemplateMappingService,
     CompanyTemplateAccessService,
+    CollectionTemplateSlotService,
     PlatformAdminGuard,
   ],
   exports: [
@@ -33,6 +35,7 @@ import { CompanyTemplateAccessService } from './company-template-access.service'
     TemplateCatalogSyncService,
     TemplateMappingService,
     CompanyTemplateAccessService,
+    CollectionTemplateSlotService,
   ],
 })
 export class TemplatesModule {}

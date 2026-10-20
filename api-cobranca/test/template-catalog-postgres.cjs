@@ -258,6 +258,42 @@ section('grants and defaults: isolation, versions, concurrency and audit rollbac
   assert.deepEqual(await resolve(b.id), { allowed: false, code: 'NOT_GRANTED' });
 });
 
+const { CollectionTemplateSlotService } = require('../src/templates/collection-template-slot.service.ts');
+
+section('collection slots: 18 global slots, versions, concurrency and constraints', async ({ prisma, pool }) => {
+  const policy = new TemplatePolicyService(config);
+  const slots = new CollectionTemplateSlotService(prisma, policy);
+  const admin = randomUUID();
+  const ready = await prisma.globalMessageTemplate.findUnique({ where: { providerAccountId_metaTemplateId: { providerAccountId: WABA_A, metaTemplateId: '700004' } } });
+  const unmapped = await prisma.globalMessageTemplate.findUnique({ where: { providerAccountId_metaTemplateId: { providerAccountId: WABA_A, metaTemplateId: '799999' } } });
+  const raw = (purpose, method) => pool.query('INSERT INTO "CollectionTemplateSlot" ("id","purpose","billingMethod","updatedAt") VALUES ($1,$2,$3,NOW())', [randomUUID(), purpose, method]);
+
+  // Only the six collection moments and the methods still issued have a slot.
+  await assert.rejects(raw('ACTIVATION_NOTICE', 'PIX'), /slot_check/);
+  await assert.rejects(raw('DUE_TODAY', 'BOLETO'), /slot_check/);
+
+  // An unusable template is refused without leaving a version change or an audit row.
+  await assert.rejects(slots.set('DUE_TODAY', 'PIX', unmapped.id, 0, admin), error => error.getStatus() === 422);
+  assert.equal(await prisma.whatsappTemplateAudit.count({ where: { action: 'COLLECTION_SLOT_CHANGED' } }), 0);
+
+  // Concurrent writes with the same expected version: exactly one wins.
+  const concurrent = await Promise.allSettled([1, 2, 3].map(() => slots.set('DUE_TODAY', 'PIX', ready.id, 0, admin)));
+  assert.equal(concurrent.filter(result => result.status === 'fulfilled').length, 1);
+  assert.ok(concurrent.filter(result => result.status === 'rejected').every(result => result.reason.getStatus() === 409));
+  assert.equal(await prisma.whatsappTemplateAudit.count({ where: { action: 'COLLECTION_SLOT_CHANGED' } }), 1);
+  await assert.rejects(raw('DUE_TODAY', 'PIX'), /purpose_billingMethod_key/, 'one row per slot');
+
+  // Global: usable without any company grant, and a link-only template fits the card.
+  const view = await slots.list();
+  assert.equal(view.slots.length, 18);
+  const dueToday = view.slots.find(slot => slot.purpose === 'DUE_TODAY' && slot.billingMethod === 'PIX');
+  assert.deepEqual({ ...dueToday, templateName: undefined }, { purpose: 'DUE_TODAY', billingMethod: 'PIX', templateId: ready.id, templateName: undefined, version: 1, available: { ready: true, code: null } });
+  assert.ok(view.options.CREDIT_CARD.some(option => option.id === ready.id));
+  assert.ok(!view.options.PIX.some(option => option.id === unmapped.id), 'unmapped templates are not offered');
+  assert.deepEqual(await slots.set('BEFORE_DUE', 'CREDIT_CARD', ready.id, 0, admin), { version: 1 });
+  assert.deepEqual(await slots.set('BEFORE_DUE', 'CREDIT_CARD', null, 1, admin), { version: 2 });
+});
+
 module.exports = { section, imported, company, WABA_A, WABA_B };
 
 if (require.main === module) {

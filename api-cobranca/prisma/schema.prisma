@@ -1414,6 +1414,7 @@ model GlobalMessageTemplate {
   mappingRevisions      WhatsappTemplateMappingRevision[]
   grants                CompanyWhatsappTemplateGrant[]
   defaults              CompanyWhatsappTemplateDefault[]
+  collectionSlots       CollectionTemplateSlot[]
   createdAt             DateTime                          @default(now())
   updatedAt             DateTime                          @updatedAt
 
@@ -1497,6 +1498,23 @@ model CompanyWhatsappTemplateDefault {
   updatedAt       DateTime                @updatedAt
 
   @@unique([companyId, purpose])
+  @@index([templateId])
+}
+
+/// One of the 18 global collection templates (moment x payment method), chosen by the
+/// platform admin and used by every company. Version 0 means "no record yet".
+model CollectionTemplateSlot {
+  id              String                  @id @default(uuid())
+  purpose         WhatsappTemplatePurpose
+  billingMethod   BillingMethod
+  templateId      String?
+  template        GlobalMessageTemplate?  @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  version         Int                     @default(0)
+  updatedByUserId String?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  @@unique([purpose, billingMethod])
   @@index([templateId])
 }
 
