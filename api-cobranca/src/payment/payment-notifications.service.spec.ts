@@ -168,6 +168,11 @@ describe('PaymentNotificationsService', () => {
         html: expect.stringContaining('Responsavel Silva') as string,
       }),
     );
+    const html = (resendMailer.sendEmail.mock.calls[0] as [{ html: string }])[0]
+      .html;
+    expect(html).toContain('Forma de pagamento');
+    expect(html).toMatch(/>Pix<\/td>/);
+    expect(html).not.toContain('>PIX<');
     expect(updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'notification-1', companyId: 'company-1' },

@@ -10,6 +10,14 @@ import { resolvePeriodInstants } from '../billing/dashboard-period';
 import { searchDigits } from '../common/search-digits';
 import type { PaymentNotificationFilterDto } from './dto/payment-notification.dto';
 
+// Names the company sees in the app; the stored value is a technical code.
+const BILLING_METHOD_LABELS: Record<string, string> = {
+  PIX: 'Pix',
+  BOLETO: 'Boleto',
+  BOLIX: 'Bolix',
+  CREDIT_CARD: 'Cartão de crédito',
+};
+
 const notificationInclude = {
   invoice: {
     select: {
@@ -431,7 +439,7 @@ export class PaymentNotificationsService {
           ${this.buildDetailRow('Fatura', invoice.id)}
           ${this.buildDetailRow('Devedor', invoice.debtor.name)}
           ${this.buildDetailRow('Valor', amount)}
-          ${this.buildDetailRow('Metodo', invoice.billingType)}
+          ${this.buildDetailRow('Forma de pagamento', BILLING_METHOD_LABELS[invoice.billingType] ?? invoice.billingType)}
           ${this.buildDetailRow('Data da baixa', this.formatDateTime(paidAt))}
           ${educationRows}
         </table>
