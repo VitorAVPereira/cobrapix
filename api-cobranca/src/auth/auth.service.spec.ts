@@ -243,6 +243,7 @@ describe('AuthService', () => {
     const emailInput = sendEmail.mock.calls[0]?.[0];
     expect(emailInput).toBeDefined();
     if (!emailInput) throw new Error('E-mail de recuperação não enviado');
+    expect(emailInput.subject).toBe('Redefinição de senha — Cifra+');
     expect(emailInput.html).toContain(
       'http://localhost:3000/redefinir-senha?token=company-1.',
     );

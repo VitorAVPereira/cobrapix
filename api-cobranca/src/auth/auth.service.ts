@@ -348,7 +348,7 @@ export class AuthService {
         apiKey,
         from,
         to: [input.email],
-        subject: 'Redefinição de senha — CobraPix',
+        subject: 'Redefinição de senha — Cifra+',
         html: `<p>${safeName},</p><p>Recebemos uma solicitação para redefinir sua senha.</p><p><a href="${resetUrl}">Redefinir minha senha</a></p><p>Este link expira em 30 minutos e pode ser usado uma única vez.</p>`,
       });
     } catch (error: unknown) {

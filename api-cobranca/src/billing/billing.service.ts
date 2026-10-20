@@ -580,6 +580,7 @@ export class BillingService {
         subject: string;
         html: string;
         ruleStepId: string;
+        pixCopyPaste: string;
       }> = [];
       let skippedCount = skippedPre;
 
@@ -714,7 +715,7 @@ export class BillingService {
               year: 'numeric',
               timeZone: 'America/Sao_Paulo',
             }).format(invoice.dueDate),
-            paymentMethod: paymentData.billingTypeLabel,
+            billingType: paymentData.billingType,
             paymentLink: paymentData.paymentLink,
             pixCopyPaste: paymentData.pixCopiaECola,
             boletoLine: paymentData.boletoLinhaDigitavel,
@@ -730,6 +731,7 @@ export class BillingService {
             subject,
             html,
             ruleStepId,
+            pixCopyPaste: paymentData.pixCopiaECola,
           });
         }
       }
@@ -997,7 +999,7 @@ export class BillingService {
       CREDIT_CARD: 'Cartão de crédito',
       PIX: 'PIX',
       BOLETO: 'Boleto',
-      BOLIX: 'Bolix',
+      BOLIX: 'Boleto ou PIX',
     };
 
     return labels[billingType];

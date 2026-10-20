@@ -1,13 +1,28 @@
 import { assertChannelAvailable } from '../communications/channel-availability';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { CollectionAttemptStatus, InvoiceStatus, Prisma } from '@prisma/client';
+import {
+  BillingMethod,
+  CollectionAttemptStatus,
+  InvoiceStatus,
+  Prisma,
+} from '@prisma/client';
 import { createHash } from 'crypto';
+import { toBuffer as qrCodePng } from 'qrcode';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { ResendMailerService } from '../common/resend-mailer.service';
 
 const EMAIL_PACING_MS = 100;
+const PIX_QR_CONTENT_ID = 'pix-qrcode';
+
+/** How the payer reads each method; BOLIX is paid either way. */
+const BILLING_METHOD_EMAIL_LABELS: Record<BillingMethod, string> = {
+  PIX: 'PIX',
+  BOLETO: 'Boleto',
+  BOLIX: 'Boleto ou PIX',
+  CREDIT_CARD: 'Cartão de crédito',
+};
 
 interface SendEmailInput {
   companyId: string;
@@ -18,6 +33,8 @@ interface SendEmailInput {
   subject: string;
   html: string;
   ruleStepId?: string;
+  // Pix copia e cola of the charge: drawn as the QR Code the HTML shows inline.
+  pixCopyPaste?: string;
 }
 
 interface EmailStats {
@@ -87,6 +104,7 @@ export class EmailService {
     const fromEmail = this.requireConfig('RESEND_FROM_EMAIL');
     const replyTo = this.requireConfig('RESEND_REPLY_TO');
 
+    const attachments = await this.buildPixQrAttachments(input);
     await this.enforcePacing();
 
     const { id: messageId } = await this.resendMailer.sendEmail({
@@ -97,6 +115,7 @@ export class EmailService {
       html: input.html,
       replyTo,
       idempotencyKey: `collection:${input.companyId}:${input.invoiceId}:${input.ruleStepId ?? 'direct'}`,
+      ...(attachments.length ? { attachments } : {}),
     });
 
     await this.markAttemptAsSent(input, messageId);
@@ -371,37 +390,52 @@ export class EmailService {
     companyName: string;
     amount: string;
     dueDate: string;
-    paymentMethod: string;
+    billingType: BillingMethod;
     paymentLink: string;
     pixCopyPaste?: string;
     boletoLine?: string;
     bodyText?: string;
   }): string {
+    const methodLabel = BILLING_METHOD_EMAIL_LABELS[params.billingType];
+    const pixCopyPaste = params.pixCopyPaste?.trim() ?? '';
+    const boletoLine = params.boletoLine?.trim() ?? '';
+    const codeStyle =
+      'display:block;margin:8px 0 16px;padding:12px;background:#f1f5f9;border-radius:6px;font-size:12px;word-break:break-all;color:#1e293b';
+    // The QR Code image travels as an inline attachment (see send): pixCopyPaste must
+    // also go in the e-mail job, or the image is missing.
+    const pixInstruction = pixCopyPaste
+      ? `<p style="margin:0;font-size:14px;color:#475569">Pague com PIX: aponte a câmera do celular para o QR Code ou use o PIX copia e cola.</p>
+           <img src="cid:${PIX_QR_CONTENT_ID}" width="180" height="180" alt="QR Code PIX" style="display:block;margin:12px auto;width:180px;height:180px;border:0">
+           <p style="margin:0;font-size:13px;color:#64748b">PIX copia e cola:</p>
+           <code style="${codeStyle}">${this.escapeHtml(pixCopyPaste)}</code>`
+      : '';
+    const boletoInstruction = boletoLine
+      ? `<p style="margin:0;font-size:13px;color:#64748b">Linha digitável do boleto:</p>
+           <code style="${codeStyle}">${this.escapeHtml(boletoLine)}</code>`
+      : '';
     const paymentInstruction =
-      params.paymentMethod === 'PIX'
-        ? `<p style="margin:0;font-size:14px;color:#475569">Use o PIX copia e cola abaixo:</p>
-           <code style="display:block;margin:8px 0;padding:12px;background:#f1f5f9;border-radius:6px;font-size:12px;word-break:break-all;color:#1e293b">${this.escapeHtml(params.pixCopyPaste ?? '')}</code>`
-        : `<p style="margin:0;font-size:14px;color:#475569">Clique no botao abaixo para acessar o boleto:</p>
-           <p style="margin:8px 0;font-size:12px;color:#94a3b8">Linha digitavel: ${this.escapeHtml(params.boletoLine ?? '')}</p>`;
+      pixInstruction || boletoInstruction
+        ? `${pixInstruction}${boletoInstruction}`
+        : `<p style="margin:0;font-size:14px;color:#475569">Clique no botão abaixo para acessar o pagamento.</p>`;
 
     const bodyContent = params.bodyText
       ? this.renderEmailBodyText(params.bodyText)
-      : `<p style="margin:0 0 8px;font-size:14px;color:#64748b">Ola, <strong style="color:#1e293b">${this.escapeHtml(params.debtorName)}</strong></p>
-        <p style="margin:0 0 24px;font-size:14px;color:#475569;line-height:1.6">Segue a cobranca pendente. Clique no botao abaixo para realizar o pagamento.</p>`;
+      : `<p style="margin:0 0 8px;font-size:14px;color:#64748b">Olá, <strong style="color:#1e293b">${this.escapeHtml(params.debtorName)}</strong></p>
+        <p style="margin:0 0 24px;font-size:14px;color:#475569;line-height:1.6">Segue a cobrança pendente. Clique no botão abaixo para realizar o pagamento.</p>`;
 
     return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cobranca</title>
+  <title>Cobrança</title>
 </head>
 <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
   <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08)">
     <tr>
       <td style="padding:32px 32px 0;background:linear-gradient(135deg,#059669 0%,#047857 100%)">
         <h1 style="margin:0;font-size:20px;color:#fff;font-weight:700">${this.escapeHtml(params.companyName)}</h1>
-        <p style="margin:4px 0 0;font-size:13px;color:#a7f3d0">Cobranca via ${params.paymentMethod}</p>
+        <p style="margin:4px 0 0;font-size:13px;color:#a7f3d0">Cobrança via ${this.escapeHtml(methodLabel)}</p>
       </td>
     </tr>
     <tr>
@@ -421,15 +455,44 @@ export class EmailService {
         </table>
         ${paymentInstruction}
         <a href="${this.escapeHtml(params.paymentLink)}" style="display:block;width:100%;box-sizing:border-box;background:#059669;color:#fff;text-align:center;padding:14px 24px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:600;margin-top:16px">Pagar agora</a>
-        <p style="margin:16px 0 0;font-size:13px;color:#94a3b8">Se o botao nao funcionar, copie e cole este link no navegador:</p>
+        <p style="margin:16px 0 0;font-size:13px;color:#94a3b8">Se o botão não funcionar, copie e cole este link no navegador:</p>
         <p style="margin:4px 0 0;font-size:12px;color:#64748b;word-break:break-all">${this.escapeHtml(params.paymentLink)}</p>
         <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0 16px">
-        <p style="margin:0;font-size:11px;color:#94a3b8;line-height:1.5">Esta e uma mensagem automatica de cobranca. Em caso de duvidas, entre em contato com ${this.escapeHtml(params.companyName)}.</p>
+        <p style="margin:0;font-size:11px;color:#94a3b8;line-height:1.5">Esta é uma mensagem automática de cobrança. Em caso de dúvidas, entre em contato com ${this.escapeHtml(params.companyName)}.</p>
       </td>
     </tr>
   </table>
 </body>
 </html>`;
+  }
+
+  private async buildPixQrAttachments(
+    input: SendEmailInput,
+  ): Promise<{ filename: string; content: Buffer; contentId: string }[]> {
+    const payload = input.pixCopyPaste?.trim();
+    if (!payload || !input.html.includes(`cid:${PIX_QR_CONTENT_ID}`)) return [];
+    try {
+      const content = await qrCodePng(payload, {
+        type: 'png',
+        width: 360,
+        margin: 1,
+      });
+      return [
+        {
+          filename: 'qrcode-pix.png',
+          content,
+          contentId: PIX_QR_CONTENT_ID,
+        },
+      ];
+    } catch (error) {
+      // The copia e cola below the image still pays the charge: send without the image.
+      this.logger.warn(
+        `QR Code PIX nao gerado para a fatura ${input.invoiceId}: ${
+          error instanceof Error ? error.message : 'erro desconhecido'
+        }`,
+      );
+      return [];
+    }
   }
 
   private async findReusableMessageId(

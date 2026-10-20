@@ -9,6 +9,8 @@ export interface SendResendEmailInput {
   html: string;
   replyTo?: string;
   idempotencyKey?: string;
+  // An attachment with contentId is shown inline, referenced in the HTML as cid:<contentId>.
+  attachments?: { filename: string; content: Buffer; contentId?: string }[];
 }
 
 export interface SendResendEmailResult {
@@ -94,6 +96,7 @@ export class ResendMailerService {
       subject: input.subject,
       html: input.html,
       ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+      ...(input.attachments?.length ? { attachments: input.attachments } : {}),
     };
     const result = input.idempotencyKey
       ? await resend.emails.send(payload, {

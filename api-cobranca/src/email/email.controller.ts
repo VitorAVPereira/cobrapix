@@ -53,8 +53,8 @@ export class EmailController {
       companyName: 'Empresa Teste',
       amount: 'R$ 150,50',
       dueDate: '30/12/2026',
-      paymentMethod: 'PIX',
-      paymentLink: 'https://cobrapix.com/pagar',
+      billingType: 'PIX',
+      paymentLink: 'https://ciframais.com.br/pagar',
       pixCopyPaste: '00020101021226860014br.gov.bcb.pix2564qrcodepix.example',
     });
 
@@ -64,7 +64,7 @@ export class EmailController {
       debtorId: 'test-debtor',
       debtorName: 'Cliente Teste',
       email: body.email,
-      subject: '[CobraPix] Teste de envio de e-mail',
+      subject: '[Cifra+] Teste de envio de e-mail',
       html,
     });
 

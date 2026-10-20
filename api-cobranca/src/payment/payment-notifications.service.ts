@@ -10,6 +10,14 @@ import { resolvePeriodInstants } from '../billing/dashboard-period';
 import { searchDigits } from '../common/search-digits';
 import type { PaymentNotificationFilterDto } from './dto/payment-notification.dto';
 
+// Names the company sees in the app; the stored value is a technical code.
+const BILLING_METHOD_LABELS: Record<string, string> = {
+  PIX: 'Pix',
+  BOLETO: 'Boleto',
+  BOLIX: 'Bolix',
+  CREDIT_CARD: 'Cartão de crédito',
+};
+
 const notificationInclude = {
   invoice: {
     select: {
@@ -399,7 +407,7 @@ export class PaymentNotificationsService {
   private buildEmailSubject(invoice: PaidInvoiceRecord): string {
     const studentLabel = invoice.studentName ? ` - ${invoice.studentName}` : '';
 
-    return `[CobraPix] Pagamento confirmado${studentLabel}`;
+    return `[Cifra+] Pagamento confirmado${studentLabel}`;
   }
 
   private buildPaymentEmailHtml(
@@ -426,12 +434,12 @@ export class PaymentNotificationsService {
     </tr>
     <tr>
       <td style="padding:28px 32px">
-        <p style="margin:0 0 18px;font-size:14px;line-height:1.6;color:#475569">Uma baixa de pagamento foi registrada no CobraPix.</p>
+        <p style="margin:0 0 18px;font-size:14px;line-height:1.6;color:#475569">Uma baixa de pagamento foi registrada no Cifra+.</p>
         <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:#f8fafc;border-radius:8px;overflow:hidden">
           ${this.buildDetailRow('Fatura', invoice.id)}
           ${this.buildDetailRow('Devedor', invoice.debtor.name)}
           ${this.buildDetailRow('Valor', amount)}
-          ${this.buildDetailRow('Metodo', invoice.billingType)}
+          ${this.buildDetailRow('Forma de pagamento', BILLING_METHOD_LABELS[invoice.billingType] ?? invoice.billingType)}
           ${this.buildDetailRow('Data da baixa', this.formatDateTime(paidAt))}
           ${educationRows}
         </table>
