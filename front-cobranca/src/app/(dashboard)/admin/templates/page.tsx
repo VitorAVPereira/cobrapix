@@ -8,6 +8,7 @@ import { WhatsappCatalog } from "@/components/features/templates/WhatsappCatalog
 import { TemplateMappingEditor } from "@/components/features/templates/TemplateMappingEditor";
 import { CompanyTemplateGrants } from "@/components/features/templates/CompanyTemplateGrants";
 import { CollectionTemplateSlots } from "@/components/features/templates/CollectionTemplateSlots";
+import { TemplateRequestsAdmin } from "@/components/features/templates/TemplateRequestsAdmin";
 import { TemplatePendingSends } from "@/components/features/templates/TemplatePendingSends";
 
 export default function AdminTemplatesPage(): ReactNode {
@@ -93,6 +94,7 @@ export default function AdminTemplatesPage(): ReactNode {
         />
       )}
       <CollectionTemplateSlots />
+      <TemplateRequestsAdmin />
       <CompanyTemplateGrants />
       <TemplatePendingSends scope="ADMIN" />
       <section className="space-y-4">

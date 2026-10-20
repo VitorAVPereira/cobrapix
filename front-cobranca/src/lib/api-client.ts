@@ -30,6 +30,11 @@ import type {
   CatalogPage,
   CollectionSlotMethod,
   CollectionTemplateSlots,
+  CompanyCollectionStep,
+  CompanyCollectionTemplates,
+  CreateTemplateRequestInput,
+  TemplateRequest,
+  TemplateRequestStatus,
   CompanyTemplateAccess,
   CompanyWhatsappTemplate,
   CountedCatalogPage,
@@ -2438,6 +2443,65 @@ class ApiClient {
     return this.fetch<{ version: number }>(
       `/admin/whatsapp-templates/collection-slots/${encodeURIComponent(purpose)}/${encodeURIComponent(method)}`,
       { method: "PUT", body: JSON.stringify(data) },
+    );
+  }
+
+  async getCollectionTemplates(): Promise<CompanyCollectionTemplates> {
+    return this.fetch<CompanyCollectionTemplates>("/templates/collection");
+  }
+
+  async getTemplateRequests(): Promise<TemplateRequest[]> {
+    return this.fetch<TemplateRequest[]>("/templates/requests");
+  }
+
+  async createTemplateRequest(
+    data: CreateTemplateRequestInput,
+  ): Promise<TemplateRequest> {
+    return this.fetch<TemplateRequest>("/templates/requests", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getAdminTemplateRequests(
+    status?: TemplateRequestStatus,
+  ): Promise<TemplateRequest[]> {
+    return this.fetch<TemplateRequest[]>(
+      `/admin/whatsapp-templates/requests${status ? `?status=${status}` : ""}`,
+    );
+  }
+
+  async updateTemplateRequest(
+    id: string,
+    data: {
+      status: TemplateRequestStatus;
+      adminNote?: string;
+      expectedVersion: number;
+    },
+  ): Promise<TemplateRequest> {
+    return this.fetch<TemplateRequest>(
+      `/admin/whatsapp-templates/requests/${encodeURIComponent(id)}`,
+      { method: "PUT", body: JSON.stringify(data) },
+    );
+  }
+
+  async getCompanyCollectionSteps(
+    companyId: string,
+  ): Promise<CompanyCollectionStep[]> {
+    return this.fetch<CompanyCollectionStep[]>(
+      `/admin/whatsapp-templates/companies/${encodeURIComponent(companyId)}/collection-steps`,
+    );
+  }
+
+  async setCompanyCollectionStepTemplate(
+    companyId: string,
+    ruleStepId: string,
+    method: CollectionSlotMethod,
+    templateId: string | null,
+  ): Promise<{ templateId: string | null }> {
+    return this.fetch<{ templateId: string | null }>(
+      `/admin/whatsapp-templates/companies/${encodeURIComponent(companyId)}/collection-steps/${encodeURIComponent(ruleStepId)}/${encodeURIComponent(method)}`,
+      { method: "PUT", body: JSON.stringify({ templateId }) },
     );
   }
 

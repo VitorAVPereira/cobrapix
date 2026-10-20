@@ -13,6 +13,8 @@ import { TemplatePolicyModule } from './template-policy.module';
 import { CompanyTemplateAccessService } from './company-template-access.service';
 import { CollectionTemplateSlotService } from './collection-template-slot.service';
 import { CollectionStepTemplateService } from './collection-step-template.service';
+import { TemplateRequestService } from './template-request.service';
+import { ResendMailerService } from '../common/resend-mailer.service';
 
 @Module({
   imports: [
@@ -30,6 +32,8 @@ import { CollectionStepTemplateService } from './collection-step-template.servic
     CompanyTemplateAccessService,
     CollectionTemplateSlotService,
     CollectionStepTemplateService,
+    TemplateRequestService,
+    ResendMailerService,
     PlatformAdminGuard,
   ],
   exports: [

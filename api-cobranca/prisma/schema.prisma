@@ -398,6 +398,7 @@ model Company {
   financialValidations     FinancialValidationAttempt[]
   whatsappTemplateGrants   CompanyWhatsappTemplateGrant[]
   whatsappTemplateDefaults CompanyWhatsappTemplateDefault[]
+  templateRequests         TemplateRequest[]
   whatsappTemplatePending  WhatsappTemplatePendingSend[]
   disbursementSettings     DisbursementSettings[]
   disbursementRecipients   DisbursementRecipient[]
@@ -1538,6 +1539,35 @@ model CollectionStepTemplateOverride {
   @@unique([ruleStepId, billingMethod])
   @@index([companyId])
   @@index([templateId])
+}
+
+enum TemplateRequestStatus {
+  OPEN
+  IN_PROGRESS
+  DONE
+  REJECTED
+}
+
+/// A company asks the platform for a custom WhatsApp template (support form). The text is
+/// what the company wants to say; it never carries debtor data.
+model TemplateRequest {
+  id                String                   @id @default(uuid())
+  companyId         String
+  company           Company                  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  requestedByUserId String
+  /// Step the request is about; kept as a plain ID because steps can be removed.
+  ruleStepId        String?
+  purpose           WhatsappTemplatePurpose?
+  billingMethod     BillingMethod?
+  message           String                   @db.Text
+  status            TemplateRequestStatus    @default(OPEN)
+  adminNote         String?                  @db.Text
+  version           Int                      @default(1)
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  @@index([status, createdAt])
+  @@index([companyId, createdAt])
 }
 
 /// Catalog, mapping, grant and default changes. Never stores rendered values.

@@ -19,6 +19,7 @@ import {
   PreviewTemplateMappingDto,
   SaveTemplateMappingDto,
   SetCollectionStepTemplateDto,
+  UpdateTemplateRequestDto,
   SetTemplateDefaultDto,
   SetTemplateGrantDto,
 } from './dto';
@@ -28,6 +29,7 @@ import { TemplateMappingService } from './template-mapping.service';
 import { CompanyTemplateAccessService } from './company-template-access.service';
 import { CollectionTemplateSlotService } from './collection-template-slot.service';
 import { CollectionStepTemplateService } from './collection-step-template.service';
+import { TemplateRequestService } from './template-request.service';
 import {
   COLLECTION_PURPOSES,
   COLLECTION_SLOT_METHODS,
@@ -50,7 +52,30 @@ export class AdminTemplatesController {
     private readonly access: CompanyTemplateAccessService,
     private readonly slots: CollectionTemplateSlotService,
     private readonly stepTemplates: CollectionStepTemplateService,
+    private readonly requests: TemplateRequestService,
   ) {}
+
+  @Get('requests')
+  listRequests(@Query('status') status?: string) {
+    if (status && !['OPEN', 'IN_PROGRESS', 'DONE', 'REJECTED'].includes(status))
+      throw new BadRequestException('Situação inválida.');
+    return this.requests.listForAdmin(
+      status as 'OPEN' | 'IN_PROGRESS' | 'DONE' | 'REJECTED' | undefined,
+    );
+  }
+
+  @Put('requests/:id')
+  updateRequest(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateTemplateRequestDto,
+  ) {
+    return this.requests.updateStatus(
+      id,
+      dto.status,
+      dto.adminNote ?? null,
+      dto.expectedVersion,
+    );
+  }
 
   @Get()
   list(@Query() query: AdminCatalogQueryDto) {

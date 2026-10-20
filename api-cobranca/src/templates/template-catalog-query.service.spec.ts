@@ -125,3 +125,105 @@ describe('TemplateCatalogQueryService', () => {
     expect(where).toEqual({ companyId: 'company-a', enabled: true });
   });
 });
+
+describe('TemplateCatalogQueryService collection templates of a company', () => {
+  const ready = {
+    allowed: true,
+    template: {
+      name: 'lembrete_pix',
+      language: 'pt_BR',
+      parsed: {
+        body: 'Olá {{1}}, sua cobrança vence em breve.',
+        parameterFormat: 'POSITIONAL',
+        variables: ['1'],
+        footer: 'Caso já tenha pago, desconsidere.',
+        paymentButton: null,
+        pixButton: { index: 0, label: 'Copiar código Pix' },
+        boletoButton: null,
+        quickReplies: [],
+        fingerprint: 'f',
+      },
+      mapping: {
+        body: { '1': { kind: 'SOURCE', source: 'DEBTOR_NAME' } },
+        pixButton: { index: 0, source: 'PIX_COPY_PASTE' },
+      },
+    },
+  };
+
+  it('shows the 18 moments with a fictitious preview and only this company custom ones', async () => {
+    const { service, prisma } = setup();
+    Object.assign(prisma, {
+      collectionTemplateSlot: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            purpose: 'BEFORE_DUE',
+            billingMethod: 'PIX',
+            templateId: 'tpl-pix',
+          },
+        ]),
+      },
+      collectionStepTemplateOverride: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            ruleStepId: 'step-2',
+            billingMethod: 'PIX',
+            templateId: 'tpl-pix',
+            ruleStep: {
+              profile: {
+                name: 'Novo Cliente',
+                steps: [
+                  { id: 'step-1', delayDays: -2 },
+                  { id: 'step-2', delayDays: 5 },
+                ],
+              },
+            },
+          },
+        ]),
+      },
+    });
+    const evaluateGlobal = jest.fn().mockResolvedValue(ready);
+    Object.assign((service as unknown as { policy: object }).policy, {
+      evaluateGlobal,
+    });
+
+    const view = await service.companyCollectionTemplates('company-a');
+
+    expect(view.moments).toHaveLength(18);
+    expect(view.moments).toContainEqual({
+      purpose: 'BEFORE_DUE',
+      billingMethod: 'PIX',
+      template: {
+        name: 'lembrete_pix',
+        content: expect.objectContaining({
+          body: 'Olá {{1}}, sua cobrança vence em breve.',
+          pixButton: { index: 0, label: 'Copiar código Pix' },
+        }) as unknown,
+        previewBody: 'Olá Maria Exemplo, sua cobrança vence em breve.',
+      },
+    });
+    expect(view.moments).toContainEqual({
+      purpose: 'EMISSION',
+      billingMethod: 'CREDIT_CARD',
+      template: null,
+    });
+    expect(view.custom).toEqual([
+      expect.objectContaining({
+        ruleStepId: 'step-2',
+        profileName: 'Novo Cliente',
+        scheduleDay: 3,
+      }),
+    ]);
+    const overrides = (
+      prisma as unknown as {
+        collectionStepTemplateOverride: { findMany: jest.Mock };
+      }
+    ).collectionStepTemplateOverride.findMany;
+    expect(overrides).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { companyId: 'company-a', ruleStep: { isActive: true } },
+      }),
+    );
+    // The same template is evaluated once.
+    expect(evaluateGlobal).toHaveBeenCalledTimes(1);
+  });
+});

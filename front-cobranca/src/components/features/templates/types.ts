@@ -307,6 +307,85 @@ export interface CollectionTemplateSlots {
   >;
 }
 
+/** "Dia do vencimento", "3 dias antes do vencimento", "5 dias após o vencimento". */
+export function scheduleDayLabel(day: number): string {
+  if (day === 0) return "Dia do vencimento";
+  const count = Math.abs(day);
+  const unit = count === 1 ? "dia" : "dias";
+  return day < 0
+    ? `${count} ${unit} antes do vencimento`
+    : `${count} ${unit} após o vencimento`;
+}
+
+/** A collection template as the company sees it: approved content and a fictitious preview. */
+export interface CollectionTemplateView {
+  name: string;
+  content: TemplateContentView;
+  previewBody: string | null;
+}
+
+export interface CompanyCollectionTemplates {
+  /** The 18 global templates; null while the platform has not configured one. */
+  moments: Array<{
+    purpose: CollectionPurpose;
+    billingMethod: CollectionSlotMethod;
+    template: CollectionTemplateView | null;
+  }>;
+  /** Custom templates linked to the company's steps after support requests. */
+  custom: Array<{
+    ruleStepId: string;
+    profileName: string;
+    scheduleDay: number;
+    billingMethod: CollectionSlotMethod;
+    template: CollectionTemplateView | null;
+  }>;
+}
+
+export type TemplateRequestStatus = "OPEN" | "IN_PROGRESS" | "DONE" | "REJECTED";
+
+export const REQUEST_STATUS_LABELS: Record<TemplateRequestStatus, string> = {
+  OPEN: "Recebido",
+  IN_PROGRESS: "Em andamento",
+  DONE: "Concluído",
+  REJECTED: "Não atendido",
+};
+
+export interface TemplateRequest {
+  id: string;
+  ruleStepId: string | null;
+  purpose: CollectionPurpose | null;
+  billingMethod: CollectionSlotMethod | null;
+  message: string;
+  status: TemplateRequestStatus;
+  adminNote: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  /** Admin listing only. */
+  companyId?: string;
+  companyName?: string;
+}
+
+export interface CreateTemplateRequestInput {
+  ruleStepId?: string;
+  purpose?: CollectionPurpose;
+  billingMethod?: CollectionSlotMethod;
+  message: string;
+}
+
+/** WhatsApp step of a company, as the admin links custom templates to it. */
+export interface CompanyCollectionStep {
+  ruleStepId: string;
+  profileId: string;
+  profileName: string;
+  scheduleDay: number;
+  customTemplates: Array<{
+    billingMethod: CollectionSlotMethod;
+    templateId: string;
+    templateName: string;
+  }>;
+}
+
 /** What a company reads: approved content, no mapping, grants or diagnostics. */
 export interface CompanyWhatsappTemplate {
   id: string;

@@ -8,11 +8,16 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { paymentPageBaseUrl, parseStoredTemplate } from './template-components';
 import {
+  COLLECTION_PURPOSES,
+  COLLECTION_SLOT_METHODS,
+  ParsedTemplate,
+  ReadyTemplate,
   RenderResult,
   TEMPLATE_PURPOSES,
   TemplateBlockCode,
   TemplateMapping,
   TemplatePurpose,
+  type CollectionSlotMethod,
 } from './template-contracts';
 import { TemplatePolicyService } from './template-policy.service';
 import { renderTemplate, syntheticValues } from './template-renderer';
@@ -35,6 +40,53 @@ export interface TemplateContentView {
   boletoButton: { label: string; index: number } | null;
   /** Static quick reply buttons, shown as approved. */
   quickReplies: string[];
+}
+
+/** A collection template as the company sees it: approved content and a fictitious preview. */
+export interface CollectionTemplateView {
+  name: string;
+  content: TemplateContentView;
+  /** Body filled with fictitious data, as the payer would read it. */
+  previewBody: string | null;
+}
+
+export interface CompanyCollectionTemplates {
+  /** The 18 global templates; null while the platform has not configured one. */
+  moments: Array<{
+    purpose: TemplatePurpose;
+    billingMethod: CollectionSlotMethod;
+    template: CollectionTemplateView | null;
+  }>;
+  /** Custom templates linked to this company's steps after support requests. */
+  custom: Array<{
+    ruleStepId: string;
+    profileName: string;
+    scheduleDay: number;
+    billingMethod: CollectionSlotMethod;
+    template: CollectionTemplateView | null;
+  }>;
+}
+
+/** Approved content of a parsed template; the codes sent are always the invoice's own. */
+function contentView(parsed: ParsedTemplate): TemplateContentView {
+  return {
+    body: parsed.body,
+    footer: parsed.footer,
+    button: parsed.paymentButton
+      ? {
+          label: parsed.paymentButton.label,
+          url: parsed.paymentButton.url,
+          index: parsed.paymentButton.index,
+        }
+      : null,
+    pixButton: parsed.pixButton
+      ? { label: parsed.pixButton.label, index: parsed.pixButton.index }
+      : null,
+    boletoButton: parsed.boletoButton
+      ? { label: parsed.boletoButton.label, index: parsed.boletoButton.index }
+      : null,
+    quickReplies: parsed.quickReplies,
+  };
 }
 
 /** What a company sees: approved content only, no mapping, grants or diagnostics. */
@@ -352,6 +404,107 @@ export class TemplateCatalogQueryService {
     );
   }
 
+  /**
+   * The collection templates a company's payers receive: the 18 global ones and the
+   * custom ones linked to this company's steps. Only usable templates are shown, with
+   * a fictitious preview; nothing about other companies, mappings or grants.
+   */
+  async companyCollectionTemplates(
+    companyId: string,
+  ): Promise<CompanyCollectionTemplates> {
+    const [slots, overrides] = await Promise.all([
+      this.prisma.collectionTemplateSlot.findMany({
+        select: { purpose: true, billingMethod: true, templateId: true },
+      }),
+      this.prisma.collectionStepTemplateOverride.findMany({
+        where: { companyId, ruleStep: { isActive: true } },
+        select: {
+          ruleStepId: true,
+          billingMethod: true,
+          templateId: true,
+          ruleStep: {
+            select: {
+              profile: {
+                select: {
+                  name: true,
+                  steps: {
+                    where: { isActive: true },
+                    orderBy: { stepOrder: 'asc' },
+                    select: { id: true, delayDays: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    ]);
+    const views = new Map<string, Promise<CollectionTemplateView | null>>();
+    const view = (templateId: string | null) => {
+      if (!templateId) return Promise.resolve(null);
+      if (!views.has(templateId))
+        views.set(templateId, this.collectionTemplateView(templateId));
+      return views.get(templateId)!;
+    };
+    const moments: CompanyCollectionTemplates['moments'] = [];
+    for (const purpose of COLLECTION_PURPOSES)
+      for (const billingMethod of COLLECTION_SLOT_METHODS)
+        moments.push({
+          purpose,
+          billingMethod,
+          template: await view(
+            slots.find(
+              (slot) =>
+                slot.purpose === purpose &&
+                slot.billingMethod === billingMethod,
+            )?.templateId ?? null,
+          ),
+        });
+    const custom: CompanyCollectionTemplates['custom'] = [];
+    for (const override of overrides) {
+      let day = 0;
+      for (const step of override.ruleStep.profile.steps) {
+        day += step.delayDays;
+        if (step.id === override.ruleStepId) break;
+      }
+      custom.push({
+        ruleStepId: override.ruleStepId,
+        profileName: override.ruleStep.profile.name,
+        scheduleDay: day,
+        billingMethod: override.billingMethod as CollectionSlotMethod,
+        template: await view(override.templateId),
+      });
+    }
+    return { moments, custom };
+  }
+
+  private async collectionTemplateView(
+    templateId: string,
+  ): Promise<CollectionTemplateView | null> {
+    const decision = await this.prisma.$transaction((tx) =>
+      this.policy.evaluateGlobal(tx, templateId),
+    );
+    if (!decision.allowed) return null;
+    return {
+      name: decision.template.name,
+      content: contentView(decision.template.parsed),
+      previewBody: this.previewBody(decision.template),
+    };
+  }
+
+  private previewBody(template: ReadyTemplate): string | null {
+    const sample = syntheticValues(
+      paymentPageBaseUrl(this.config.get<string>('FRONTEND_URL')),
+    );
+    const rendered = renderTemplate(
+      template.parsed,
+      template.mapping,
+      sample.values,
+      sample.paymentUrl,
+    );
+    return rendered.ok ? rendered.body : null;
+  }
+
   private async companyTemplateOrNull(
     companyId: string,
     templateId: string,
@@ -370,33 +523,12 @@ export class TemplateCatalogQueryService {
         select: { purpose: true },
       }),
     ]);
-    const { parsed } = decision.template;
     return {
       id: templateId,
       name: decision.template.name,
       language: decision.template.language,
       category: template.metaProviderCategory,
-      content: {
-        body: parsed.body,
-        footer: parsed.footer,
-        button: parsed.paymentButton
-          ? {
-              label: parsed.paymentButton.label,
-              url: parsed.paymentButton.url,
-              index: parsed.paymentButton.index,
-            }
-          : null,
-        pixButton: parsed.pixButton
-          ? { label: parsed.pixButton.label, index: parsed.pixButton.index }
-          : null,
-        boletoButton: parsed.boletoButton
-          ? {
-              label: parsed.boletoButton.label,
-              index: parsed.boletoButton.index,
-            }
-          : null,
-        quickReplies: parsed.quickReplies,
-      },
+      content: contentView(decision.template.parsed),
       defaultFor: defaults.map((row) => row.purpose),
     };
   }

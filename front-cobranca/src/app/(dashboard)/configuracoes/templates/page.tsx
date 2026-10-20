@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import type { EmailTemplate, SaveEmailTemplateInput } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
-import { CompanyWhatsappTemplates } from "@/components/features/templates/CompanyWhatsappTemplates";
+import { CompanyCollectionTemplates } from "@/components/features/templates/CompanyCollectionTemplates";
 
 type Channel = "WHATSAPP" | "EMAIL";
 
@@ -96,8 +96,9 @@ export default function TemplatesPage() {
           Modelos de cobrança
         </h1>
         <p className="mt-1 text-sm text-slate-600">
-          No WhatsApp você consulta os templates liberados para sua empresa. No
-          e-mail você personaliza a saudação, as instruções e a assinatura.
+          No WhatsApp você vê a mensagem de cada momento da cobrança, por forma
+          de pagamento. No e-mail você personaliza a saudação, as instruções e a
+          assinatura.
         </p>
       </div>
       <div className="flex gap-2">
@@ -114,7 +115,7 @@ export default function TemplatesPage() {
         ))}
       </div>
       {channel === "WHATSAPP" ? (
-        <CompanyWhatsappTemplates />
+        <CompanyCollectionTemplates />
       ) : (
         <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
           <aside className="space-y-2">

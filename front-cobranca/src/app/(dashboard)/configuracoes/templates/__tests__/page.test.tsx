@@ -3,8 +3,8 @@ import TemplatesPage from "../page";
 import type { EmailTemplate } from "@/lib/api-client";
 
 const mockApi = {
-  getTemplates: jest.fn(),
-  getTemplatePreview: jest.fn(),
+  getCollectionTemplates: jest.fn(),
+  getTemplateRequests: jest.fn(),
   getEmailTemplates: jest.fn(),
   updateEmailTemplate: jest.fn(),
 };
@@ -33,23 +33,20 @@ const email = {
 describe("TemplatesPage", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockApi.getTemplates.mockResolvedValue({ items: [], nextCursor: null });
+    mockApi.getCollectionTemplates.mockResolvedValue({ moments: [], custom: [] });
+    mockApi.getTemplateRequests.mockResolvedValue([]);
     mockApi.getEmailTemplates.mockResolvedValue([email]);
     mockApi.updateEmailTemplate.mockResolvedValue(email);
   });
 
-  it("lists only granted WhatsApp templates, read-only", async () => {
+  it("shows the collection messages of WhatsApp, read-only", async () => {
     render(<TemplatesPage />);
     expect(
-      await screen.findByText("Nenhum template liberado para sua empresa."),
+      await screen.findByRole("button", { name: "Lembrete · Pix" }),
     ).toBeVisible();
     expect(screen.queryByLabelText("Saudação WhatsApp")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Saudação")).not.toBeInTheDocument();
-    expect(mockApi.getTemplates).toHaveBeenCalledWith({
-      limit: 10,
-      search: undefined,
-      cursor: undefined,
-    });
+    expect(mockApi.getCollectionTemplates).toHaveBeenCalled();
   });
 
   it("keeps bounded email personalization", async () => {
