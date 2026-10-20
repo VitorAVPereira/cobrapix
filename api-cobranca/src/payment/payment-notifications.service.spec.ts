@@ -164,7 +164,7 @@ describe('PaymentNotificationsService', () => {
         apiKey: 'central-key',
         from: 'CifraMais <avisos@ciframais.com.br>',
         to: ['tesouraria@escola.com'],
-        subject: '[CobraPix] Pagamento confirmado - Joao Silva',
+        subject: '[Cifra+] Pagamento confirmado - Joao Silva',
         html: expect.stringContaining('Responsavel Silva') as string,
       }),
     );

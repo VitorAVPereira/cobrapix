@@ -399,7 +399,7 @@ export class PaymentNotificationsService {
   private buildEmailSubject(invoice: PaidInvoiceRecord): string {
     const studentLabel = invoice.studentName ? ` - ${invoice.studentName}` : '';
 
-    return `[CobraPix] Pagamento confirmado${studentLabel}`;
+    return `[Cifra+] Pagamento confirmado${studentLabel}`;
   }
 
   private buildPaymentEmailHtml(
@@ -426,7 +426,7 @@ export class PaymentNotificationsService {
     </tr>
     <tr>
       <td style="padding:28px 32px">
-        <p style="margin:0 0 18px;font-size:14px;line-height:1.6;color:#475569">Uma baixa de pagamento foi registrada no CobraPix.</p>
+        <p style="margin:0 0 18px;font-size:14px;line-height:1.6;color:#475569">Uma baixa de pagamento foi registrada no Cifra+.</p>
         <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:#f8fafc;border-radius:8px;overflow:hidden">
           ${this.buildDetailRow('Fatura', invoice.id)}
           ${this.buildDetailRow('Devedor', invoice.debtor.name)}
