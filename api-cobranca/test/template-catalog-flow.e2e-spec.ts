@@ -1,9 +1,10 @@
 /**
- * Whole catalog flow over real HTTP and JWT with two companies: the admin imports, maps
- * and grants only to A; A picks the template in its rule; B is refused; revoking holds
- * the send; fixing the grant alone sends nothing; the admin reviews; a paid invoice is
- * closed without a message and the eligible one produces exactly one transmission.
- * Disposable PostgreSQL/Redis (test/e2e-disposable.cjs); Datafy is simulated at `fetch`.
+ * Whole catalog flow over real HTTP and JWT with two companies: the admin imports and maps;
+ * grants still decide which templates a company sees; collection messages use the global
+ * templates of the rules instead, never a choice of the company. Without the global
+ * template the send is held; choosing it alone sends nothing; the admin reviews; a paid
+ * invoice is closed without a message and the eligible one produces exactly one
+ * transmission. Disposable PostgreSQL/Redis (test/e2e-disposable.cjs); Datafy simulated.
  */
 import { INestApplication } from '@nestjs/common';
 import type { Server } from 'node:http';
@@ -101,7 +102,12 @@ describe('Template catalog flow with two companies (HTTP)', () => {
       }),
       origin: 'COLLECTION',
       context: { companyId: ids.a, invoiceId, debtorId: ids.debtorA },
-      selection: { mode: 'EXPLICIT', templateId: ids.template },
+      selection: {
+        mode: 'AUTOMATIC',
+        purpose: 'DUE_TODAY',
+        billingMethod: 'PIX',
+        ruleStepId: ids.stepA,
+      },
       ruleStepId: ids.stepA,
     });
   }
@@ -150,16 +156,21 @@ describe('Template catalog flow with two companies (HTTP)', () => {
     }
   });
 
-  it('only A is granted; A picks it in its rule and B is refused', async () => {
+  it('grants still decide what a company sees; its rule never chooses a template', async () => {
     await grant(true);
     const listB = await request(http).get('/templates').set(auth(tokens.b));
     expect(listB.body).toEqual({ items: [], nextCursor: null, total: 0 });
+    const previewB = await request(http)
+      .get(`/templates/${ids.template}/preview`)
+      .set(auth(tokens.b));
+    expect(previewB.status).toBe(404);
 
     const profileA = (await rules(tokens.a))[0]!;
     const stepA = profileA.steps.find((step) => step.channel === 'WHATSAPP')!;
     ids.profileA = profileA.id;
     ids.stepA = stepA.id;
-    const choose = await request(http)
+    // A choice sent by an older screen is ignored: the step keeps no template.
+    const saved = await request(http)
       .put(`/billing/rules/${profileA.id}/steps`)
       .set(auth(tokens.a))
       .send({
@@ -168,51 +179,26 @@ describe('Template catalog flow with two companies (HTTP)', () => {
           templateId: ids.template,
         }),
       });
-    expect(choose.status).toBe(200);
-    const saved = (choose.body as PresentedStep[]).find(
-      (step) => step.id === stepA.id,
-    )!;
-    expect(saved).toMatchObject({
-      whatsappSelection: { mode: 'EXPLICIT', templateId: ids.template },
-      whatsappStatus: { ready: true, code: null },
+    expect(saved.status).toBe(200);
+    expect(
+      (saved.body as Array<PresentedStep & { templateId: string | null }>).find(
+        (step) => step.id === stepA.id,
+      ),
+    ).toMatchObject({
+      templateId: null,
       stepOrder: stepA.stepOrder,
       delayDays: stepA.delayDays,
     });
-
-    const profileB = (await rules(tokens.b))[0]!;
-    const stepB = profileB.steps.find((step) => step.channel === 'WHATSAPP')!;
-    const refused = await request(http)
-      .put(`/billing/rules/${profileB.id}/steps`)
-      .set(auth(tokens.b))
-      .send({
-        steps: stepsWith(profileB.steps, stepB.id, {
-          mode: 'EXPLICIT',
-          templateId: ids.template,
-        }),
-      });
-    expect(refused.status).toBe(400);
-    const previewB = await request(http)
-      .get(`/templates/${ids.template}/preview`)
-      .set(auth(tokens.b));
-    expect(previewB.status).toBe(404);
   });
 
-  it('revoking holds the sends; fixing the grant alone sends nothing', async () => {
-    await grant(false);
-    const stepAfterRevoke = (await rules(tokens.a))
-      .find((profile) => profile.id === ids.profileA)!
-      .steps.find((step) => step.id === ids.stepA)!;
-    expect(stepAfterRevoke.whatsappStatus).toEqual({
-      ready: false,
-      code: 'NOT_GRANTED',
-    });
+  it('without the global template the sends are held; choosing it alone sends nothing', async () => {
     await expect(prepareFor(ids.eligible)).resolves.toMatchObject({
       status: 'BLOCKED',
-      code: 'NOT_GRANTED',
+      code: 'COLLECTION_TEMPLATE_MISSING',
     });
     await expect(prepareFor(ids.paid)).resolves.toMatchObject({
       status: 'BLOCKED',
-      code: 'NOT_GRANTED',
+      code: 'COLLECTION_TEMPLATE_MISSING',
     });
     const companyView = await request(http)
       .get('/communications/template-pending')
@@ -227,7 +213,17 @@ describe('Template catalog flow with two companies (HTTP)', () => {
       .set(auth(tokens.b));
     expect(otherCompany.body).toEqual({ items: [], nextCursor: null });
 
-    await grant(true);
+    // A company cannot choose the global templates; the admin can.
+    await request(http)
+      .put('/admin/whatsapp-templates/collection-slots/DUE_TODAY/PIX')
+      .set(auth(tokens.a))
+      .send({ templateId: ids.template, expectedVersion: 0 })
+      .expect(403);
+    await request(http)
+      .put('/admin/whatsapp-templates/collection-slots/DUE_TODAY/PIX')
+      .set(auth(tokens.admin))
+      .send({ templateId: ids.template, expectedVersion: 0 })
+      .expect(200);
     await app.get(OutboundDispatcherService).recover();
     await sleep(1500);
     expect(provider.sends).toHaveLength(0);

@@ -51,6 +51,33 @@ export class TemplatePolicyService {
     let templateId: string;
     if (selection.mode === 'UNCONFIGURED')
       return { allowed: false, code: 'SELECTION_MISSING' };
+    if (selection.mode === 'AUTOMATIC') {
+      const custom = selection.ruleStepId
+        ? await tx.collectionStepTemplateOverride.findFirst({
+            where: {
+              ruleStepId: selection.ruleStepId,
+              companyId,
+              billingMethod: selection.billingMethod,
+            },
+            select: { templateId: true },
+          })
+        : null;
+      const global = custom
+        ? null
+        : await tx.collectionTemplateSlot.findUnique({
+            where: {
+              purpose_billingMethod: {
+                purpose: selection.purpose,
+                billingMethod: selection.billingMethod,
+              },
+            },
+            select: { templateId: true },
+          });
+      const chosen = custom?.templateId ?? global?.templateId;
+      if (!chosen)
+        return { allowed: false, code: 'COLLECTION_TEMPLATE_MISSING' };
+      return this.evaluateGlobal(tx, chosen);
+    }
     if (selection.mode === 'DEFAULT') {
       const configured = await tx.companyWhatsappTemplateDefault.findUnique({
         where: {
@@ -76,8 +103,12 @@ export class TemplatePolicyService {
     snapshot: TemplateSnapshot,
   ): Promise<ReadyTemplate> {
     await lockTemplates(tx, [snapshot.templateId], 'SHARE');
-    await lockGrants(tx, companyId, [snapshot.templateId], 'SHARE');
-    const decision = await this.evaluate(tx, companyId, snapshot.templateId);
+    const global = snapshot.access === 'GLOBAL';
+    if (!global)
+      await lockGrants(tx, companyId, [snapshot.templateId], 'SHARE');
+    const decision = global
+      ? await this.evaluateGlobal(tx, snapshot.templateId)
+      : await this.evaluate(tx, companyId, snapshot.templateId);
     if (!decision.allowed) throw new TemplatePolicyError(decision.code);
     const current = decision.template.snapshot;
     if (
@@ -113,6 +144,33 @@ export class TemplatePolicyService {
           mappingRevision: template.mappingRevision,
           policyVersion: template.policyVersion,
           grantVersion: grant.version,
+        },
+        name: template.metaTemplateName,
+        language: template.metaLanguage,
+        parsed,
+        mapping,
+      },
+    };
+  }
+
+  /**
+   * A collection template chosen by the platform (global or custom for a step): usable by
+   * the company without a grant, still only when approved, supported and mapped.
+   */
+  async evaluateGlobal(tx: Tx, templateId: string): Promise<TemplateDecision> {
+    const readiness = await this.readiness(tx, templateId);
+    if (!readiness.ready) return { allowed: false, code: readiness.code };
+    const { template, parsed, mapping } = readiness;
+    return {
+      allowed: true,
+      template: {
+        snapshot: {
+          templateId: template.id,
+          providerRevision: template.providerRevision,
+          mappingRevision: template.mappingRevision,
+          policyVersion: template.policyVersion,
+          grantVersion: 0,
+          access: 'GLOBAL',
         },
         name: template.metaTemplateName,
         language: template.metaLanguage,

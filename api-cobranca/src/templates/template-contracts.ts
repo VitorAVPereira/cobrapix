@@ -42,7 +42,19 @@ export type CollectionSlotMethod = (typeof COLLECTION_SLOT_METHODS)[number];
 export type TemplateSelection =
   | { mode: 'EXPLICIT'; templateId: string }
   | { mode: 'DEFAULT'; purpose: TemplatePurpose }
+  | {
+      /**
+       * Collection messages: the rule step's custom template for the method, else the
+       * global template of (moment, method). Neither needs a company grant.
+       */
+      mode: 'AUTOMATIC';
+      purpose: TemplatePurpose;
+      billingMethod: BillingMethodCode;
+      ruleStepId?: string;
+    }
   | { mode: 'UNCONFIGURED' };
+
+export type BillingMethodCode = 'PIX' | 'BOLETO' | 'BOLIX' | 'CREDIT_CARD';
 
 export type TemplateContext = {
   companyId: string;
@@ -124,6 +136,8 @@ export type TemplateSnapshot = {
   mappingRevision: number;
   policyVersion: number;
   grantVersion: number;
+  /** GLOBAL: a collection template chosen by the platform, authorized without a grant. */
+  access?: 'GLOBAL';
 };
 
 export const TEMPLATE_BLOCK_CODES = [
@@ -137,6 +151,7 @@ export const TEMPLATE_BLOCK_CODES = [
   'CONTEXT_CHANGED',
   'LEGACY_PAYLOAD',
   'SELECTION_MISSING',
+  'COLLECTION_TEMPLATE_MISSING',
 ] as const;
 export type TemplateBlockCode = (typeof TEMPLATE_BLOCK_CODES)[number];
 

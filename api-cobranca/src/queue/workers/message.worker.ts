@@ -11,7 +11,6 @@ import {
   BillingMethod,
   CollectionAttemptStatus,
   CollectionChannel,
-  CollectionRuleStep,
   Prisma,
 } from '@prisma/client';
 import { Worker, Job, UnrecoverableError } from 'bullmq';
@@ -23,11 +22,7 @@ import {
   TemplateSendPreparerService,
 } from '../../templates/template-send-preparer.service';
 import { TemplatePendingService } from '../../communications/template-pending.service';
-import {
-  collectionLogicalKey,
-  ruleStepSelection,
-} from '../../templates/template-selection';
-import { initialRuleStep } from '../../billing/collection-rule-engine';
+import { collectionLogicalKey } from '../../templates/template-selection';
 import { PaymentService } from '../../payment/payment.service';
 import { PublicPaymentLinkService } from '../../payment/payment-link.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -92,7 +87,6 @@ interface InitialChargeInvoice {
     useGlobalBillingSettings: boolean;
     preferredBillingMethod: BillingMethod | null;
     autoGenerateFirstCharge: boolean | null;
-    collectionProfile: { steps: InitialRuleStep[] } | null;
   };
   company: {
     corporateName: string;
@@ -104,23 +98,6 @@ interface InitialChargeInvoice {
   };
   collectionLogs: Array<{ id: string }>;
 }
-
-type InitialRuleStep = Pick<
-  CollectionRuleStep,
-  | 'id'
-  | 'stepOrder'
-  | 'channel'
-  | 'delayDays'
-  | 'isActive'
-  | 'templateId'
-  | 'emailTemplateId'
-  | 'whatsappSelectionMode'
-  | 'whatsappPurpose'
-  | 'pixTemplateId'
-  | 'boletoTemplateId'
-  | 'bolixTemplateId'
-  | 'cardTemplateId'
->;
 
 interface InitialChargePaymentInvoice {
   id: string;
@@ -564,6 +541,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
     // with the same financial and communication validations.
     if (
       data.source !== 'SELECTED' &&
+      !data.requested &&
       !this.shouldAutoGenerateFirstCharge(invoice)
     ) {
       await this.createCollectionLog(
@@ -626,12 +604,7 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
           'SKIPPED',
         );
       } else if (
-        await this.queueInitialEmail(
-          data,
-          invoice,
-          invoice.debtor.email,
-          paymentData,
-        )
+        await this.queueInitialEmail(invoice, invoice.debtor.email, paymentData)
       ) {
         queuedCount++;
       }
@@ -643,52 +616,23 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * First charge by e-mail: the template of the rule's "Inicial" e-mail step, which this
-   * e-mail fulfills, else the default e-mail template. An unavailable step template skips
-   * the e-mail, as in the rule; it never falls back to the default.
+   * Emission e-mail: the e-mail model of the emission moment with the company's text. A
+   * model the company turned off skips the e-mail; it never falls back to another one.
    */
   private async queueInitialEmail(
-    data: InitialChargeJob,
     invoice: InitialChargeInvoice,
     email: string,
     paymentData: PaymentMessageData,
   ): Promise<boolean> {
-    const step = initialRuleStep(
-      invoice.debtor.collectionProfile?.steps ?? [],
-      'EMAIL',
-    );
-    const emailTemplate = step
-      ? await this.emailTemplatesService
-          .resolveForRule(invoice.companyId, step.emailTemplateId)
-          .catch(() => null)
-      : await this.emailTemplatesService.findActiveOrDefault(
-          invoice.companyId,
-          null,
-        );
+    const emailTemplate = await this.emailTemplatesService
+      .resolveForPurpose(invoice.companyId, 'EMISSION')
+      .catch(() => null);
     if (!emailTemplate || !emailTemplate.isActive) {
       await this.createCollectionLog(
         invoice.companyId,
         invoice.id,
         'EMAIL_SKIPPED',
-        'Cobranca por email ignorada: template de email da etapa Inicial indisponivel.',
-        'SKIPPED',
-      );
-      return false;
-    }
-    const claimed = step
-      ? await this.createQueuedAttempt(
-          invoice.companyId,
-          invoice.id,
-          step.id,
-          'EMAIL',
-        )
-      : false;
-    if (step && !claimed && data.source !== 'SELECTED') {
-      await this.createCollectionLog(
-        invoice.companyId,
-        invoice.id,
-        'EMAIL_SKIPPED',
-        'Cobranca por email ignorada: a etapa Inicial de email da regua ja foi enviada.',
+        'Cobranca por email ignorada: modelo de e-mail de emissao desativado.',
         'SKIPPED',
       );
       return false;
@@ -734,29 +678,16 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
       bodyText,
     });
 
-    try {
-      await this.emailQueue.addJob({
-        companyId: invoice.companyId,
-        invoiceId: invoice.id,
-        debtorId: invoice.debtor.id,
-        debtorName: invoice.debtor.name,
-        email,
-        subject,
-        html,
-        pixCopyPaste: paymentData.pixCopiaECola,
-        // Only the send that claimed the step records it: sent, failed or deduplicated.
-        ...(step && claimed ? { ruleStepId: step.id } : {}),
-      });
-    } catch (error) {
-      if (step && claimed)
-        await this.releaseInitialStep(
-          invoice.companyId,
-          invoice.id,
-          step.id,
-          'EMAIL',
-        );
-      throw error;
-    }
+    await this.emailQueue.addJob({
+      companyId: invoice.companyId,
+      invoiceId: invoice.id,
+      debtorId: invoice.debtor.id,
+      debtorName: invoice.debtor.name,
+      email,
+      subject,
+      html,
+      pixCopyPaste: paymentData.pixCopiaECola,
+    });
 
     await this.createCollectionLog(
       invoice.companyId,
@@ -769,9 +700,8 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * First charge on WhatsApp: the choice of the rule's "Inicial" WhatsApp step for the
-   * charge's billing method, which this message fulfills, else the company's EMISSION
-   * default; never another template. A manual send of selected invoices is its own
+   * Emission WhatsApp: the global EMISSION template of the charge's billing method; held
+   * when it is missing, never replaced. A manual send of selected invoices is its own
    * communication.
    */
   private async prepareInitialWhatsapp(
@@ -797,61 +727,16 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
           ? `selected-${data.requestId}`
           : null,
     });
-    const step = initialRuleStep(
-      invoice.debtor.collectionProfile?.steps ?? [],
-      'WHATSAPP',
-    );
-    // The step's attempt keeps the rule from sending it again.
-    const claimed = step
-      ? await this.createQueuedAttempt(
-          invoice.companyId,
-          invoice.id,
-          step.id,
-          'WHATSAPP',
-        )
-      : false;
-    if (
-      step &&
-      !claimed &&
-      data.source !== 'SELECTED' &&
-      !(await this.hasInitialWhatsapp(logicalKey))
-    ) {
-      // The rule already sent its "Inicial" step (a retry of this job finds its own message).
-      await this.createCollectionLog(
-        invoice.companyId,
-        invoice.id,
-        'INITIAL_CHARGE_SKIPPED',
-        'Primeira mensagem WhatsApp nao enviada: a etapa Inicial da regua ja foi enviada.',
-        'SKIPPED',
-      );
-      return false;
-    }
-    let prepared: PrepareResult;
-    try {
-      prepared = await this.templateSender.prepare({
-        logicalKey,
-        origin: 'COLLECTION',
-        context: {
-          companyId: invoice.companyId,
-          invoiceId: invoice.id,
-          debtorId: invoice.debtor.id,
-        },
-        selection: step
-          ? ruleStepSelection(step, billingMethod)
-          : { mode: 'DEFAULT', purpose: 'EMISSION' },
-        // Only the send that claimed the step records it as sent or failed.
-        ...(step && claimed ? { ruleStepId: step.id } : {}),
-      });
-    } catch (error) {
-      if (step && claimed)
-        await this.releaseInitialStep(
-          invoice.companyId,
-          invoice.id,
-          step.id,
-          'WHATSAPP',
-        );
-      throw error;
-    }
+    const prepared: PrepareResult = await this.templateSender.prepare({
+      logicalKey,
+      origin: 'COLLECTION',
+      context: {
+        companyId: invoice.companyId,
+        invoiceId: invoice.id,
+        debtorId: invoice.debtor.id,
+      },
+      selection: { mode: 'AUTOMATIC', purpose: 'EMISSION', billingMethod },
+    });
     if (prepared.status === 'BLOCKED') {
       await this.createCollectionLog(
         invoice.companyId,
@@ -910,29 +795,6 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
             useGlobalBillingSettings: true,
             preferredBillingMethod: true,
             autoGenerateFirstCharge: true,
-            collectionProfile: {
-              select: {
-                steps: {
-                  where: { isActive: true },
-                  orderBy: { stepOrder: 'asc' },
-                  select: {
-                    id: true,
-                    stepOrder: true,
-                    channel: true,
-                    delayDays: true,
-                    isActive: true,
-                    templateId: true,
-                    emailTemplateId: true,
-                    whatsappSelectionMode: true,
-                    whatsappPurpose: true,
-                    pixTemplateId: true,
-                    boletoTemplateId: true,
-                    bolixTemplateId: true,
-                    cardTemplateId: true,
-                  },
-                },
-              },
-            },
           },
         },
         company: {
@@ -1320,32 +1182,6 @@ export class MessageWorkerService implements OnModuleInit, OnModuleDestroy {
 
       throw error;
     }
-  }
-
-  private async hasInitialWhatsapp(logicalKey: string): Promise<boolean> {
-    const [intent, hold] = await Promise.all([
-      this.prisma.communicationOutboundIntent.findFirst({
-        where: { OR: [{ logicalKey }, { idempotencyKey: logicalKey }] },
-        select: { id: true },
-      }),
-      this.prisma.whatsappTemplatePendingSend.findUnique({
-        where: { logicalKey },
-        select: { id: true },
-      }),
-    ]);
-    return Boolean(intent || hold);
-  }
-
-  /** Nothing was prepared or queued for a claimed "Inicial" step: it returns to the rule. */
-  private async releaseInitialStep(
-    companyId: string,
-    invoiceId: string,
-    ruleStepId: string,
-    channel: CollectionChannel,
-  ): Promise<void> {
-    await this.prisma.collectionAttempt.deleteMany({
-      where: { companyId, invoiceId, ruleStepId, channel, status: 'QUEUED' },
-    });
   }
 
   // A diagnosed issuance failure, or a reservation still awaiting

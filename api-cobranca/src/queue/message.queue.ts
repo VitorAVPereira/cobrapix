@@ -31,6 +31,8 @@ export interface InitialChargeJob {
   channels?: CollectionChannel[];
   /** Manual re-send request: each one is its own WhatsApp communication. */
   requestId?: string;
+  /** Asked for when registering the invoice ("Enviar cobrança agora"): no default applies. */
+  requested?: boolean;
 }
 
 export interface OutboundIntentJob {

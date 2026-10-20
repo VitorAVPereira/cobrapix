@@ -1,4 +1,5 @@
 import {
+  collectionMoment,
   isInitialChargeKey,
   purposeForScheduleDay,
   ruleStepSelection,
@@ -65,5 +66,24 @@ describe('first message keys', () => {
   it('the emission day is the purpose of the Inicial step', () => {
     expect(purposeForScheduleDay(-30)).toBe('EMISSION');
     expect(purposeForScheduleDay(-29)).toBe('BEFORE_DUE');
+  });
+});
+
+describe('collectionMoment', () => {
+  const moment = (
+    daysFromDue: number,
+    recurring = false,
+    overdueReceived = false,
+  ) => collectionMoment({ daysFromDue, recurring, overdueReceived });
+
+  it('follows the day the message is sent and the kind of invoice', () => {
+    expect(moment(-3)).toBe('BEFORE_DUE');
+    expect(moment(0)).toBe('DUE_TODAY');
+    expect(moment(0, true)).toBe('DUE_TODAY');
+    expect(moment(1)).toBe('FIRST_OVERDUE');
+    expect(moment(40)).toBe('FIRST_OVERDUE');
+    expect(moment(2, false, true)).toBe('CRITICAL_OVERDUE');
+    expect(moment(1, true)).toBe('RECURRING_OVERDUE');
+    expect(moment(1, true, true)).toBe('RECURRING_OVERDUE');
   });
 });

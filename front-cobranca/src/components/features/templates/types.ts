@@ -97,7 +97,8 @@ export type TemplateBlockCode =
   | "VERSION_CHANGED"
   | "CONTEXT_CHANGED"
   | "LEGACY_PAYLOAD"
-  | "SELECTION_MISSING";
+  | "SELECTION_MISSING"
+  | "COLLECTION_TEMPLATE_MISSING";
 
 export const BLOCK_LABELS: Record<TemplateBlockCode, string> = {
   DEFAULT_MISSING: "Sem template padrão para a finalidade",
@@ -110,6 +111,8 @@ export const BLOCK_LABELS: Record<TemplateBlockCode, string> = {
   CONTEXT_CHANGED: "Dados da cobrança mudaram",
   LEGACY_PAYLOAD: "Envio anterior à nova política",
   SELECTION_MISSING: "Etapa sem template escolhido",
+  COLLECTION_TEMPLATE_MISSING:
+    "Sem template da régua para o momento e a forma de pagamento",
 };
 
 export interface TemplateContentView {

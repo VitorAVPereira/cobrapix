@@ -87,6 +87,23 @@ export function purposeForScheduleDay(day: number): TemplatePurpose {
 }
 
 /**
+ * Moment of a collection message on the day it is actually sent (São Paulo calendar):
+ * before, on or after the due date. After it, a recurring invoice always uses
+ * RECURRING_OVERDUE; a one-off invoice uses FIRST_OVERDUE until an overdue message
+ * reached the payer, then CRITICAL_OVERDUE for every following one.
+ */
+export function collectionMoment(input: {
+  daysFromDue: number;
+  recurring: boolean;
+  overdueReceived: boolean;
+}): TemplatePurpose {
+  if (input.daysFromDue < 0) return 'BEFORE_DUE';
+  if (input.daysFromDue === 0) return 'DUE_TODAY';
+  if (input.recurring) return 'RECURRING_OVERDUE';
+  return input.overdueReceived ? 'CRITICAL_OVERDUE' : 'FIRST_OVERDUE';
+}
+
+/**
  * Hold request of a template intent prepared before the catalog change. It carries no
  * choice: the admin decides the template when reviewing it.
  */

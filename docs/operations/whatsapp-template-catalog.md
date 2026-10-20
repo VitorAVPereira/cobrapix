@@ -28,6 +28,47 @@ blocos `bash` rodam na VPS como `deploy`, **um comando por vez**, avançando só
 erro. Credenciais só em `/opt/ciframais/secrets/api.env`. Guarde apenas relatórios
 sem dados sensíveis (os comandos abaixo imprimem só contagens e IDs de etapas).
 
+## Atualização de 20/10/2026: régua com templates automáticos
+
+Especificação: [régua de cobrança com templates automáticos](../superpowers/specs/2026-10-20-regua-templates-automaticos-design.md).
+
+A empresa deixa de escolher template na régua. Cada mensagem de cobrança usa um dos **18
+templates globais** (momento × Pix, Bolix, Cartão), escolhidos em **Admin → Catálogo de
+templates → Templates da régua**, sem liberação por empresa. Um template sob medida pode
+ser ligado a uma etapa de uma empresa (pedido pelo suporte). Os **padrões por finalidade**
+da empresa continuam só para ativação financeira e pagamentos a colaboradores.
+
+Migrations aditivas: `20261020120000_collection_template_slots` e
+`20261020130000_collection_rules_automatic` (status `SKIPPED` e templates sob medida).
+
+Ordem segura da publicação (o backend novo já usa os 18 templates):
+
+1. Publicar o backend **depois da rodada das 17:00** (a régua roda às 09:00 e às 17:00):
+   build, `prisma migrate deploy`, subir a API (passos 3, 5 e 7, sem
+   `templates:transition`, que já foi aplicada). Pausar o canal não impede a régua de
+   preparar mensagens: só o despacho e o envio manual.
+2. Logo em seguida, em **Templates da régua**, escolher os 18 templates. Para Cartão só
+   servem templates com o link de pagamento (sem Pix e sem boleto). Uma mensagem preparada
+   antes disso (ex.: cobrança cadastrada com envio imediato) fica em **Envios pendentes**
+   com "Sem template da régua"; revise e retome depois de escolher.
+3. Conferir, sem escrita, antes da rodada das 09:00:
+
+   ```bash
+   sudo bash infra/interserver/compose.sh run --rm --no-deps api npm run collection-templates:preflight
+   ```
+
+   Esperado: `"ok": true` e `"ready": 18`. Com `missing`, volte ao passo 2.
+4. Publicar o frontend (Vercel). Fazer um envio controlado para um
+   telefone próprio: cadastrar uma cobrança de teste com **Enviar cobrança agora**.
+
+Mudanças visíveis ao cliente final, para as notas da publicação:
+
+- A mensagem de emissão só sai quando pedida no cadastro da fatura (ou na importação).
+- Entre duas mensagens da mesma fatura há pelo menos 24 h; etapas atrasadas não saem
+  em sequência: só a mais recente (as anteriores ficam registradas como puladas).
+- Fatura recorrente vencida usa "Atraso recorrente"; avulsa usa "Primeiro atraso" e
+  depois "Atraso crítico".
+
 ## Migrations e transição
 
 | Migration | Efeito | Pode falhar se |

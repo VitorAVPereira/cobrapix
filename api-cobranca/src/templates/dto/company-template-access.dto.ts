@@ -20,3 +20,12 @@ export class SetTemplateDefaultDto {
   @Min(0)
   expectedVersion!: number;
 }
+
+export class SetCollectionStepTemplateDto {
+  /** null removes the custom template: the step uses the global one again. */
+  @ValidateIf(
+    (value: SetCollectionStepTemplateDto) => value.templateId !== null,
+  )
+  @IsUUID()
+  templateId!: string | null;
+}

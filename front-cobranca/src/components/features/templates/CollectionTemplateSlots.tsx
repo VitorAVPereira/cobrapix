@@ -98,10 +98,10 @@ export function CollectionTemplateSlots(): ReactNode {
         </h2>
         <p className="text-sm text-slate-600">
           Um template por momento da cobrança e forma de pagamento, igual para
-          todas as empresas. Para cartão, só servem templates com o link de
-          pagamento (sem Pix e sem boleto). A régua passa a usar estes templates
-          quando a seleção automática for publicada; até lá, os envios seguem
-          os padrões de cada empresa.
+          todas as empresas: a régua escolhe sozinha pelo dia do envio e pela
+          forma de pagamento da cobrança. Para cartão, só servem templates com o
+          link de pagamento (sem Pix e sem boleto). Sem template, a mensagem
+          fica pendente para revisão.
         </p>
       </div>
       {loadError && (

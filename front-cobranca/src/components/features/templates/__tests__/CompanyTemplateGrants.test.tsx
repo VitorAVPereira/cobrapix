@@ -186,18 +186,22 @@ describe("CompanyTemplateGrants", () => {
   it("sets a purpose default among granted, ready templates only", async () => {
     render(<CompanyTemplateGrants />);
     await selectCompany();
-    const select = screen.getByLabelText("Antes do vencimento");
+    // Collection messages use the global templates of the collection rules.
+    expect(screen.queryByLabelText("Antes do vencimento")).not.toBeInTheDocument();
+    const select = screen.getByLabelText("Aviso de ativação financeira");
     expect(
       within(select).getAllByRole("option").map((option) => option.textContent),
     ).toEqual(["Sem padrão", "liberado"]);
     fireEvent.change(select, { target: { value: "tpl-granted" } });
     fireEvent.click(
-      screen.getByRole("button", { name: "Salvar padrão: Antes do vencimento" }),
+      screen.getByRole("button", {
+        name: "Salvar padrão: Aviso de ativação financeira",
+      }),
     );
     await waitFor(() =>
       expect(mockApi.setCompanyWhatsappTemplateDefault).toHaveBeenCalledWith(
         "company-a",
-        "BEFORE_DUE",
+        "ACTIVATION_NOTICE",
         { templateId: "tpl-granted", expectedVersion: 0 },
       ),
     );

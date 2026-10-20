@@ -286,6 +286,8 @@ enum CollectionAttemptStatus {
   OPENED
   CLICKED
   BLOCKED
+  /// Superseded by a more recent contact or dated before the invoice existed: never sent.
+  SKIPPED
 }
 
 enum ConversationStatus {
@@ -1415,6 +1417,7 @@ model GlobalMessageTemplate {
   grants                CompanyWhatsappTemplateGrant[]
   defaults              CompanyWhatsappTemplateDefault[]
   collectionSlots       CollectionTemplateSlot[]
+  stepOverrides         CollectionStepTemplateOverride[]
   createdAt             DateTime                          @default(now())
   updatedAt             DateTime                          @updatedAt
 
@@ -1515,6 +1518,25 @@ model CollectionTemplateSlot {
   updatedAt       DateTime                @updatedAt
 
   @@unique([purpose, billingMethod])
+  @@index([templateId])
+}
+
+/// Custom template of one rule step for one payment method, linked by the platform admin
+/// after a support request. It replaces the global template for that step only.
+model CollectionStepTemplateOverride {
+  id              String                @id @default(uuid())
+  companyId       String
+  ruleStepId      String
+  ruleStep        CollectionRuleStep    @relation(fields: [ruleStepId], references: [id], onDelete: Cascade)
+  billingMethod   BillingMethod
+  templateId      String
+  template        GlobalMessageTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  createdByUserId String?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@unique([ruleStepId, billingMethod])
+  @@index([companyId])
   @@index([templateId])
 }
 
@@ -1665,6 +1687,7 @@ model CollectionRuleStep {
   sendTimeEnd           String?
   isActive              Boolean                  @default(true)
   attempts              CollectionAttempt[]
+  templateOverrides     CollectionStepTemplateOverride[]
   createdAt             DateTime                 @default(now())
   updatedAt             DateTime                 @updatedAt
 

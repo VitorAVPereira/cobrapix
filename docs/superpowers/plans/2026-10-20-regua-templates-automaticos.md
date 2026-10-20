@@ -7,7 +7,10 @@ Especificação: [régua de cobrança com templates automáticos](../specs/2026-
 - [x] Fase 0: especificação e plano.
 - [x] Fase 1: os 18 templates globais e a grade no admin (não muda envios).
   - Desvio: os padrões por finalidade de cada empresa continuam na tela do admin até a Fase 2, porque ainda controlam os envios; a grade nova entra ao lado deles e os substitui na Fase 2.
-- [ ] Fase 2: novas regras de envio no backend.
+- [x] Fase 2: novas regras de envio no backend.
+  - Desvio: perfis com envios deixam de ficar travados; etapa já enviada mantém dia e canal e, removida, é desativada (antes só o template podia mudar, e ele deixou de existir).
+  - Desvio: as fases vão num único PR; a ordem segura de publicação está no runbook (backend após a rodada das 17:00, 18 templates e preflight antes das 09:00).
+  - A mensagem de emissão sai nos canais marcados no cadastro (WhatsApp por padrão); sem resposta (telas antigas), vale o padrão atual da empresa/cliente.
 - [ ] Fase 3: tela de templates da empresa e pedido ao suporte.
 - [ ] Fase 4: nova régua e "Enviar cobrança agora" no cadastro.
 

@@ -161,3 +161,120 @@ describe('TemplatePolicyService', () => {
     ).rejects.toBeInstanceOf(TemplatePolicyError);
   });
 });
+
+describe('TemplatePolicyService automatic collection templates', () => {
+  function automaticTx(options: {
+    custom?: string | null;
+    global?: string | null;
+  }) {
+    const client = tx({}) as unknown as Record<string, unknown>;
+    Object.assign(client, {
+      collectionStepTemplateOverride: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue(
+            options.custom ? { templateId: options.custom } : null,
+          ),
+      },
+      collectionTemplateSlot: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue(
+            options.global === undefined
+              ? null
+              : { templateId: options.global },
+          ),
+      },
+    });
+    return client as unknown as Prisma.TransactionClient & {
+      collectionStepTemplateOverride: { findFirst: jest.Mock };
+      collectionTemplateSlot: { findUnique: jest.Mock };
+    };
+  }
+  const automatic = {
+    mode: 'AUTOMATIC',
+    purpose: 'BEFORE_DUE',
+    billingMethod: 'PIX',
+    ruleStepId: 'step-1',
+  } as const;
+
+  it('uses the global template of (moment, method) without any company grant', async () => {
+    const client = automaticTx({ global: 'template-1' });
+    await expect(
+      policy.resolve(client, 'companyA', automatic),
+    ).resolves.toMatchObject({
+      allowed: true,
+      template: {
+        snapshot: {
+          templateId: 'template-1',
+          access: 'GLOBAL',
+          grantVersion: 0,
+        },
+      },
+    });
+    expect(client.collectionTemplateSlot.findUnique).toHaveBeenCalledWith({
+      where: {
+        purpose_billingMethod: { purpose: 'BEFORE_DUE', billingMethod: 'PIX' },
+      },
+      select: { templateId: true },
+    });
+  });
+
+  it('a custom template of the step comes first, only within the same company', async () => {
+    const client = automaticTx({
+      custom: 'template-1',
+      global: 'template-global',
+    });
+    await expect(
+      policy.resolve(client, 'companyA', automatic),
+    ).resolves.toMatchObject({
+      allowed: true,
+      template: { snapshot: { templateId: 'template-1' } },
+    });
+    expect(
+      client.collectionStepTemplateOverride.findFirst,
+    ).toHaveBeenCalledWith({
+      where: {
+        ruleStepId: 'step-1',
+        companyId: 'companyA',
+        billingMethod: 'PIX',
+      },
+      select: { templateId: true },
+    });
+    expect(client.collectionTemplateSlot.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('without a template the message is held, never replaced', async () => {
+    await expect(
+      policy.resolve(automaticTx({ global: null }), 'companyA', automatic),
+    ).resolves.toEqual({ allowed: false, code: 'COLLECTION_TEMPLATE_MISSING' });
+    await expect(
+      policy.resolve(automaticTx({}), 'companyA', {
+        ...automatic,
+        billingMethod: 'BOLETO',
+      }),
+    ).resolves.toEqual({ allowed: false, code: 'COLLECTION_TEMPLATE_MISSING' });
+  });
+
+  it('a global snapshot is authorized at dispatch without a grant, still pinned to its versions', async () => {
+    const client = automaticTx({ global: 'template-1' });
+    const decision = await policy.resolve(client, 'companyA', automatic);
+    if (!decision.allowed) throw new Error('expected a ready template');
+    await expect(
+      policy.assertPinned(client, 'companyA', decision.template.snapshot),
+    ).resolves.toMatchObject({ snapshot: { templateId: 'template-1' } });
+    await expect(
+      policy.assertPinned(client, 'companyA', {
+        ...decision.template.snapshot,
+        mappingRevision: 0,
+      }),
+    ).rejects.toBeInstanceOf(TemplatePolicyError);
+    // Without the GLOBAL mark the company grant is still required.
+    await expect(
+      policy.assertPinned(client, 'companyA', {
+        ...decision.template.snapshot,
+        access: undefined,
+      }),
+    ).rejects.toBeInstanceOf(TemplatePolicyError);
+  });
+});

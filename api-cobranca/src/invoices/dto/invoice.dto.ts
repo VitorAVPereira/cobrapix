@@ -111,6 +111,18 @@ export class CreateInvoiceDto {
   @Min(0)
   @Max(PAYMENT_DAYS_AFTER_DUE_MAX)
   payment_days_after_due?: number | null;
+  /** "Enviar cobrança agora": true sends the emission message, false skips it; absent keeps the client or company default. */
+  @IsOptional()
+  @ToBoolean()
+  @IsBoolean()
+  send_now?: boolean;
+
+  /** Channels of the emission message when send_now is true; WhatsApp when empty. */
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsIn(['WHATSAPP', 'EMAIL'], { each: true })
+  send_channels?: Array<'WHATSAPP' | 'EMAIL'>;
 }
 
 export class CreateDebtorInvoiceDto {
@@ -170,6 +182,18 @@ export class CreateDebtorInvoiceDto {
   @Min(0)
   @Max(PAYMENT_DAYS_AFTER_DUE_MAX)
   payment_days_after_due?: number | null;
+  /** "Enviar cobrança agora": true sends the emission message, false skips it; absent keeps the client or company default. */
+  @IsOptional()
+  @ToBoolean()
+  @IsBoolean()
+  send_now?: boolean;
+
+  /** Channels of the emission message when send_now is true; WhatsApp when empty. */
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsIn(['WHATSAPP', 'EMAIL'], { each: true })
+  send_channels?: Array<'WHATSAPP' | 'EMAIL'>;
 }
 
 export class CreateDebtorDto {

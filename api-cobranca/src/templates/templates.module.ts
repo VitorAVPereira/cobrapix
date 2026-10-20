@@ -12,6 +12,7 @@ import { TemplateRenderingModule } from './template-rendering.module';
 import { TemplatePolicyModule } from './template-policy.module';
 import { CompanyTemplateAccessService } from './company-template-access.service';
 import { CollectionTemplateSlotService } from './collection-template-slot.service';
+import { CollectionStepTemplateService } from './collection-step-template.service';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { CollectionTemplateSlotService } from './collection-template-slot.servic
     TemplateMappingService,
     CompanyTemplateAccessService,
     CollectionTemplateSlotService,
+    CollectionStepTemplateService,
     PlatformAdminGuard,
   ],
   exports: [

@@ -82,12 +82,15 @@ de ativação financeira e de pagamentos a colaboradores não mudam.
   momento aparece sozinho, com "Ver mensagem". Sem escolha de template e sem "Contato inicial".
 - **Cadastro da fatura e importação**: "Enviar cobrança agora", com os canais.
 
-## Publicação em fases
+## Publicação
 
-1. Fase 1: os 18 templates globais e a tela do admin (não muda envios).
-2. O admin escolhe os 18 em produção; o preflight confere.
-3. Fase 2: novas regras de envio no backend.
-4. Fases 3 e 4: telas da empresa, pedido ao suporte, nova régua e opção no cadastro.
+As quatro fases vão num único PR. A ordem segura está no runbook
+[catálogo WhatsApp](../../operations/whatsapp-template-catalog.md#atualização-de-20102026-régua-com-templates-automáticos):
+backend depois da rodada das 17:00, escolha dos 18 templates, `collection-templates:preflight`
+antes da rodada das 09:00 e então o frontend.
+
+Etapas já enviadas para alguma fatura mantêm dia e canal; removê-las só as desativa. As
+demais etapas mudam livremente (antes, um perfil com qualquer envio ficava travado).
 
 Mudanças visíveis ao cliente final (registrar nas notas de publicação): etapas atrasadas não saem
 mais em sequência (só a mais recente), a emissão depende do pedido no cadastro e há intervalo

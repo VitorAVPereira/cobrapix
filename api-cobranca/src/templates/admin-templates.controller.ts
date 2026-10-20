@@ -18,6 +18,7 @@ import {
   AdminCatalogQueryDto,
   PreviewTemplateMappingDto,
   SaveTemplateMappingDto,
+  SetCollectionStepTemplateDto,
   SetTemplateDefaultDto,
   SetTemplateGrantDto,
 } from './dto';
@@ -26,6 +27,7 @@ import { TemplateCatalogSyncService } from './template-catalog-sync.service';
 import { TemplateMappingService } from './template-mapping.service';
 import { CompanyTemplateAccessService } from './company-template-access.service';
 import { CollectionTemplateSlotService } from './collection-template-slot.service';
+import { CollectionStepTemplateService } from './collection-step-template.service';
 import {
   COLLECTION_PURPOSES,
   COLLECTION_SLOT_METHODS,
@@ -47,6 +49,7 @@ export class AdminTemplatesController {
     private readonly mappings: TemplateMappingService,
     private readonly access: CompanyTemplateAccessService,
     private readonly slots: CollectionTemplateSlotService,
+    private readonly stepTemplates: CollectionStepTemplateService,
   ) {}
 
   @Get()
@@ -92,6 +95,30 @@ export class AdminTemplatesController {
   @Get('companies/:companyId')
   company(@Param('companyId', ParseUUIDPipe) companyId: string) {
     return this.catalog.companyAccess(companyId);
+  }
+
+  @Get('companies/:companyId/collection-steps')
+  collectionSteps(@Param('companyId', ParseUUIDPipe) companyId: string) {
+    return this.stepTemplates.list(companyId);
+  }
+
+  @Put('companies/:companyId/collection-steps/:ruleStepId/:method')
+  setCollectionStepTemplate(
+    @GetUser() user: AuthenticatedUser,
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+    @Param('ruleStepId', ParseUUIDPipe) ruleStepId: string,
+    @Param('method') method: string,
+    @Body() dto: SetCollectionStepTemplateDto,
+  ) {
+    if (!(COLLECTION_SLOT_METHODS as readonly string[]).includes(method))
+      throw new BadRequestException('Forma de pagamento inválida.');
+    return this.stepTemplates.set(
+      companyId,
+      ruleStepId,
+      method as CollectionSlotMethod,
+      dto.templateId,
+      user.userId,
+    );
   }
 
   @Put('companies/:companyId/grants/:templateId')

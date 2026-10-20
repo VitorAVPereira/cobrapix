@@ -1,219 +1,301 @@
-import { Injectable, Logger } from '@nestjs/common';
-import {
-  CollectionChannel,
-  WhatsappSelectionMode,
-  WhatsappTemplatePurpose,
-} from '@prisma/client';
-import type { TemplateSelection } from '../templates/template-contracts';
+import { Injectable } from '@nestjs/common';
+import { CollectionChannel, Prisma } from '@prisma/client';
+import type { TemplatePurpose } from '../templates/template-contracts';
 import {
   EMISSION_SCHEDULE_DAY,
-  MethodTemplates,
   collectionLogicalKey,
-  ruleStepSelection,
-  stepMethodTemplates,
+  collectionMoment,
 } from '../templates/template-selection';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  addDays,
+  daysBetween,
+  saoPauloDate,
+  saoPauloStart,
+} from './dashboard-period';
+
+type Tx = Prisma.TransactionClient;
+type Db = PrismaService | Tx;
+
+/** Minimum time between two messages of the same invoice, whatever their channel. */
+export const MIN_CONTACT_INTERVAL_MS = 24 * 3_600_000;
+
+/** Attempts that never reached the payer: they neither count as a contact nor as received. */
+const NOT_DELIVERED = ['FAILED', 'BLOCKED', 'SKIPPED'] as const;
+
+interface RuleStep {
+  id: string;
+  stepOrder: number;
+  channel: CollectionChannel;
+  delayDays: number;
+  sendTimeStart: string | null;
+  sendTimeEnd: string | null;
+  isActive: boolean;
+}
+
+export interface ContactInvoice {
+  id: string;
+  companyId: string;
+  dueDate: Date;
+  createdAt: Date;
+  recurringInvoiceId: string | null;
+  debtor: {
+    collectionProfile?: { steps: RuleStep[] } | null;
+  };
+}
+
+/** Steps of the rule sharing a cumulative day: one contact, sent together. */
+export interface Contact {
+  day: number;
+  steps: Array<{ ruleStepId: string; channel: CollectionChannel }>;
+}
+
+export type ContactPlan =
+  | { kind: 'NONE' }
+  | { kind: 'WAIT'; reason: 'SEND_WINDOW' | 'MIN_INTERVAL' }
+  | { kind: 'SEND'; contact: Contact; moment: TemplatePurpose };
+
+export interface ContactClaim {
+  ruleStepId: string;
+  channel: CollectionChannel;
+  status: 'QUEUED' | 'FAILED';
+  errorDetails?: string;
+}
 
 /**
- * The rule's "Inicial" step of a channel: the first active one at the emission day. It
- * is the first message of the charge; without it the company's emission default applies.
+ * Decides which contact of the collection rule an invoice gets now:
+ * - steps of the same cumulative day form one contact (WhatsApp and e-mail together);
+ * - of the contacts already due and never sent, only the most recent one is sent; older
+ *   ones are recorded as SKIPPED and never sent;
+ * - a reminder dated before the day the invoice was registered is skipped too;
+ * - at least 24 h between two messages of the invoice, emission included;
+ * - the moment (template) follows the day the message is actually sent.
+ * "Inicial" steps (day <= -30) are history: the emission message is requested when the
+ * invoice is registered, not by the rule.
  */
-export function initialRuleStep<
-  T extends {
-    stepOrder: number;
-    channel: CollectionChannel;
-    delayDays: number;
-    isActive: boolean;
-  },
->(steps: readonly T[], channel: CollectionChannel): T | null {
+@Injectable()
+export class CollectionRuleEngine {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async planContact(
+    invoice: ContactInvoice,
+    now = new Date(),
+  ): Promise<ContactPlan> {
+    const contacts = ruleContacts(
+      invoice.debtor.collectionProfile?.steps ?? [],
+    );
+    if (contacts.length === 0) return { kind: 'NONE' };
+
+    const dueDate = invoice.dueDate.toISOString().slice(0, 10);
+    const daysFromDue = daysBetween(dueDate, saoPauloDate(now));
+    const registeredDay = daysBetween(dueDate, saoPauloDate(invoice.createdAt));
+
+    const attempted = new Set(
+      (
+        await this.prisma.collectionAttempt.findMany({
+          where: {
+            companyId: invoice.companyId,
+            invoiceId: invoice.id,
+            ruleStepId: {
+              in: contacts.flatMap((contact) =>
+                contact.steps.map((step) => step.ruleStepId),
+              ),
+            },
+          },
+          select: { ruleStepId: true },
+        })
+      ).map((attempt) => attempt.ruleStepId),
+    );
+    const due = contacts.filter(
+      (contact) =>
+        contact.day <= daysFromDue &&
+        !contact.steps.some((step) => attempted.has(step.ruleStepId)),
+    );
+    const beforeRegistration = (contact: Contact) =>
+      contact.day < 0 && contact.day < registeredDay;
+    const chosen = due.filter((contact) => !beforeRegistration(contact)).at(-1);
+    const skipped = due.filter((contact) => contact !== chosen);
+    if (skipped.length) await this.skip(invoice, skipped, beforeRegistration);
+    if (!chosen) return { kind: 'NONE' };
+
+    const steps = invoice.debtor.collectionProfile!.steps;
+    const currentTime = saoPauloTime(now);
+    const outsideWindow = chosen.steps.some((item) => {
+      const step = steps.find((row) => row.id === item.ruleStepId);
+      return (
+        step?.sendTimeStart &&
+        step.sendTimeEnd &&
+        (currentTime < step.sendTimeStart || currentTime > step.sendTimeEnd)
+      );
+    });
+    if (outsideWindow) return { kind: 'WAIT', reason: 'SEND_WINDOW' };
+
+    const last = await this.lastContactAt(this.prisma, invoice);
+    if (last && now.getTime() - last.getTime() < MIN_CONTACT_INTERVAL_MS)
+      return { kind: 'WAIT', reason: 'MIN_INTERVAL' };
+
+    return {
+      kind: 'SEND',
+      contact: chosen,
+      moment: collectionMoment({
+        daysFromDue,
+        recurring: Boolean(invoice.recurringInvoiceId),
+        overdueReceived: await this.overdueReceived(invoice, dueDate),
+      }),
+    };
+  }
+
+  /**
+   * Records the contact's attempts once, serialized per invoice: a concurrent run (the
+   * scheduled one and "Executar agora") that already claimed this or another contact
+   * inside the last 24 h makes this claim return false and nothing is sent.
+   */
+  async claimContact(
+    invoice: Pick<ContactInvoice, 'id' | 'companyId'>,
+    claims: ContactClaim[],
+    now = new Date(),
+  ): Promise<boolean> {
+    if (claims.length === 0) return false;
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`collection-contact:${invoice.id}`}, 0))`;
+      const existing = await tx.collectionAttempt.count({
+        where: {
+          companyId: invoice.companyId,
+          invoiceId: invoice.id,
+          ruleStepId: { in: claims.map((claim) => claim.ruleStepId) },
+        },
+      });
+      if (existing > 0) return false;
+      const last = await this.lastContactAt(tx, invoice);
+      if (last && now.getTime() - last.getTime() < MIN_CONTACT_INTERVAL_MS)
+        return false;
+      await tx.collectionAttempt.createMany({
+        data: claims.map((claim) => ({
+          companyId: invoice.companyId,
+          invoiceId: invoice.id,
+          ruleStepId: claim.ruleStepId,
+          channel: claim.channel,
+          status: claim.status,
+          ...(claim.errorDetails ? { errorDetails: claim.errorDetails } : {}),
+        })),
+      });
+      return true;
+    });
+  }
+
+  /**
+   * Last message of the invoice that may have reached the payer: a rule attempt, the
+   * emission WhatsApp (initial or requested) or the emission e-mail.
+   */
+  async lastContactAt(
+    db: Db,
+    invoice: Pick<ContactInvoice, 'id' | 'companyId'>,
+  ): Promise<Date | null> {
+    const { companyId, id: invoiceId } = invoice;
+    const [attempt, intent, email] = await Promise.all([
+      db.collectionAttempt.findFirst({
+        where: { companyId, invoiceId, status: { notIn: [...NOT_DELIVERED] } },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      }),
+      db.communicationOutboundIntent.findFirst({
+        where: {
+          companyId,
+          invoiceId,
+          state: { notIn: ['FAILED', 'BLOCKED'] },
+          OR: [
+            { logicalKey: collectionLogicalKey({ companyId, invoiceId }) },
+            {
+              logicalKey: {
+                startsWith: `collection:${companyId}:${invoiceId}:selected-`,
+              },
+            },
+          ],
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      }),
+      db.collectionLog.findFirst({
+        where: { companyId, invoiceId, actionType: 'EMAIL_QUEUED' },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      }),
+    ]);
+    const times = [attempt, intent, email]
+      .map((row) => row?.createdAt.getTime())
+      .filter((time): time is number => time !== undefined);
+    return times.length ? new Date(Math.max(...times)) : null;
+  }
+
+  /** A rule message after the due date reached the payer (not failed, held or skipped). */
+  private async overdueReceived(
+    invoice: ContactInvoice,
+    dueDate: string,
+  ): Promise<boolean> {
+    return Boolean(
+      await this.prisma.collectionAttempt.findFirst({
+        where: {
+          companyId: invoice.companyId,
+          invoiceId: invoice.id,
+          status: { notIn: [...NOT_DELIVERED] },
+          createdAt: { gte: saoPauloStart(addDays(dueDate, 1)) },
+        },
+        select: { id: true },
+      }),
+    );
+  }
+
+  private async skip(
+    invoice: ContactInvoice,
+    contacts: Contact[],
+    beforeRegistration: (contact: Contact) => boolean,
+  ): Promise<void> {
+    await this.prisma.collectionAttempt.createMany({
+      data: contacts.flatMap((contact) =>
+        contact.steps.map((step) => ({
+          companyId: invoice.companyId,
+          invoiceId: invoice.id,
+          ruleStepId: step.ruleStepId,
+          channel: step.channel,
+          status: 'SKIPPED' as const,
+          errorDetails: beforeRegistration(contact)
+            ? 'Data anterior ao cadastro da fatura.'
+            : 'Substituída por uma etapa mais recente.',
+        })),
+      ),
+      skipDuplicates: true,
+    });
+    await this.prisma.collectionLog.createMany({
+      data: contacts.map((contact) => ({
+        companyId: invoice.companyId,
+        invoiceId: invoice.id,
+        actionType: 'RULE_CONTACT_SKIPPED',
+        description: beforeRegistration(contact)
+          ? `Etapa do dia ${contact.day} ignorada: data anterior ao cadastro da fatura.`
+          : `Etapa do dia ${contact.day} não enviada: uma etapa mais recente já venceu.`,
+        status: 'SKIPPED',
+      })),
+    });
+  }
+}
+
+/** Active rule steps grouped by cumulative day, without the "Inicial" ones. */
+export function ruleContacts(steps: readonly RuleStep[]): Contact[] {
+  const contacts: Contact[] = [];
   let day = 0;
   for (const step of steps
     .filter((item) => item.isActive)
     .sort((a, b) => a.stepOrder - b.stepOrder)) {
     day += step.delayDays;
-    if (day > EMISSION_SCHEDULE_DAY) return null;
-    if (step.channel === channel) return step;
+    if (day <= EMISSION_SCHEDULE_DAY) continue;
+    const contact = contacts.find((item) => item.day === day);
+    const entry = { ruleStepId: step.id, channel: step.channel };
+    if (contact) contact.steps.push(entry);
+    else contacts.push({ day, steps: [entry] });
   }
-  return null;
+  return contacts.sort((a, b) => a.day - b.day);
 }
 
-interface IncomingInvoice {
-  id: string;
-  companyId: string;
-  dueDate: Date;
-  debtor: {
-    id: string;
-    collectionProfileId: string | null;
-    collectionProfile?: {
-      id: string;
-      steps: Array<{
-        id: string;
-        stepOrder: number;
-        channel: CollectionChannel;
-        templateId: string | null;
-        emailTemplateId?: string | null;
-        whatsappSelectionMode?: WhatsappSelectionMode | null;
-        whatsappPurpose?: WhatsappTemplatePurpose | null;
-        pixTemplateId?: string | null;
-        boletoTemplateId?: string | null;
-        bolixTemplateId?: string | null;
-        delayDays: number;
-        sendTimeStart: string | null;
-        sendTimeEnd: string | null;
-        isActive: boolean;
-      }>;
-    } | null;
-  };
-}
-
-interface ResolvedStep {
-  ruleStepId: string;
-  channel: CollectionChannel;
-  templateId: string | null;
-  emailTemplateId: string | null;
-  /** Meaningful for WHATSAPP steps only. */
-  whatsappSelection: TemplateSelection;
-  /** WHATSAPP only: templates by billing method, applied once the charge is known. */
-  whatsappMethodTemplates: MethodTemplates;
-  delayDays: number;
-}
-
-@Injectable()
-export class CollectionRuleEngine {
-  private readonly logger = new Logger(CollectionRuleEngine.name);
-
-  constructor(private readonly prisma: PrismaService) {}
-
-  async getNextStep(invoice: IncomingInvoice): Promise<ResolvedStep | null> {
-    const profile = invoice.debtor.collectionProfile;
-    if (!profile) return null;
-
-    const steps = profile.steps
-      .filter((s) => s.isActive)
-      .sort((a, b) => a.stepOrder - b.stepOrder);
-
-    if (steps.length === 0) return null;
-
-    const today = this.startOfDay(new Date());
-    const dueDate = this.startOfDay(invoice.dueDate);
-    const daysOverdue = Math.floor(
-      (today.getTime() - dueDate.getTime()) / (24 * 3600 * 1000),
-    );
-
-    let cumulativeDelayDays = 0;
-
-    for (const step of steps) {
-      cumulativeDelayDays += step.delayDays;
-
-      if (daysOverdue < cumulativeDelayDays) {
-        return null;
-      }
-
-      if (step.sendTimeStart && step.sendTimeEnd) {
-        const currentTime = this.getCurrentLocalTime();
-
-        if (
-          currentTime < step.sendTimeStart ||
-          currentTime > step.sendTimeEnd
-        ) {
-          this.logger.debug(
-            `Etapa ${step.stepOrder} fora da janela de envio (${step.sendTimeStart}-${step.sendTimeEnd}), hora atual: ${currentTime}`,
-          );
-          return null;
-        }
-      }
-
-      const alreadyAttempted = await this.prisma.collectionAttempt.findFirst({
-        where: {
-          companyId: invoice.companyId,
-          invoiceId: invoice.id,
-          ruleStepId: step.id,
-          channel: step.channel,
-        },
-      });
-
-      if (alreadyAttempted) continue;
-      if (
-        cumulativeDelayDays <= EMISSION_SCHEDULE_DAY &&
-        (await this.firstMessageSent(invoice, step.channel))
-      )
-        continue;
-
-      return {
-        ruleStepId: step.id,
-        channel: step.channel,
-        templateId: step.templateId,
-        emailTemplateId: step.emailTemplateId ?? null,
-        whatsappSelection: ruleStepSelection({
-          whatsappSelectionMode: step.whatsappSelectionMode ?? null,
-          whatsappPurpose: step.whatsappPurpose ?? null,
-          templateId: step.templateId,
-        }),
-        whatsappMethodTemplates: stepMethodTemplates(step),
-        delayDays: cumulativeDelayDays,
-      };
-    }
-
-    return null;
-  }
-
-  /**
-   * The first message of the charge already fulfilled the "Inicial" step. Charges issued
-   * before the first message claimed the step have no attempt: their first WhatsApp is
-   * an intent or hold under the initial keys, their first e-mail an EMAIL_QUEUED log
-   * (written only by the first charge).
-   */
-  private async firstMessageSent(
-    invoice: IncomingInvoice,
-    channel: CollectionChannel,
-  ): Promise<boolean> {
-    const { companyId, id: invoiceId } = invoice;
-    if (channel === 'EMAIL')
-      return Boolean(
-        await this.prisma.collectionLog.findFirst({
-          where: { companyId, invoiceId, actionType: 'EMAIL_QUEUED' },
-          select: { id: true },
-        }),
-      );
-    const keys = {
-      OR: [
-        { logicalKey: collectionLogicalKey({ companyId, invoiceId }) },
-        {
-          logicalKey: {
-            startsWith: `collection:${companyId}:${invoiceId}:selected-`,
-          },
-        },
-      ],
-    };
-    const [intent, hold] = await Promise.all([
-      this.prisma.communicationOutboundIntent.findFirst({
-        where: { companyId, invoiceId, ...keys },
-        select: { id: true },
-      }),
-      this.prisma.whatsappTemplatePendingSend.findFirst({
-        where: { companyId, invoiceId, ...keys },
-        select: { id: true },
-      }),
-    ]);
-    return Boolean(intent || hold);
-  }
-
-  private startOfDay(date: Date): Date {
-    return new Date(
-      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
-    );
-  }
-
-  private getCurrentLocalTime(): string {
-    const parts = new Intl.DateTimeFormat('pt-BR', {
-      timeZone: 'America/Sao_Paulo',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    }).formatToParts(new Date());
-    const hour = parts.find((part) => part.type === 'hour')?.value ?? '00';
-    const minute = parts.find((part) => part.type === 'minute')?.value ?? '00';
-
-    return `${hour}:${minute}`;
-  }
+function saoPauloTime(now: Date): string {
+  return new Date(now.getTime() - 3 * 3_600_000).toISOString().slice(11, 16);
 }
