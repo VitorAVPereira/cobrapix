@@ -6,570 +6,334 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import type {
   CollectionRuleProfile,
   CollectionRuleStep,
-  EmailTemplate,
-  RuleStepInput,
 } from "@/lib/api-client";
-import type { CompanyWhatsappTemplate } from "@/components/features/templates/types";
+import {
+  COLLECTION_PURPOSES,
+  COLLECTION_SLOT_METHODS,
+  type CompanyCollectionTemplates,
+} from "@/components/features/templates/types";
 import ReguaPage from "../page";
 
-const mockGetRules = jest.fn() as jest.MockedFunction<
-  () => Promise<CollectionRuleProfile[]>
->;
-const mockGetTemplates = jest.fn() as jest.MockedFunction<
-  () => Promise<CompanyWhatsappTemplate[]>
->;
-const mockGetEmailTemplates = jest.fn() as jest.MockedFunction<
-  () => Promise<EmailTemplate[]>
->;
-const mockSetRuleSteps = jest.fn() as jest.MockedFunction<
-  (profileId: string, steps: RuleStepInput[]) => Promise<CollectionRuleStep[]>
->;
-
 const mockApiClient = {
-  getRules: mockGetRules,
-  getAllTemplates: mockGetTemplates,
-  getEmailTemplates: mockGetEmailTemplates,
-  setRuleSteps: mockSetRuleSteps,
+  getRules: jest.fn(),
+  getCollectionTemplates: jest.fn(),
+  setRuleSteps: jest.fn(),
   createRule: jest.fn(),
   deleteRule: jest.fn(),
   classifyDebtors: jest.fn(),
+  createTemplateRequest: jest.fn(),
 };
-
+// A new client object stands for the session token arriving after the first render.
+let mockCurrentClient = mockApiClient;
 jest.mock("@/lib/use-api-client", () => ({
-  useApiClient: () => mockApiClient,
+  useApiClient: () => mockCurrentClient,
 }));
 
-function createTemplateFixture(
-  id: string,
-  name: string,
-): CompanyWhatsappTemplate {
-  return {
-    id,
-    name,
-    language: "pt_BR",
-    category: "UTILITY",
-    content: { body: "Conteudo", footer: null, button: null },
-    defaultFor: [],
-  };
-}
-
-function createEmailFixture(id: string, name: string): EmailTemplate {
-  return {
-    id,
-    name,
-    slug: id,
-    subject: name,
-    content: "Conteudo",
-    isActive: true,
-    resendTemplateId: null,
-    resendAlias: null,
-    resendStatus: "published",
-    resendPublishedAt: null,
-    lastResendSyncAt: null,
-    resendError: null,
-    greeting: "",
-    instructions: "",
-    signature: "",
-    createdAt: "2026-05-20T00:00:00.000Z",
-    updatedAt: "2026-05-20T00:00:00.000Z",
-  };
-}
-
-function whatsappStep(
-  overrides: Partial<CollectionRuleStep>,
-): CollectionRuleStep {
+function step(overrides: Partial<CollectionRuleStep>): CollectionRuleStep {
   return {
     id: "step",
-    profileId: "profile-1",
+    profileId: "profile-new",
     stepOrder: 0,
     channel: "WHATSAPP",
-    emailTemplateId: null,
-    whatsappSelection: { mode: "DEFAULT", purpose: "EMISSION" },
-    whatsappStatus: { ready: true, code: null },
     delayDays: 0,
     sendTimeStart: null,
     sendTimeEnd: null,
     isActive: true,
+    scheduleDay: 0,
+    attempted: false,
+    customTemplates: [],
     ...overrides,
   };
 }
 
-function createProfileFixture(): CollectionRuleProfile {
+function profile(
+  id: string,
+  profileType: CollectionRuleProfile["profileType"],
+  steps: CollectionRuleStep[],
+): CollectionRuleProfile {
   return {
-    id: "profile-1",
+    id,
     companyId: "company-1",
-    name: "Novo Cliente",
-    profileType: "NEW",
-    isDefault: true,
+    name: profileType === "NEW" ? "Novo Cliente" : "Bom Pagador",
+    profileType,
+    isDefault: profileType === "NEW",
     isActive: true,
     daysOverdueMin: null,
     daysOverdueMax: null,
-    steps: [
-      whatsappStep({
-        id: "step-emission",
-        stepOrder: 0,
-        delayDays: -30,
-      }),
-      whatsappStep({
-        id: "step-due",
-        stepOrder: 1,
-        delayDays: 30,
-        whatsappSelection: {
-          mode: "EXPLICIT",
-          templateId: "template-vencimento",
-        },
-      }),
+    steps,
+    _count: { debtors: 3 },
+  } as CollectionRuleProfile;
+}
+
+const steps = [
+  step({
+    id: "inicial",
+    stepOrder: 0,
+    channel: "EMAIL",
+    delayDays: -30,
+    scheduleDay: -30,
+  }),
+  step({
+    id: "d-2-email",
+    stepOrder: 1,
+    channel: "EMAIL",
+    delayDays: 28,
+    scheduleDay: -2,
+  }),
+  step({
+    id: "d-2-wa",
+    stepOrder: 2,
+    delayDays: 0,
+    scheduleDay: -2,
+    attempted: true,
+  }),
+  step({
+    id: "d4-wa",
+    stepOrder: 3,
+    delayDays: 6,
+    scheduleDay: 4,
+    customTemplates: [
+      { billingMethod: "PIX", templateId: "tpl-x", templateName: "x" },
     ],
-    _count: { debtors: 0 },
-    createdAt: "2026-05-20T00:00:00.000Z",
-    updatedAt: "2026-05-20T00:00:00.000Z",
+  }),
+];
+
+function collection(): CompanyCollectionTemplates {
+  return {
+    moments: COLLECTION_PURPOSES.flatMap((purpose) =>
+      COLLECTION_SLOT_METHODS.map((billingMethod) => ({
+        purpose,
+        billingMethod,
+        template: {
+          name: `${purpose}-${billingMethod}`,
+          content: {
+            body: "x",
+            footer: null,
+            button: null,
+            pixButton: null,
+            boletoButton: null,
+            quickReplies: [],
+          },
+          previewBody: `Mensagem ${purpose} ${billingMethod}`,
+        },
+      })),
+    ),
+    custom: [
+      {
+        ruleStepId: "d4-wa",
+        profileName: "Novo Cliente",
+        scheduleDay: 4,
+        billingMethod: "PIX",
+        template: {
+          name: "x",
+          content: {
+            body: "x",
+            footer: null,
+            button: null,
+            pixButton: null,
+            boletoButton: null,
+            quickReplies: [],
+          },
+          previewBody: "Mensagem sob medida",
+        },
+      },
+    ],
   };
 }
 
+beforeEach(() => {
+  jest.clearAllMocks();
+  mockApiClient.getRules.mockResolvedValue([
+    profile("profile-new", "NEW", steps),
+    profile("profile-good", "GOOD", []),
+  ]);
+  mockApiClient.getCollectionTemplates.mockResolvedValue(collection());
+  mockApiClient.setRuleSteps.mockImplementation(
+    (_id: string, input: unknown[]) =>
+      Promise.resolve(
+        input.map((item, index) =>
+          step({ ...(item as object), id: `saved-${index}` }),
+        ),
+      ),
+  );
+  jest.spyOn(window, "confirm").mockReturnValue(true);
+});
+
 describe("ReguaPage", () => {
-  beforeEach(() => {
-    mockGetRules.mockReset();
-    mockGetTemplates.mockReset();
-    mockGetEmailTemplates.mockReset();
-    mockSetRuleSteps.mockReset();
-    mockGetRules.mockResolvedValue([createProfileFixture()]);
-    mockGetTemplates.mockResolvedValue([
-      createTemplateFixture("template-emissao", "Cobranca na emissao"),
-      createTemplateFixture("template-vencimento", "Vencimento hoje"),
-      createTemplateFixture("template-atraso", "Atraso recorrente"),
-    ]);
-    mockGetEmailTemplates.mockResolvedValue([
-      createEmailFixture("email-lembrete", "Lembrete por e-mail"),
-    ]);
-    mockSetRuleSteps.mockResolvedValue(createProfileFixture().steps);
-  });
-
-  it("oferece o padrão da finalidade ou um template liberado por etapa", async () => {
-    const user = userEvent.setup();
-
+  it("shows one card per day with its channels and message; old Inicial steps stay out", async () => {
     render(<ReguaPage />);
-
-    expect(
-      await screen.findByRole("button", { name: /Novo Cliente/i }),
-    ).toBeInTheDocument();
-    expect(mockGetTemplates).toHaveBeenCalledTimes(1);
-    expect(
-      await screen.findByLabelText("Template do contato inicial por WhatsApp"),
-    ).toHaveValue("default");
-    const stepSelect = screen.getByLabelText("Template da etapa 2");
-    expect(stepSelect).toHaveValue("t:template-vencimento");
-    expect(
-      within(stepSelect)
-        .getAllByRole("option")
-        .map((option) => option.textContent),
-    ).toEqual([
-      "Padrão da empresa: No dia do vencimento",
-      "Atraso recorrente",
-      "Cobranca na emissao",
-      "Vencimento hoje",
-    ]);
-
-    await user.selectOptions(stepSelect, "t:template-atraso");
-    await user.click(screen.getByRole("button", { name: /salvar/i }));
-
-    await waitFor(() => expect(mockSetRuleSteps).toHaveBeenCalledTimes(1));
-    const saved = mockSetRuleSteps.mock.calls[0]![1];
-    expect(saved[0]).toMatchObject({
-      id: "step-emission",
-      channel: "WHATSAPP",
-      whatsappSelection: { mode: "DEFAULT", purpose: "EMISSION" },
+    const reminder = await screen.findByRole("article", {
+      name: "Contato: 2 dias antes",
     });
-    expect(saved[1]).toMatchObject({
-      id: "step-due",
-      stepOrder: 1,
-      channel: "WHATSAPP",
-      whatsappSelection: { mode: "EXPLICIT", templateId: "template-atraso" },
-    });
-    expect(saved[1]).not.toHaveProperty("emailTemplateId");
-  });
-
-  it("usa o catálogo de e-mail em etapas de e-mail", async () => {
-    const user = userEvent.setup();
-    render(<ReguaPage />);
-
-    await screen.findByLabelText("Template da etapa 2");
-    await user.click(screen.getAllByRole("button", { name: /E-mail/ }).at(-1)!);
-    const stepSelect = screen.getByLabelText("Template da etapa 2");
+    expect(within(reminder).getByText("Lembrete")).toBeInTheDocument();
     expect(
-      within(stepSelect)
-        .getAllByRole("option")
-        .map((option) => option.textContent),
-    ).toEqual(["Modelo padrão", "Lembrete por e-mail"]);
-    await user.selectOptions(stepSelect, "email-lembrete");
-    await user.click(screen.getByRole("button", { name: /salvar/i }));
-
-    await waitFor(() => expect(mockSetRuleSteps).toHaveBeenCalledTimes(1));
-    const savedEmailStep = mockSetRuleSteps.mock.calls[0]![1][1];
-    expect(savedEmailStep).toMatchObject({
-      channel: "EMAIL",
-      emailTemplateId: "email-lembrete",
-    });
-    expect(savedEmailStep).not.toHaveProperty("whatsappSelection");
-  });
-
-  it("acompanha a finalidade do padrão quando o dia muda", async () => {
-    const user = userEvent.setup();
-    mockGetRules.mockResolvedValue([
-      {
-        ...createProfileFixture(),
-        steps: [
-          whatsappStep({
-            id: "step-due",
-            whatsappSelection: { mode: "DEFAULT", purpose: "DUE_TODAY" },
-          }),
-        ],
-      },
-    ]);
-    render(<ReguaPage />);
-
-    const dayInput = await screen.findByRole("spinbutton", {
-      name: "Dia do contato 1",
-    });
-    await user.clear(dayInput);
-    await user.type(dayInput, "-3");
-    await user.tab();
-    await user.click(
-      screen.getByRole("button", { name: /salvar alterações/i }),
-    );
-
-    await waitFor(() => expect(mockSetRuleSteps).toHaveBeenCalledTimes(1));
-    const savedWhatsappStep = mockSetRuleSteps.mock.calls[0]![1][0];
-    expect(savedWhatsappStep).toMatchObject({
-      channel: "WHATSAPP",
-      whatsappSelection: { mode: "DEFAULT", purpose: "BEFORE_DUE" },
-    });
-  });
-
-  it("mostra a etapa com template revogado como pendência, sem oferecê-lo", async () => {
-    mockGetRules.mockResolvedValue([
-      {
-        ...createProfileFixture(),
-        steps: [
-          whatsappStep({
-            id: "step-revoked",
-            whatsappSelection: {
-              mode: "EXPLICIT",
-              templateId: "template-revogado",
-            },
-            whatsappStatus: { ready: false, code: "NOT_GRANTED" },
-          }),
-          whatsappStep({
-            id: "step-missing",
-            stepOrder: 1,
-            delayDays: 3,
-            whatsappSelection: {
-              mode: "DEFAULT",
-              purpose: "RECURRING_OVERDUE",
-            },
-            whatsappStatus: { ready: false, code: "DEFAULT_MISSING" },
-          }),
-        ],
-      },
-    ]);
-    render(<ReguaPage />);
-
-    const revoked = await screen.findByLabelText("Template da etapa 1");
-    expect(revoked).toHaveValue("unavailable");
+      within(reminder).getByRole("checkbox", { name: /WhatsApp/ }),
+    ).toBeChecked();
     expect(
-      within(revoked).getByRole("option", { name: "Template indisponível" }),
+      within(reminder).getByRole("checkbox", { name: /E-mail/ }),
+    ).toBeChecked();
+    // Already sent: the day can no longer change.
+    expect(within(reminder).getByText(/Já enviada/)).toBeInTheDocument();
+    expect(
+      within(reminder).getByLabelText("Dia em relação ao vencimento"),
     ).toBeDisabled();
+
+    const overdue = screen.getByRole("article", {
+      name: "Contato: 4 dias após",
+    });
+    expect(within(overdue).getByText("Atraso")).toBeInTheDocument();
     expect(
-      within(revoked).queryByRole("option", { name: /revogado/ }),
-    ).toBeNull();
-    const notes = screen.getAllByRole("note").map((note) => note.textContent);
-    expect(notes).toEqual(
-      expect.arrayContaining([
-        expect.stringMatching(/não está mais liberado/),
-        "Envios pendentes: Sem template padrão para a finalidade.",
-      ]),
-    );
+      within(overdue).getByText("Personalizado pelo suporte"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("article", { name: /30 dias antes/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByRole("article")).toHaveLength(2);
+    // Nothing to choose about templates anymore.
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
 
-  it("não confunde falha ao carregar templates com nenhum template liberado", async () => {
-    mockGetTemplates.mockRejectedValue(new Error("Falha de rede"));
+  it("adds a contact with a shortcut and saves days and channels only", async () => {
     render(<ReguaPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "+3 dias" }));
+    expect(screen.getByText("Alterações não salvas")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
 
+    await waitFor(() =>
+      expect(mockApiClient.setRuleSteps).toHaveBeenCalledWith("profile-new", [
+        { id: "d-2-wa", stepOrder: 0, channel: "WHATSAPP", delayDays: -2 },
+        { id: "d-2-email", stepOrder: 1, channel: "EMAIL", delayDays: 0 },
+        { stepOrder: 2, channel: "WHATSAPP", delayDays: 5 },
+        { id: "d4-wa", stepOrder: 3, channel: "WHATSAPP", delayDays: 1 },
+      ]),
+    );
+    expect(await screen.findByText("Régua salva.")).toBeInTheDocument();
+  });
+
+  it("refuses a contact without channel and confirms before turning off a channel already sent", async () => {
+    render(<ReguaPage />);
+    const reminder = await screen.findByRole("article", {
+      name: "Contato: 2 dias antes",
+    });
+    (window.confirm as jest.Mock).mockReturnValueOnce(false);
+    fireEvent.click(
+      within(reminder).getByRole("checkbox", { name: /WhatsApp/ }),
+    );
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringMatching(/já foi enviado/),
+    );
+    expect(
+      within(reminder).getByRole("checkbox", { name: /WhatsApp/ }),
+    ).toBeChecked();
+
+    const overdue = screen.getByRole("article", {
+      name: "Contato: 4 dias após",
+    });
+    fireEvent.click(
+      within(overdue).getByRole("checkbox", { name: /WhatsApp/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Não foi possível carregar os templates disponíveis",
+      "Escolha WhatsApp, e-mail ou os dois no contato “4 dias após”.",
     );
-    expect(screen.queryByText(/Nenhum template liberado/)).toBeNull();
-    expect(await screen.findByLabelText("Template da etapa 2")).toHaveValue(
-      "unavailable",
-    );
-    expect(
-      screen.queryByText(/não está mais liberado para sua empresa/),
-    ).toBeNull();
+    expect(mockApiClient.setRuleSteps).not.toHaveBeenCalled();
   });
 
-  it("explica a referência dos dias e mostra uma prévia da sequência", async () => {
+  it("shows the message of a day for each payment method", async () => {
     render(<ReguaPage />);
-
-    expect(
-      await screen.findByRole("heading", { name: "Prévia da sequência" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/dia 0 é o vencimento/i)).toBeInTheDocument();
-    expect(
-      (await screen.findAllByText("No dia do vencimento")).length,
-    ).toBeGreaterThan(0);
-    // The "Inicial" step is the first message of the charge.
-    expect(screen.getByText("Na emissão da cobrança")).toBeInTheDocument();
+    const overdue = await screen.findByRole("article", {
+      name: "Contato: 4 dias após",
+    });
+    fireEvent.click(
+      within(overdue).getByRole("button", { name: "Ver mensagem" }),
+    );
+    const dialog = screen.getByRole("dialog");
+    // The custom template of this step replaces the global one for Pix.
+    expect(within(dialog).getByRole("img")).toHaveTextContent(
+      "Mensagem sob medida",
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Bolix" }));
+    expect(within(dialog).getByRole("img")).toHaveTextContent(
+      "Mensagem FIRST_OVERDUE BOLIX",
+    );
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Atraso recorrente" }),
+    );
+    expect(within(dialog).getByRole("img")).toHaveTextContent(
+      "Mensagem RECURRING_OVERDUE BOLIX",
+    );
   });
 
-  it("escolhe um template por forma de pagamento na etapa inicial", async () => {
-    const user = userEvent.setup();
-    mockGetTemplates.mockResolvedValue([
-      createTemplateFixture("template-emissao", "Cobranca na emissao"),
+  it("asks for a custom message for a saved step", async () => {
+    mockApiClient.createTemplateRequest.mockResolvedValue({ id: "request-1" });
+    render(<ReguaPage />);
+    const overdue = await screen.findByRole("article", {
+      name: "Contato: 4 dias após",
+    });
+    fireEvent.click(
+      within(overdue).getByRole("button", {
+        name: "Pedir mensagem personalizada",
+      }),
+    );
+    const dialog = screen.getByRole("dialog", {
+      name: "Solicitar template personalizado",
+    });
+    expect(dialog).toHaveTextContent("Etapa: Novo Cliente · 4 dias após");
+    fireEvent.change(
+      within(dialog).getByLabelText("O que a mensagem deve dizer"),
       {
-        ...createTemplateFixture("template-pix", "emissao_pix"),
-        content: {
-          body: "Pix",
-          footer: null,
-          button: null,
-          pixButton: { label: "Copiar código Pix", index: 0 },
-        },
+        target: { value: "Quero citar o número do contrato." },
       },
-      {
-        ...createTemplateFixture("template-bolix", "emissao_bolix"),
-        content: {
-          body: "Bolix",
-          footer: null,
-          button: null,
-          pixButton: { label: "Copiar código Pix", index: 0 },
-          boletoButton: { label: "Copiar código do boleto", index: 1 },
-        },
-      },
-    ]);
-    render(<ReguaPage />);
-
-    const label = "Template do contato inicial por WhatsApp";
-    await screen.findByLabelText(label);
-    expect(screen.queryByLabelText(`${label} para BOLIX`)).toBeNull();
-    await user.click(
-      screen.getByLabelText(`${label}: templates diferentes por forma de pagamento`),
     );
-    const bolix = screen.getByLabelText(`${label} para BOLIX`);
-    // Templates that need data the method lacks are not offered.
-    expect(
-      within(screen.getByLabelText(`${label} para Pix`))
-        .getAllByRole("option")
-        .map((option) => option.textContent),
-    ).not.toContain("Pix: emissao_bolix");
-    expect(screen.queryByLabelText(`${label} para Boleto`)).toBeNull();
-    const card = screen.getByLabelText(`${label} para Cartão de crédito`);
-    expect(within(card).getAllByRole("option").map((option) => option.textContent))
-      .toEqual(["Cartão de crédito: igual à etapa", "Cartão de crédito: Cobranca na emissao"]);
-    await user.selectOptions(bolix, "template-bolix");
-    await user.selectOptions(card, "template-emissao");
-    await user.click(screen.getByRole("button", { name: /salvar/i }));
-
-    await waitFor(() => expect(mockSetRuleSteps).toHaveBeenCalledTimes(1));
-    expect(mockSetRuleSteps.mock.calls[0]![1][0]).toMatchObject({
-      id: "step-emission",
-      whatsappSelection: { mode: "DEFAULT", purpose: "EMISSION" },
-      whatsappMethodTemplates: {
-        PIX: null,
-        BOLIX: "template-bolix",
-        CREDIT_CARD: "template-emissao",
-      },
-    });
-    expect(mockSetRuleSteps.mock.calls[0]![1][0])
-      .not.toHaveProperty("whatsappMethodTemplates.BOLETO");
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Enviar pedido" }),
+    );
+    await waitFor(() =>
+      expect(mockApiClient.createTemplateRequest).toHaveBeenCalledWith({
+        message: "Quero citar o número do contrato.",
+        purpose: "FIRST_OVERDUE",
+        ruleStepId: "d4-wa",
+      }),
+    );
   });
 
-  it("mostra as escolhas salvas, o aviso de compatibilidade e limpa ao desmarcar", async () => {
-    const user = userEvent.setup();
-    const profile = createProfileFixture();
-    profile.steps[0] = whatsappStep({
-      ...profile.steps[0],
-      whatsappMethodTemplates: { PIX: null, BOLETO: null, BOLIX: "template-emissao", CREDIT_CARD: "template-vencimento" },
-      whatsappMethodStatus: { BOLIX: { ready: false, code: "NOT_GRANTED" }, CREDIT_CARD: { ready: false, code: "NOT_GRANTED" } },
-      whatsappIncompatibleMethods: ["BOLETO", "PIX"],
-    });
-    mockGetRules.mockResolvedValue([profile]);
+  it("asks before discarding unsaved changes when switching profile", async () => {
     render(<ReguaPage />);
-
-    const label = "Template do contato inicial por WhatsApp";
-    expect(await screen.findByLabelText(`${label} para BOLIX`)).toHaveValue(
-      "template-emissao",
+    fireEvent.click(
+      await screen.findByRole("button", { name: "No vencimento" }),
+    );
+    (window.confirm as jest.Mock).mockReturnValueOnce(false);
+    fireEvent.click(screen.getByRole("button", { name: /Bom Pagador/ }));
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringMatching(/alterações não salvas/),
     );
     expect(
-      screen.getByText(/Envios BOLIX pendentes: Não liberado para a empresa/),
+      screen.getByRole("article", { name: "Contato: Dia do vencimento" }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText(`${label} para Cartão de crédito`)).toHaveValue("template-vencimento");
-    expect(screen.getByText(/Envios Cartão de crédito pendentes: Não liberado para a empresa/)).toBeInTheDocument();
+  });
+
+  it("tells a load failure apart from an empty rule", async () => {
+    mockApiClient.getRules.mockRejectedValueOnce(new Error("Falha de rede"));
+    render(<ReguaPage />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Falha de rede");
+  });
+
+  it("drops the error of a load made before the session was ready", async () => {
+    mockApiClient.getRules.mockRejectedValueOnce(
+      new Error("Sessao autenticada ainda nao carregada."),
+    );
+    const { rerender } = render(<ReguaPage />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Sessao");
+
+    mockCurrentClient = { ...mockApiClient };
+    rerender(<ReguaPage />);
     expect(
-      screen.getByText(/Cobranças Pix não têm os dados que este template usa/),
+      await screen.findByRole("article", { name: "Contato: 2 dias antes" }),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/Cobranças Boleto/)).toBeNull();
-    await user.click(
-      screen.getByLabelText(`${label}: templates diferentes por forma de pagamento`),
-    );
-    expect(screen.queryByLabelText(`${label} para BOLIX`)).toBeNull();
-    await user.click(screen.getByRole("button", { name: /salvar/i }));
-    await waitFor(() => expect(mockSetRuleSteps).toHaveBeenCalledTimes(1));
-    expect(mockSetRuleSteps.mock.calls[0]![1][0]).toMatchObject({
-      whatsappMethodTemplates: { PIX: null, BOLIX: null, CREDIT_CARD: null },
-    });
-    expect(mockSetRuleSteps.mock.calls[0]![1][0])
-      .not.toHaveProperty("whatsappMethodTemplates.BOLETO");
-  });
-
-  it("não oferece boleto legado ao editar templates por forma de pagamento", async () => {
-    const user = userEvent.setup();
-    const profile = createProfileFixture();
-    profile.steps[0].whatsappMethodTemplates = {
-      BOLETO: "template-emissao", PIX: null, BOLIX: null, CREDIT_CARD: null,
-    };
-    mockGetRules.mockResolvedValue([profile]);
-    render(<ReguaPage />);
-    const label = "Template do contato inicial por WhatsApp";
-    await screen.findByLabelText(label);
-    await user.click(screen.getByLabelText(`${label}: templates diferentes por forma de pagamento`));
-    expect(screen.queryByLabelText(`${label} para Boleto`)).toBeNull();
-    expect(screen.getByLabelText(`${label} para Pix`)).toBeInTheDocument();
-    expect(screen.getByLabelText(`${label} para BOLIX`)).toBeInTheDocument();
-    expect(screen.getByLabelText(`${label} para Cartão de crédito`)).toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText(`${label} para Cartão de crédito`), "template-emissao");
-    await user.click(screen.getByRole("button", { name: /salvar/i }));
-    await waitFor(() => expect(mockSetRuleSteps).toHaveBeenCalledTimes(1));
-    // An absent legacy field is preserved by the API instead of overwritten silently.
-    expect(mockSetRuleSteps.mock.calls[0]![1][0])
-      .toHaveProperty("whatsappMethodTemplates", { PIX: null, BOLIX: null, CREDIT_CARD: "template-emissao" });
-  });
-
-  it("avisa antes de descartar alterações ao trocar de perfil", async () => {
-    const user = userEvent.setup();
-    const secondProfile: CollectionRuleProfile = {
-      ...createProfileFixture(),
-      id: "profile-2",
-      name: "Bom Pagador",
-      profileType: "GOOD",
-      isDefault: false,
-      steps: [],
-    };
-    mockGetRules.mockResolvedValue([createProfileFixture(), secondProfile]);
-    const confirmSpy = jest.spyOn(window, "confirm").mockReturnValue(false);
-
-    try {
-      render(<ReguaPage />);
-      const emissionTemplate = await screen.findByLabelText(
-        "Template do contato inicial por WhatsApp",
-      );
-      await user.selectOptions(emissionTemplate, "t:template-atraso");
-      await user.click(screen.getByRole("button", { name: /Bom Pagador/i }));
-
-      expect(confirmSpy).toHaveBeenCalledTimes(1);
-      expect(emissionTemplate).toHaveValue("t:template-atraso");
-
-      confirmSpy.mockReturnValue(true);
-      await user.click(screen.getByRole("button", { name: /Bom Pagador/i }));
-      expect(
-        await screen.findByText("Nenhuma etapa configurada."),
-      ).toBeInTheDocument();
-    } finally {
-      confirmSpy.mockRestore();
-    }
-  });
-
-  it("permite digitar um dia negativo e atualiza a prévia antes de salvar", async () => {
-    const user = userEvent.setup();
-    render(<ReguaPage />);
-
-    const dayInput = await screen.findByRole("spinbutton", {
-      name: "Dia do contato 1",
-    });
-    await user.clear(dayInput);
-    await user.type(dayInput, "-3");
-    await user.tab();
-
-    expect(dayInput).toHaveValue(-3);
-    const preview = screen
-      .getByRole("heading", { name: "Prévia da sequência" })
-      .closest("section");
-    if (!preview) throw new Error("Prévia da sequência ausente");
-    expect(
-      within(preview).getByText("3 dias antes do vencimento"),
-    ).toBeInTheDocument();
-    await user.click(
-      screen.getByRole("button", { name: /salvar alterações/i }),
-    );
-    await waitFor(() => expect(mockSetRuleSteps).toHaveBeenCalledTimes(1));
-    expect(mockSetRuleSteps).toHaveBeenCalledWith(
-      "profile-1",
-      expect.arrayContaining([
-        expect.objectContaining({ stepOrder: 1, delayDays: 27 }),
-      ]),
-    );
-  });
-
-  it("explica janelas de horário incompletas antes de salvar", async () => {
-    const user = userEvent.setup();
-    render(<ReguaPage />);
-
-    const startTime = await screen.findByLabelText(
-      "Horário inicial do contato 1",
-    );
-    fireEvent.change(startTime, { target: { value: "09:00" } });
-    await user.click(
-      screen.getByRole("button", { name: /salvar alterações/i }),
-    );
-
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Preencha os dois horários do contato 1 ou deixe ambos vazios.",
-    );
-    expect(mockSetRuleSteps).not.toHaveBeenCalled();
-  });
-
-  it("protege alterações ao sair por um link ou atualizar a página", async () => {
-    const user = userEvent.setup();
-    const confirmSpy = jest.spyOn(window, "confirm").mockReturnValue(false);
-
-    try {
-      render(
-        <>
-          <a href="/clientes">Ir para clientes</a>
-          <ReguaPage />
-        </>,
-      );
-      const template = await screen.findByLabelText(
-        "Template do contato inicial por WhatsApp",
-      );
-      await user.selectOptions(template, "t:template-atraso");
-
-      expect(
-        fireEvent.click(screen.getByRole("link", { name: "Ir para clientes" })),
-      ).toBe(false);
-      expect(confirmSpy).toHaveBeenCalledTimes(1);
-
-      const beforeUnload = new Event("beforeunload", { cancelable: true });
-      fireEvent(window, beforeUnload);
-      expect(beforeUnload.defaultPrevented).toBe(true);
-    } finally {
-      confirmSpy.mockRestore();
-    }
-  });
-
-  it("rejeita um dia fracionário em vez de convertê-lo silenciosamente", async () => {
-    render(<ReguaPage />);
-    const dayInput = await screen.findByRole("spinbutton", {
-      name: "Dia do contato 1",
-    });
-
-    fireEvent.change(dayInput, { target: { value: "2.5" } });
-    fireEvent.blur(dayInput);
-
-    expect(dayInput).toHaveValue(0);
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Digite um número inteiro de dias.",
-    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    mockCurrentClient = mockApiClient;
   });
 });

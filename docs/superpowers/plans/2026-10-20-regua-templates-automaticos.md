@@ -15,7 +15,11 @@ Especificação: [régua de cobrança com templates automáticos](../specs/2026-
   - Desvio: a landing continua com a própria ilustração; a prévia nova (`WhatsappMessagePreview`) reproduz o visual em Tailwind sem mexer na página de marketing.
   - A aba WhatsApp da empresa deixou de listar templates liberados (`CompanyWhatsappTemplates` removido): a empresa vê os 18 da régua e os personalizados.
   - O e-mail ao admin é só um aviso: se falhar, o pedido continua registrado e visível em Solicitações.
-- [ ] Fase 4: nova régua e "Enviar cobrança agora" no cadastro.
+- [x] Fase 4: nova régua e "Enviar cobrança agora" no cadastro.
+  - A régua virou cards por dia (`components/features/regua/`); a página mantém perfis, classificação e o salvamento com aviso de alterações não salvas.
+  - Etapa já enviada aparece como "Já enviada: só é possível remover"; remover desativa e mantém no histórico (o backend da Fase 2 faz isso), com confirmação antes. Remover etapa com mensagem personalizada também pede confirmação.
+  - "Enviar cobrança agora" entrou na nova cobrança (Cobranças e Clientes) e na importação, marcado conforme o padrão da empresa e com WhatsApp por padrão.
+  - Os tipos e chamadas antigos de seleção de template por etapa saíram de `api-client.ts`; o backend ignora esses campos se uma tela antiga ainda os enviar.
 
 ## Regras de envio (o coração da mudança)
 

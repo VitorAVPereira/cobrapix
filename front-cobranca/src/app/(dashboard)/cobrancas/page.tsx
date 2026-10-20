@@ -58,6 +58,13 @@ import { useFinancialActivation } from "@/components/features/financial-activati
 import { normalizeWhatsAppNumber } from "@/lib/whatsapp-number";
 import { LateTermsFields } from "@/components/features/LateTermsFields";
 import {
+  SendNowFields,
+  initialSendNow,
+  sendNowPayload,
+  sendNowProblem,
+  type SendNowValue,
+} from "@/components/features/SendNowFields";
+import {
   EMPTY_LATE_TERMS,
   isIndividualDocument,
   lateTermsFormFromValues,
@@ -380,6 +387,12 @@ function CobrancasContent() {
   const [manualForm, setManualForm] = useState<ManualChargeForm>(
     initialManualChargeForm,
   );
+  const [sendNow, setSendNow] = useState<SendNowValue>(() =>
+    initialSendNow(undefined),
+  );
+  const [importSendNow, setImportSendNow] = useState<SendNowValue>(() =>
+    initialSendNow(undefined),
+  );
   const [pickedClient, setPickedClient] = useState<DebtorOption | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -491,6 +504,7 @@ function CobrancasContent() {
     importedDebtors: ParsedDebtor[],
   ): Promise<void> {
     setImportError(null);
+    setImportSendNow(initialSendNow(billingSettings?.autoGenerateFirstCharge));
     await analyzeImport(importedDebtors);
   }
 
@@ -550,7 +564,16 @@ function CobrancasContent() {
       const rows = importConsent
         ? importRows.map((row) => ({ ...row, whatsapp_opt_in: true }))
         : importRows;
-      const result = await apiClient.importInvoices(rows, importDecisions);
+      const problem = sendNowProblem(importSendNow);
+      if (problem) {
+        setImportError(problem);
+        return;
+      }
+      const result = await apiClient.importInvoices(
+        rows,
+        importDecisions,
+        sendNowPayload(importSendNow),
+      );
       resetImport();
       setIsUploadingCSV(false);
       setErrorMsg(null);
@@ -885,6 +908,7 @@ function CobrancasContent() {
     setInvoiceTargetDebtor(null);
     setPickedClient(null);
     setManualForm({ ...initialManualChargeForm, lateTerms: companyLateTerms() });
+    setSendNow(initialSendNow(billingSettings?.autoGenerateFirstCharge));
     setIsModalOpen(true);
   }
 
@@ -930,6 +954,7 @@ function CobrancasContent() {
       billingType,
       lateTerms: companyLateTerms(),
     });
+    setSendNow(initialSendNow(billingSettings?.autoGenerateFirstCharge));
     setIsModalOpen(true);
   }
 
@@ -964,6 +989,9 @@ function CobrancasContent() {
         throw new Error("Informe a data de vencimento.");
       }
 
+      const sendProblem = sendNowProblem(sendNow);
+      if (sendProblem) throw new Error(sendProblem);
+
       // Optional: an empty field uses the company default, zero means none.
       const parsedLateTerms = parseLateTermsForm(manualForm.lateTerms);
       if ("error" in parsedLateTerms) {
@@ -982,6 +1010,7 @@ function CobrancasContent() {
         recurring: manualForm.recurring,
         due_day: manualForm.recurring ? dueDay : undefined,
         ...lateTerms,
+        ...sendNowPayload(sendNow),
         ...(isEducationSegment
           ? {
               studentName: manualForm.studentName.trim() || undefined,
@@ -1114,16 +1143,26 @@ function CobrancasContent() {
             )}
 
             {importRows && importDecisions ? (
-              <ImportSummary
-                rows={importRows.length}
-                clients={importClients}
-                decisions={importDecisions}
-                busy={isImporting}
-                whatsappConsent={importConsent}
-                onWhatsappConsentChange={setImportConsent}
-                onConfirm={() => void confirmImport()}
-                onCancel={resetImport}
-              />
+              <>
+                <div className="mb-4">
+                  <SendNowFields
+                    many
+                    value={importSendNow}
+                    onChange={setImportSendNow}
+                    disabled={isImporting}
+                  />
+                </div>
+                <ImportSummary
+                  rows={importRows.length}
+                  clients={importClients}
+                  decisions={importDecisions}
+                  busy={isImporting}
+                  whatsappConsent={importConsent}
+                  onWhatsappConsentChange={setImportConsent}
+                  onConfirm={() => void confirmImport()}
+                  onCancel={resetImport}
+                />
+              </>
             ) : isImporting ? (
               <p className="flex items-center gap-2 py-10 text-sm text-slate-500">
                 <Loader2 size={18} className="animate-spin" />
@@ -1450,11 +1489,18 @@ function CobrancasContent() {
                     )}
                   />
                   <p className="mt-2 text-xs text-slate-500">
-                    Vem com o padrão de Configurações → Cobrança. Campo vazio
+                    Vem com o padrão de Configurações → Geral. Campo vazio
                     usa o padrão; 0 significa sem multa, sem juros ou sem
                     pagamento após o vencimento.
                   </p>
                 </fieldset>
+                <div className="sm:col-span-2">
+                  <SendNowFields
+                    value={sendNow}
+                    onChange={setSendNow}
+                    disabled={isSavingInvoice}
+                  />
+                </div>
               </div>
 
               <div className="flex flex-col-reverse gap-2 border-t border-slate-200 px-5 py-4 sm:flex-row sm:justify-end">

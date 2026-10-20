@@ -307,6 +307,9 @@ describe("ClientesPage", () => {
         late_fine_percentage: 2,
         late_interest_monthly_percentage: 1,
         payment_days_after_due: 30,
+        // "Enviar cobrança agora" starts as the company setting, by WhatsApp.
+        send_now: true,
+        send_channels: ["WHATSAPP"],
       });
     });
   });

@@ -306,7 +306,10 @@ describe("CobrancasPage URL filters", () => {
       fireEvent.click(screen.getByRole("button", { name: "Importar 2 cobranças" }));
 
       await waitFor(() =>
-        expect(mockApiClient.importInvoices).toHaveBeenCalledWith(mockRows, []),
+        expect(mockApiClient.importInvoices).toHaveBeenCalledWith(mockRows, [], {
+          send_now: true,
+          send_channels: ["WHATSAPP"],
+        }),
       );
       expect(await screen.findByText("2 cobranças importadas.")).toBeInTheDocument();
     });
@@ -339,9 +342,11 @@ describe("CobrancasPage URL filters", () => {
       expect(await screen.findByText(/Ficam de fora as cobranças de 1 cliente/)).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Importar 1 cobrança" }));
       await waitFor(() =>
-        expect(mockApiClient.importInvoices).toHaveBeenCalledWith(mockRows, [
-          { document: "52998224725", action: "SKIP" },
-        ]),
+        expect(mockApiClient.importInvoices).toHaveBeenCalledWith(
+          mockRows,
+          [{ document: "52998224725", action: "SKIP" }],
+          { send_now: true, send_channels: ["WHATSAPP"] },
+        ),
       );
     });
 
@@ -365,6 +370,7 @@ describe("CobrancasPage URL filters", () => {
         expect(mockApiClient.importInvoices).toHaveBeenCalledWith(
           mockRows.map((row) => ({ ...row, whatsapp_opt_in: true })),
           [],
+          { send_now: true, send_channels: ["WHATSAPP"] },
         ),
       );
     });
