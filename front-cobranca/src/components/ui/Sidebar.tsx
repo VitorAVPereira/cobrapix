@@ -60,7 +60,7 @@ const mainItems = [
     icon: CalendarClock,
   },
   {
-    href: "/communications",
+    href: "/comunicacoes",
     label: "Inbox WhatsApp e envios",
     icon: MessageSquare,
   },
@@ -69,12 +69,12 @@ const mainItems = [
 const settingsItems = [
   {
     href: "/configuracoes/cobranca",
-    label: "Cobranca",
+    label: "Cobrança",
     icon: CalendarClock,
   },
   {
     href: "/configuracoes/regua",
-    label: "Regua de Cobranca",
+    label: "Régua de Cobrança",
     icon: SlidersHorizontal,
   },
   {
@@ -94,7 +94,7 @@ const adminItems = [
   {href:'/admin/conciliacao',label:'Conciliação',icon:Scale},
   {href:'/admin/efi-onboarding',label:'Ativações e saúde',icon:Database},
   {href:'/admin/payment-fees',label:'Tarifas',icon:HandCoins},
-  {href:'/admin/communications',label:'Atendimento central',icon:MessageSquare},
+  {href:'/admin/comunicacoes',label:'Atendimento central',icon:MessageSquare},
   {href:'/admin/templates',label:'Catálogo de templates',icon:MessageSquareText},
   {
     href: "/admin/visao-geral",

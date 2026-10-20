@@ -1,2 +1,6 @@
-import {CommunicationsHistory} from '@/components/features/CommunicationsHistory';
-export default function OutboundPage(){return <CommunicationsHistory/>;}
+import { redirect } from "next/navigation";
+
+/** Old address kept for saved links: the screen moved to the Portuguese route. */
+export default function LegacyCommunicationsPage(): never {
+  redirect("/comunicacoes");
+}
