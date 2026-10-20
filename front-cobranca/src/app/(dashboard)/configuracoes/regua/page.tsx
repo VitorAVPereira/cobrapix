@@ -24,6 +24,7 @@ import { useApiClient } from "@/lib/use-api-client";
 import type { CompanyCollectionTemplates } from "@/components/features/templates/types";
 import { TemplateRequestDialog } from "@/components/features/templates/TemplateRequestDialog";
 import { RuleDayCard } from "@/components/features/regua/RuleDayCard";
+import { RuleTimeline } from "@/components/features/regua/RuleTimeline";
 import { DayMessageDialog } from "@/components/features/regua/DayMessageDialog";
 import {
   DAY_SHORTCUTS,
@@ -673,6 +674,9 @@ export default function ReguaPage(): ReactElement {
                         Remover perfil
                       </button>
                     )}
+                  </div>
+                  <div className="mt-4">
+                    <RuleTimeline days={days} />
                   </div>
                   <ul className="mt-4 grid gap-2 rounded-xl bg-slate-50 p-4 text-sm text-slate-600 sm:grid-cols-2">
                     {RULES.map((rule) => (
