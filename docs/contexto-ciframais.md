@@ -64,7 +64,8 @@ Use estes textos como base de tom e de promessa. Estão em
 - **Pagador sem login:** o cliente da empresa recebe um link, abre e paga. O link mostra só
   aquela cobrança.
 - **Segurança:** dados separados por empresa, credenciais Efí cifradas, dinheiro direto na
-  conta da empresa, conformidade com a LGPD.
+  conta da empresa, dados tratados conforme a LGPD (sem prometer "todos os pontos" da lei),
+  com link para a política de privacidade.
 - **Como funciona:** (1) você pede o orçamento; (2) nossa equipe faz a ativação (conecta a
   conta Efí e valida a chave Pix); (3) você cadastra clientes e faturas, à mão ou por
   planilha CSV; (4) a primeira cobrança sai.
@@ -176,11 +177,12 @@ Não há API para leads nem para criar empresas fora do painel do admin. Recomen
 
 ## 11. Pontos em aberto
 
-- **O formulário de orçamento não tem aviso de privacidade nem link para política.** A
-  página afirma conformidade com a LGPD, mas a única política existente
-  (`/onboarding/privacidade`) trata da ativação financeira e diz ser "texto de homologação,
-  sujeito à aprovação jurídica". A captação automatizada precisa de uma política pública
-  de privacidade antes de escalar.
+- **Política de privacidade pública em `/privacidade`**, ligada no formulário de orçamento
+  e no rodapé. Cobre só o que existe hoje: visita, pedido de orçamento e conversa pelo
+  WhatsApp, com uso restrito a responder e negociar, retenção de até 12 meses sem
+  contratação e pedidos do titular pelo WhatsApp comercial. Ela diz que o contato **não** é
+  usado para outra finalidade: campanhas, CRM, novos fornecedores ou novos canais de
+  captação exigem atualizar a política antes. Ainda não passou por revisão jurídica.
 - Os leads de hoje existem só na caixa de entrada de `QUOTE_REQUEST_EMAIL`; não há
   registro de origem, campanha nem conversão.
 - Confirmar com o responsável: perfil de cliente ideal, segmentos prioritários, faixa de

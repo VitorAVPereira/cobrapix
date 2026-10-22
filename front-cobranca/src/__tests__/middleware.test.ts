@@ -229,6 +229,13 @@ describe("presentation page on /", () => {
     expect(matcher.test("/")).toBe(true);
   });
 
+  it("keeps the privacy policy public for visitors without a session", () => {
+    const matcher = new RegExp(`^${config.matcher[0]}$`);
+
+    expect(matcher.test("/privacidade")).toBe(false);
+    expect(matcher.test("/onboarding/privacidade")).toBe(true);
+  });
+
   it("rewrites to the address the visitor reached, not the Auth.js origin", () => {
     expect(
       runMiddleware({

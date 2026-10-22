@@ -162,14 +162,17 @@ VPS e na Vercel antes de afirmar que algo está em produção.
 - **Página de apresentação** em `/` para visitantes sem sessão (rota interna `/apresentacao`),
   com formulário "Solicitar orçamento" (`POST /contact/quote-request`, público, 5 pedidos por
   15 min por IP) que só envia um e-mail para `QUOTE_REQUEST_EMAIL`; o lead não é gravado.
+  O formulário e o rodapé levam à política de privacidade pública em `/privacidade`
+  (visitante, orçamento e WhatsApp; pedidos de titular pelo WhatsApp comercial; pedidos
+  guardados até 12 meses sem contratação). Mudou a coleta, mude a política.
   Contexto para o projeto de captação de leads: `docs/contexto-ciframais.md`.
 - **Em aberto:**
   - Planos de 29/09 (`docs/superpowers/plans/2026-09-29-0*.md`): código entregue; faltam as
     verificações depois da publicação e a conciliação das duas tentativas BOLIX reais pelo
     painel.
   - Homologação e habilitação do cartão por empresa.
-  - O formulário de orçamento não tem aviso de privacidade; a única política existente é a
-    da ativação financeira, ainda como texto de homologação.
+  - A política de `/privacidade` não passou por revisão jurídica; a da ativação financeira
+    (`/onboarding/privacidade`) segue como texto de homologação.
 
 ---
 
