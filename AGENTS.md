@@ -118,28 +118,58 @@ e e-mail, acompanha o pagamento e concilia a remuneração da plataforma.
 mensagem pode estar retida enquanto o pagamento existe; reenviar mensagem nunca cria
 nova cobrança.
 
-### 2.2 Estado atual (30/09/2026)
+### 2.2 Estado atual (22/10/2026, `main` em `3ae05d8`)
 
+Descreve o código no `main`. O repositório não registra o que já foi publicado; confira na
+VPS e na Vercel antes de afirmar que algo está em produção.
+
+- **Nome público:** Cifra+. CifraMais é o nome interno; `cobrapix` é o nome antigo do
+  repositório. E-mails e textos para cliente usam Cifra+.
 - **Financeiro, Fase A em uso:** conta Efí **do próprio cliente**, configurada pelo admin
   (credenciais, `.p12`, chave Pix). O pagamento cai na conta do cliente; a remuneração da
   CifraMais vem por split e é conciliada em Admin → Conciliação.
+- **Formas de pagamento:** Pix, BOLIX (boleto com QR Code Pix; no e-mail aparece como
+  "Boleto ou Pix") e **cartão de crédito em até 6x**. O cartão está implementado (pagador paga só por
+  cartão em `/pagar/<token>`, arca só com o custo Efí; remuneração CifraMais sobre o
+  principal após descontos, por split), mas a homologação Efí por conta ainda não foi feita:
+  só habilite para uma empresa seguindo `docs/operations/efi-credit-card.md`.
 - **Fase B bloqueada:** modos com conta da CifraMais (`PLATFORM_ACCOUNT`, repasse por split
   invertido ou manual) existem em tipos e enums, mas são recusados na ativação e na emissão
   (`FINANCIAL_MODE_NOT_SUPPORTED`). Não habilite sem pedido.
 - **Abertura de contas Efí desligada** (`EFI_OPENING_ENABLED=false`): a autoativação pela
   empresa não deve aparecer; a ativação é manual pelo admin.
 - **WhatsApp:** canal central compartilhado, transporte **somente Datafy**. Templates são
-  criados na Meta, importados, mapeados e liberados por empresa pelo admin (seção 4.3).
+  criados na Meta e importados pelo admin; os 18 da régua valem para todas as empresas e os
+  demais são liberados por empresa (seção 4.3).
 - **E-mail:** conta central Resend, com atribuição da mensagem à empresa.
 - **Pagamentos a colaboradores:** Pix da conta Efí do próprio cliente para os colaboradores,
   liberado por empresa pelo admin e enviado só depois da aprovação no WhatsApp do aprovador
-  cadastrado pelo admin. Não calcula folha; devoluções não são tratadas nesta versão. Operação em
-  `docs/operations/pagamentos-colaboradores.md`.
+  cadastrado pelo admin. Pode ser agendado (pedido de aprovação às 08:00 da data, válido até
+  23:59) e repetido a cada N dias, semanas ou meses. Não calcula folha; devoluções não são
+  tratadas nesta versão. Operação em `docs/operations/pagamentos-colaboradores.md`.
 - **Produção:** frontend na Vercel; API, PostgreSQL, Redis e Nginx na VPS InterServer,
   publicação manual (seção 9). Código no `main` não significa código publicado.
-- **Em aberto:** planos de correção de 29/09 em `docs/superpowers/plans/2026-09-29-0*.md`
-  (conciliação de BOLIX, página pública de pagamento, cota por empresa no canal central,
-  interface). Confira no git o que já entrou antes de assumir.
+- **Régua com templates automáticos (20/10):** a empresa escolhe só o dia e o canal de cada
+  contato; a mensagem sai de 18 templates globais (seção 4.3). A emissão só manda mensagem
+  quando o usuário pede "Enviar cobrança agora" no cadastro ou na importação. As 4 réguas
+  padrão foram revistas e são levadas às empresas existentes por
+  `collection-rules:apply-standard`; a publicação segue a ordem do runbook do catálogo
+  WhatsApp (seção de 20/10).
+- **Telas da empresa refeitas para volume (+1.000 cobranças/mês):** dashboard com gráficos e
+  períodos, Cobranças com filtros, nova cobrança e importação CSV com revisão (cliente
+  achado pelo CPF/CNPJ), Baixas paginadas com marcação em lote, Recorrentes, inbox e
+  Configurações → Geral. O segmento da empresa (Geral/Educação) é definido só pelo admin.
+- **Página de apresentação** em `/` para visitantes sem sessão (rota interna `/apresentacao`),
+  com formulário "Solicitar orçamento" (`POST /contact/quote-request`, público, 5 pedidos por
+  15 min por IP) que só envia um e-mail para `QUOTE_REQUEST_EMAIL`; o lead não é gravado.
+  Contexto para o projeto de captação de leads: `docs/contexto-ciframais.md`.
+- **Em aberto:**
+  - Planos de 29/09 (`docs/superpowers/plans/2026-09-29-0*.md`): código entregue; faltam as
+    verificações depois da publicação e a conciliação das duas tentativas BOLIX reais pelo
+    painel.
+  - Homologação e habilitação do cartão por empresa.
+  - O formulário de orçamento não tem aviso de privacidade; a única política existente é a
+    da ativação financeira, ainda como texto de homologação.
 
 ---
 
@@ -154,18 +184,19 @@ nova cobrança.
 | --- | --- |
 | `auth/` | Login, JWT, guards (`JwtAuthGuard`, `@GetUser()`), primeiro acesso e recuperação de senha |
 | `admin/` | Empresas, analytics da plataforma, `PlatformAdminGuard`, integrações centrais |
-| `invoices/`, `billing/` | Faturas, devedores, régua de cobrança (`CollectionProfile`/`CollectionRuleStep`), envio da primeira cobrança |
-| `payment/`, `payment-fees/` | Emissão Efí, cobranças, link público de pagamento, webhooks de pagamento, tarifas versionadas |
+| `invoices/`, `billing/` | Faturas, devedores, importação CSV, recorrentes, régua de cobrança (`CollectionProfile`/`CollectionRuleStep`), envio da primeira cobrança |
+| `payment/`, `payment-fees/` | Emissão Efí, cobranças, link público de pagamento, checkout de cartão, webhooks de pagamento, tarifas versionadas |
 | `financial-activation/` | Ativação manual: perfil versionado, credenciais cifradas, validação em fila, elegibilidade, certificados |
 | `settlements/` | Lançamentos imutáveis (`FinancialLedgerEntry`), conciliação e divergências |
 | `disbursements/` | Pagamentos a colaboradores: liberação pelo admin, colaboradores, lotes, aprovação no WhatsApp, envio Pix e resultado pelo webhook Pix |
 | `efi-onboarding/` | Abertura de contas (desligada) e chaves de integração (`PlatformIntegrationState`) |
 | `communications/` | Conversas, mensagens, intenções de envio, atribuição por empresa, pendências e retomada de templates |
 | `whatsapp/` | Transporte Datafy e `OutboundDispatcherService` (ver `whatsapp/transport/README.md`) |
-| `templates/` | Catálogo WhatsApp importado: sync, mapeamento, liberações/padrões, política e preparação do envio |
+| `templates/` | Catálogo WhatsApp importado: sync, mapeamento, 18 templates da régua, templates sob medida e solicitações, liberações/padrões, política e preparação do envio |
 | `email/` | Templates de e-mail (`GlobalEmailTemplate`) e envio pelo Resend |
 | `queue/` | Filas BullMQ e workers (mensagens, primeira cobrança, webhooks Datafy) |
 | `webhooks/` | Entrada de Datafy, Efí e Resend |
+| `contact/` | Pedido de orçamento público da página de apresentação (e-mail para o comercial) |
 | `health/`, `scripts/` | Saúde e scripts operacionais (seed de produção, rotação de chaves, transição de templates) |
 
 ---
@@ -202,7 +233,14 @@ nova cobrança.
 - Datafy é o único transporte. Não existe integração direta com a Meta.
 - Todo envio passa por `OutboundDispatcherService`, com intenção persistida antes da
   transmissão e chave idempotente. `UNCERTAIN` nunca é reenviado automaticamente.
-- Empresa só vê e usa templates liberados a ela. Template novo nasce sem liberação.
+- **Régua de cobrança:** 18 templates globais (6 momentos × Pix, BOLIX, Cartão), escolhidos
+  pelo admin em Admin → Catálogo de templates → Templates da régua, valem para todas as empresas sem
+  liberação. Ordem: template sob medida que o admin ligou à etapa e forma de pagamento
+  (a empresa pede pelo suporte, `TemplateRequest`) → global do momento → pendente.
+  Templates de Cartão só usam o link de pagamento.
+- Os demais usos (padrões por finalidade de ativação financeira e de pagamentos a
+  colaboradores) continuam com liberação por empresa: a empresa só usa templates liberados
+  a ela, e template novo nasce sem liberação.
 - Sem template disponível, a mensagem fica **pendente**; nunca troque por outro
   automaticamente. Corrigir liberação ou mapeamento não retoma envio: só a confirmação
   do admin (prévia de 15 min, chave idempotente). `ACCEPTED`, `SENDING` e `UNCERTAIN`
@@ -213,16 +251,26 @@ nova cobrança.
   do boleto" (`PAYMENT_REQUEST` `pix_dynamic_code`/`boleto`, preenchidos com o Pix e a linha
   digitável da cobrança) e respostas rápidas estáticas. Cabeçalho/mídia e outros botões
   aparecem como não suportados; nunca "adapte" o texto aprovado.
-- A primeira mensagem da cobrança (WhatsApp e e-mail) segue a etapa "Inicial" da régua do
-  devedor e conta como envio dela; sem essa etapa, vale o padrão de Emissão. Etapas de
-  WhatsApp podem ter um template por forma de pagamento (Pix, Boleto, BOLIX).
+- O momento é calculado **na hora do envio**, pelo estado real da fatura (dia em São Paulo):
+  Emissão (só quando pedida no cadastro ou na importação, "Enviar cobrança agora"),
+  Lembrete, Vence hoje, Atraso recorrente (fatura recorrente vencida), Primeiro atraso e
+  Atraso crítico (fatura avulsa: o primeiro atraso que o cliente realmente recebeu, depois
+  o crítico, que se repete).
+- A régua roda às 09:00 e às 17:00. Etapas do mesmo dia formam um contato; em cada rodada
+  só o contato vencido mais recente sai e os anteriores ficam `SKIPPED`. Há intervalo mínimo
+  de 23 h entre mensagens da mesma fatura, e editar a régua ou trocar o perfil nunca volta no
+  tempo. A etapa "Inicial" e a escolha de template por etapa ficaram só como histórico.
 - Respeite opt-in, supressão do destinatário, janela de 24 h para texto livre e limites do
   canal. Admin responde no atendimento central; a empresa só visualiza.
 
 ### 4.4 E-mail, links e ativação
 
-- Etapas EMAIL da régua usam `GlobalEmailTemplate` (`emailTemplateId`); WhatsApp usa a
-  seleção de template (`whatsappSelection`). Não misture catálogos.
+- E-mails da régua usam o `GlobalEmailTemplate` do momento (`cobranca-emissao`,
+  `pre-vencimento`, `vencimento-hoje`, `atraso-primeiro-aviso`, `atraso-recorrente`,
+  `atraso-critico`); se a empresa desativou o modelo, o e-mail é pulado e registrado.
+  Saudação, instruções e assinatura continuam personalizáveis. `emailTemplateId` e
+  `whatsappSelection` das etapas ficam só como histórico. Não misture os catálogos de e-mail
+  e WhatsApp.
 - O link público de pagamento autoriza ver **só aquela cobrança**; não cria sessão nem
   libera outra API. Cobrança encerrada mostra o status, sem instrumentos de pagamento.
 - Ativação financeira é manual e auditada; alterar dados após a validação exige validar de novo.
@@ -414,7 +462,7 @@ Seed de desenvolvimento (`npx prisma db seed`): empresa "Empresa Teste MVP", log
 - Confira no container que o código novo está rodando antes de declarar concluído.
 - Runbooks: `infra/interserver/README.md`, `infra/interserver/DATAFY.md`,
   `docs/operations/financial-activation.md`, `docs/operations/whatsapp-template-catalog.md`,
-  `docs/operations/pagamentos-colaboradores.md`.
+  `docs/operations/pagamentos-colaboradores.md`, `docs/operations/efi-credit-card.md`.
 
 ---
 
@@ -427,6 +475,7 @@ Seed de desenvolvimento (`npx prisma db seed`): empresa "Empresa Teste MVP", log
 | `docs/operations/` | Runbooks de operação (ativação financeira, homologação, catálogo WhatsApp) |
 | `api-cobranca/src/whatsapp/transport/README.md` | Transporte Datafy, estados das intenções, limites, templates |
 | `infra/interserver/` | Infraestrutura da VPS, Compose, backup, HTTPS, Datafy |
+| `docs/contexto-ciframais.md` | Resumo do produto para projetos fora do sistema (captação de leads) |
 
 Para demandas grandes, o fluxo é: spec em `specs/` → plano em `plans/` → execução por
 etapas com commits e registro. Siga o plano; registre desvios e o motivo.
@@ -448,8 +497,9 @@ etapas com commits e registro. Siga o plano; registre desvios e o motivo.
 | `EFI_PLATFORM_PAYEE_CODE`, `EFI_PLATFORM_ACCOUNT_NUMBER`, `EFI_PLATFORM_CNPJ` | Conta CifraMais que recebe a remuneração por split |
 | `EFI_OPENING_ENABLED` | `false` enquanto a abertura de contas não for liberada |
 | `EFI_WEBHOOK_BASE_URL`, `EFI_CHARGES_WEBHOOK_BASE_URL`, `EFI_WEBHOOK_SECRET` | Webhooks Pix (mTLS) e Cobranças |
-| `PLATFORM_ALERT_EMAIL` | Alertas de vencimento de certificado |
-| `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET` | E-mail e webhook Resend |
+| `PLATFORM_ALERT_EMAIL` | Alertas de vencimento de certificado e aviso de solicitação de template |
+| `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_WEBHOOK_SECRET` | E-mail, remetente e webhook Resend |
+| `QUOTE_REQUEST_EMAIL` | Destino dos pedidos de orçamento da página de apresentação |
 | `COMMUNICATION_MEDIA_DIR`, `COMMUNICATION_MEDIA_LIMIT_BYTES` | Anexos cifrados do WhatsApp |
 
 Descontinuadas: `EFI_ONBOARDING_NOTICE_TEMPLATE`, `EFI_ONBOARDING_REMINDER_TEMPLATE`
@@ -467,6 +517,15 @@ Descontinuadas: `EFI_ONBOARDING_NOTICE_TEMPLATE`, `EFI_ONBOARDING_REMINDER_TEMPL
 | POST | `/payments/invoice/:id/status` | Atualiza status |
 | POST | `/payments/invoice/:id/replace` | Substitui a cobrança, preservando a anterior |
 | GET | `/payments/status` | Situação da configuração de pagamentos da empresa |
+
+### Rotas públicas (sem login)
+
+| Método | Rota | Descrição |
+| --- | --- | --- |
+| GET | `/payments/public/:token` | Dados da cobrança para a página `/pagar/<token>` |
+| POST | `/payments/public/:token/card/quote` | Cotação das parcelas do cartão |
+| POST | `/payments/public/:token/card/pay` | Pagamento por cartão (chave idempotente) |
+| POST | `/contact/quote-request` | Pedido de orçamento da página de apresentação |
 
 ### Webhooks
 
