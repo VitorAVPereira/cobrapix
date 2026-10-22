@@ -1,5 +1,7 @@
 # Cartão de crédito — especificação para revisão
 
+> **Atualização 21/10/2026 (decisão do usuário):** parcelamento em até 12x. A tarifa Efí passa a seguir a tabela da Efí (recebimento antecipado ou parcelado), com os valores padrão da Efí pré-preenchidos e negociáveis por empresa. Detalhes em [operação de cartão](../../operations/efi-credit-card.md). Onde este documento diz "até 6x", vale 12x.
+
 **Status:** implementação autorizada posteriormente pelo usuário e concluída localmente em 07/10/2026. Homologação externa, configuração de empresas e publicação pendentes; consulte [operação de cartão](../../operations/efi-credit-card.md). Tarifa de processamento uniforme entre bandeiras confirmada pelo usuário durante a implementação.
 
 ## Objetivo e critério de pronto

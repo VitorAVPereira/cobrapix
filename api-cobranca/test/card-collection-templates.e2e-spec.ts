@@ -394,12 +394,11 @@ describe('Card collection rules and templates (disposable infrastructure)', () =
         expectedVersion: 0,
         onTimeBasisPoints: 200,
         overdueBasisPoints: 500,
-        processingRates: ['visa', 'mastercard', 'elo', 'amex'].map((brand) => ({
-          brand,
-          installments: 1,
-          basisPoints: 300,
-          fixedCents: 0,
-        })),
+        processingRates: {
+          receipt: 'ANTICIPATED',
+          cashBasisPoints: 300,
+          anticipationBasisPoints: 129,
+        },
         validationReference: 'simulated-contract-validation',
       })
       .expect(201);

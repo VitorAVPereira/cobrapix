@@ -204,9 +204,13 @@ export interface LateTerms {
   payment_days_after_due: number;
 }
 
+export type CardProcessingRates =
+  | { receipt: "ANTICIPATED"; cashBasisPoints: number; anticipationBasisPoints: number }
+  | { receipt: "INSTALLMENTS"; cashBasisPoints: number; upTo6BasisPoints: number; upTo12BasisPoints: number };
 export interface CardSettings {
   issuerIdentityId: string; version: number; enabled: boolean; onTimeBasisPoints: number; overdueBasisPoints: number;
-  validationReference: string; processingRates: { brand: string; installments: number; basisPoints: number; fixedCents: number }[];
+  // Settings saved before the 12x tariff hold per-brand rows (up to 6x).
+  validationReference: string; processingRates: CardProcessingRates | unknown[];
 }
 export interface CardSettingsOverview { activeIssuerIdentityId: string | null; settings: CardSettings[] }
 export interface CardAttempt { reviewRequired?: boolean; id: string; invoiceId: string; status: string; totalCents: number; installments: number; createdAt: string }
@@ -1553,7 +1557,7 @@ class ApiClient {
   getCardPaymentSettings(companyId: string): Promise<CardSettingsOverview> {
     return this.fetch(`/admin/card-payments/${companyId}/settings`);
   }
-  configureCardPayments(companyId: string, body: Omit<CardSettings, "version"> & { expectedVersion: number }): Promise<CardSettings> {
+  configureCardPayments(companyId: string, body: Omit<CardSettings, "version" | "processingRates"> & { expectedVersion: number; processingRates: CardProcessingRates }): Promise<CardSettings> {
     return this.fetch(`/admin/card-payments/${companyId}/settings`, { method: "POST", body: JSON.stringify(body) });
   }
   getCardPaymentAttempts(companyId: string): Promise<CardAttempt[]> { return this.fetch(`/admin/card-payments/${companyId}/attempts`); }

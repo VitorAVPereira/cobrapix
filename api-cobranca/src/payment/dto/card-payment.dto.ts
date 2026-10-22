@@ -1,8 +1,5 @@
 import { Type } from 'class-transformer';
 import {
-  ArrayMaxSize,
-  ArrayMinSize,
-  IsArray,
   IsBoolean,
   IsDefined,
   IsEmail,
@@ -16,9 +13,10 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
-import type { CardBrand } from '../efi-card.client';
+import type { CardBrand, CardReceipt } from '../efi-card.client';
 export class CardQuoteDto {
   @IsIn(['visa', 'mastercard', 'amex', 'elo']) brand!: CardBrand;
 }
@@ -51,7 +49,7 @@ export class CardCustomerDto {
 }
 export class CardPayDto {
   @IsUUID() quoteId!: string;
-  @IsInt() @Min(1) @Max(6) installments!: number;
+  @IsInt() @Min(1) @Max(12) installments!: number;
   @IsString()
   @Length(10, 512)
   @Matches(/^[A-Za-z0-9_-]+$/)
@@ -65,11 +63,24 @@ export class CardPayDto {
   @Type(() => CardAddressDto)
   billingAddress!: CardAddressDto;
 }
-export class CardProcessingRateDto {
-  @IsIn(['visa', 'mastercard', 'amex', 'elo']) brand!: CardBrand;
-  @IsInt() @Min(1) @Max(6) installments!: number;
-  @IsInt() @Min(0) @Max(9999) basisPoints!: number;
-  @IsInt() @Min(0) @Max(2147483647) fixedCents!: number;
+export class CardProcessingRatesDto {
+  @IsIn(['ANTICIPATED', 'INSTALLMENTS']) receipt!: CardReceipt;
+  @IsInt() @Min(0) @Max(9999) cashBasisPoints!: number;
+  @ValidateIf((o: CardProcessingRatesDto) => o.receipt === 'ANTICIPATED')
+  @IsInt()
+  @Min(0)
+  @Max(9999)
+  anticipationBasisPoints?: number;
+  @ValidateIf((o: CardProcessingRatesDto) => o.receipt === 'INSTALLMENTS')
+  @IsInt()
+  @Min(0)
+  @Max(9999)
+  upTo6BasisPoints?: number;
+  @ValidateIf((o: CardProcessingRatesDto) => o.receipt === 'INSTALLMENTS')
+  @IsInt()
+  @Min(0)
+  @Max(9999)
+  upTo12BasisPoints?: number;
 }
 export class CardSettingsDto {
   @IsUUID() issuerIdentityId!: string;
@@ -77,12 +88,10 @@ export class CardSettingsDto {
   @IsBoolean() enabled!: boolean;
   @IsInt() @Min(0) @Max(10000) onTimeBasisPoints!: number;
   @IsInt() @Min(0) @Max(10000) overdueBasisPoints!: number;
-  @IsArray()
-  @ArrayMinSize(1)
-  @ArrayMaxSize(24)
-  @ValidateNested({ each: true })
-  @Type(() => CardProcessingRateDto)
-  processingRates!: CardProcessingRateDto[];
+  @IsDefined()
+  @ValidateNested()
+  @Type(() => CardProcessingRatesDto)
+  processingRates!: CardProcessingRatesDto;
   @IsString()
   @Length(3, 200)
   @Matches(/^[\p{L}\p{N} ._:/-]+$/u)

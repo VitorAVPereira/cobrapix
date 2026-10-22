@@ -132,7 +132,7 @@ export async function grossUpCard(
     debt <= 0 ||
     !Number.isInteger(installments) ||
     installments < 1 ||
-    installments > 6 ||
+    installments > 12 ||
     !Number.isInteger(basisPoints) ||
     basisPoints < 0 ||
     basisPoints >= 10000

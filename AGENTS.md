@@ -129,9 +129,10 @@ VPS e na Vercel antes de afirmar que algo está em produção.
   (credenciais, `.p12`, chave Pix). O pagamento cai na conta do cliente; a remuneração da
   CifraMais vem por split e é conciliada em Admin → Conciliação.
 - **Formas de pagamento:** Pix, BOLIX (boleto com QR Code Pix; no e-mail aparece como
-  "Boleto ou Pix") e **cartão de crédito em até 6x**. O cartão está implementado (pagador paga só por
-  cartão em `/pagar/<token>`, arca só com o custo Efí; remuneração CifraMais sobre o
-  principal após descontos, por split), mas a homologação Efí por conta ainda não foi feita:
+  "Boleto ou Pix") e **cartão de crédito em até 12x**. O cartão está implementado (pagador paga só por
+  cartão em `/pagar/<token>`, arca só com o custo Efí, pela tarifa negociada de cada empresa;
+  remuneração CifraMais sobre o principal após descontos, por split), mas a homologação Efí
+  por conta ainda não foi feita:
   só habilite para uma empresa seguindo `docs/operations/efi-credit-card.md`.
 - **Fase B bloqueada:** modos com conta da CifraMais (`PLATFORM_ACCOUNT`, repasse por split
   invertido ou manual) existem em tipos e enums, mas são recusados na ativação e na emissão

@@ -13,7 +13,8 @@ import { PublicPaymentLinkService } from './payment-link.service';
 import {
   EfiCardClient,
   CardBrand,
-  CardProcessingRate,
+  CardProcessingRates,
+  cardProcessingBasisPoints,
 } from './efi-card.client';
 import {
   calculateCardDebt,
@@ -71,30 +72,25 @@ export class CardPaymentService {
       );
   }
   async configure(companyId: string, userId: string, dto: CardSettingsDto) {
-    const duplicate = new Set(
-      dto.processingRates.map((r) => `${r.brand}:${r.installments}`),
-    );
-    if (duplicate.size !== dto.processingRates.length)
-      throw new BadRequestException('Tarifas duplicadas.');
-    // The opaque Efí token cannot prove its brand before debit. A processing
-    // tariff varying by brand could undercharge the payer. Enable only a
-    // contractual tariff verified to be uniform across all accepted brands.
-    const installments = new Set(
-      dto.processingRates.map((r) => r.installments),
-    );
-    for (const installment of installments) {
-      const rows = dto.processingRates.filter(
-        (r) => r.installments === installment,
+    const r = dto.processingRates;
+    const processingRates: CardProcessingRates =
+      r.receipt === 'ANTICIPATED'
+        ? {
+            receipt: r.receipt,
+            cashBasisPoints: r.cashBasisPoints,
+            anticipationBasisPoints: r.anticipationBasisPoints!,
+          }
+        : {
+            receipt: r.receipt,
+            cashBasisPoints: r.cashBasisPoints,
+            upTo6BasisPoints: r.upTo6BasisPoints!,
+            upTo12BasisPoints: r.upTo12BasisPoints!,
+          };
+    // The checkout refuses a tariff of 100% or more; refuse it when saving.
+    if (cardProcessingBasisPoints(processingRates, 12) >= 10000)
+      throw new BadRequestException(
+        'Tarifa de cartão inválida: em 12x ela passaria de 100%.',
       );
-      if (
-        rows.length !== 4 ||
-        new Set(rows.map((r) => `${r.basisPoints}:${r.fixedCents}`)).size !== 1
-      )
-        conflict(
-          'CARD_BRAND_TARIFF_UNSUPPORTED',
-          'Informe a mesma tarifa contratual para todas as bandeiras de cada parcelamento. Tarifas diferentes por bandeira precisam de validação da Efí antes da habilitação.',
-        );
-    }
     const identity = await this.prisma.efiAccountIdentity.findFirst({
       where: { id: dto.issuerIdentityId, companyId, ownership: 'COMPANY' },
     });
@@ -126,7 +122,7 @@ export class CardPaymentService {
         enabled: dto.enabled,
         onTimeBasisPoints: dto.onTimeBasisPoints,
         overdueBasisPoints: dto.overdueBasisPoints,
-        processingRates: dto.processingRates.map((r) => ({ ...r })),
+        processingRates,
         validationReference: dto.validationReference,
         validatedByUserId: userId,
       };
@@ -260,7 +256,14 @@ export class CardPaymentService {
           action: 'CARD_SETTINGS_CHANGED',
           entityType: 'CardPaymentSettings',
           entityId: settings.id,
-          changes: { version: settings.version, enabled: settings.enabled },
+          // Settings are updated in place; the audit keeps each negotiated tariff.
+          changes: {
+            version: settings.version,
+            enabled: settings.enabled,
+            onTimeBasisPoints: settings.onTimeBasisPoints,
+            overdueBasisPoints: settings.overdueBasisPoints,
+            processingRates,
+          },
           retentionExpiresAt: new Date(Date.now() + 5 * 365.25 * 86400000),
         },
       });
@@ -524,7 +527,7 @@ export class CardPaymentService {
       charge.companyId,
       amounts.baseDebtCents,
       brand,
-      settings.processingRates as unknown as CardProcessingRate[],
+      settings.processingRates,
     );
     if (
       fingerprint !== this.fingerprint(charge) ||

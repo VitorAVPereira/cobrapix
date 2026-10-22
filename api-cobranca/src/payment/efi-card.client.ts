@@ -6,11 +6,62 @@ import { PaymentCryptoService } from './payment-crypto.service';
 import { CardInstallmentQuote, grossUpCard } from './card-amounts';
 
 export type CardBrand = 'visa' | 'mastercard' | 'amex' | 'elo';
-export interface CardProcessingRate {
+export type CardReceipt = 'ANTICIPATED' | 'INSTALLMENTS';
+// Efí tariff negotiated for the company's account. The opaque card token cannot
+// prove its brand before debit, so the tariff is uniform across brands.
+export type CardProcessingRates =
+  | {
+      receipt: 'ANTICIPATED';
+      cashBasisPoints: number;
+      anticipationBasisPoints: number;
+    }
+  | {
+      receipt: 'INSTALLMENTS';
+      cashBasisPoints: number;
+      upTo6BasisPoints: number;
+      upTo12BasisPoints: number;
+    };
+// Settings saved before the 12x tariff hold one row per brand and installment
+// count (up to 6x). They keep quoting with their own rates until saved again.
+interface LegacyCardProcessingRate {
   brand: CardBrand;
   installments: number;
   basisPoints: number;
   fixedCents: number;
+}
+export function cardProcessingBasisPoints(
+  rates: CardProcessingRates,
+  installments: number,
+): number {
+  if (installments === 1) return rates.cashBasisPoints;
+  // Receiving the full amount in 31 days costs the anticipation rate for each
+  // installment after the first, which settles in 31 days anyway. N − 1 still
+  // awaits Efí's confirmation (docs/operations/efi-credit-card.md).
+  if (rates.receipt === 'ANTICIPATED')
+    return (
+      rates.cashBasisPoints + rates.anticipationBasisPoints * (installments - 1)
+    );
+  return installments <= 6 ? rates.upTo6BasisPoints : rates.upTo12BasisPoints;
+}
+export function cardProcessingRate(
+  stored: unknown,
+  brand: CardBrand,
+  installments: number,
+): { basisPoints: number; fixedCents: number } | null {
+  if (!Array.isArray(stored))
+    return {
+      basisPoints: cardProcessingBasisPoints(
+        stored as CardProcessingRates,
+        installments,
+      ),
+      fixedCents: 0,
+    };
+  const row = (stored as LegacyCardProcessingRate[]).find(
+    (r) => r.brand === brand && r.installments === installments,
+  );
+  return row
+    ? { basisPoints: row.basisPoints, fixedCents: row.fixedCents }
+    : null;
 }
 export interface CardCustomer {
   name: string;
@@ -66,7 +117,7 @@ export function normalizeCardInstallments(
         valueCents: Number(item.value),
       };
     })
-    .filter((x) => x.installments >= 1 && x.installments <= 6);
+    .filter((x) => x.installments >= 1 && x.installments <= 12);
 }
 export function normalizeCardSubmission(raw: unknown): CardSubmission {
   const body = record(raw);
@@ -87,7 +138,7 @@ export function normalizeCardSubmission(raw: unknown): CardSubmission {
     if (
       !Number.isInteger(card.installments) ||
       Number(card.installments) < 1 ||
-      Number(card.installments) > 6 ||
+      Number(card.installments) > 12 ||
       !Number.isSafeInteger(card.installment_value) ||
       Number(card.installment_value) <= 0
     )
@@ -187,31 +238,27 @@ export class EfiCardClient {
     companyId: string,
     debtCents: number,
     brand: CardBrand,
-    rates: CardProcessingRate[],
+    rates: unknown,
   ): Promise<CardInstallmentQuote[]> {
     const { sdk } = await this.account(identityId, companyId);
     const initial = normalizeCardInstallments(
       await sdk.getInstallments({ total: debtCents, brand }),
     );
     const options: CardInstallmentQuote[] = [];
-    for (const rate of rates.filter(
-      (r) =>
-        r.brand === brand &&
-        initial.some((i) => i.installments === r.installments),
-    )) {
+    for (const { installments } of initial) {
+      const rate = cardProcessingRate(rates, brand, installments);
+      if (!rate) continue;
       options.push(
         await grossUpCard(
           debtCents,
-          rate.installments,
+          installments,
           rate.basisPoints,
           rate.fixedCents,
           async (submission) => {
             const rows = normalizeCardInstallments(
               await sdk.getInstallments({ total: submission, brand }),
             );
-            const found = rows.find(
-              (i) => i.installments === rate.installments,
-            );
+            const found = rows.find((i) => i.installments === installments);
             if (!found)
               throw new ConflictException({
                 code: 'CARD_INSTALLMENT_UNAVAILABLE',

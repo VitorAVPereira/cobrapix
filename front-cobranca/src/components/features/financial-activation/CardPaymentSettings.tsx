@@ -2,8 +2,84 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { useApiClient } from "@/lib/use-api-client";
-import type { CardSettingsOverview, CardAttempt } from "@/lib/api-client";
-const brands = ["visa", "mastercard", "elo", "amex"];
+import type {
+  CardSettingsOverview,
+  CardAttempt,
+  CardProcessingRates,
+} from "@/lib/api-client";
+// Efí list prices; each company may have negotiated different ones.
+const efiDefaults = {
+  cashBasisPoints: 349,
+  anticipationBasisPoints: 129,
+  upTo6BasisPoints: 399,
+  upTo12BasisPoints: 439,
+};
+type RateField = keyof typeof efiDefaults;
+const receiptLabels: Record<CardProcessingRates["receipt"], string> = {
+  ANTICIPATED: "Valor total em até 31 dias (antecipado)",
+  INSTALLMENTS: "Uma parcela a cada 31 dias",
+};
+function ProcessingRatesFields({
+  stored,
+}: {
+  stored: CardProcessingRates | null;
+}) {
+  const [receipt, setReceipt] = useState(stored?.receipt ?? "ANTICIPATED");
+  const input = (name: string, label: string, field: RateField) => (
+    <label key={name} className="block">
+      {label}
+      <input
+        name={name}
+        type="number"
+        min="0"
+        max="99.99"
+        step="0.01"
+        required
+        defaultValue={
+          ((stored as Partial<Record<RateField, number>> | null)?.[field] ??
+            efiDefaults[field]) / 100
+        }
+        className="ml-2 w-24 rounded border p-2"
+      />
+    </label>
+  );
+  return (
+    <div className="space-y-3">
+      <p className="font-medium">Recebimento na conta Efí</p>
+      {(["ANTICIPATED", "INSTALLMENTS"] as const).map((value) => (
+        <label key={value} className="flex gap-2">
+          <input
+            type="radio"
+            name="receipt"
+            value={value}
+            checked={receipt === value}
+            onChange={() => setReceipt(value)}
+          />
+          {receiptLabels[value]}
+        </label>
+      ))}
+      {input("cash", "À vista (%)", "cashBasisPoints")}
+      {receipt === "ANTICIPATED" ? (
+        <>
+          {input(
+            "anticipation",
+            "Por parcela antecipada (%)",
+            "anticipationBasisPoints",
+          )}
+          <p className="text-xs text-slate-500">
+            Em N parcelas, a antecipação é cobrada sobre N − 1 parcelas: a
+            primeira já cai em 31 dias.
+          </p>
+        </>
+      ) : (
+        <>
+          {input("upTo6", "Parcelado de 2x a 6x (%)", "upTo6BasisPoints")}
+          {input("upTo12", "Parcelado de 7x a 12x (%)", "upTo12BasisPoints")}
+        </>
+      )}
+    </div>
+  );
+}
 const statusLabels: Record<string, string> = {
   SUBMITTING: "Enviando",
   UNCERTAIN: "Resultado incerto",
@@ -51,12 +127,27 @@ export default function CardPaymentSettings({
   const current = data?.settings.find(
     (s) => s.issuerIdentityId === data.activeIssuerIdentityId,
   );
+  const legacyRates = Array.isArray(current?.processingRates);
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!data?.activeIssuerIdentityId || busy) return;
     const form = new FormData(event.currentTarget);
     const number = (name: string, scale = 100) =>
       Math.round(Number(form.get(name)) * scale);
+    const cashBasisPoints = number("cash");
+    const processingRates: CardProcessingRates =
+      form.get("receipt") === "INSTALLMENTS"
+        ? {
+            receipt: "INSTALLMENTS",
+            cashBasisPoints,
+            upTo6BasisPoints: number("upTo6"),
+            upTo12BasisPoints: number("upTo12"),
+          }
+        : {
+            receipt: "ANTICIPATED",
+            cashBasisPoints,
+            anticipationBasisPoints: number("anticipation"),
+          };
     setBusy(true);
     setError("");
     setNotice("");
@@ -68,14 +159,7 @@ export default function CardPaymentSettings({
         onTimeBasisPoints: number("onTime"),
         overdueBasisPoints: number("overdue"),
         validationReference: String(form.get("reference") ?? ""),
-        processingRates: brands.flatMap((brand) =>
-          Array.from({ length: 6 }, (_, i) => ({
-            brand,
-            installments: i + 1,
-            basisPoints: number(`${brand}-${i}-percentage`),
-            fixedCents: number(`${brand}-${i}-fixed`),
-          })),
-        ),
+        processingRates,
       });
       const updated = await load();
       setData(updated.settings);
@@ -131,12 +215,18 @@ export default function CardPaymentSettings({
           className="space-y-4 text-sm"
         >
           <p>
-            Preencha a tarifa contratada de processamento Efí. A tarifa de
-            processamento deve ser uniforme entre todas as bandeiras. Os juros
-            do parcelamento serão consultados na Efí na simulação e somados ao
-            custo pago pelo cliente. A remuneração Cifra+ será descontada da
-            empresa por split, sobre o principal após descontos.
+            Informe as tarifas de cartão negociadas com a Efí para esta empresa.
+            Os valores iniciais são os da tabela padrão da Efí e valem para
+            todas as bandeiras, em até 12x. A tarifa e os juros do parcelamento
+            são somados ao valor pago pelo cliente. A remuneração Cifra+ é
+            descontada da empresa por split, sobre o principal após descontos.
           </p>
+          {legacyRates && (
+            <p className="text-amber-700">
+              As tarifas salvas estão no formato anterior (por bandeira, até
+              6x) e continuam valendo até você salvar esta configuração.
+            </p>
+          )}
           <fieldset disabled={busy} className="space-y-3">
             <label className="flex gap-2">
               <input
@@ -172,58 +262,13 @@ export default function CardPaymentSettings({
                 className="ml-2 rounded border p-2"
               />
             </label>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left">
-                <thead>
-                  <tr>
-                    <th>Bandeira</th>
-                    <th>Parcelas</th>
-                    <th>Processamento (%)</th>
-                    <th>Fixo (R$)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {brands.flatMap((brand) =>
-                    Array.from({ length: 6 }, (_, i) => {
-                      const rate = current?.processingRates.find(
-                        (r) => r.brand === brand && r.installments === i + 1,
-                      );
-                      return (
-                        <tr key={`${brand}-${i}`}>
-                          <td>{brand}</td>
-                          <td>{i + 1}x</td>
-                          <td>
-                            <input
-                              aria-label={`${brand} ${i + 1}x processamento`}
-                              name={`${brand}-${i}-percentage`}
-                              type="number"
-                              min="0"
-                              max="99.99"
-                              step="0.01"
-                              required
-                              defaultValue={(rate?.basisPoints ?? 0) / 100}
-                              className="m-1 w-24 rounded border p-1"
-                            />
-                          </td>
-                          <td>
-                            <input
-                              aria-label={`${brand} ${i + 1}x fixo`}
-                              name={`${brand}-${i}-fixed`}
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              required
-                              defaultValue={(rate?.fixedCents ?? 0) / 100}
-                              className="m-1 w-24 rounded border p-1"
-                            />
-                          </td>
-                        </tr>
-                      );
-                    }),
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <ProcessingRatesFields
+              stored={
+                current && !legacyRates
+                  ? (current.processingRates as CardProcessingRates)
+                  : null
+              }
+            />
             <label className="block">
               Referência da homologação e das tarifas contratadas
               <input
