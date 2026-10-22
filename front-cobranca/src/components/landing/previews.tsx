@@ -218,7 +218,7 @@ export function CardCheckoutPreview() {
         </span>
         <span className={styles.fieldLabel}>Parcelamento</span>
         <span className={styles.selectField}>
-          De 1x a 6x <ChevronDown size={14} aria-hidden />
+          De 1x a 12x <ChevronDown size={14} aria-hidden />
         </span>
         <span className={styles.fakeButton}>
           <CreditCard size={14} aria-hidden /> Pagar com cartão

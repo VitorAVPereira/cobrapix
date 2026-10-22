@@ -140,7 +140,7 @@ const FAQ: FaqItem[] = [
             do boleto com a agilidade do Pix no mesmo documento.
           </li>
           <li>
-            <strong>Cartão de crédito</strong>, parcelado em até 6x.
+            <strong>Cartão de crédito</strong>, parcelado em até 12x.
           </li>
         </ul>
       </>
@@ -351,11 +351,11 @@ export function LandingPage() {
                     <p className={styles.payWord}>Cartão de crédito</p>
                   </div>
                   <div className={styles.payCard}>
-                    <h3>Parcelado em até 6x</h3>
+                    <h3>Parcelado em até 12x</h3>
                     <p>Seu cliente paga com cartão na página da cobrança, sem criar conta.</p>
                     <ul className={styles.payChips} aria-label="Como pagar">
                       <li>
-                        <CreditCard size={18} aria-hidden /> Até 6x
+                        <CreditCard size={18} aria-hidden /> Até 12x
                       </li>
                       <li>
                         <Landmark size={18} aria-hidden /> Conta Efí
@@ -423,7 +423,7 @@ export function LandingPage() {
                 </div>
                 <figcaption>
                   <strong>Cartão de crédito</strong>
-                  Pagamento na mesma página, parcelado em até 6x.
+                  Pagamento na mesma página, parcelado em até 12x.
                 </figcaption>
               </figure>
             </div>
