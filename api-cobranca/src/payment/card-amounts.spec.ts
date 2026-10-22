@@ -142,7 +142,7 @@ describe('card financial amounts', () => {
   });
   it('rejects malformed provider installments and unbounded tariffs', async () => {
     await expect(
-      grossUpCard(10000, 7, 300, 0, () => Promise.resolve(1000)),
+      grossUpCard(10000, 13, 300, 0, () => Promise.resolve(1000)),
     ).rejects.toThrow();
     await expect(
       grossUpCard(10000, 1, 10000, 0, (x) => Promise.resolve(x)),

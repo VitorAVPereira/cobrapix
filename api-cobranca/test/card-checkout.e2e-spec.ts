@@ -182,14 +182,12 @@ describe('Card checkout (disposable PostgreSQL, simulated Efí)', () => {
       expectedVersion: 0,
       onTimeBasisPoints: 200,
       overdueBasisPoints: 500,
-      processingRates: (['visa', 'mastercard', 'elo', 'amex'] as const).map(
-        (brand) => ({
-          brand,
-          installments: 1,
-          basisPoints: 300,
-          fixedCents: 0,
-        }),
-      ),
+      processingRates: {
+        receipt: 'INSTALLMENTS',
+        cashBasisPoints: 300,
+        upTo6BasisPoints: 300,
+        upTo12BasisPoints: 300,
+      },
       validationReference: 'simulated-validation',
     });
   });
@@ -210,11 +208,11 @@ describe('Card checkout (disposable PostgreSQL, simulated Efí)', () => {
             efiFeeCents: 300,
           },
           {
-            installments: 6,
+            installments: 12,
             submissionCents: debt + 300,
-            totalCents: Math.ceil((debt + 900) / 6) * 6,
-            installmentValueCents: Math.ceil((debt + 900) / 6),
-            efiFeeCents: Math.ceil((debt + 900) / 6) * 6 - debt,
+            totalCents: Math.ceil((debt + 900) / 12) * 12,
+            installmentValueCents: Math.ceil((debt + 900) / 12),
+            efiFeeCents: Math.ceil((debt + 900) / 12) * 12 - debt,
           },
         ]),
     );
@@ -279,7 +277,7 @@ describe('Card checkout (disposable PostgreSQL, simulated Efí)', () => {
       } satisfies CardPayDto,
     };
   }
-  it('rejects brand-dependent tariffs without changing active settings', async () => {
+  it('rejects a 12x tariff of 100% or more without changing active settings', async () => {
     const current = await prisma.cardPaymentSettings.findUniqueOrThrow({
       where: { issuerIdentityId: identityId },
     });
@@ -290,17 +288,14 @@ describe('Card checkout (disposable PostgreSQL, simulated Efí)', () => {
         expectedVersion: current.version,
         onTimeBasisPoints: 200,
         overdueBasisPoints: 500,
-        processingRates: (['visa', 'mastercard', 'elo', 'amex'] as const).map(
-          (brand) => ({
-            brand,
-            installments: 1,
-            basisPoints: brand === 'amex' ? 400 : 300,
-            fixedCents: 0,
-          }),
-        ),
+        processingRates: {
+          receipt: 'ANTICIPATED',
+          cashBasisPoints: 349,
+          anticipationBasisPoints: 900,
+        },
         validationReference: 'invalid-contract',
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow('100%');
     expect(
       await prisma.cardPaymentSettings.findUnique({
         where: { issuerIdentityId: identityId },
@@ -348,7 +343,7 @@ describe('Card checkout (disposable PostgreSQL, simulated Efí)', () => {
     const first = await cards.pay(f.link.token, f.body, key);
     expect(await cards.pay(f.link.token, f.body, key)).toEqual(first);
     await expect(
-      cards.pay(f.link.token, { ...f.body, installments: 6 }, key),
+      cards.pay(f.link.token, { ...f.body, installments: 12 }, key),
     ).rejects.toThrow();
     expect(client.submit).toHaveBeenCalledTimes(1);
     expect(
@@ -571,16 +566,16 @@ describe('Card checkout (disposable PostgreSQL, simulated Efí)', () => {
       invoices.cancelInvoice(companyId, other.invoice.id),
     ).rejects.toThrow();
   });
-  it('supports up to six installments and refuses seven without a debit', async () => {
+  it('supports up to twelve installments and refuses thirteen without a debit', async () => {
     const f = await checkout();
     await expect(
-      cards.pay(f.link.token, { ...f.body, installments: 7 }, randomUUID()),
+      cards.pay(f.link.token, { ...f.body, installments: 13 }, randomUUID()),
     ).rejects.toThrow();
     expect(client.submit).not.toHaveBeenCalled();
     expect(
       await cards.pay(
         f.link.token,
-        { ...f.body, installments: 6 },
+        { ...f.body, installments: 12 },
         randomUUID(),
       ),
     ).toMatchObject({ state: 'APPROVED' });
