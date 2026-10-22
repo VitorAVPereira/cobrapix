@@ -2013,6 +2013,12 @@
   line-height: 1.5;
 }
 
+.securityBlocks a {
+  color: var(--light);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
 .securityLink {
   white-space: nowrap;
   align-self: start;

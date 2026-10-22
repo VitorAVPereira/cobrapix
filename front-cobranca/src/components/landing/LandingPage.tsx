@@ -98,8 +98,12 @@ const STEPS = [
 
 const SECURITY = [
   [
-    "Em conformidade com a LGPD",
-    "Seguimos todos os pontos da Lei Geral de Proteção de Dados (Lei nº 13.709/2018). Os dados dos seus clientes são tratados apenas para a cobrança e ficam protegidos em cada etapa.",
+    "Dados tratados conforme a LGPD",
+    <>
+      Os dados dos seus clientes são usados apenas para a cobrança e ficam protegidos em cada
+      etapa, como pede a Lei Geral de Proteção de Dados (Lei nº 13.709/2018). Veja a{" "}
+      <Link href={PRIVACY_URL}>Política de privacidade</Link>.
+    </>,
   ],
   [
     "Cada empresa vê só os próprios dados",

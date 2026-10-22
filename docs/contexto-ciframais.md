@@ -64,7 +64,8 @@ Use estes textos como base de tom e de promessa. Estão em
 - **Pagador sem login:** o cliente da empresa recebe um link, abre e paga. O link mostra só
   aquela cobrança.
 - **Segurança:** dados separados por empresa, credenciais Efí cifradas, dinheiro direto na
-  conta da empresa, conformidade com a LGPD.
+  conta da empresa, dados tratados conforme a LGPD (sem prometer "todos os pontos" da lei),
+  com link para a política de privacidade.
 - **Como funciona:** (1) você pede o orçamento; (2) nossa equipe faz a ativação (conecta a
   conta Efí e valida a chave Pix); (3) você cadastra clientes e faturas, à mão ou por
   planilha CSV; (4) a primeira cobrança sai.
