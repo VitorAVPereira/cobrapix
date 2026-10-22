@@ -2,7 +2,7 @@
 
 import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { CircleCheck, MessageCircle, X } from "lucide-react";
-import { QUOTE_DIALOG_ID, QUOTE_REQUEST_URL, WHATSAPP_URL } from "./contact";
+import { PRIVACY_URL, QUOTE_DIALOG_ID, QUOTE_REQUEST_URL, WHATSAPP_URL } from "./contact";
 import styles from "./landing.module.css";
 
 function openQuoteDialog() {
@@ -158,6 +158,15 @@ export function QuoteDialog() {
                 )}
               </p>
             )}
+
+            {/* Opens in a new tab so the visitor does not lose what was typed. */}
+            <p className={styles.quoteNotice}>
+              Usamos seus dados só para responder a este pedido. Veja a{" "}
+              <a href={PRIVACY_URL} target="_blank" rel="noopener noreferrer">
+                Política de privacidade
+              </a>
+              .
+            </p>
 
             <button
               type="submit"

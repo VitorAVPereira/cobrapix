@@ -10,7 +10,7 @@ import {
   Plus,
   QrCode,
 } from "lucide-react";
-import { LOGIN_URL, WHATSAPP_URL } from "./contact";
+import { LOGIN_URL, PRIVACY_URL, WHATSAPP_URL } from "./contact";
 import { LandingFaq, type FaqItem } from "./LandingFaq";
 import { LandingHeader } from "./LandingHeader";
 import { LandingMotion } from "./LandingMotion";
@@ -611,7 +611,9 @@ export function LandingPage() {
           </div>
         </div>
         <div className={`${styles.wrap} ${styles.footerBottom}`}>
-          <p>© 2026 Cifra+. Todos os direitos reservados.</p>
+          <p>
+            © 2026 Cifra+. Todos os direitos reservados. <Link href={PRIVACY_URL}>Política de privacidade</Link>
+          </p>
           <Image src="/brand/cifra-plus-reverse.svg" alt="Cifra+" width={99} height={32} />
         </div>
       </footer>

@@ -35,6 +35,15 @@ describe("QuoteDialog", () => {
     });
   });
 
+  it("avisa como os dados são usados e leva à política de privacidade em outra aba", () => {
+    render(<QuoteDialog />);
+
+    const link = screen.getByRole("link", { name: "Política de privacidade", hidden: true });
+    expect(link).toHaveAttribute("href", "/privacidade");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(screen.getByText(/Usamos seus dados só para responder a este pedido/)).toBeInTheDocument();
+  });
+
   it("avisa quando há pedidos demais e mantém o formulário", async () => {
     fetchMock.mockResolvedValue({ ok: false, status: 429 });
     render(<QuoteDialog />);

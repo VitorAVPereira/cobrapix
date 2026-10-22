@@ -2426,6 +2426,12 @@
   font-size: 15px;
 }
 
+.footerBottom a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
 .footerBottom img {
   width: auto;
   height: 32px;
@@ -2569,6 +2575,17 @@
   width: 1px;
   height: 1px;
   opacity: 0;
+}
+
+.quoteNotice {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.quoteNotice a {
+  color: var(--accent-text);
+  font-weight: 600;
 }
 
 .quoteError {
