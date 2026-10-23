@@ -25,6 +25,8 @@ import {
   LATE_INTEREST_MONTHLY_MAX_PERCENTAGE,
   PAYMENT_DAYS_AFTER_DUE_MAX,
 } from '../late-terms';
+import { RECURRENCE_FREQUENCIES } from '../recurrence-frequency';
+import type { RecurrenceFrequency } from '@prisma/client';
 
 export type BillingType = 'PIX' | 'BOLETO' | 'BOLIX' | 'CREDIT_CARD';
 
@@ -72,11 +74,22 @@ export class CreateInvoiceDto {
   @IsBoolean()
   recurring?: boolean;
 
-  @ValidateIf((dto: CreateInvoiceDto) => dto.recurring === true)
+  // Older clients send only the day of a monthly recurrence.
+  @ValidateIf(
+    (dto: CreateInvoiceDto) => dto.recurring === true && !dto.first_due_date,
+  )
   @IsInt()
   @Min(1)
   @Max(31)
   due_day?: number;
+
+  @IsOptional()
+  @IsIn(RECURRENCE_FREQUENCIES)
+  frequency?: RecurrenceFrequency;
+
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  first_due_date?: string;
 
   @IsOptional()
   @IsString()
@@ -143,11 +156,23 @@ export class CreateDebtorInvoiceDto {
   @IsBoolean()
   recurring?: boolean;
 
-  @ValidateIf((dto: CreateDebtorInvoiceDto) => dto.recurring === true)
+  // Older clients send only the day of a monthly recurrence.
+  @ValidateIf(
+    (dto: CreateDebtorInvoiceDto) =>
+      dto.recurring === true && !dto.first_due_date,
+  )
   @IsInt()
   @Min(1)
   @Max(31)
   due_day?: number;
+
+  @IsOptional()
+  @IsIn(RECURRENCE_FREQUENCIES)
+  frequency?: RecurrenceFrequency;
+
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  first_due_date?: string;
 
   @IsOptional()
   @IsString()
@@ -258,10 +283,12 @@ export class UpdateRecurringInvoiceDto {
   @IsIn(['PIX', 'BOLIX', 'CREDIT_CARD'])
   billingType!: BillingType;
 
+  // Month-based recurrences only; absent keeps the current day.
+  @IsOptional()
   @IsInt()
   @Min(1)
   @Max(31)
-  dueDay!: number;
+  dueDay?: number;
 
   // Absent keeps the current value; zero means none.
   @IsOptional()

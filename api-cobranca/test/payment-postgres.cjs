@@ -259,6 +259,12 @@ let containerStarted = false;
     assert.deepEqual([recurrence.lateFineBasisPoints, recurrence.lateInterestMonthlyBasisPoints, recurrence.paymentDaysAfterDue], [200, 50, 15]);
     assert.ok(recurrence.invoices.length >= 1);
     for (const generated of recurrence.invoices) assert.deepEqual([generated.lateFineBasisPoints, generated.lateInterestMonthlyBasisPoints, generated.paymentDaysAfterDue], [200, 50, 15], 'the recurrence copies its terms to each invoice');
+    // A weekly recurrence: first invoice on the chosen date, keyed by day, with the student data.
+    await creator.createInvoice(company.id, { debtorId: debtor.id, original_amount: 40, billing_type: 'PIX', recurring: true, frequency: 'WEEKLY', first_due_date: '2030-03-04', studentName: 'Aluno', studentGroup: '5A' });
+    const weeklyRecurrence = await prisma.recurringInvoice.findFirst({ where: { companyId: company.id, frequency: 'WEEKLY' }, include: { invoices: true } });
+    assert.deepEqual([weeklyRecurrence.dueDay, weeklyRecurrence.studentName, weeklyRecurrence.nextDueDate.toISOString().slice(0, 10)], [4, 'Aluno', '2030-03-11']);
+    assert.deepEqual(weeklyRecurrence.invoices.map(invoice => [invoice.recurrencePeriod, invoice.dueDate.toISOString().slice(0, 10), invoice.studentName, invoice.studentGroup]), [['2030-03-04', '2030-03-04', 'Aluno', '5A']]);
+    assert.equal((await prisma.recurringInvoice.findFirst({ where: { id: recurrence.id } })).frequency, 'MONTHLY', 'the day-only request stays monthly');
     console.log('PASS company defaults, per-invoice override (zero = none) and recurrence copying its late terms');
 
     // Operation: stale or uncertain issuances are listed per company for reconciliation.

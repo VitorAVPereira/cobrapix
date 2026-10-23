@@ -16,6 +16,7 @@ import {
   CollectionChannel,
   CollectionProfileType,
   Prisma,
+  RecurrenceFrequency,
   RecurringInvoiceStatus,
 } from '@prisma/client';
 import {
@@ -50,6 +51,15 @@ import {
   toLateTermsView,
 } from './late-terms';
 import { searchDigits } from '../common/search-digits';
+import {
+  firstOccurrenceFrom,
+  generationLookaheadDays,
+  isMonthBased,
+  monthlyDueDate,
+  monthlyEquivalent,
+  nextRecurringDueDate,
+  recurrencePeriodKey,
+} from './recurrence-frequency';
 
 export type InvoiceListStatus = 'PENDING' | 'OVERDUE' | 'PAID' | 'CANCELED';
 export type InvoiceListBillingType = 'PIX' | 'BOLETO' | 'CREDIT_CARD';
@@ -62,7 +72,8 @@ export const INVOICE_LIST_ORDER = {
 } as const satisfies Record<string, Prisma.InvoiceOrderByWithRelationInput>;
 export type InvoiceListSort = keyof typeof INVOICE_LIST_ORDER;
 
-const RECURRING_GENERATION_LOOKAHEAD_DAYS = 30;
+// Longest generation lookahead of any frequency (see generationLookaheadDays).
+const RECURRING_GENERATION_MAX_LOOKAHEAD_DAYS = 30;
 
 // Next invoice of a recurrence: the open one or the draft it generated and
 // the company has not charged yet (drafts are charged from Cobranças).
@@ -182,6 +193,9 @@ interface CreateInvoiceInput {
   billing_type: BillingType;
   recurring?: boolean;
   due_day?: number;
+  frequency?: RecurrenceFrequency;
+  // First due date (YYYY-MM-DD) of a recurrence; without it, due_day monthly.
+  first_due_date?: string;
   studentName?: string;
   studentEnrollment?: string;
   studentGroup?: string;
@@ -204,6 +218,7 @@ interface RecurringInvoiceListItem {
   amount: number;
   billingType: BillingMethod;
   dueDay: number;
+  frequency: RecurrenceFrequency;
   status: RecurringInvoiceStatus;
   lateTerms: LateTermsView;
   nextDueDate: string | null;
@@ -263,7 +278,8 @@ export interface DebtorPaymentHistoryResponse {
 interface UpdateRecurringInvoiceInput {
   amount: number;
   billingType: BillingType;
-  dueDay: number;
+  // Month-based frequencies only; absent keeps the current day.
+  dueDay?: number;
   // Absent keeps the current value; applies to invoices generated from now on.
   lateFinePercentage?: number;
   lateInterestMonthlyPercentage?: number;
@@ -328,6 +344,7 @@ interface RecurringInvoiceWithRelations {
   amount: { toNumber(): number };
   billingType: BillingMethod;
   dueDay: number;
+  frequency: RecurrenceFrequency;
   status: RecurringInvoiceStatus;
   lateFineBasisPoints: number;
   lateInterestMonthlyBasisPoints: number;
@@ -836,6 +853,8 @@ export class InvoicesService {
     companyId: string,
     search: string | undefined,
     limit: number,
+    // One client by id (a form opened for a client chosen on another screen).
+    debtorId?: string,
   ): Promise<
     {
       debtorId: string;
@@ -849,6 +868,7 @@ export class InvoicesService {
     const debtors = await this.prisma.debtor.findMany({
       where: {
         companyId,
+        ...(debtorId && { id: debtorId }),
         ...(search && {
           OR: [
             { name: { contains: search, mode: 'insensitive' } },
@@ -1099,12 +1119,9 @@ export class InvoicesService {
         debtorId,
         input,
       );
+      // The emission goes to the first occurrence; a later one may already be generated.
       const invoice = await this.prisma.invoice.findFirst({
-        where: {
-          companyId,
-          recurringInvoiceId: recurrence.recurrenceId,
-          recurrencePeriod: recurrence.lastGeneratedPeriod ?? undefined,
-        },
+        where: { companyId, recurringInvoiceId: recurrence.recurrenceId },
         include: {
           debtor: { include: { collectionProfile: true } },
           recurringInvoice: true,
@@ -1114,35 +1131,11 @@ export class InvoicesService {
             take: 1,
           },
         },
-        orderBy: { createdAt: 'desc' },
+        orderBy: { dueDate: 'asc' },
       });
 
       if (!invoice) {
         throw new Error('Nao foi possivel criar a fatura recorrente.');
-      }
-
-      const educationData = this.buildEducationalInvoiceData(input);
-      if (Object.keys(educationData).length > 0) {
-        await this.prisma.invoice.updateMany({
-          where: { id: invoice.id, companyId },
-          data: educationData,
-        });
-
-        const refreshedInvoice = await this.prisma.invoice.findFirst({
-          where: { id: invoice.id, companyId },
-          include: {
-            debtor: { include: { collectionProfile: true } },
-            recurringInvoice: true,
-          },
-        });
-
-        if (!refreshedInvoice) {
-          throw new Error('Nao foi possivel carregar a fatura recorrente.');
-        }
-
-        await this.queueEmission(companyId, [invoice.id], 'RECURRING', input);
-
-        return this.mapInvoiceListItem(refreshedInvoice);
       }
 
       await this.queueEmission(companyId, [invoice.id], 'RECURRING', input);
@@ -1416,14 +1409,25 @@ export class InvoicesService {
       }),
       this.prisma.recurringInvoice.count({ where }),
       this.prisma.recurringInvoice.groupBy({
-        by: ['status'],
+        by: ['status', 'frequency'],
         where: { companyId },
         _count: { _all: true },
         _sum: { amount: true },
       }),
     ]);
-    const active = byStatus.find((row) => row.status === 'ACTIVE');
-    const paused = byStatus.find((row) => row.status === 'PAUSED');
+    const count = (status: RecurringInvoiceStatus) =>
+      byStatus
+        .filter((row) => row.status === status)
+        .reduce((total, row) => total + row._count._all, 0);
+    // Weekly and yearly recurrences add up as their amount per month.
+    const activeMonthlyAmount = byStatus
+      .filter((row) => row.status === 'ACTIVE')
+      .reduce(
+        (total, row) =>
+          total +
+          monthlyEquivalent(row._sum.amount?.toNumber() ?? 0, row.frequency),
+        0,
+      );
 
     return {
       data: recurrences.map((recurrence) =>
@@ -1433,11 +1437,9 @@ export class InvoicesService {
       page: params.page,
       pageSize: params.pageSize,
       summary: {
-        active: active?._count._all ?? 0,
-        paused: paused?._count._all ?? 0,
-        activeMonthlyAmount: Number(
-          (active?._sum.amount?.toNumber() ?? 0).toFixed(2),
-        ),
+        active: count('ACTIVE'),
+        paused: count('PAUSED'),
+        activeMonthlyAmount: Number(activeMonthlyAmount.toFixed(2)),
       },
     };
   }
@@ -1449,21 +1451,28 @@ export class InvoicesService {
   ): Promise<RecurringInvoiceListItem | null> {
     const recurrence = await this.prisma.recurringInvoice.findFirst({
       where: { id: recurringInvoiceId, companyId },
-      select: { id: true },
+      select: { id: true, dueDay: true, frequency: true, nextDueDate: true },
     });
 
     if (!recurrence) {
       return null;
     }
 
-    const nextDueDate = this.computeInitialRecurringDueDate(input.dueDay);
+    // The frequency is fixed; weekly ones keep their weekday.
+    const dueDay = isMonthBased(recurrence.frequency)
+      ? (input.dueDay ?? recurrence.dueDay)
+      : recurrence.dueDay;
+    const nextDueDate =
+      dueDay === recurrence.dueDay
+        ? recurrence.nextDueDate
+        : this.rescheduleDueDay(recurrence, dueDay);
 
     await this.prisma.recurringInvoice.updateMany({
       where: { id: recurringInvoiceId, companyId },
       data: {
         amount: input.amount,
         billingType: input.billingType,
-        dueDay: input.dueDay,
+        dueDay,
         nextDueDate,
         ...(input.lateFinePercentage !== undefined
           ? {
@@ -1500,22 +1509,35 @@ export class InvoicesService {
   ): Promise<RecurringInvoiceListItem | null> {
     const recurrence = await this.prisma.recurringInvoice.findFirst({
       where: { id: recurringInvoiceId, companyId },
-      select: { id: true, dueDay: true, nextDueDate: true },
+      select: {
+        id: true,
+        dueDay: true,
+        frequency: true,
+        status: true,
+        nextDueDate: true,
+      },
     });
 
     if (!recurrence) {
       return null;
     }
 
+    // Reactivating starts at the next occurrence from today: the paused period is
+    // not charged afterwards.
+    const nextDueDate =
+      status === 'ACTIVE' && recurrence.status === 'PAUSED'
+        ? firstOccurrenceFrom(
+            recurrence.nextDueDate ??
+              this.computeInitialRecurringDueDate(recurrence.dueDay),
+            recurrence.dueDay,
+            recurrence.frequency,
+            saoPauloDate(new Date()),
+          )
+        : recurrence.nextDueDate;
+
     await this.prisma.recurringInvoice.updateMany({
       where: { id: recurringInvoiceId, companyId },
-      data: {
-        status,
-        nextDueDate:
-          status === 'ACTIVE' && !recurrence.nextDueDate
-            ? this.computeInitialRecurringDueDate(recurrence.dueDay)
-            : recurrence.nextDueDate,
-      },
+      data: { status, nextDueDate },
     });
 
     if (status === 'ACTIVE') {
@@ -1957,9 +1979,8 @@ export class InvoicesService {
     debtorId: string,
     input: CreateInvoiceInput,
   ): Promise<RecurringInvoiceListItem> {
-    if (!input.due_day) {
-      throw new Error('Dia de vencimento recorrente invalido.');
-    }
+    const frequency = input.frequency ?? 'MONTHLY';
+    const schedule = this.initialRecurringSchedule(input, frequency);
 
     const debtor = await this.prisma.debtor.findFirst({
       where: { id: debtorId, companyId },
@@ -1972,15 +1993,16 @@ export class InvoicesService {
 
     this.ensureDebtorDocumentReady(debtor.document);
 
-    const nextDueDate = this.computeInitialRecurringDueDate(input.due_day);
     const recurrence = await this.prisma.recurringInvoice.create({
       data: {
         companyId,
         debtorId: debtor.id,
         amount: input.original_amount,
         billingType: input.billing_type,
-        dueDay: input.due_day,
-        nextDueDate,
+        dueDay: schedule.dueDay,
+        frequency,
+        nextDueDate: schedule.nextDueDate,
+        ...this.buildEducationalInvoiceData(input),
         // The recurrence keeps its terms and copies them to each invoice.
         ...resolveLateTerms(
           this.lateTermsInput(input),
@@ -1992,6 +2014,7 @@ export class InvoicesService {
     await this.generateRecurringInvoices({
       companyId,
       recurrenceId: recurrence.id,
+      includeFirst: true,
     });
 
     const created = await this.getRecurringInvoice(companyId, recurrence.id);
@@ -2000,6 +2023,57 @@ export class InvoicesService {
     }
 
     return created;
+  }
+
+  // A first due date sets the schedule; without it (older clients), the next
+  // `due_day` of a monthly recurrence.
+  private initialRecurringSchedule(
+    input: CreateInvoiceInput,
+    frequency: RecurrenceFrequency,
+  ): { dueDay: number; nextDueDate: Date } {
+    if (input.first_due_date) {
+      const firstDueDate = this.parseDueDate(input.first_due_date);
+      if (
+        !firstDueDate ||
+        this.formatDateOnly(firstDueDate) !== input.first_due_date.trim()
+      ) {
+        throw new Error('Data do primeiro vencimento inválida.');
+      }
+      if (this.formatDateOnly(firstDueDate) < saoPauloDate(new Date())) {
+        throw new Error('O primeiro vencimento não pode ser anterior a hoje.');
+      }
+      return { dueDay: firstDueDate.getUTCDate(), nextDueDate: firstDueDate };
+    }
+
+    if (frequency !== 'MONTHLY') {
+      throw new Error('Informe o primeiro vencimento.');
+    }
+    if (!input.due_day) {
+      throw new Error('Dia de vencimento recorrente invalido.');
+    }
+    return {
+      dueDay: input.due_day,
+      nextDueDate: this.computeInitialRecurringDueDate(input.due_day),
+    };
+  }
+
+  // The new day applies from the month of the next due date on, never to a month
+  // already behind it.
+  private rescheduleDueDay(
+    recurrence: {
+      frequency: RecurrenceFrequency;
+      nextDueDate: Date | null;
+    },
+    dueDay: number,
+  ): Date {
+    const base =
+      recurrence.nextDueDate ?? this.computeInitialRecurringDueDate(dueDay);
+    return firstOccurrenceFrom(
+      monthlyDueDate(base.getUTCFullYear(), base.getUTCMonth(), dueDay),
+      dueDay,
+      recurrence.frequency,
+      saoPauloDate(new Date()),
+    );
   }
 
   private async companyLateDefaults(
@@ -2042,34 +2116,56 @@ export class InvoicesService {
 
   // Without a scope (the daily cron) every active recurrence is generated.
   // Creating, editing or activating one recurrence generates only that one,
-  // so the answer does not wait for the whole company.
+  // so the answer does not wait for the whole company. On creation the first
+  // occurrence is generated even when it is further away than the lookahead.
   private async generateRecurringInvoices(scope?: {
     companyId: string;
     recurrenceId: string;
+    includeFirst?: boolean;
   }): Promise<number> {
-    const horizon = this.addDays(
-      this.startOfDay(new Date()),
-      RECURRING_GENERATION_LOOKAHEAD_DAYS,
-    );
+    const today = this.startOfDay(new Date());
     const recurrences = await this.prisma.recurringInvoice.findMany({
       where: {
         ...(scope
           ? { companyId: scope.companyId, id: scope.recurrenceId }
           : {}),
         status: 'ACTIVE',
-        OR: [{ nextDueDate: null }, { nextDueDate: { lte: horizon } }],
+        ...(scope?.includeFirst
+          ? {}
+          : {
+              OR: [
+                { nextDueDate: null },
+                {
+                  nextDueDate: {
+                    lte: this.addDays(
+                      today,
+                      RECURRING_GENERATION_MAX_LOOKAHEAD_DAYS,
+                    ),
+                  },
+                },
+              ],
+            }),
       },
     });
 
     let generated = 0;
 
     for (const recurrence of recurrences) {
+      const horizon = this.addDays(
+        today,
+        generationLookaheadDays(recurrence.frequency),
+      );
       let nextDueDate =
         recurrence.nextDueDate ??
         this.computeInitialRecurringDueDate(recurrence.dueDay);
+      let first = scope?.includeFirst === true;
 
-      while (nextDueDate <= horizon) {
-        const recurrencePeriod = this.getRecurrencePeriod(nextDueDate);
+      while (first || nextDueDate <= horizon) {
+        first = false;
+        const recurrencePeriod = recurrencePeriodKey(
+          nextDueDate,
+          recurrence.frequency,
+        );
 
         const invoice = await this.prisma.invoice.upsert({
           where: {
@@ -2089,6 +2185,9 @@ export class InvoicesService {
             lateInterestMonthlyBasisPoints:
               recurrence.lateInterestMonthlyBasisPoints,
             paymentDaysAfterDue: recurrence.paymentDaysAfterDue,
+            studentName: recurrence.studentName,
+            studentEnrollment: recurrence.studentEnrollment,
+            studentGroup: recurrence.studentGroup,
             recurringInvoiceId: recurrence.id,
             recurrencePeriod,
           },
@@ -2098,9 +2197,10 @@ export class InvoicesService {
           generated++;
         }
 
-        nextDueDate = this.computeNextMonthlyDueDate(
+        nextDueDate = nextRecurringDueDate(
           nextDueDate,
           recurrence.dueDay,
+          recurrence.frequency,
         );
 
         await this.prisma.recurringInvoice.updateMany({
@@ -2340,6 +2440,7 @@ export class InvoicesService {
       amount: Number(recurrence.amount.toNumber().toFixed(2)),
       billingType: recurrence.billingType,
       dueDay: recurrence.dueDay,
+      frequency: recurrence.frequency,
       status: recurrence.status,
       lateTerms: toLateTermsView(recurrence),
       nextDueDate: recurrence.nextDueDate
@@ -2489,46 +2590,17 @@ export class InvoicesService {
 
   private computeInitialRecurringDueDate(dueDay: number): Date {
     const today = this.startOfDay(new Date());
-    const currentMonthDate = this.getMonthlyDueDate(
+    const currentMonthDate = monthlyDueDate(
       today.getUTCFullYear(),
       today.getUTCMonth(),
       dueDay,
     );
 
     if (this.startOfDay(currentMonthDate) < today) {
-      return this.computeNextMonthlyDueDate(currentMonthDate, dueDay);
+      return nextRecurringDueDate(currentMonthDate, dueDay, 'MONTHLY');
     }
 
     return currentMonthDate;
-  }
-
-  private computeNextMonthlyDueDate(
-    currentDueDate: Date,
-    dueDay: number,
-  ): Date {
-    return this.getMonthlyDueDate(
-      currentDueDate.getUTCFullYear(),
-      currentDueDate.getUTCMonth() + 1,
-      dueDay,
-    );
-  }
-
-  private getMonthlyDueDate(
-    year: number,
-    monthIndex: number,
-    dueDay: number,
-  ): Date {
-    const lastDay = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
-    const day = Math.min(dueDay, lastDay);
-
-    return new Date(Date.UTC(year, monthIndex, day, 12, 0, 0));
-  }
-
-  private getRecurrencePeriod(dueDate: Date): string {
-    const year = dueDate.getUTCFullYear();
-    const month = String(dueDate.getUTCMonth() + 1).padStart(2, '0');
-
-    return `${year}-${month}`;
   }
 
   private startOfDay(date: Date): Date {

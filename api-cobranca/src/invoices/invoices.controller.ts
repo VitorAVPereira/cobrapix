@@ -157,6 +157,8 @@ export class InvoicesController {
         billing_type: dto.billing_type,
         recurring: dto.recurring,
         due_day: dto.due_day,
+        frequency: dto.frequency,
+        first_due_date: dto.first_due_date,
         studentName: dto.studentName,
         studentEnrollment: dto.studentEnrollment,
         studentGroup: dto.studentGroup,
@@ -294,6 +296,8 @@ export class InvoicesController {
           billing_type: dto.billing_type,
           recurring: dto.recurring,
           due_day: dto.due_day,
+          frequency: dto.frequency,
+          first_due_date: dto.first_due_date,
           studentName: dto.studentName,
           studentEnrollment: dto.studentEnrollment,
           studentGroup: dto.studentGroup,
@@ -319,11 +323,13 @@ export class InvoicesController {
   async searchDebtors(
     @GetUser() user: AuthenticatedUser,
     @Query('search') search?: string,
+    @Query('debtorId') debtorId?: string,
   ): Promise<unknown> {
     return this.invoicesService.searchDebtors(
       user.companyId,
       search?.trim() || undefined,
       8,
+      this.normalizeUuidQuery(debtorId, 'Devedor invalido.'),
     );
   }
 

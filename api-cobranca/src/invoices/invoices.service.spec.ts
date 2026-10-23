@@ -799,6 +799,7 @@ describe('InvoicesService', () => {
       amount: decimal(199.9),
       billingType: 'PIX',
       dueDay: 31,
+      frequency: 'MONTHLY',
       status: 'ACTIVE',
       nextDueDate: new Date('2026-04-30T12:00:00.000Z'),
       lastGeneratedPeriod: null,
@@ -877,6 +878,198 @@ describe('InvoicesService', () => {
         }) as unknown,
       }),
     );
+  });
+
+  describe('recorrencia com periodicidade', () => {
+    function buildRecurringPrisma(frequency: string) {
+      const recurrence = {
+        id: 'recurrence-2',
+        companyId: 'company-1',
+        debtorId: 'debtor-1',
+        amount: decimal(80),
+        billingType: 'PIX',
+        dueDay: 26,
+        frequency,
+        status: 'ACTIVE',
+        nextDueDate: new Date('2026-10-26T12:00:00.000Z'),
+        lastGeneratedPeriod: null,
+        lateFineBasisPoints: 0,
+        lateInterestMonthlyBasisPoints: 0,
+        paymentDaysAfterDue: 30,
+        studentName: 'Joao Silva',
+        studentEnrollment: 'MAT-1',
+        studentGroup: '5A',
+        createdAt: new Date('2026-10-23T15:00:00.000Z'),
+        updatedAt: new Date('2026-10-23T15:00:00.000Z'),
+      };
+      const invoice = buildInvoice({
+        id: 'invoice-week-1',
+        dueDate: new Date('2026-10-26T12:00:00.000Z'),
+        recurringInvoiceId: 'recurrence-2',
+        recurrencePeriod: '2026-10-26',
+      });
+      const prisma = {
+        company: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'company-1',
+            enabledBillingMethods: ['PIX', 'BOLIX'],
+          }),
+        },
+        debtor: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: 'debtor-1',
+            document: '12345678909',
+          }),
+        },
+        recurringInvoice: {
+          create: jest.fn().mockResolvedValue(recurrence),
+          findMany: jest.fn().mockResolvedValue([recurrence]),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          findFirst: jest.fn().mockResolvedValue({
+            ...recurrence,
+            debtor: {
+              id: 'debtor-1',
+              name: 'Maria Silva',
+              document: '12345678909',
+              phoneNumber: '11999999999',
+              email: null,
+            },
+            invoices: [invoice],
+          }),
+        },
+        invoice: {
+          upsert: jest.fn().mockResolvedValue(invoice),
+          findFirst: jest.fn().mockResolvedValue(invoice),
+        },
+      };
+      return { prisma, invoice };
+    }
+
+    it('cria uma semanal pelo primeiro vencimento e emite a primeira fatura', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-23T15:00:00.000Z'));
+      const { prisma, invoice } = buildRecurringPrisma('WEEKLY');
+      const addInitialChargeJobs = jest.fn().mockResolvedValue(undefined);
+      const service = new InvoicesService(
+        prisma as unknown as PrismaService,
+        { addInitialChargeJobs } as unknown as MessageQueueService,
+        buildPaymentService(),
+      );
+
+      await service.createInvoice('company-1', {
+        debtorId: 'debtor-1',
+        original_amount: 80,
+        billing_type: 'PIX',
+        recurring: true,
+        frequency: 'WEEKLY',
+        first_due_date: '2026-10-26',
+        studentName: 'Joao Silva',
+        studentEnrollment: 'MAT-1',
+        studentGroup: '5A',
+      });
+
+      expect(prisma.recurringInvoice.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          frequency: 'WEEKLY',
+          dueDay: 26,
+          nextDueDate: new Date('2026-10-26T12:00:00.000Z'),
+          studentName: 'Joao Silva',
+        }) as unknown,
+      });
+      // Only the first week: the next one is generated a week ahead.
+      expect(prisma.invoice.upsert).toHaveBeenCalledTimes(1);
+      expect(prisma.invoice.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({
+            dueDate: new Date('2026-10-26T12:00:00.000Z'),
+            recurrencePeriod: '2026-10-26',
+            studentName: 'Joao Silva',
+            studentEnrollment: 'MAT-1',
+            studentGroup: '5A',
+          }) as unknown,
+        }),
+      );
+      expect(prisma.recurringInvoice.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: {
+            lastGeneratedPeriod: '2026-10-26',
+            nextDueDate: new Date('2026-11-02T12:00:00.000Z'),
+          },
+        }),
+      );
+      expect(prisma.invoice.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { dueDate: 'asc' } }),
+      );
+      expect(addInitialChargeJobs).toHaveBeenCalledWith([
+        expect.objectContaining({ invoiceId: invoice.id, source: 'RECURRING' }),
+      ]);
+    });
+
+    it('gera a primeira ocorrencia mesmo alem do horizonte', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-23T15:00:00.000Z'));
+      const { prisma } = buildRecurringPrisma('YEARLY');
+      prisma.recurringInvoice.findMany.mockResolvedValue([
+        {
+          ...(await prisma.recurringInvoice.create()),
+          nextDueDate: new Date('2027-03-01T12:00:00.000Z'),
+          dueDay: 1,
+        },
+      ]);
+      const service = new InvoicesService(
+        prisma as unknown as PrismaService,
+        buildMessageQueue(),
+        buildPaymentService(),
+      );
+
+      await service.createInvoice('company-1', {
+        debtorId: 'debtor-1',
+        original_amount: 1200,
+        billing_type: 'PIX',
+        recurring: true,
+        frequency: 'YEARLY',
+        first_due_date: '2027-03-01',
+      });
+
+      expect(prisma.invoice.upsert).toHaveBeenCalledTimes(1);
+      expect(prisma.invoice.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({
+            recurrencePeriod: '2027-03',
+          }) as unknown,
+        }),
+      );
+    });
+
+    it('recusa primeiro vencimento anterior a hoje', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-23T15:00:00.000Z'));
+      const { prisma } = buildRecurringPrisma('WEEKLY');
+      const service = new InvoicesService(
+        prisma as unknown as PrismaService,
+        buildMessageQueue(),
+        buildPaymentService(),
+      );
+
+      await expect(
+        service.createInvoice('company-1', {
+          debtorId: 'debtor-1',
+          original_amount: 80,
+          billing_type: 'PIX',
+          recurring: true,
+          frequency: 'WEEKLY',
+          first_due_date: '2026-10-22',
+        }),
+      ).rejects.toThrow('O primeiro vencimento não pode ser anterior a hoje.');
+      await expect(
+        service.createInvoice('company-1', {
+          debtorId: 'debtor-1',
+          original_amount: 80,
+          billing_type: 'PIX',
+          recurring: true,
+          frequency: 'WEEKLY',
+          due_day: 10,
+        }),
+      ).rejects.toThrow('Informe o primeiro vencimento.');
+      expect(prisma.recurringInvoice.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('clientes pagadores', () => {
