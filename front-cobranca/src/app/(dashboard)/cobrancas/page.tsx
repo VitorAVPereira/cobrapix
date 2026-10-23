@@ -81,8 +81,6 @@ interface ManualChargeForm {
   amount: string;
   dueDate: string;
   billingType: PaymentMethod;
-  recurring: boolean;
-  dueDay: string;
   studentName: string;
   studentEnrollment: string;
   studentGroup: string;
@@ -114,8 +112,6 @@ const initialManualChargeForm: ManualChargeForm = {
   amount: "",
   dueDate: "",
   billingType: "BOLIX",
-  recurring: false,
-  dueDay: "10",
   studentName: "",
   studentEnrollment: "",
   studentGroup: "",
@@ -958,6 +954,15 @@ function CobrancasContent() {
     setIsModalOpen(true);
   }
 
+  // Recurring charges are created in Recorrentes, keeping the client already chosen.
+  function openRecurringCharge(): void {
+    const debtorId = invoiceTargetDebtor?.debtorId ?? pickedClient?.debtorId;
+    closeManualModal();
+    router.push(
+      `/devedores-recorrentes?nova=1${debtorId ? `&cliente=${debtorId}` : ""}`,
+    );
+  }
+
   async function handleManualSubmit(
     event: FormEvent<HTMLFormElement>,
   ): Promise<void> {
@@ -966,7 +971,6 @@ function CobrancasContent() {
     setIsSavingInvoice(true);
 
     const amount = Number(manualForm.amount);
-    const dueDay = Number(manualForm.dueDay);
 
     try {
       const debtorId = invoiceTargetDebtor?.debtorId ?? pickedClient?.debtorId;
@@ -978,14 +982,7 @@ function CobrancasContent() {
         throw new Error("Informe um valor de fatura valido.");
       }
 
-      if (
-        manualForm.recurring &&
-        (!Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31)
-      ) {
-        throw new Error("Informe um dia de vencimento entre 1 e 31.");
-      }
-
-      if (!manualForm.recurring && !manualForm.dueDate) {
+      if (!manualForm.dueDate) {
         throw new Error("Informe a data de vencimento.");
       }
 
@@ -1005,10 +1002,8 @@ function CobrancasContent() {
 
       await apiClient.createDebtorInvoice(debtorId, {
         original_amount: amount,
-        due_date: manualForm.recurring ? undefined : manualForm.dueDate,
+        due_date: manualForm.dueDate,
         billing_type: manualForm.billingType,
-        recurring: manualForm.recurring,
-        due_day: manualForm.recurring ? dueDay : undefined,
         ...lateTerms,
         ...sendNowPayload(sendNow),
         ...(isEducationSegment
@@ -1301,6 +1296,16 @@ function CobrancasContent() {
                     ? "Preencha os dados da nova cobrança deste cliente."
                     : "Escolha um cliente cadastrado e preencha os dados da cobrança."}
                 </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Repete toda semana, todo mês ou em outra periodicidade?{" "}
+                  <button
+                    type="button"
+                    onClick={openRecurringCharge}
+                    className="font-semibold text-emerald-700 underline-offset-2 hover:underline"
+                  >
+                    Adicionar cobrança recorrente
+                  </button>
+                </p>
               </div>
 
               <button
@@ -1427,41 +1432,16 @@ function CobrancasContent() {
                   </>
                 )}
 
-                <label className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 sm:col-span-2">
-                  <input
-                    type="checkbox"
-                    checked={manualForm.recurring}
-                    onChange={(event) =>
-                      updateManualForm("recurring", event.target.checked)
-                    }
-                    className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                  />
-                  <span className="text-sm font-medium text-slate-700">
-                    Cobrança recorrente mensal
-                  </span>
-                </label>
-
                 <label className="flex flex-col gap-1.5 sm:col-span-2">
                   <span className="text-xs font-semibold uppercase text-slate-500">
-                    {manualForm.recurring
-                      ? "Dia de Vencimento"
-                      : "Data de Vencimento"}
+                    Data de Vencimento
                   </span>
                   <input
                     required
-                    type={manualForm.recurring ? "number" : "date"}
-                    min={manualForm.recurring ? "1" : undefined}
-                    max={manualForm.recurring ? "31" : undefined}
-                    value={
-                      manualForm.recurring
-                        ? manualForm.dueDay
-                        : manualForm.dueDate
-                    }
+                    type="date"
+                    value={manualForm.dueDate}
                     onChange={(event) =>
-                      updateManualForm(
-                        manualForm.recurring ? "dueDay" : "dueDate",
-                        event.target.value,
-                      )
+                      updateManualForm("dueDate", event.target.value)
                     }
                     className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                   />

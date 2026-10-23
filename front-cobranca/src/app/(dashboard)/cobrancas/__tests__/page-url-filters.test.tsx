@@ -5,6 +5,7 @@ import CobrancasPage from "../page";
 const getInvoices = jest.fn();
 const getBillingSettings = jest.fn();
 const mockReplace = jest.fn();
+const mockPush = jest.fn();
 let mockParams = new URLSearchParams("debtorId=debtor-1&status=PENDING");
 
 const mockApiClient = {
@@ -22,7 +23,7 @@ const mockApiClient = {
 
 jest.mock("next/navigation", () => ({
   useSearchParams: () => mockParams,
-  useRouter: () => ({ replace: mockReplace }),
+  useRouter: () => ({ replace: mockReplace, push: mockPush }),
   usePathname: () => "/cobrancas",
 }));
 
@@ -241,6 +242,19 @@ describe("CobrancasPage URL filters", () => {
           expect.objectContaining({ original_amount: 150, due_date: "2026-11-10" }),
         ),
       );
+    });
+
+    it("sends recurring charges to Recorrentes with the chosen client", async () => {
+      render(<CobrancasPage />);
+      fireEvent.click(await screen.findByRole("button", { name: "Nova cobrança" }));
+      const dialog = screen.getByRole("dialog", { name: "Nova cobrança" });
+      expect(within(dialog).queryByRole("checkbox", { name: /recorrente/i })).toBeNull();
+
+      fireEvent.click(await within(dialog).findByRole("option", { name: /Ana Souza/ }));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Adicionar cobrança recorrente" }));
+
+      expect(mockPush).toHaveBeenCalledWith("/devedores-recorrentes?nova=1&cliente=debtor-ana");
+      expect(screen.queryByRole("dialog", { name: "Nova cobrança" })).toBeNull();
     });
 
     it("keeps Bolix as default and hides traditional Boleto even with legacy settings", async () => {

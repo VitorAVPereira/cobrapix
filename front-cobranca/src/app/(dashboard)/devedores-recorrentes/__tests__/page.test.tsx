@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { RecurringInvoice, RecurringInvoiceListResponse } from "@/lib/api-client";
 import RecorrentesPage from "../page";
@@ -9,12 +9,16 @@ const getBillingSettings = jest.fn();
 const pauseRecurringInvoice = jest.fn();
 const activateRecurringInvoice = jest.fn();
 const updateRecurringInvoice = jest.fn();
+const searchDebtors = jest.fn();
+const createDebtorInvoice = jest.fn();
 const mockApiClient = {
   getRecurringInvoices,
   getBillingSettings,
   pauseRecurringInvoice,
   activateRecurringInvoice,
   updateRecurringInvoice,
+  searchDebtors,
+  createDebtorInvoice,
 };
 
 const replace = jest.fn();
@@ -45,6 +49,7 @@ function recurrence(overrides: Partial<RecurringInvoice> = {}): RecurringInvoice
     amount: 250,
     billingType: "BOLIX",
     dueDay: 10,
+    frequency: "MONTHLY",
     status: "ACTIVE",
     nextDueDate: "2026-11-10",
     lastGeneratedPeriod: "2026-10",
@@ -83,6 +88,7 @@ describe("RecorrentesPage", () => {
     mockParams = new URLSearchParams();
     getRecurringInvoices.mockResolvedValue(listResponse());
     getBillingSettings.mockResolvedValue({ enabledBillingMethods: ["BOLIX", "PIX"] });
+    searchDebtors.mockResolvedValue([]);
   });
 
   it("lists one compact row per recurrence with the company summary", async () => {
@@ -128,14 +134,15 @@ describe("RecorrentesPage", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("confirms an activation, saying invoices are created now", async () => {
+  it("confirms an activation, saying the paused period is not charged", async () => {
     activateRecurringInvoice.mockResolvedValue({});
     render(<RecorrentesPage />);
     await screen.findByRole("table");
 
     await userEvent.click(screen.getByLabelText("Ativar recorrência de Bruno Lima"));
     const dialog = screen.getByRole("dialog");
-    expect(dialog).toHaveTextContent("vencem nos próximos 30 dias são criadas agora");
+    expect(dialog).toHaveTextContent("(mensal · dia 5) voltam a ser geradas a partir de hoje");
+    expect(dialog).toHaveTextContent("O período em que ficou pausada não é cobrado.");
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancelar" }));
     expect(activateRecurringInvoice).not.toHaveBeenCalled();
@@ -195,5 +202,108 @@ describe("RecorrentesPage", () => {
     expect(screen.getByRole("dialog")).toHaveTextContent(
       "A fatura de 10/11/2026 (R$ 250,00) já foi gerada como rascunho e continua em Cobranças, sem envio.",
     );
+  });
+
+  it("shows the frequency and keeps the weekday of a weekly recurrence when editing", async () => {
+    getRecurringInvoices.mockResolvedValue(
+      listResponse({
+        data: [
+          recurrence({
+            frequency: "WEEKLY",
+            dueDay: 26,
+            pendingInvoice: { invoiceId: "invoice-w", dueDate: "2026-10-26", amount: 80, status: "PENDING" },
+            nextDueDate: "2026-11-02",
+            amount: 80,
+          }),
+        ],
+        total: 1,
+      }),
+    );
+    updateRecurringInvoice.mockResolvedValue({});
+    render(<RecorrentesPage />);
+
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("Semanal · segunda-feira")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByLabelText("Editar recorrência de Ana Souza"));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).queryByText("Dia de vencimento")).toBeNull();
+    expect(dialog).toHaveTextContent("Periodicidade: Semanal. Ela não muda");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Salvar alterações" }));
+
+    await waitFor(() =>
+      expect(updateRecurringInvoice).toHaveBeenCalledWith(
+        "recurrence-1",
+        expect.objectContaining({ amount: 80, dueDay: undefined }),
+      ),
+    );
+  });
+
+  it("creates a recurrence from the button with frequency and first due date", async () => {
+    searchDebtors.mockResolvedValue([
+      { debtorId: "debtor-3", name: "Carla Dias", document: "52998224725", phone_number: "+5511999990003", email: null },
+    ]);
+    createDebtorInvoice.mockResolvedValue({});
+    render(<RecorrentesPage />);
+    await screen.findByRole("table");
+
+    await userEvent.click(screen.getByRole("button", { name: "Nova recorrência" }));
+    const dialog = await screen.findByRole("dialog", { name: "Nova cobrança recorrente" });
+    await userEvent.click(await within(dialog).findByText("Carla Dias"));
+    await userEvent.type(within(dialog).getByLabelText("Valor (R$)"), "80");
+    await userEvent.selectOptions(within(dialog).getByLabelText("Periodicidade"), "WEEKLY");
+    fireEvent.change(within(dialog).getByLabelText("Primeiro vencimento"), {
+      target: { value: "2030-03-04" },
+    });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Salvar recorrência" }));
+
+    await waitFor(() =>
+      expect(createDebtorInvoice).toHaveBeenCalledWith(
+        "debtor-3",
+        expect.objectContaining({
+          original_amount: 80,
+          billing_type: "BOLIX",
+          recurring: true,
+          frequency: "WEEKLY",
+          first_due_date: "2030-03-04",
+        }),
+      ),
+    );
+    expect(await screen.findByText("Recorrência criada para Carla Dias.")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(getRecurringInvoices).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens the form with the client chosen in Cobranças and cleans the link", async () => {
+    mockParams = new URLSearchParams("nova=1&cliente=debtor-3");
+    searchDebtors.mockResolvedValue([
+      { debtorId: "debtor-3", name: "Carla Dias", document: "52998224725", phone_number: "+5511999990003", email: null },
+    ]);
+    render(<RecorrentesPage />);
+
+    const dialog = await screen.findByRole("dialog", { name: "Nova cobrança recorrente" });
+    expect(await within(dialog).findByText("Carla Dias")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Trocar cliente" })).toBeInTheDocument();
+    expect(searchDebtors).toHaveBeenCalledWith("", undefined, "debtor-3");
+    expect(replace).toHaveBeenCalledWith("/devedores-recorrentes", { scroll: false });
+  });
+
+  it("refuses a first due date before today", async () => {
+    mockParams = new URLSearchParams("nova=1&cliente=debtor-3");
+    searchDebtors.mockResolvedValue([
+      { debtorId: "debtor-3", name: "Carla Dias", document: "52998224725", phone_number: "+5511999990003", email: null },
+    ]);
+    render(<RecorrentesPage />);
+    const dialog = await screen.findByRole("dialog", { name: "Nova cobrança recorrente" });
+    await within(dialog).findByText("Carla Dias");
+
+    await userEvent.type(within(dialog).getByLabelText("Valor (R$)"), "80");
+    fireEvent.change(within(dialog).getByLabelText("Primeiro vencimento"), {
+      target: { value: "2020-01-01" },
+    });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Salvar recorrência" }));
+
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("O primeiro vencimento não pode ser anterior a hoje.");
+    expect(createDebtorInvoice).not.toHaveBeenCalled();
   });
 });

@@ -298,6 +298,14 @@ export type MessagingLimitTier =
   | "TIER_UNLIMITED";
 export type PaymentNotificationStatus = "PENDING" | "SENT" | "FAILED" | "READ";
 export type RecurringInvoiceStatus = "ACTIVE" | "PAUSED";
+export type RecurrenceFrequency =
+  | "WEEKLY"
+  | "BIWEEKLY"
+  | "MONTHLY"
+  | "BIMONTHLY"
+  | "QUARTERLY"
+  | "SEMIANNUAL"
+  | "YEARLY";
 export type InvoiceListStatus = "PENDING" | "OVERDUE" | "PAID" | "CANCELED";
 export type InvoiceListBillingType = "PIX" | "BOLETO" | "CREDIT_CARD";
 export type InvoiceListSort =
@@ -402,6 +410,9 @@ export interface CreateInvoiceInput {
   billing_type: BillingMethod;
   recurring?: boolean;
   due_day?: number;
+  frequency?: RecurrenceFrequency;
+  /** First due date (YYYY-MM-DD) of a recurrence. */
+  first_due_date?: string;
   studentName?: string;
   studentEnrollment?: string;
   studentGroup?: string;
@@ -426,6 +437,7 @@ export interface RecurringInvoice {
   amount: number;
   billingType: BillingMethod;
   dueDay: number;
+  frequency: RecurrenceFrequency;
   status: RecurringInvoiceStatus;
   lateTerms?: LateTerms;
   nextDueDate: string | null;
@@ -460,7 +472,8 @@ export interface RecurringInvoiceListResponse {
 export interface UpdateRecurringInvoiceInput {
   amount: number;
   billingType: BillingMethod;
-  dueDay: number;
+  /** Month-based recurrences only; absent keeps the current day. */
+  dueDay?: number;
   lateFinePercentage?: number;
   lateInterestMonthlyPercentage?: number;
   paymentDaysAfterDue?: number;
@@ -1861,10 +1874,14 @@ class ApiClient {
     );
   }
 
-  /** Up to 8 clients for choosing one in a form; no totals. */
-  searchDebtors(search: string, signal?: AbortSignal): Promise<DebtorOption[]> {
+  /** Up to 8 clients for choosing one in a form (or the one with `debtorId`); no totals. */
+  searchDebtors(
+    search: string,
+    signal?: AbortSignal,
+    debtorId?: string,
+  ): Promise<DebtorOption[]> {
     return this.fetch<DebtorOption[]>(
-      `/invoices/debtors/search${this.buildQueryString({ search })}`,
+      `/invoices/debtors/search${this.buildQueryString({ search, debtorId })}`,
       { signal },
     );
   }

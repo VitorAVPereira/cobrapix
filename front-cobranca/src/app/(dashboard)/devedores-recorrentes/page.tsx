@@ -9,6 +9,7 @@ import {
   PauseCircle,
   Pencil,
   PlayCircle,
+  Plus,
   RefreshCw,
   Search,
   SearchX,
@@ -17,6 +18,7 @@ import {
 import type {
   BillingMethod,
   BillingSettings,
+  DebtorOption,
   InvoiceListBillingType,
   RecurringInvoice,
   RecurringInvoiceListResponse,
@@ -29,6 +31,12 @@ import { formatDebtorDocument } from "@/lib/debtor-document";
 import { billingMethodLabel, plural } from "@/lib/list-format";
 import { TablePagination } from "@/components/ui/TablePagination";
 import { LateTermsFields } from "@/components/features/LateTermsFields";
+import { RecurringChargeModal } from "@/components/features/invoices/RecurringChargeModal";
+import {
+  RECURRENCE_FREQUENCY_OPTIONS,
+  describeSchedule,
+  isMonthBased,
+} from "@/lib/recurrence-frequency";
 import {
   EMPTY_LATE_TERMS,
   isIndividualDocument,
@@ -170,6 +178,13 @@ function RecorrentesContent() {
   );
   const [response, setResponse] = useState<RecurringInvoiceListResponse | null>(null);
   const [settings, setSettings] = useState<BillingSettings | null>(null);
+  // The new-recurrence form waits for the company defaults (methods, fees, terms).
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  // New recurrence: open, with the client it starts with (from Cobranças or none).
+  const [creating, setCreating] = useState<{ client: DebtorOption | null } | null>(
+    null,
+  );
+  const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -262,11 +277,37 @@ function RecorrentesContent() {
       })
       .catch(() => {
         // Without settings the form offers Bolix, the default method.
+      })
+      .finally(() => {
+        if (active) setSettingsLoaded(true);
       });
     return () => {
       active = false;
     };
   }, [apiClient]);
+
+  // "Adicionar cobrança recorrente" in Cobranças opens the form here (?nova=1), with the
+  // client already chosen there (&cliente=<id>); the link is consumed once.
+  const opensNew = searchParams.get("nova") === "1";
+  const newClientId = searchParams.get("cliente");
+  useEffect(() => {
+    if (!opensNew) return;
+    router.replace(`${pathname}${writeQuery(query)}`, { scroll: false });
+    if (!newClientId) {
+      setCreating({ client: null });
+      return;
+    }
+    apiClient
+      .searchDebtors("", undefined, newClientId)
+      .then((found) => setCreating({ client: found[0] ?? null }))
+      .catch(() => setCreating({ client: null }));
+  }, [apiClient, newClientId, opensNew, pathname, query, router]);
+
+  async function handleCreated(client: DebtorOption): Promise<void> {
+    setCreating(null);
+    setSuccess(`Recorrência criada para ${client.name}.`);
+    await fetchRecurrences();
+  }
 
   const enabledBillingMethods: BillingMethod[] = settings?.enabledBillingMethods.length
     ? settings.enabledBillingMethods.filter((method) => method !== "BOLETO")
@@ -311,7 +352,9 @@ function RecorrentesContent() {
       return;
     }
 
-    if (!Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31) {
+    // Weekly ones keep their weekday; only month-based ones have a day to edit.
+    const monthBased = isMonthBased(selectedRecurrence.frequency);
+    if (monthBased && (!Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31)) {
       setEditError("Informe um dia de vencimento entre 1 e 31.");
       return;
     }
@@ -330,7 +373,7 @@ function RecorrentesContent() {
       await apiClient.updateRecurringInvoice(selectedRecurrence.recurrenceId, {
         amount,
         billingType: editForm.billingType,
-        dueDay,
+        dueDay: monthBased ? dueDay : undefined,
         lateFinePercentage: parsedLateTerms.terms.fine ?? undefined,
         lateInterestMonthlyPercentage:
           parsedLateTerms.terms.interest ?? undefined,
@@ -376,25 +419,46 @@ function RecorrentesContent() {
           <div>
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Recorrentes</h1>
             <p className="mt-1 text-sm text-slate-500">
-              Cobranças mensais: valor, vencimento, forma de pagamento e situação de cada cliente.
+              Cobranças que se repetem: valor, periodicidade, forma de pagamento e situação de cada cliente.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => void fetchRecurrences()}
-            disabled={loading}
-            className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <RefreshCw size={16} className={loading ? "animate-spin" : undefined} />
-            Atualizar
-          </button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <button
+              type="button"
+              onClick={() => void fetchRecurrences()}
+              disabled={loading}
+              className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <RefreshCw size={16} className={loading ? "animate-spin" : undefined} />
+              Atualizar
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSuccess(null);
+                setCreating({ client: null });
+              }}
+              className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
+            >
+              <Plus size={17} />
+              Nova recorrência
+            </button>
+          </div>
         </header>
+
+        {success && (
+          <div role="status" className="flex items-start gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+            <CalendarClock className="mt-0.5 shrink-0" size={18} />
+            <span>{success}</span>
+          </div>
+        )}
 
         {summary && (
           <section aria-label="Resumo" className="grid gap-3 sm:grid-cols-3">
             {[
               ["Ativas", plural(summary.active, "recorrência", "recorrências")],
-              ["Valor mensal das ativas", formatCurrency(summary.activeMonthlyAmount)],
+              // Weekly, quarterly, yearly... amounts are converted to a month.
+              ["Valor por mês das ativas", formatCurrency(summary.activeMonthlyAmount)],
               ["Pausadas", plural(summary.paused, "recorrência", "recorrências")],
             ].map(([label, value]) => (
               <div key={label} className="rounded-md border border-slate-200 bg-white px-4 py-3">
@@ -487,7 +551,7 @@ function RecorrentesContent() {
                   <CalendarClock size={28} className="text-slate-400" />
                   <p className="font-semibold text-slate-900">Nenhuma recorrência</p>
                   <p className="max-w-md text-sm text-slate-500">
-                    Marque uma nova cobrança como recorrente na tela de Cobranças para iniciar a agenda mensal.
+                    Use o botão Nova recorrência para cobrar um cliente toda semana, todo mês ou em outra periodicidade.
                   </p>
                 </>
               )}
@@ -501,7 +565,7 @@ function RecorrentesContent() {
                       <th className="px-4 py-2.5">Cliente</th>
                       <th className="w-32 px-4 py-2.5 text-right">Valor</th>
                       <th className="w-28 px-4 py-2.5">Forma</th>
-                      <th className="w-28 px-4 py-2.5">Vencimento</th>
+                      <th className="w-40 px-4 py-2.5">Periodicidade</th>
                       <th className="w-32 whitespace-nowrap px-4 py-2.5">Próxima fatura</th>
                       <th className="w-28 px-4 py-2.5">Situação</th>
                       <th className="w-24 px-4 py-2.5"><span className="sr-only">Ações</span></th>
@@ -523,7 +587,7 @@ function RecorrentesContent() {
                           {formatCurrency(recurrence.amount)}
                         </td>
                         <td className="px-4 py-2.5 text-slate-600">{billingMethodLabel(recurrence.billingType)}</td>
-                        <td className="px-4 py-2.5 text-slate-600">Dia {recurrence.dueDay}</td>
+                        <td className="px-4 py-2.5 text-slate-600">{describeSchedule(recurrence)}</td>
                         <td className="px-4 py-2.5">
                           <p className="tabular-nums text-slate-600">{nextInvoiceDate(recurrence)}</p>
                           {isDraft(recurrence) && (
@@ -576,7 +640,7 @@ function RecorrentesContent() {
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
                       <span>{billingMethodLabel(recurrence.billingType)}</span>
                       <span aria-hidden>·</span>
-                      <span>Dia {recurrence.dueDay}</span>
+                      <span>{describeSchedule(recurrence)}</span>
                       <span aria-hidden>·</span>
                       <span>
                         Próxima {nextInvoiceDate(recurrence)}
@@ -634,8 +698,8 @@ function RecorrentesContent() {
               </p>
             ) : (
               <p className="mt-2 text-sm text-slate-600">
-                As faturas de {formatCurrency(statusTarget.amount)} com vencimento no dia {statusTarget.dueDay} voltam a ser
-                geradas, e as que vencem nos próximos 30 dias são criadas agora.
+                As faturas de {formatCurrency(statusTarget.amount)} ({describeSchedule(statusTarget).toLowerCase()}) voltam
+                a ser geradas a partir de hoje. O período em que ficou pausada não é cobrado.
               </p>
             )}
             <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
@@ -715,24 +779,45 @@ function RecorrentesContent() {
                 />
               </label>
 
-              <label className="flex flex-col gap-1.5">
-                <span className="text-xs font-semibold uppercase text-slate-500">
-                  Dia de vencimento
-                </span>
-                <input
-                  type="number"
-                  min="1"
-                  max="31"
-                  value={editForm.dueDay}
-                  onChange={(event) =>
-                    setEditForm((currentForm) => ({
-                      ...currentForm,
-                      dueDay: event.target.value,
-                    }))
-                  }
-                  className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                />
-              </label>
+              {isMonthBased(selectedRecurrence.frequency) ? (
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-semibold uppercase text-slate-500">
+                    Dia de vencimento
+                  </span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="31"
+                    value={editForm.dueDay}
+                    onChange={(event) =>
+                      setEditForm((currentForm) => ({
+                        ...currentForm,
+                        dueDay: event.target.value,
+                      }))
+                    }
+                    className="h-11 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  />
+                </label>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-semibold uppercase text-slate-500">
+                    Vencimento
+                  </span>
+                  <p className="flex h-11 items-center text-sm text-slate-700">
+                    {describeSchedule(selectedRecurrence)}
+                  </p>
+                </div>
+              )}
+
+              <p className="text-xs text-slate-500 sm:col-span-2">
+                Periodicidade:{" "}
+                {RECURRENCE_FREQUENCY_OPTIONS.find(
+                  (option) => option.value === selectedRecurrence.frequency,
+                )?.label ?? "Mensal"}
+                . Ela não muda; para outra, pause esta e crie uma nova recorrência.
+                {isMonthBased(selectedRecurrence.frequency) &&
+                  " Um novo dia vale a partir do próximo vencimento ainda não gerado."}
+              </p>
 
               <label className="flex flex-col gap-1.5 sm:col-span-2">
                 <span className="text-xs font-semibold uppercase text-slate-500">
@@ -805,6 +890,15 @@ function RecorrentesContent() {
             </div>
           </div>
         </div>
+      )}
+
+      {creating && settingsLoaded && (
+        <RecurringChargeModal
+          initialClient={creating.client}
+          settings={settings}
+          onClose={() => setCreating(null)}
+          onCreated={handleCreated}
+        />
       )}
     </main>
   );
