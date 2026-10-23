@@ -267,8 +267,8 @@ VPS e na Vercel antes de afirmar que algo está em produção.
   o crítico, que se repete).
 - A régua roda às 09:00 e às 17:00. Etapas do mesmo dia formam um contato; em cada rodada
   só o contato vencido mais recente sai e os anteriores ficam `SKIPPED`. Há intervalo mínimo
-  de 23 h entre mensagens da mesma fatura, e editar a régua ou trocar o perfil nunca volta no
-  tempo. A etapa "Inicial" e a escolha de template por etapa ficaram só como histórico.
+  de 23 h entre mensagens da mesma fatura (ou da mesma recorrência), e editar a régua ou trocar o
+  perfil nunca volta no tempo. A etapa "Inicial" e a escolha de template por etapa ficaram só como histórico.
 - Respeite opt-in, supressão do destinatário, janela de 24 h para texto livre e limites do
   canal. Admin responde no atendimento central; a empresa só visualiza.
 
