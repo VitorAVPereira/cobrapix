@@ -221,6 +221,26 @@ async function seedLegacy() {
     assert.deepEqual((await service.getProfile(older.id, vip.id)).steps.map(step => [step.scheduleDay, step.channel]), [[1, 'EMAIL']], 'a profile the company created is not touched');
     assert.ok(forOlder(await service.syncStandardSchedules(true)).every(([, action]) => action === 'UNCHANGED'), 'idempotent');
     console.log('PASS standard schedules of existing companies: preview, apply on standard profiles only, sent steps kept, idempotent');
+    // Invoices of one recurrence share the 24 h: a payer with overdue weekly invoices gets
+    // one rule message a day, not one per invoice; a one-off invoice keeps its own count.
+    const weeklyTenant = await prisma.company.create({ data: { corporateName: 'Weekly tenant', email: 'weekly@example.test', phoneNumber: '5511844444444', document: '33444555000181' } });
+    await service.listProfiles(weeklyTenant.id);
+    const weeklyProfile = await prisma.collectionProfile.findFirstOrThrow({ where: { companyId: weeklyTenant.id, profileType: 'NEW' } });
+    await service.setSteps(weeklyTenant.id, weeklyProfile.id, [{ stepOrder: 0, channel: 'WHATSAPP', delayDays: 0 }]);
+    const weeklyDebtor = await prisma.debtor.create({ data: { companyId: weeklyTenant.id, name: 'Weekly', phoneNumber: '5511944444444', whatsappOptIn: true, collectionProfileId: weeklyProfile.id } });
+    const weekly = await prisma.recurringInvoice.create({ data: { companyId: weeklyTenant.id, debtorId: weeklyDebtor.id, amount: 10, billingType: 'PIX', dueDay: 16, frequency: 'WEEKLY' } });
+    const loadWeekly = async (dueDate, recurrencePeriod) => prisma.invoice.findFirstOrThrow({ where: { id: (await prisma.invoice.create({ data: { companyId: weeklyTenant.id, debtorId: weeklyDebtor.id, originalAmount: 10, dueDate, status: 'PENDING', createdAt: at('2026-10-01', '10:00'), ...(recurrencePeriod ? { recurringInvoiceId: weekly.id, recurrencePeriod } : {}) } })).id }, include: { debtor: { include: { collectionProfile: { include: { steps: { where: { isActive: true }, orderBy: { stepOrder: 'asc' } } } } } } } });
+    const firstWeek = await loadWeekly(new Date('2026-10-16T00:00:00Z'), '2026-10-16');
+    const secondWeek = await loadWeekly(due, '2026-10-23');
+    const oneOff = await loadWeekly(due, null);
+    const weekPlan = await engine.planContact(firstWeek, at('2026-10-23', '09:00'));
+    assert.equal(weekPlan.kind, 'SEND');
+    assert.equal(await engine.claimContact(firstWeek, weekPlan.contact.steps.map(step => ({ ...step, status: 'QUEUED' })), at('2026-10-23', '09:00')), true);
+    assert.deepEqual(await engine.planContact(secondWeek, at('2026-10-23', '09:00')), { kind: 'WAIT', reason: 'MIN_INTERVAL' });
+    assert.equal(await engine.claimContact(secondWeek, weekPlan.contact.steps.map(step => ({ ...step, status: 'QUEUED' })), at('2026-10-23', '09:00')), false, 'the claim re-checks the recurrence');
+    assert.equal((await engine.planContact(oneOff, at('2026-10-23', '09:00'))).kind, 'SEND', 'a one-off invoice of the same payer is not held');
+    assert.equal((await engine.planContact(secondWeek, at('2026-10-24', '09:00'))).kind, 'SEND', 'the next day it goes');
+    console.log('PASS invoices of one recurrence share the 24 h between messages');
     console.log(`PASS collection rules on PostgreSQL 16 with ${migrations.length} migrations`);
   } finally {
     if (prisma) await prisma.$disconnect();
