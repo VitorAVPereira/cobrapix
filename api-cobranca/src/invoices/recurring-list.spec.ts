@@ -14,6 +14,7 @@ const recurrence = {
   amount: decimal(250),
   billingType: 'BOLIX',
   dueDay: 10,
+  frequency: 'MONTHLY',
   status: 'ACTIVE',
   nextDueDate: new Date('2026-11-10T00:00:00.000Z'),
   lastGeneratedPeriod: '2026-10',
@@ -38,10 +39,16 @@ function build() {
   const groupBy = jest.fn().mockResolvedValue([
     {
       status: 'ACTIVE',
+      frequency: 'MONTHLY',
       _count: { _all: 1200 },
       _sum: { amount: decimal(300000.5) },
     },
-    { status: 'PAUSED', _count: { _all: 34 }, _sum: { amount: decimal(8000) } },
+    {
+      status: 'PAUSED',
+      frequency: 'MONTHLY',
+      _count: { _all: 34 },
+      _sum: { amount: decimal(8000) },
+    },
   ]);
   const prisma = {
     recurringInvoice: { findMany, count, groupBy },
@@ -188,6 +195,8 @@ describe('recurring invoices list', () => {
           .mockResolvedValueOnce({
             id: 'recurrence-1',
             dueDay: 10,
+            frequency: 'MONTHLY',
+            status: 'PAUSED',
             nextDueDate: null,
           })
           .mockResolvedValueOnce(recurrence),
@@ -210,6 +219,165 @@ describe('recurring invoices list', () => {
         id: 'recurrence-1',
         status: 'ACTIVE',
       }) as unknown,
+    });
+  });
+
+  it('adds weekly and yearly recurrences to the summary by their amount per month', async () => {
+    const { service, groupBy } = build();
+    groupBy.mockResolvedValueOnce([
+      {
+        status: 'ACTIVE',
+        frequency: 'MONTHLY',
+        _count: { _all: 2 },
+        _sum: { amount: decimal(200) },
+      },
+      {
+        status: 'ACTIVE',
+        frequency: 'WEEKLY',
+        _count: { _all: 1 },
+        _sum: { amount: decimal(60) },
+      },
+      {
+        status: 'ACTIVE',
+        frequency: 'YEARLY',
+        _count: { _all: 1 },
+        _sum: { amount: decimal(1200) },
+      },
+      {
+        status: 'PAUSED',
+        frequency: 'WEEKLY',
+        _count: { _all: 3 },
+        _sum: { amount: decimal(90) },
+      },
+    ]);
+
+    const result = await service.findRecurringPaginated('company-1', {
+      page: 1,
+      pageSize: 20,
+    });
+
+    expect(groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({ by: ['status', 'frequency'] }),
+    );
+    // 200 + 60 × 52 / 12 + 1200 / 12
+    expect(result.summary).toEqual({
+      active: 4,
+      paused: 3,
+      activeMonthlyAmount: 560,
+    });
+  });
+
+  describe('schedule changes', () => {
+    afterEach(() => jest.useRealTimers());
+
+    function buildSchedule(current: Record<string, unknown>) {
+      const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      const prisma = {
+        recurringInvoice: {
+          findFirst: jest
+            .fn()
+            .mockResolvedValueOnce({ id: 'recurrence-1', ...current })
+            .mockResolvedValueOnce(recurrence),
+          updateMany,
+          findMany: jest.fn().mockResolvedValue([]),
+        },
+      } as unknown as PrismaService;
+      const service = new InvoicesService(
+        prisma,
+        {} as MessageQueueService,
+        {} as PaymentService,
+      );
+      const nextDueDate = () =>
+        (
+          (updateMany.mock.calls as unknown[][])[0][0] as {
+            data: { nextDueDate: Date | null; dueDay?: number };
+          }
+        ).data;
+      return { service, nextDueDate };
+    }
+
+    it('reactivating does not charge the paused period', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-05-11T15:00:00Z'));
+      const { service, nextDueDate } = buildSchedule({
+        dueDay: 10,
+        frequency: 'MONTHLY',
+        status: 'PAUSED',
+        nextDueDate: new Date('2026-01-10T12:00:00Z'),
+      });
+
+      await service.updateRecurringStatus(
+        'company-1',
+        'recurrence-1',
+        'ACTIVE',
+      );
+
+      expect(nextDueDate().nextDueDate).toEqual(
+        new Date('2026-06-10T12:00:00Z'),
+      );
+    });
+
+    it('a weekly recurrence keeps its weekday when edited', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-23T15:00:00Z'));
+      const { service, nextDueDate } = buildSchedule({
+        dueDay: 26,
+        frequency: 'WEEKLY',
+        nextDueDate: new Date('2026-11-02T12:00:00Z'),
+      });
+
+      await service.updateRecurringInvoice('company-1', 'recurrence-1', {
+        amount: 80,
+        billingType: 'PIX',
+        dueDay: 5,
+      });
+
+      expect(nextDueDate()).toEqual(
+        expect.objectContaining({
+          dueDay: 26,
+          nextDueDate: new Date('2026-11-02T12:00:00Z'),
+        }),
+      );
+    });
+
+    it('a new day applies from the month of the next due date on', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-23T15:00:00Z'));
+      const { service, nextDueDate } = buildSchedule({
+        dueDay: 10,
+        frequency: 'QUARTERLY',
+        nextDueDate: new Date('2027-01-10T12:00:00Z'),
+      });
+
+      await service.updateRecurringInvoice('company-1', 'recurrence-1', {
+        amount: 300,
+        billingType: 'BOLIX',
+        dueDay: 25,
+      });
+
+      expect(nextDueDate()).toEqual(
+        expect.objectContaining({
+          dueDay: 25,
+          nextDueDate: new Date('2027-01-25T12:00:00Z'),
+        }),
+      );
+    });
+
+    it('a monthly day change does not create an invoice in the current month', async () => {
+      // Created on 15/10 with day 10: November is generated, October never was.
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-23T15:00:00Z'));
+      const { service, nextDueDate } = buildSchedule({
+        dueDay: 10,
+        frequency: 'MONTHLY',
+        nextDueDate: new Date('2026-12-10T12:00:00Z'),
+      });
+
+      await service.updateRecurringInvoice('company-1', 'recurrence-1', {
+        amount: 300,
+        billingType: 'BOLIX',
+        dueDay: 25,
+      });
+
+      expect(nextDueDate().nextDueDate).toEqual(
+        new Date('2026-12-25T12:00:00Z'),
+      );
     });
   });
 });

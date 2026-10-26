@@ -106,6 +106,7 @@ interface NormalizedBillingSettings {
 interface ScheduledInvoice {
   id: string;
   companyId: string;
+  recurringInvoiceId: string | null;
   originalAmount: unknown;
   dueDate: Date;
   gatewayId: string | null;

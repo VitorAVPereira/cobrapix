@@ -20,9 +20,13 @@ type Db = PrismaService | Tx;
 /**
  * Minimum time between two messages of the same invoice, whatever their channel: a day,
  * with 1 h of slack so the next day's round always counts even if yesterday's message
- * left a few minutes later in the round.
+ * left a few minutes later in the round. Invoices of one recurrence share it, so a payer
+ * with several overdue weekly invoices gets one message a day, not one per invoice.
  */
 export const MIN_CONTACT_INTERVAL_MS = 23 * 3_600_000;
+
+/** End of the automatic emission's logical key (see collectionLogicalKey). */
+const INITIAL_KEY_END = ':initial:WHATSAPP';
 
 /** Attempts that never reached the payer: they neither count as a contact nor as received. */
 const NOT_DELIVERED = ['FAILED', 'BLOCKED', 'SKIPPED'] as const;
@@ -74,7 +78,8 @@ export interface ContactClaim {
  * - a reminder dated before the day the invoice was registered is skipped too;
  * - a contact dated on or before the day the invoice got its last rule message is skipped:
  *   editing the rule or moving the payer to another profile never goes back in time;
- * - at least 24 h between two messages of the invoice, emission included;
+ * - at least 24 h between two messages of the invoice (of its recurrence, for a
+ *   recurring one), emission included;
  * - the moment (template) follows the day the message is actually sent.
  * "Inicial" steps (day <= -30) are history: the emission message is requested when the
  * invoice is registered, not by the rule.
@@ -164,13 +169,15 @@ export class CollectionRuleEngine {
    * inside the last 24 h makes this claim return false and nothing is sent.
    */
   async claimContact(
-    invoice: Pick<ContactInvoice, 'id' | 'companyId'>,
+    invoice: Pick<ContactInvoice, 'id' | 'companyId' | 'recurringInvoiceId'>,
     claims: ContactClaim[],
     now = new Date(),
   ): Promise<boolean> {
     if (claims.length === 0) return false;
     return this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`collection-contact:${invoice.id}`}, 0))`;
+      // Serialized per recurrence too: two runs never message two of its invoices.
+      const lockKey = `collection-contact:${invoice.recurringInvoiceId ?? invoice.id}`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const existing = await tx.collectionAttempt.count({
         where: {
           companyId: invoice.companyId,
@@ -197,39 +204,44 @@ export class CollectionRuleEngine {
   }
 
   /**
-   * Last message of the invoice that may have reached the payer: a rule attempt, the
-   * emission WhatsApp (initial or requested) or the emission e-mail.
+   * Last message of the invoice (or of any invoice of its recurrence) that may have
+   * reached the payer: a rule attempt, the emission WhatsApp (initial or requested) or
+   * the emission e-mail.
    */
   async lastContactAt(
     db: Db,
-    invoice: Pick<ContactInvoice, 'id' | 'companyId'>,
+    invoice: Pick<ContactInvoice, 'id' | 'companyId' | 'recurringInvoiceId'>,
   ): Promise<Date | null> {
-    const { companyId, id: invoiceId } = invoice;
+    const { companyId, id: invoiceId, recurringInvoiceId } = invoice;
+    const scope = recurringInvoiceId
+      ? { invoice: { is: { companyId, recurringInvoiceId } } }
+      : { invoiceId };
+    const prefix = `collection:${companyId}:${recurringInvoiceId ? '' : `${invoiceId}:`}`;
     const [attempt, intent, email] = await Promise.all([
       db.collectionAttempt.findFirst({
-        where: { companyId, invoiceId, status: { notIn: [...NOT_DELIVERED] } },
+        where: { companyId, ...scope, status: { notIn: [...NOT_DELIVERED] } },
         orderBy: { createdAt: 'desc' },
         select: { createdAt: true },
       }),
       db.communicationOutboundIntent.findFirst({
         where: {
           companyId,
-          invoiceId,
+          ...scope,
           state: { notIn: ['FAILED', 'BLOCKED'] },
           OR: [
-            { logicalKey: collectionLogicalKey({ companyId, invoiceId }) },
-            {
-              logicalKey: {
-                startsWith: `collection:${companyId}:${invoiceId}:selected-`,
-              },
-            },
+            recurringInvoiceId
+              ? {
+                  logicalKey: { startsWith: prefix, endsWith: INITIAL_KEY_END },
+                }
+              : { logicalKey: collectionLogicalKey({ companyId, invoiceId }) },
+            { logicalKey: { startsWith: prefix, contains: ':selected-' } },
           ],
         },
         orderBy: { createdAt: 'desc' },
         select: { createdAt: true },
       }),
       db.collectionLog.findFirst({
-        where: { companyId, invoiceId, actionType: 'EMAIL_QUEUED' },
+        where: { companyId, ...scope, actionType: 'EMAIL_QUEUED' },
         orderBy: { createdAt: 'desc' },
         select: { createdAt: true },
       }),

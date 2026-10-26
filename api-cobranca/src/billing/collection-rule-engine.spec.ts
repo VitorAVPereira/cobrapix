@@ -6,12 +6,7 @@ import {
 } from './collection-rule-engine';
 
 type Status =
-  | 'QUEUED'
-  | 'SENT'
-  | 'FAILED'
-  | 'BLOCKED'
-  | 'SKIPPED'
-  | 'DELIVERED';
+  'QUEUED' | 'SENT' | 'FAILED' | 'BLOCKED' | 'SKIPPED' | 'DELIVERED';
 interface Attempt {
   ruleStepId: string;
   channel: string;
@@ -398,5 +393,61 @@ describe('CollectionRuleEngine.claimContact', () => {
       t.engine.claimContact(t.invoice, claims, t.at('2026-10-23', '09:00')),
     ).resolves.toBe(false);
     expect(t.attempts).toHaveLength(1);
+  });
+});
+
+describe('CollectionRuleEngine with a recurrence', () => {
+  it('counts the messages of every invoice of the recurrence for the 24 h', async () => {
+    const t = setup([step('d0', 0, 'WHATSAPP', 0)], {
+      recurringInvoiceId: 'recurrence-1',
+    });
+    // This morning, the emission of the next weekly invoice of the same recurrence.
+    t.intents.push({ createdAt: sp('2026-10-23', '09:00'), state: 'ACCEPTED' });
+
+    await expect(
+      t.engine.planContact(t.invoice, t.at('2026-10-23', '17:00')),
+    ).resolves.toEqual({ kind: 'WAIT', reason: 'MIN_INTERVAL' });
+    const scope = {
+      invoice: {
+        is: { companyId: 'company-1', recurringInvoiceId: 'recurrence-1' },
+      },
+    };
+    expect(t.db.collectionAttempt.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining(scope) as unknown,
+      }),
+    );
+    expect(t.db.communicationOutboundIntent.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining(scope) as unknown,
+      }),
+    );
+    expect(t.db.collectionLog.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining(scope) as unknown,
+      }),
+    );
+  });
+
+  it('keeps a one-off invoice on its own messages', async () => {
+    const t = setup([step('d0', 0, 'WHATSAPP', 0)]);
+    await t.engine.lastContactAt(t.db as unknown as PrismaService, t.invoice);
+    const { where } = (
+      t.db.collectionAttempt.findFirst.mock.calls as unknown[][]
+    )[0][0] as { where: Record<string, unknown> };
+    expect(where).toEqual(expect.objectContaining({ invoiceId: 'invoice-1' }));
+    expect(where).not.toHaveProperty('invoice');
+  });
+
+  it('serializes the claim per recurrence', async () => {
+    const t = setup([], { recurringInvoiceId: 'recurrence-1' });
+    await t.engine.claimContact(
+      t.invoice,
+      [{ ruleStepId: 'd0', channel: 'WHATSAPP', status: 'QUEUED' }],
+      t.at('2026-10-23', '09:00'),
+    );
+    expect(t.db.$executeRaw.mock.calls[0]).toContain(
+      'collection-contact:recurrence-1',
+    );
   });
 });

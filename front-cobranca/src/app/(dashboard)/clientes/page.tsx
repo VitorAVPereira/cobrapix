@@ -12,6 +12,7 @@ import {
   Pencil,
   Plus,
   ReceiptText,
+  Repeat,
   Search,
   Settings2,
   UserRound,
@@ -21,8 +22,10 @@ import {
 import { DebtorPaymentHistoryModal } from "@/components/features/DebtorPaymentHistoryModal";
 import { DebtorSettingsModal } from "@/components/features/DebtorSettingsModal";
 import { DebtorActionsMenu } from "@/components/features/debtors/DebtorActionsMenu";
+import { RecurringChargeModal } from "@/components/features/invoices/RecurringChargeModal";
 import type {
   BillingMethod,
+  BillingSettings,
   CollectionRuleProfile,
   CreateDebtorInput,
   DebtorListItem,
@@ -246,6 +249,13 @@ function ClientesContent() {
     null,
   );
   const [chargeTarget, setChargeTarget] = useState<DebtorListItem | null>(null);
+  // "Nova cobrança" first asks: one-off (chargeTarget) or recurring (recurringTarget).
+  const [chargeKindTarget, setChargeKindTarget] =
+    useState<DebtorListItem | null>(null);
+  const [recurringTarget, setRecurringTarget] =
+    useState<DebtorListItem | null>(null);
+  const [billingSettings, setBillingSettings] =
+    useState<BillingSettings | null>(null);
   const [chargeForm, setChargeForm] = useState<ChargeForm>(emptyChargeForm);
   const [sendNow, setSendNow] = useState<SendNowValue>(() =>
     initialSendNow(undefined),
@@ -375,6 +385,7 @@ function ClientesContent() {
       try {
         const settings = await apiClient.getBillingSettings();
         if (!active) return;
+        setBillingSettings(settings);
         setCompanySendsNow(settings.autoGenerateFirstCharge);
         setCompanyLateTerms(
           lateTermsFormFromValues({
@@ -437,10 +448,15 @@ function ClientesContent() {
     setSavingClient(false);
   }
 
-  function openChargeModal(debtor: DebtorListItem): void {
+  function openChargeKind(debtor: DebtorListItem): void {
     setError(null);
     setSuccess(null);
     setOpenAction(null);
+    setChargeKindTarget(debtor);
+  }
+
+  function openChargeModal(debtor: DebtorListItem): void {
+    setChargeKindTarget(null);
     setChargeTarget(debtor);
     setChargeForm({ ...emptyChargeForm, lateTerms: companyLateTerms });
     setSendNow(initialSendNow(companySendsNow));
@@ -846,7 +862,7 @@ function ClientesContent() {
                   id: "charge",
                   label: "Nova cobrança",
                   icon: <Plus size={15} />,
-                  onSelect: () => openChargeModal(actionDebtor),
+                  onSelect: () => openChargeKind(actionDebtor),
                 },
                 {
                   id: "open-invoices",
@@ -1016,6 +1032,82 @@ function ClientesContent() {
             </form>
           </div>
         </div>
+      )}
+
+      {chargeKindTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="charge-kind-title"
+            className="w-full max-w-md rounded-md bg-white shadow-xl"
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 id="charge-kind-title" className="font-semibold text-slate-900">
+                  Nova cobrança
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">{chargeKindTarget.name}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setChargeKindTarget(null)}
+                className="rounded-md p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                aria-label="Fechar"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="grid gap-3 p-5">
+              <button
+                type="button"
+                onClick={() => openChargeModal(chargeKindTarget)}
+                className="flex items-start gap-3 rounded-md border border-slate-200 px-4 py-3 text-left transition hover:border-emerald-300 hover:bg-emerald-50"
+              >
+                <ReceiptText className="mt-0.5 shrink-0 text-emerald-600" size={18} />
+                <span>
+                  <span className="block text-sm font-semibold text-slate-900">Avulsa</span>
+                  <span className="block text-xs text-slate-500">Uma cobrança com um vencimento.</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRecurringTarget(chargeKindTarget);
+                  setChargeKindTarget(null);
+                }}
+                className="flex items-start gap-3 rounded-md border border-slate-200 px-4 py-3 text-left transition hover:border-emerald-300 hover:bg-emerald-50"
+              >
+                <Repeat className="mt-0.5 shrink-0 text-emerald-600" size={18} />
+                <span>
+                  <span className="block text-sm font-semibold text-slate-900">Recorrente</span>
+                  <span className="block text-xs text-slate-500">
+                    Repete toda semana, todo mês ou em outra periodicidade.
+                  </span>
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {recurringTarget && (
+        <RecurringChargeModal
+          initialClient={{
+            debtorId: recurringTarget.debtorId,
+            name: recurringTarget.name,
+            document: recurringTarget.document,
+            phone_number: recurringTarget.phone_number,
+            email: recurringTarget.email,
+          }}
+          settings={billingSettings}
+          onClose={() => setRecurringTarget(null)}
+          onCreated={async (client) => {
+            setRecurringTarget(null);
+            setSuccess(`Cobrança recorrente criada para ${client.name}.`);
+            await fetchDebtors();
+          }}
+        />
       )}
 
       {chargeTarget && (

@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {
   CollectionRuleProfile,
@@ -127,6 +127,7 @@ describe("ClientesPage", () => {
     updateDebtor.mockResolvedValue(debtorResponse.data[0]);
     createDebtorInvoice.mockResolvedValue({});
     getBillingSettings.mockResolvedValue({
+      enabledBillingMethods: ["BOLIX", "PIX"],
       lateFinePercentage: 2,
       lateInterestMonthlyPercentage: 1,
       paymentDaysAfterDue: 30,
@@ -186,6 +187,7 @@ describe("ClientesPage", () => {
       // Not inside the table (whose overflow container used to cut it).
       expect(screen.getByRole("table")).not.toContainElement(menu);
       await user.click(screen.getByRole("menuitem", { name: /nova cobrança/i }));
+      await user.click(screen.getByRole("button", { name: /avulsa/i }));
       await user.type(screen.getByLabelText(/valor/i), "50");
       await user.type(screen.getByLabelText(/data de vencimento/i), "2026-10-10");
       await user.click(screen.getByRole("button", { name: /salvar cobrança/i }));
@@ -295,6 +297,7 @@ describe("ClientesPage", () => {
       screen.getByRole("button", { name: /abrir ações do cliente maria/i }),
     );
     await user.click(screen.getByRole("menuitem", { name: /nova cobrança/i }));
+    await user.click(screen.getByRole("button", { name: /avulsa/i }));
     await user.type(screen.getByLabelText(/valor/i), "120");
     await user.type(screen.getByLabelText(/data de vencimento/i), "2026-07-10");
     await user.click(screen.getByRole("button", { name: /salvar cobrança/i }));
@@ -314,6 +317,44 @@ describe("ClientesPage", () => {
     });
   });
 
+  it("creates a recurring charge for the client without leaving Clientes", async () => {
+    const user = userEvent.setup();
+    render(<ClientesPage />);
+
+    await screen.findByText("Maria Silva");
+    await waitFor(() => expect(getBillingSettings).toHaveBeenCalled());
+    await user.click(
+      screen.getByRole("button", { name: /abrir ações do cliente maria/i }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: /nova cobrança/i }));
+    await user.click(screen.getByRole("button", { name: /recorrente/i }));
+
+    const dialog = screen.getByRole("dialog", { name: "Nova cobrança recorrente" });
+    expect(within(dialog).getByText("Maria Silva")).toBeInTheDocument();
+    await user.type(within(dialog).getByLabelText(/valor/i), "120");
+    await user.selectOptions(within(dialog).getByLabelText("Periodicidade"), "BIWEEKLY");
+    fireEvent.change(within(dialog).getByLabelText("Primeiro vencimento"), {
+      target: { value: "2030-03-04" },
+    });
+    await user.click(within(dialog).getByRole("button", { name: /salvar recorrência/i }));
+
+    await waitFor(() => {
+      expect(createDebtorInvoice).toHaveBeenCalledWith(
+        "debtor-1",
+        expect.objectContaining({
+          original_amount: 120,
+          recurring: true,
+          frequency: "BIWEEKLY",
+          first_due_date: "2030-03-04",
+          late_fine_percentage: 2,
+        }),
+      );
+    });
+    expect(
+      await screen.findByText("Cobrança recorrente criada para Maria Silva."),
+    ).toBeInTheDocument();
+  });
+
   it("starts a charge with the company late terms and lets the user change them", async () => {
     const user = userEvent.setup();
     render(<ClientesPage />);
@@ -324,6 +365,7 @@ describe("ClientesPage", () => {
       screen.getByRole("button", { name: /abrir ações do cliente maria/i }),
     );
     await user.click(screen.getByRole("menuitem", { name: /nova cobrança/i }));
+    await user.click(screen.getByRole("button", { name: /avulsa/i }));
     expect(screen.getByLabelText(/^multa \(%\)/i)).toHaveValue("2");
     expect(screen.getByLabelText(/^juros ao mês/i)).toHaveValue("1");
     expect(screen.getByLabelText(/^dias aceitando pagamento/i)).toHaveValue("30");

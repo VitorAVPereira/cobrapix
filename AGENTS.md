@@ -160,6 +160,11 @@ VPS e na Vercel antes de afirmar que algo está em produção.
   períodos, Cobranças com filtros, nova cobrança e importação CSV com revisão (cliente
   achado pelo CPF/CNPJ), Baixas paginadas com marcação em lote, Recorrentes, inbox e
   Configurações → Geral. O segmento da empresa (Geral/Educação) é definido só pelo admin.
+- **Recorrências (23/10):** criadas em Recorrentes → Nova recorrência (ou Clientes → Nova
+  cobrança → Recorrente), com periodicidade semanal, quinzenal (14 dias), mensal, bimestral,
+  trimestral, semestral ou anual, fixa depois de criada. Cobranças não cria mais recorrência. Na
+  régua, as faturas de uma recorrência dividem o intervalo de 23 h. Spec:
+  `docs/superpowers/specs/2026-10-23-recorrencias-periodicidade-design.md`.
 - **Página de apresentação** em `/` para visitantes sem sessão (rota interna `/apresentacao`),
   com formulário "Solicitar orçamento" (`POST /contact/quote-request`, público, 5 pedidos por
   15 min por IP) que só envia um e-mail para `QUOTE_REQUEST_EMAIL`; o lead não é gravado.
@@ -262,8 +267,8 @@ VPS e na Vercel antes de afirmar que algo está em produção.
   o crítico, que se repete).
 - A régua roda às 09:00 e às 17:00. Etapas do mesmo dia formam um contato; em cada rodada
   só o contato vencido mais recente sai e os anteriores ficam `SKIPPED`. Há intervalo mínimo
-  de 23 h entre mensagens da mesma fatura, e editar a régua ou trocar o perfil nunca volta no
-  tempo. A etapa "Inicial" e a escolha de template por etapa ficaram só como histórico.
+  de 23 h entre mensagens da mesma fatura (ou da mesma recorrência), e editar a régua ou trocar o
+  perfil nunca volta no tempo. A etapa "Inicial" e a escolha de template por etapa ficaram só como histórico.
 - Respeite opt-in, supressão do destinatário, janela de 24 h para texto livre e limites do
   canal. Admin responde no atendimento central; a empresa só visualiza.
 
