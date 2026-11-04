@@ -1,5 +1,6 @@
 "use client";
 
+import { loadFailed } from "@/components/features/checkout/ui";
 import { useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { AlertTriangle, Loader2, Plus, ShoppingBag } from "lucide-react";
@@ -14,6 +15,7 @@ import { errorCode, formatDateTime } from "@/lib/disbursements";
 import { parsePercentToBps } from "@/lib/checkout";
 import { PlatformAccountPanel } from "@/components/features/checkout/PlatformAccountPanel";
 import { FinancePanel } from "@/components/features/checkout/FinancePanel";
+import { CardPausePanel } from "@/components/features/checkout/CardPausePanel";
 
 const inputClass =
   "h-11 w-full rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100";
@@ -317,6 +319,7 @@ function ClientDetail({
           ))}
         </ul>
       </div>
+      <CardPausePanel client={client} onChanged={(updated) => onChanged(updated, null)} />
       <FinancePanel companyId={client.id} />
     </section>
   );
@@ -352,7 +355,7 @@ export default function AdminCheckoutPage() {
       .listCheckoutClients(controller.signal)
       .then((result) => setClients(result))
       .catch((caught: unknown) => {
-        if (!controller.signal.aborted)
+        if (loadFailed(controller.signal, caught))
           setListError(messageOf(caught, "Não foi possível carregar os clientes."));
       });
     return () => controller.abort();
@@ -366,7 +369,7 @@ export default function AdminCheckoutPage() {
       .getCheckoutClient(selectedId, controller.signal)
       .then((result) => setDetail(result))
       .catch((caught: unknown) => {
-        if (!controller.signal.aborted)
+        if (loadFailed(controller.signal, caught))
           setDetailError(messageOf(caught, "Não foi possível carregar o cliente."));
       });
     return () => controller.abort();

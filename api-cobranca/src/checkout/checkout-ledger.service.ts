@@ -60,8 +60,13 @@ export class CheckoutLedgerService {
       paidAt: Date;
     },
     providerFeeCents: number | null,
+    // Card: not before the Efí credits the CifraMais account.
+    releaseNotBefore?: Date,
   ): Promise<void> {
-    const availableAt = new Date(order.paidAt.getTime() + RELEASE_DELAY_MS);
+    const sevenDays = order.paidAt.getTime() + RELEASE_DELAY_MS;
+    const availableAt = new Date(
+      Math.max(sevenDays, releaseNotBefore?.getTime() ?? 0),
+    );
     const base = { companyId: order.companyId, orderId: order.id, availableAt };
     await this.record(client, [
       {
@@ -162,6 +167,8 @@ export class CheckoutLedgerService {
             unitPriceCents: line.unitPriceCents,
             discountCents: line.discountCents,
           })),
+          paymentMethod: order.paymentMethod,
+          installments: order.installments,
           couponCode: order.couponCode,
           utm: order.utm,
           totalCents: order.totalCents,

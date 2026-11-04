@@ -43,6 +43,16 @@ export default function CheckoutPrivacyPage() {
               produto e permitir que o vendedor fale com você sobre a compra.
             </li>
             <li>
+              <strong>Cartão de crédito:</strong> o número, a validade e o código de segurança vão direto
+              do seu navegador para a Efí, que devolve um código de uso único. A Cifra+ e o vendedor não
+              recebem nem guardam esses dados.
+            </li>
+            <li>
+              <strong>Endereço de cobrança (só no cartão):</strong> enviado à Efí junto com o pagamento,
+              sem ficar guardado na Cifra+. Para preencher rua e cidade, o CEP digitado é consultado no
+              ViaCEP.
+            </li>
+            <li>
               <strong>Itens escolhidos, cupom e valores:</strong> para calcular o total e registrar a venda.
             </li>
             <li>
@@ -73,7 +83,7 @@ export default function CheckoutPrivacyPage() {
 
         <Section title="Com quem compartilhamos">
           <p>
-            Com o vendedor do produto; com a Efí, instituição de pagamento que processa o Pix; e com o
+            Com o vendedor do produto; com a Efí, instituição de pagamento que processa o Pix e o cartão; e com o
             serviço que envia os e-mails de acesso. Não vendemos seus dados.
           </p>
         </Section>

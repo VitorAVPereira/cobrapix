@@ -18,6 +18,7 @@ import {
   messageOf,
   NoticeText,
   type Notice,
+  loadFailed,
 } from "@/components/features/checkout/ui";
 import { WebhookPanel } from "@/components/features/checkout/WebhookPanel";
 
@@ -171,13 +172,19 @@ function SettingsForm({
             ))}
           </select>
         </Field>
-        <label className="flex items-center gap-2 text-sm text-slate-400">
-          <input type="checkbox" checked={false} disabled aria-describedby="card-soon" />
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input type="checkbox" checked={form.cardEnabled} onChange={(event) => set({ cardEnabled: event.target.checked })} />
           Cartão de crédito
         </label>
-        <p id="card-soon" className="text-xs text-slate-500">
-          Disponível em breve. As opções abaixo já ficam guardadas para quando o cartão for liberado.
-        </p>
+        {settings.cardPausedAt ? (
+          <p role="alert" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            Cartão pausado pela Cifra+. Seus compradores pagam só com Pix até a Cifra+ retomar. Fale com o suporte.
+          </p>
+        ) : (
+          <p className="text-xs text-slate-500">
+            O cartão só pode ser ligado depois que a Cifra+ liberar. A venda no cartão libera para repasse depois do prazo de crédito da Efí (em geral, 30 dias).
+          </p>
+        )}
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Parcelas no cartão (até)">
             <select
@@ -238,7 +245,7 @@ export default function CheckoutSettingsPage() {
       .getCheckoutSettings(controller.signal)
       .then((result) => setSettings(result))
       .catch((caught: unknown) => {
-        if (!controller.signal.aborted)
+        if (loadFailed(controller.signal, caught))
           setError(messageOf(caught, "Não foi possível carregar as configurações."));
       });
     return () => controller.abort();

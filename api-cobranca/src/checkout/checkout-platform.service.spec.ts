@@ -223,4 +223,57 @@ describe('CheckoutPlatformService', () => {
     });
     await expect(service.ready()).resolves.toBeNull();
   });
+
+  it('cartão: nova versão com tarifa e prazo, mantendo a tarifa do Pix', async () => {
+    tx.checkoutPlatformSettings.findFirst.mockResolvedValue({
+      version: 3,
+      identityId: 'identity-1',
+      pixFeeBasisPoints: 119,
+      webhookConfiguredAt: new Date(),
+    });
+    prisma.checkoutPlatformSettings.findMany.mockResolvedValue([]);
+    await service.setCard('admin', 'platform', {
+      expectedVersion: 3,
+      cardEnabled: false,
+      cashBasisPoints: 349,
+      anticipationBasisPoints: 159,
+      cardCreditDays: 30,
+    });
+    expect(tx.checkoutPlatformSettings.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        version: 4,
+        pixFeeBasisPoints: 119,
+        cardEnabled: false,
+        cardCreditDays: 30,
+        cardRates: {
+          receipt: 'ANTICIPATED',
+          cashBasisPoints: 349,
+          anticipationBasisPoints: 159,
+        },
+      }) as unknown,
+    });
+  });
+
+  it('ligar o cartão sem a conta pronta ou com tarifa de 100% é recusado', async () => {
+    prisma.checkoutPlatformSettings.findFirst.mockResolvedValue(null);
+    await expect(
+      service.setCard('admin', 'platform', {
+        expectedVersion: 3,
+        cardEnabled: true,
+        cashBasisPoints: 349,
+        anticipationBasisPoints: 159,
+        cardCreditDays: 30,
+      }),
+    ).rejects.toMatchObject({ response: { code: 'CARD_ACCOUNT_NOT_READY' } });
+    await expect(
+      service.setCard('admin', 'platform', {
+        expectedVersion: 3,
+        cardEnabled: false,
+        cashBasisPoints: 2000,
+        anticipationBasisPoints: 1000,
+        cardCreditDays: 30,
+      }),
+    ).rejects.toMatchObject({ response: { code: 'CHECKOUT_INVALID' } });
+    expect(tx.checkoutPlatformSettings.create).not.toHaveBeenCalled();
+  });
 });

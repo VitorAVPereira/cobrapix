@@ -428,6 +428,8 @@ model Company {
   checkoutRefundRequests   CheckoutRefundRequest[]
   checkoutWebhookDeliveries CheckoutWebhookDelivery[]
   checkoutLeads            CheckoutLead[]
+  checkoutCardQuotes       CheckoutCardQuote[]
+  checkoutCardAttempts     CheckoutCardAttempt[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -786,6 +788,7 @@ model EfiAccountIdentity {
   credentialVersions EfiCredentialVersion[]
   checkoutPlatformSettings CheckoutPlatformSettings[]
   checkoutPaymentAttempts  CheckoutPaymentAttempt[]
+  checkoutCardAttempts     CheckoutCardAttempt[]
   financialProfiles  FinancialProfileVersion[]
   paymentCharges     PaymentCharge[]
   gatewayAccount     GatewayAccount?
@@ -2363,6 +2366,8 @@ model CheckoutSettings {
   webhookSecretEncrypted String?   @db.Text
   webhookFailingSince    DateTime?
   webhookDisabledAt      DateTime?
+  // Set only by the admin (e.g. high chargeback rate); Pix keeps selling.
+  cardPausedAt           DateTime?
   updatedAt           DateTime         @updatedAt
 }
 
@@ -2411,6 +2416,7 @@ model CheckoutProduct {
   couponProducts      CheckoutCouponProduct[]
   orders              CheckoutOrder[]
   leads               CheckoutLead[]
+  cardQuotes          CheckoutCardQuote[]
 
   @@unique([id, companyId])
   @@index([companyId, active, createdAt])
@@ -2482,6 +2488,71 @@ enum CheckoutOrderStatus {
   FAILED
   REFUNDED
   CHARGEBACK
+  DECLINED
+}
+
+enum CheckoutPaymentMethod {
+  PIX
+  CARD
+}
+
+enum CheckoutCardAttemptStatus {
+  SUBMITTING
+  APPROVED
+  PAID
+  DECLINED
+  CANCELED
+  UNCERTAIN
+}
+
+// Installments the server quoted for a cart; paying refers to it, so the
+// browser never sets an amount. Valid for 10 minutes.
+model CheckoutCardQuote {
+  id                 String                   @id @default(uuid())
+  companyId          String
+  company            Company                  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  productId          String
+  product            CheckoutProduct          @relation(fields: [productId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  platformSettingsId String
+  platformSettings   CheckoutPlatformSettings @relation(fields: [platformSettingsId], references: [id], onDelete: Restrict)
+  // Hash of bumps, coupon and the amount P: the order must match it.
+  fingerprint        String
+  brand              String
+  options            Json
+  validUntil         DateTime
+  createdAt          DateTime                 @default(now())
+  attempts           CheckoutCardAttempt[]
+
+  @@index([createdAt])
+}
+
+// One card charge sent to the Efí; its id is the Efí custom_id. Never card data.
+model CheckoutCardAttempt {
+  id               String                    @id @default(uuid())
+  orderId          String
+  companyId        String
+  order            CheckoutOrder             @relation(fields: [orderId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  company          Company                   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  issuerIdentityId String
+  issuerIdentity   EfiAccountIdentity        @relation(fields: [issuerIdentityId], references: [id], onDelete: Restrict)
+  quoteId          String
+  quote            CheckoutCardQuote         @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  idempotencyKey   String
+  requestHash      String
+  brand            String
+  installments     Int
+  submissionCents  Int
+  totalCents       Int
+  efiFeeCents      Int
+  status           CheckoutCardAttemptStatus @default(SUBMITTING)
+  efiChargeId      String?                   @unique
+  providerStatus   String?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+
+  @@unique([orderId, idempotencyKey])
+  @@index([orderId, createdAt])
+  @@index([status, updatedAt])
 }
 
 enum CheckoutAttemptStatus {
@@ -2502,9 +2573,16 @@ model CheckoutPlatformSettings {
   identity            EfiAccountIdentity @relation(fields: [identityId], references: [id], onDelete: Restrict)
   pixFeeBasisPoints   Int?
   webhookConfiguredAt DateTime?
+  // Card on the CifraMais account: off until the Efí card approval.
+  cardEnabled         Boolean            @default(false)
+  // Anticipated receipt: { receipt, cashBasisPoints, anticipationBasisPoints }.
+  cardRates           Json?
+  // Days until the Efí credits a card sale; the sale is released after it.
+  cardCreditDays      Int?
   changedByUserId     String
   createdAt           DateTime           @default(now())
   orders              CheckoutOrder[]
+  cardQuotes          CheckoutCardQuote[]
 }
 
 // What was sold, to whom and for how much. Prices, fees and terms are copied
@@ -2518,6 +2596,8 @@ model CheckoutOrder {
   publicToken            String                   @unique
   idempotencyKey         String                   @unique
   status                 CheckoutOrderStatus      @default(PENDING)
+  paymentMethod          CheckoutPaymentMethod    @default(PIX)
+  installments           Int?
   buyerName              String
   buyerEmail             String
   buyerDocument          String
@@ -2550,6 +2630,7 @@ model CheckoutOrder {
   createdAt              DateTime                 @default(now())
   updatedAt              DateTime                 @updatedAt
   attempt                CheckoutPaymentAttempt?
+  cardAttempts           CheckoutCardAttempt[]
   ledgerEntries          CheckoutLedgerEntry[]
   refundRequests         CheckoutRefundRequest[]
 

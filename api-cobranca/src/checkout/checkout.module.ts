@@ -32,6 +32,8 @@ import { CheckoutFinanceController } from './checkout-finance.controller';
 import { CheckoutWebhooksService } from './checkout-webhooks.service';
 import { CheckoutWebhookSender } from './checkout-webhook.sender';
 import { CheckoutRecoveryService } from './checkout-recovery.service';
+import { CheckoutCardService } from './checkout-card.service';
+import { EfiCheckoutCardClient } from './efi-checkout-card.client';
 
 @Module({
   imports: [
@@ -67,10 +69,12 @@ import { CheckoutRecoveryService } from './checkout-recovery.service';
     CheckoutWebhooksService,
     CheckoutWebhookSender,
     CheckoutRecoveryService,
+    CheckoutCardService,
+    EfiCheckoutCardClient,
     ResendMailerService,
     PlatformAdminGuard,
   ],
   // The Pix webhook (WebhooksModule) hands checkout events over.
-  exports: [CheckoutPaymentsService],
+  exports: [CheckoutPaymentsService, CheckoutCardService],
 })
 export class CheckoutModule {}

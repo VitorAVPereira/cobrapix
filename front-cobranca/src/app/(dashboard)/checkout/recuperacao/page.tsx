@@ -11,7 +11,7 @@ import type {
 import { useApiClient } from "@/lib/use-api-client";
 import { formatCents, formatDateTime } from "@/lib/disbursements";
 import { recoveryWhatsAppLink } from "@/lib/checkout";
-import { inputClass, messageOf, NoticeText, secondaryButtonClass, type Notice } from "@/components/features/checkout/ui";
+import { inputClass, messageOf, NoticeText, secondaryButtonClass, type Notice, loadFailed } from "@/components/features/checkout/ui";
 
 const PERIODS = [
   { value: "30", label: "Últimos 30 dias" },
@@ -77,7 +77,7 @@ export default function CheckoutRecoveryPage() {
       )
       .then(setResult)
       .catch((caught: unknown) => {
-        if (!controller.signal.aborted) setError(messageOf(caught, "Não foi possível carregar a recuperação."));
+        if (loadFailed(controller.signal, caught)) setError(messageOf(caught, "Não foi possível carregar a recuperação."));
       });
     return () => controller.abort();
   }, [api, kind, productId, period, state, page, reload]);
@@ -136,6 +136,7 @@ export default function CheckoutRecoveryPage() {
         <select aria-label="Tipo" className={`${inputClass} w-auto`} value={kind} onChange={(event) => load(() => { setPage(1); setKind(event.target.value as CheckoutRecoveryKind | ""); })}>
           <option value="">Todos os tipos</option>
           <option value="PIX">Pix não pago</option>
+          <option value="CARD">Cartão recusado</option>
           <option value="LEAD">Saiu antes de gerar o Pix</option>
         </select>
         <select aria-label="Produto" className={`${inputClass} w-auto`} value={productId} onChange={(event) => load(() => { setPage(1); setProductId(event.target.value); })}>

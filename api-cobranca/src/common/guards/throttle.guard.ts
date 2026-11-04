@@ -110,6 +110,19 @@ export class ThrottleGuard implements CanActivate, OnModuleDestroy {
       keyPrefix: 'throttle:checkout:order:ip',
       scope: 'ip',
     },
+    // Card: installments per IP, and few charges per IP (stolen card tests).
+    {
+      points: 30,
+      duration: 60,
+      keyPrefix: 'throttle:checkout:card-quote:ip',
+      scope: 'ip',
+    },
+    {
+      points: 10,
+      duration: 60 * 60,
+      keyPrefix: 'throttle:checkout:card-pay:ip',
+      scope: 'ip',
+    },
     // Lead capture: one call per field the buyer leaves.
     {
       points: 30,
@@ -266,6 +279,14 @@ export class ThrottleGuard implements CanActivate, OnModuleDestroy {
 
     if (method === 'POST' && path === '/billing/run') {
       return this.findConfigs(['throttle:billing:run']);
+    }
+
+    // Card routes first: "/card/orders" also ends with "/orders".
+    if (path.startsWith('/checkout/public/') && method === 'POST') {
+      if (path.endsWith('/card/quote'))
+        return this.findConfigs(['throttle:checkout:card-quote:ip']);
+      if (path.endsWith('/card/orders') || path.endsWith('/card/pay'))
+        return this.findConfigs(['throttle:checkout:card-pay:ip']);
     }
 
     if (path.startsWith('/checkout/public/products/') && method === 'POST') {

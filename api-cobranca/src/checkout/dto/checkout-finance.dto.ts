@@ -30,7 +30,7 @@ export class SalesQueryDto {
 }
 
 export class RecoveryQueryDto {
-  @IsOptional() @IsIn(['PIX', 'LEAD']) kind?: 'PIX' | 'LEAD';
+  @IsOptional() @IsIn(['PIX', 'CARD', 'LEAD']) kind?: 'PIX' | 'CARD' | 'LEAD';
   @IsOptional() @IsUUID() productId?: string;
   @IsOptional() @IsDateString() from?: string;
   @IsOptional() @IsDateString() to?: string;

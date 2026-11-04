@@ -9,7 +9,7 @@ import { useApiClient } from "@/lib/use-api-client";
 import { formatCents } from "@/lib/disbursements";
 import { checkoutLink } from "@/lib/checkout";
 import { ProductForm } from "@/components/features/checkout/ProductForm";
-import { buttonClass, messageOf } from "@/components/features/checkout/ui";
+import { buttonClass, messageOf, loadFailed } from "@/components/features/checkout/ui";
 
 type Filter = "all" | "active" | "inactive";
 
@@ -36,7 +36,7 @@ export default function CheckoutProductsPage() {
       .listCheckoutProducts(filter === "all" ? undefined : filter === "active", controller.signal)
       .then((result) => setProducts(result))
       .catch((caught: unknown) => {
-        if (!controller.signal.aborted)
+        if (loadFailed(controller.signal, caught))
           setError(messageOf(caught, "Não foi possível carregar os produtos."));
       });
     return () => controller.abort();

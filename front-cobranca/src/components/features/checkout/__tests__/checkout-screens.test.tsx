@@ -120,6 +120,7 @@ describe("CheckoutSettingsPage", () => {
     id: "settings-1",
     version: 1,
     updatedAt: "2026-11-03T12:00:00.000Z",
+    cardPausedAt: null,
     displayName: "Porquim",
     logoAssetId: null,
     bannerAssetId: null,
@@ -136,11 +137,12 @@ describe("CheckoutSettingsPage", () => {
 
   beforeEach(() => jest.clearAllMocks());
 
-  it("o cartão aparece desabilitado", async () => {
-    mockApi.getCheckoutSettings.mockResolvedValue(settings);
+  it("o cartão pode ser ligado e, pausado pela Cifra+, mostra o aviso", async () => {
+    mockApi.getCheckoutSettings.mockResolvedValue({ ...settings, cardPausedAt: "2026-11-08T12:00:00.000Z" });
     render(<CheckoutSettingsPage />);
 
-    expect(await screen.findByLabelText("Cartão de crédito")).toBeDisabled();
+    expect(await screen.findByLabelText("Cartão de crédito")).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent(/pausado pela Cifra+/);
   });
 
   it("alteração em outra tela recarrega em vez de sobrescrever", async () => {

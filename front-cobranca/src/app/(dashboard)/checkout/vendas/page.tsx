@@ -13,6 +13,7 @@ import {
   NoticeText,
   secondaryButtonClass,
   type Notice,
+  loadFailed,
 } from "@/components/features/checkout/ui";
 
 const STATUS_LABELS: Record<CheckoutSaleStatus, string> = {
@@ -114,7 +115,7 @@ export default function CheckoutSalesPage() {
         setSales(loadedSales);
       })
       .catch((caught: unknown) => {
-        if (!controller.signal.aborted) setError(messageOf(caught, "Não foi possível carregar as vendas."));
+        if (loadFailed(controller.signal, caught)) setError(messageOf(caught, "Não foi possível carregar as vendas."));
       });
     return () => controller.abort();
   }, [api, period, status, page, reload]);
@@ -183,6 +184,7 @@ export default function CheckoutSalesPage() {
                   </p>
                   <p className="text-xs text-slate-500">
                     {STATUS_LABELS[sale.status]}
+                    {sale.paymentMethod === "CARD" ? ` · cartão ${sale.installments ?? 1}x` : " · Pix"}
                     {sale.couponCode && ` · cupom ${sale.couponCode}`}
                     {sale.utm?.utm_source && ` · origem ${sale.utm.utm_source}`}
                     {sale.availableAt && sale.status === "PAID" && ` · libera em ${formatDateTime(sale.availableAt)}`}

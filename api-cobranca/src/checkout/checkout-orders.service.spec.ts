@@ -38,6 +38,9 @@ function order(change: Record<string, unknown> = {}) {
     surchargeCents: 0,
     totalCents: 6700,
     product: { slug: 'porquim-anual-ab12' },
+    paymentMethod: 'PIX',
+    installments: null,
+    cardAttempts: [],
     attempt: {
       id: 'attempt-1',
       status: 'ACTIVE',

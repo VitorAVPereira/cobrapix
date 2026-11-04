@@ -61,7 +61,7 @@ const product: PublicCheckoutProduct = {
     supportWhatsapp: null,
     whatsappButtonPhone: null,
   },
-  payment: { pixEnabled: true, cardEnabled: false },
+  payment: { pixEnabled: true, cardEnabled: false, maxInstallments: null },
 };
 
 const quote = (totalCents: number) => ({
@@ -78,7 +78,10 @@ function order(change: Partial<PublicCheckoutOrder> = {}): PublicCheckoutOrder {
     token: "token",
     productSlug: "porquim-anual-ab12",
     status: "PENDING",
+    paymentMethod: "PIX",
+    installments: null,
     processing: false,
+    card: null,
     expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
     items: [
       {

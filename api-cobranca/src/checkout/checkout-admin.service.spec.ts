@@ -31,6 +31,7 @@ describe('CheckoutAdminService', () => {
   const tx = {
     company: { create: jest.fn(), findFirst: jest.fn() },
     checkoutSellerTerms: { create: jest.fn() },
+    checkoutSettings: { updateMany: jest.fn(), count: jest.fn() },
     auditLog: { create: jest.fn() },
   };
   const prisma = {
@@ -200,6 +201,37 @@ describe('CheckoutAdminService', () => {
       id: 'company-1',
       product: 'CHECKOUT',
     });
+  });
+
+  it('pausar o cartão grava a data e o motivo na auditoria; repetir não audita de novo', async () => {
+    prisma.company.findFirst.mockResolvedValue({
+      id: 'company-1',
+      checkoutSellerTerms: [],
+      checkoutSettings: { cardEnabled: true, cardPausedAt: new Date() },
+    });
+    tx.checkoutSettings.updateMany.mockResolvedValueOnce({ count: 1 });
+    const view = await service.setCardPause(
+      'company-1',
+      true,
+      'Chargeback acima de 1%',
+      'admin',
+    );
+    expect(view.card.pausedAt).toBeInstanceOf(Date);
+    expect(firstArg(tx.auditLog.create).data).toMatchObject({
+      action: 'CHECKOUT_CARD_PAUSED',
+      changes: { reason: 'Chargeback acima de 1%' },
+    });
+
+    jest.clearAllMocks();
+    prisma.company.findFirst.mockResolvedValue({
+      id: 'company-1',
+      checkoutSellerTerms: [],
+      checkoutSettings: null,
+    });
+    tx.checkoutSettings.updateMany.mockResolvedValueOnce({ count: 0 });
+    tx.checkoutSettings.count.mockResolvedValueOnce(1);
+    await service.setCardPause('company-1', true, 'De novo', 'admin');
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
   });
 
   it('lista só empresas de checkout', async () => {

@@ -88,12 +88,59 @@ export class CheckoutAdminService {
           },
         },
         checkoutSellerTerms: { orderBy: { version: 'desc' } },
+        checkoutSettings: { select: { cardEnabled: true, cardPausedAt: true } },
       },
     });
     if (!company)
       throw new NotFoundException('Cliente de checkout não encontrado.');
-    const { checkoutSellerTerms, ...rest } = company;
-    return { ...rest, terms: checkoutSellerTerms };
+    const { checkoutSellerTerms, checkoutSettings, ...rest } = company;
+    return {
+      ...rest,
+      terms: checkoutSellerTerms,
+      card: {
+        enabledBySeller: checkoutSettings?.cardEnabled ?? false,
+        pausedAt: checkoutSettings?.cardPausedAt ?? null,
+      },
+    };
+  }
+
+  /** Pause or resume the seller's card (Pix keeps selling); the reason is audited. */
+  async setCardPause(
+    companyId: string,
+    paused: boolean,
+    reason: string,
+    adminUserId: string,
+  ) {
+    await this.prisma.$transaction(async (tx) => {
+      const changed = await tx.checkoutSettings.updateMany({
+        where: {
+          companyId,
+          company: { product: 'CHECKOUT' },
+          cardPausedAt: paused ? null : { not: null },
+        },
+        data: { cardPausedAt: paused ? new Date() : null },
+      });
+      if (changed.count === 0) {
+        const exists = await tx.checkoutSettings.count({
+          where: { companyId, company: { product: 'CHECKOUT' } },
+        });
+        if (!exists)
+          throw new NotFoundException('Cliente de checkout não encontrado.');
+        return; // already in the asked state
+      }
+      await tx.auditLog.create({
+        data: {
+          companyId,
+          userId: adminUserId,
+          entityType: 'CheckoutSettings',
+          entityId: companyId,
+          action: paused ? 'CHECKOUT_CARD_PAUSED' : 'CHECKOUT_CARD_RESUMED',
+          changes: { reason },
+          retentionExpiresAt: new Date(Date.now() + AUDIT_RETENTION_MS),
+        },
+      });
+    });
+    return this.detail(companyId);
   }
 
   async create(dto: CreateCheckoutClientDto, adminUserId: string) {

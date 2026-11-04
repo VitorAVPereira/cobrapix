@@ -24,7 +24,7 @@ describe('CheckoutCatalogService', () => {
     checkoutSellerTerms: { findFirst: jest.fn() },
     checkoutCoupon: { findUnique: jest.fn() },
   };
-  const platform = { ready: jest.fn() };
+  const platform = { ready: jest.fn(), cardReady: jest.fn() };
   const service = new CheckoutCatalogService(
     prisma as unknown as PrismaService,
     platform as unknown as CheckoutPlatformService,

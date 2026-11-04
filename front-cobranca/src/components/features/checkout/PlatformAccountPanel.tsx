@@ -8,7 +8,8 @@ import { useApiClient } from "@/lib/use-api-client";
 import { errorCode, formatDateTime } from "@/lib/disbursements";
 import { formatPercentageBps } from "@/lib/billing-fees";
 import { parsePercentToBps } from "@/lib/checkout";
-import { buttonClass, Field, inputClass, messageOf, NoticeText, secondaryButtonClass, type Notice } from "./ui";
+import { PlatformCardForm } from "./PlatformCardForm";
+import { buttonClass, Field, inputClass, messageOf, NoticeText, secondaryButtonClass, type Notice, loadFailed } from "./ui";
 
 const CREDENTIAL_STATUS: Record<string, string> = {
   CANDIDATE: "aguardando validação",
@@ -99,7 +100,7 @@ export function PlatformAccountPanel() {
       .getCheckoutPlatformAccount(controller.signal)
       .then((result) => setView(result))
       .catch((caught: unknown) => {
-        if (!controller.signal.aborted) setLoadError(messageOf(caught, "Não foi possível carregar a conta."));
+        if (loadFailed(controller.signal, caught)) setLoadError(messageOf(caught, "Não foi possível carregar a conta."));
       });
     return () => controller.abort();
   }, [api, reload]);
@@ -226,6 +227,18 @@ export function PlatformAccountPanel() {
                 Salvar tarifa
               </button>
             </form>
+          )}
+
+          {view.current && (
+            <PlatformCardForm
+              key={view.current.version}
+              current={view.current}
+              onSaved={(next) => {
+                setView(next);
+                setNotice({ error: false, text: "Cartão salvo em uma nova versão." });
+              }}
+              onConflict={() => refresh({ error: true, text: "Outra pessoa alterou a conta. Os dados foram recarregados." })}
+            />
           )}
         </>
       )}

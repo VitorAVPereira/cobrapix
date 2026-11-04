@@ -6,7 +6,7 @@ import { AlertTriangle, Copy, Loader2, Webhook } from "lucide-react";
 import type { CheckoutWebhookDelivery, CheckoutWebhookView } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 import { errorCode, formatDateTime } from "@/lib/disbursements";
-import { buttonClass, Field, inputClass, messageOf, NoticeText, secondaryButtonClass, type Notice } from "./ui";
+import { buttonClass, Field, inputClass, messageOf, NoticeText, secondaryButtonClass, type Notice, loadFailed } from "./ui";
 
 const EVENT_LABELS: Record<string, string> = {
   "order.created": "Pix gerado",
@@ -60,7 +60,7 @@ export function WebhookPanel() {
         setDeliveries(history.items);
       })
       .catch((caught: unknown) => {
-        if (!controller.signal.aborted) setError(messageOf(caught, "Não foi possível carregar o webhook."));
+        if (loadFailed(controller.signal, caught)) setError(messageOf(caught, "Não foi possível carregar o webhook."));
       });
     return () => controller.abort();
   }, [api, reload]);

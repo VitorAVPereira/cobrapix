@@ -25,6 +25,8 @@ import { EfiCheckoutPixClient } from '../src/checkout/efi-checkout-pix.client';
 import { CheckoutWebhookSender } from '../src/checkout/checkout-webhook.sender';
 import { CheckoutOrdersService } from '../src/checkout/checkout-orders.service';
 import { CheckoutRecoveryService } from '../src/checkout/checkout-recovery.service';
+import { CheckoutCardService } from '../src/checkout/checkout-card.service';
+import { EfiCheckoutCardClient } from '../src/checkout/efi-checkout-card.client';
 import { CheckoutWebhooksService } from '../src/checkout/checkout-webhooks.service';
 import { GlobalExceptionFilter } from '../src/common/filters/http-exception.filter';
 import { validateEnv } from '../src/config/env.validation';
@@ -62,6 +64,18 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
     }),
     status: jest.fn(),
   };
+  // The Efí card API: no interest, the total split in equal installments.
+  const cardClient = {
+    installmentCounts: jest.fn().mockResolvedValue([1, 2, 3, 4]),
+    installmentValue: jest.fn(
+      (_account: unknown, total: number, _brand: string, count: number) =>
+        Promise.resolve(Math.ceil(total / count)),
+    ),
+    submit: jest.fn(),
+    detail: jest.fn(),
+    findByAttempt: jest.fn().mockResolvedValue([]),
+    notification: jest.fn(),
+  };
   const tokens = { admin: '', seller: '' };
   // The seller system: always answers 200 unless a test says otherwise.
   const webhookSender = {
@@ -85,6 +99,7 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
       EFI_WEBHOOK_SECRET: 'e2e_efi_webhook_secret_with_32_characters',
       EFI_WEBHOOK_BASE_URL: 'https://webhooks.e2e.test',
       FRONTEND_URL: 'https://app.e2e.test',
+      EFI_CHARGES_WEBHOOK_BASE_URL: 'https://webhooks.e2e.test',
     });
     const moduleRef = await Test.createTestingModule({
       imports: [
@@ -117,6 +132,8 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
       .useValue(pix)
       .overrideProvider(CheckoutWebhookSender)
       .useValue(webhookSender)
+      .overrideProvider(EfiCheckoutCardClient)
+      .useValue(cardClient)
       .compile();
     app = moduleRef.createNestApplication({ logger: false });
     await app.init();
@@ -874,5 +891,308 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
       buyerDocument: paidBefore.buyerDocument,
       anonymizedAt: null,
     });
+  });
+
+  // Part 6: card on the CifraMais account (Efí card API simulated).
+  const holder = (document: string, name: string) => ({
+    name,
+    email: `${document}@e2e.test`,
+    document,
+    phone: '11977776666',
+  });
+  const cardAddress = {
+    street: 'Praça da Sé',
+    number: '10',
+    neighborhood: 'Sé',
+    city: 'São Paulo',
+    state: 'SP',
+    zipcode: '01001000',
+  };
+  const cardQuote = async () => {
+    const response = await request(http)
+      .post(`/checkout/public/products/${slug}/card/quote`)
+      .send({ bumpIds: [], couponCode: null, brand: 'visa' })
+      .expect(200);
+    return response.body as {
+      quoteId: string;
+      payeeCode: string;
+      options: { installments: number; totalCents: number }[];
+    };
+  };
+  const charge = (quoteId: string, document: string, installments = 1) => ({
+    quoteId,
+    installments,
+    paymentToken: `tok${randomUUID().replace(/-/g, '')}`,
+    holderDocument: document,
+    address: cardAddress,
+    idempotencyKey: randomUUID(),
+  });
+  let declinedToken = '';
+
+  it('o admin liga o cartão da conta Cifra+ e o vendedor liga o dele', async () => {
+    const before = await request(http)
+      .get('/admin/checkout/platform-account')
+      .set(auth(tokens.admin))
+      .expect(200);
+    const version = (before.body as { current: { version: number } }).current
+      .version;
+    await request(http)
+      .put('/admin/checkout/platform-account/card')
+      .set(auth(tokens.admin))
+      .send({
+        expectedVersion: version,
+        cardEnabled: true,
+        cashBasisPoints: 300,
+        anticipationBasisPoints: 100,
+        cardCreditDays: 30,
+      })
+      .expect(200);
+
+    const settings = (
+      await request(http)
+        .get('/checkout/settings')
+        .set(auth(tokens.seller))
+        .expect(200)
+    ).body as Record<string, unknown> & { version: number };
+    await request(http)
+      .put('/checkout/settings')
+      .set(auth(tokens.seller))
+      .send({
+        expectedVersion: settings.version,
+        displayName: settings.displayName,
+        primaryColor: settings.primaryColor,
+        pixEnabled: true,
+        cardEnabled: true,
+        maxInstallments: 3,
+        pixFeePayer: settings.pixFeePayer,
+        cardFeePayer: 'BUYER',
+      })
+      .expect(200);
+
+    const page = await request(http)
+      .get(`/checkout/public/products/${slug}`)
+      .expect(200);
+    expect((page.body as { payment: unknown }).payment).toEqual({
+      pixEnabled: true,
+      cardEnabled: true,
+      maxInstallments: 3,
+    });
+  });
+
+  it('cartão aprovado só vira venda pelo aviso da Efí, e o saldo libera em 30 dias', async () => {
+    const quote = await cardQuote();
+    expect(quote.payeeCode).toBe('payee');
+    expect(quote.options.map((option) => option.installments)).toEqual([
+      1, 2, 3,
+    ]);
+    const three = quote.options[2]!;
+    cardClient.submit.mockResolvedValueOnce({
+      chargeId: '7001',
+      status: 'waiting',
+      totalCents: three.totalCents,
+      installments: 3,
+    });
+    const created = await request(http)
+      .post(`/checkout/public/products/${slug}/card/orders`)
+      .send({
+        bumpIds: [],
+        couponCode: null,
+        buyer: holder('39053344705', 'Bruno Lima'),
+        ...charge(quote.quoteId, '39053344705', 3),
+      })
+      .expect(201);
+    const view = created.body as { token: string; processing: boolean };
+    expect(view.processing).toBe(true);
+    // The card never reaches the API: only the token was sent to the Efí.
+    const sent = (cardClient.submit.mock.calls as unknown[][]).at(-1)?.[1] as {
+      attemptId: string;
+      submissionCents: number;
+    };
+
+    cardClient.notification.mockResolvedValueOnce({
+      customId: sent.attemptId,
+      chargeId: '7001',
+    });
+    cardClient.detail.mockResolvedValueOnce({
+      chargeId: '7001',
+      customId: sent.attemptId,
+      status: 'paid',
+      method: 'credit_card',
+      installments: 3,
+      totalCents: three.totalCents,
+    });
+    const identity = await prisma.efiAccountIdentity.findFirstOrThrow({
+      where: { ownership: 'PLATFORM' },
+    });
+    await expect(
+      app.get(CheckoutCardService).handleNotification(identity.id, 'notif-1'),
+    ).resolves.toBe(true);
+
+    const order = await prisma.checkoutOrder.findUniqueOrThrow({
+      where: { publicToken: view.token },
+      include: { ledgerEntries: true },
+    });
+    expect(order).toMatchObject({
+      status: 'PAID',
+      paymentMethod: 'CARD',
+      installments: 3,
+      totalCents: three.totalCents,
+      surchargeCents: three.totalCents - 6700,
+    });
+    const sale = order.ledgerEntries.find((entry) => entry.kind === 'SALE');
+    expect(
+      Math.round(
+        (sale!.availableAt.getTime() - order.paidAt!.getTime()) / 86_400_000,
+      ),
+    ).toBe(30);
+    // The buyer pays the card cost: the seller keeps P − % Cifra+.
+    const net = order.ledgerEntries.reduce(
+      (sum, entry) => sum + entry.amountCents,
+      0,
+    );
+    expect(net).toBe(6700 - order.platformFeeCents);
+  });
+
+  it('recusa: até 3 tentativas no mesmo pedido, depois só Pix', async () => {
+    const quote = await cardQuote();
+    let charges = 8000;
+    cardClient.submit.mockImplementation(() => ({
+      chargeId: String(charges++),
+      status: 'unpaid',
+      totalCents: quote.options[0]!.totalCents,
+      installments: 1,
+    }));
+    const first = await request(http)
+      .post(`/checkout/public/products/${slug}/card/orders`)
+      .send({
+        bumpIds: [],
+        couponCode: null,
+        buyer: holder('15350946056', 'Carla Dias'),
+        ...charge(quote.quoteId, '15350946056'),
+      })
+      .expect(201);
+    const view = first.body as {
+      token: string;
+      card: { declined: boolean; canRetry: boolean };
+    };
+    expect(view.card).toEqual({ declined: true, canRetry: true });
+    declinedToken = view.token;
+
+    for (let i = 0; i < 2; i++)
+      await request(http)
+        .post(`/checkout/public/orders/${declinedToken}/card/pay`)
+        .send(charge(quote.quoteId, '15350946056'))
+        .expect(200);
+    const blocked = await request(http)
+      .post(`/checkout/public/orders/${declinedToken}/card/pay`)
+      .send(charge(quote.quoteId, '15350946056'))
+      .expect(409);
+    expect(blocked.body).toMatchObject({ code: 'CARD_ATTEMPT_LIMIT' });
+    expect(
+      await prisma.checkoutCardAttempt.count({
+        where: { order: { publicToken: declinedToken } },
+      }),
+    ).toBe(3);
+    cardClient.submit.mockReset();
+  });
+
+  it('resposta perdida fica em análise e a conciliação pelo custom_id confirma', async () => {
+    const quote = await cardQuote();
+    cardClient.submit.mockRejectedValueOnce(new Error('socket hang up'));
+    const created = await request(http)
+      .post(`/checkout/public/products/${slug}/card/orders`)
+      .send({
+        bumpIds: [],
+        couponCode: null,
+        buyer: holder('98765432100', 'Davi Rocha'),
+        ...charge(quote.quoteId, '98765432100'),
+      })
+      .expect(201);
+    const token = (created.body as { token: string; processing: boolean })
+      .token;
+    expect((created.body as { processing: boolean }).processing).toBe(true);
+    const attempt = await prisma.checkoutCardAttempt.findFirstOrThrow({
+      where: { order: { publicToken: token } },
+    });
+    expect(attempt.status).toBe('UNCERTAIN');
+
+    cardClient.findByAttempt.mockResolvedValueOnce(['7003']);
+    cardClient.detail.mockResolvedValueOnce({
+      chargeId: '7003',
+      customId: attempt.id,
+      status: 'paid',
+      method: 'credit_card',
+      installments: 1,
+      totalCents: attempt.totalCents,
+    });
+    await app.get(CheckoutCardService).reconcileDue();
+    expect(cardClient.submit).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        await prisma.checkoutOrder.findUniqueOrThrow({
+          where: { publicToken: token },
+        })
+      ).status,
+    ).toBe('PAID');
+  });
+
+  it('pedido recusado fecha, avisa o vendedor e entra na Recuperação', async () => {
+    await app
+      .get(CheckoutCardService)
+      .closeOverdue(new Date(Date.now() + 45 * 60_000));
+    const order = await prisma.checkoutOrder.findUniqueOrThrow({
+      where: { publicToken: declinedToken },
+    });
+    expect(order.status).toBe('DECLINED');
+    expect(
+      await prisma.checkoutWebhookDelivery.count({
+        where: { orderId: order.id, eventType: 'order.card_declined' },
+      }),
+    ).toBe(1);
+
+    const list = await request(http)
+      .get('/checkout/recovery?kind=CARD')
+      .set(auth(tokens.seller))
+      .expect(200);
+    expect(
+      (list.body as { items: { name: string; reason: string }[] }).items,
+    ).toEqual([
+      expect.objectContaining({
+        name: 'Carla Dias',
+        reason: 'Cartão recusado',
+      }),
+    ]);
+  });
+
+  it('cartão pausado pelo admin some da página e o Pix continua', async () => {
+    const company = await prisma.company.findFirstOrThrow({
+      where: { email: `porquim-${suffix}@e2e.test` },
+    });
+    await request(http)
+      .put(`/admin/checkout/clients/${company.id}/card-pause`)
+      .set(auth(tokens.admin))
+      .send({ paused: true, reason: 'Chargeback acima de 1%' })
+      .expect(200);
+    const page = await request(http)
+      .get(`/checkout/public/products/${slug}`)
+      .expect(200);
+    expect(
+      (page.body as { payment: { cardEnabled: boolean } }).payment.cardEnabled,
+    ).toBe(false);
+    const refused = await request(http)
+      .post(`/checkout/public/products/${slug}/card/quote`)
+      .send({ bumpIds: [], couponCode: null, brand: 'visa' })
+      .expect(400);
+    expect(refused.body).toMatchObject({ code: 'CARD_NOT_AVAILABLE' });
+    await request(http)
+      .post(`/checkout/public/products/${slug}/quote`)
+      .send({ bumpIds: [], couponCode: null, method: 'PIX' })
+      .expect(200);
+    // The seller is not an admin: admin routes do not exist for a seller.
+    await request(http)
+      .put(`/admin/checkout/clients/${company.id}/card-pause`)
+      .set(auth(tokens.seller))
+      .send({ paused: false, reason: 'Tentativa do vendedor' })
+      .expect(404);
   });
 });

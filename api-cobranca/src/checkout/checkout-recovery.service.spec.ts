@@ -150,6 +150,7 @@ describe('CheckoutRecoveryService', () => {
       {
         id: 'o1',
         status: 'EXPIRED',
+        paymentMethod: 'PIX',
         productId: 'p1',
         product: { name: 'Porquim' },
         buyerName: 'Ana',
@@ -193,7 +194,7 @@ describe('CheckoutRecoveryService', () => {
     )[0]?.[0].where;
     expect(orderWhere).toMatchObject({
       companyId: 'c1',
-      status: { in: ['EXPIRED', 'FAILED'] },
+      status: { in: ['EXPIRED', 'FAILED', 'DECLINED'] },
       recoveredByOrderId: null,
       anonymizedAt: null,
     });
@@ -205,6 +206,7 @@ describe('CheckoutRecoveryService', () => {
       {
         id: 'o1',
         status: 'EXPIRED',
+        paymentMethod: 'PIX',
         productId: 'p1',
         product: { name: 'Porquim' },
         buyerName: '=HYPERLINK("http://mal.test")',
@@ -247,7 +249,7 @@ describe('CheckoutRecoveryService', () => {
     expect(prisma.checkoutOrder.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
-          status: { in: ['EXPIRED', 'FAILED'] },
+          status: { in: ['EXPIRED', 'FAILED', 'DECLINED'] },
           anonymizedAt: null,
           createdAt: { lt: cutoff },
         },

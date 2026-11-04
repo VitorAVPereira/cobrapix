@@ -129,6 +129,7 @@ describe('CheckoutPaymentsService', () => {
       tx,
       expect.objectContaining({ id: 'order-1', totalCents: 8289 }),
       99,
+      undefined,
     );
   });
 
