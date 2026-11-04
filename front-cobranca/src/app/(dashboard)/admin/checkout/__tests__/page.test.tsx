@@ -30,6 +30,7 @@ function detail(version: number, bps: number): CheckoutClientDetail {
   return {
     id: "company-1",
     corporateName: "Treze Digital",
+    card: { enabledBySeller: false, pausedAt: null },
     document: "11222333000181",
     email: "contato@treze.test",
     phoneNumber: "11999999999",

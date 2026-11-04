@@ -14,6 +14,7 @@ import { errorCode, formatDateTime } from "@/lib/disbursements";
 import { parsePercentToBps } from "@/lib/checkout";
 import { PlatformAccountPanel } from "@/components/features/checkout/PlatformAccountPanel";
 import { FinancePanel } from "@/components/features/checkout/FinancePanel";
+import { CardPausePanel } from "@/components/features/checkout/CardPausePanel";
 
 const inputClass =
   "h-11 w-full rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100";
@@ -317,6 +318,7 @@ function ClientDetail({
           ))}
         </ul>
       </div>
+      <CardPausePanel client={client} onChanged={(updated) => onChanged(updated, null)} />
       <FinancePanel companyId={client.id} />
     </section>
   );

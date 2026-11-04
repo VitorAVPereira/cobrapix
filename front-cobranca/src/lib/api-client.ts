@@ -1386,6 +1386,7 @@ export interface CheckoutClientDetail {
   createdAt: string;
   users: Array<{ id: string; name: string | null; email: string; mustChangePassword: boolean }>;
   terms: CheckoutTermsVersion[];
+  card: { enabledBySeller: boolean; pausedAt: string | null };
 }
 export interface CreateCheckoutClientInput {
   company: { corporateName: string; document: string; email: string; phoneNumber: string };
@@ -1410,6 +1411,8 @@ export interface CheckoutSettings extends CheckoutSettingsInput {
   id: string;
   version: number;
   updatedAt: string;
+  // Set by the CifraMais admin; the seller only sees it.
+  cardPausedAt: string | null;
 }
 export interface CheckoutAsset {
   id: string;
@@ -1476,6 +1479,8 @@ export interface CheckoutSale {
   paidAt: string;
   buyer: { name: string; email: string; phone: string };
   items: Array<{ kind: "MAIN" | "BUMP"; name: string; unitPriceCents: number; discountCents: number }>;
+  paymentMethod: "PIX" | "CARD";
+  installments: number | null;
   couponCode: string | null;
   utm: Record<string, string> | null;
   totalCents: number;
@@ -1487,7 +1492,7 @@ export interface CheckoutSale {
   availableAt: string | null;
   openRefundRequest: { id: string; origin: "BUYER" | "SELLER"; createdAt: string } | null;
 }
-export type CheckoutRecoveryKind = "PIX" | "LEAD";
+export type CheckoutRecoveryKind = "PIX" | "CARD" | "LEAD";
 export interface CheckoutRecoveryItem {
   id: string;
   kind: CheckoutRecoveryKind;
@@ -1579,6 +1584,9 @@ export interface CheckoutPlatformView {
     id: string;
     version: number;
     pixFeeBasisPoints: number | null;
+    cardEnabled: boolean;
+    cardRates: { receipt: "ANTICIPATED"; cashBasisPoints: number; anticipationBasisPoints: number } | null;
+    cardCreditDays: number | null;
     webhookConfiguredAt: string | null;
     createdAt: string;
     identityId: string;
@@ -2885,6 +2893,22 @@ class ApiClient {
       method: "PUT",
       body: JSON.stringify(input),
     });
+  }
+
+  setCheckoutCardPause(id: string, input: { paused: boolean; reason: string }): Promise<CheckoutClientDetail> {
+    return this.fetch(`/admin/checkout/clients/${encodeURIComponent(id)}/card-pause`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  }
+  setCheckoutPlatformCard(input: {
+    expectedVersion: number;
+    cardEnabled: boolean;
+    cashBasisPoints: number;
+    anticipationBasisPoints: number;
+    cardCreditDays: number;
+  }): Promise<CheckoutPlatformView> {
+    return this.fetch("/admin/checkout/platform-account/card", { method: "PUT", body: JSON.stringify(input) });
   }
 
   getCheckoutPlatformAccount(signal?: AbortSignal): Promise<CheckoutPlatformView> {

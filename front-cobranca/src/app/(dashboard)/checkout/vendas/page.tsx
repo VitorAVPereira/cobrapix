@@ -183,6 +183,7 @@ export default function CheckoutSalesPage() {
                   </p>
                   <p className="text-xs text-slate-500">
                     {STATUS_LABELS[sale.status]}
+                    {sale.paymentMethod === "CARD" ? ` · cartão ${sale.installments ?? 1}x` : " · Pix"}
                     {sale.couponCode && ` · cupom ${sale.couponCode}`}
                     {sale.utm?.utm_source && ` · origem ${sale.utm.utm_source}`}
                     {sale.availableAt && sale.status === "PAID" && ` · libera em ${formatDateTime(sale.availableAt)}`}

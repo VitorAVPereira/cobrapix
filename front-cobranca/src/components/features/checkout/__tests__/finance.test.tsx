@@ -23,6 +23,8 @@ const sale: CheckoutSale = {
   paidAt: "2026-11-04T15:00:00.000Z",
   buyer: { name: "Maria Souza", email: "maria@exemplo.test", phone: "11999999999" },
   items: [{ kind: "MAIN", name: "Porquim Anual", unitPriceCents: 6700, discountCents: 0 }],
+  paymentMethod: "PIX",
+  installments: null,
   couponCode: null,
   utm: { utm_source: "LINK_PADRAO" },
   totalCents: 6700,

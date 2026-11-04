@@ -34,7 +34,7 @@ export interface PublicCheckoutProduct {
     supportWhatsapp: string | null;
     whatsappButtonPhone: string | null;
   };
-  payment: { pixEnabled: boolean; cardEnabled: boolean };
+  payment: { pixEnabled: boolean; cardEnabled: boolean; maxInstallments: number | null };
 }
 
 export interface PublicCheckoutQuote {
@@ -46,13 +46,16 @@ export interface PublicCheckoutQuote {
   totalCents: number;
 }
 
-export type PublicOrderStatus = "PENDING" | "PAID" | "EXPIRED" | "FAILED" | "REFUNDED" | "CHARGEBACK";
+export type PublicOrderStatus = "PENDING" | "PAID" | "EXPIRED" | "FAILED" | "DECLINED" | "REFUNDED" | "CHARGEBACK";
 
 export interface PublicCheckoutOrder {
   token: string;
   productSlug: string;
   status: PublicOrderStatus;
+  paymentMethod: "PIX" | "CARD";
+  installments: number | null;
   processing: boolean;
+  card: { declined: boolean; canRetry: boolean } | null;
   expiresAt: string;
   items: Array<{
     kind: "MAIN" | "BUMP";
@@ -160,6 +163,72 @@ export function createCheckoutOrder(
 /** What the buyer typed so far; the seller may contact them if they leave. */
 export function saveCheckoutLead(slug: string, body: Partial<CheckoutBuyer> & { sessionKey: string; utm: Utm }) {
   return request<{ saved: boolean }>(`/checkout/public/products/${encodeURIComponent(slug)}/lead`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export type CardBrand = "visa" | "mastercard" | "amex" | "elo";
+
+export interface CardQuote {
+  quoteId: string;
+  validUntil: string;
+  payeeCode: string;
+  environment: "production" | "sandbox";
+  subtotalCents: number;
+  options: Array<{ installments: number; installmentValueCents: number; totalCents: number }>;
+}
+
+export interface CardAddress {
+  street: string;
+  number: string;
+  neighborhood: string;
+  city: string;
+  state: string;
+  zipcode: string;
+  complement?: string;
+}
+
+/** What paying by card sends: never the card itself, only the Efí token. */
+export interface CardCharge {
+  quoteId: string;
+  installments: number;
+  paymentToken: string;
+  holderDocument: string;
+  address: CardAddress;
+  idempotencyKey: string;
+}
+
+export function quoteCheckoutCard(
+  slug: string,
+  body: { bumpIds: string[]; couponCode: string | null; brand: CardBrand },
+  signal?: AbortSignal,
+) {
+  return request<CardQuote>(`/checkout/public/products/${encodeURIComponent(slug)}/card/quote`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    signal,
+  });
+}
+
+export function createCheckoutCardOrder(
+  slug: string,
+  body: CardCharge & {
+    bumpIds: string[];
+    couponCode: string | null;
+    buyer: CheckoutBuyer;
+    utm: Utm;
+    sessionKey?: string;
+  },
+) {
+  return request<PublicCheckoutOrder>(`/checkout/public/products/${encodeURIComponent(slug)}/card/orders`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function payCheckoutCard(token: string, body: CardCharge) {
+  return request<PublicCheckoutOrder>(`/checkout/public/orders/${encodeURIComponent(token)}/card/pay`, {
     method: "POST",
     body: JSON.stringify(body),
   });

@@ -48,7 +48,8 @@ export function OrderStatus({ token }: { token: string }) {
         .then((result) => {
           if (stopped) return;
           setLoaded({ kind: "ok", order: result });
-          if (result.status === "PENDING")
+          // A declined card waits for the buyer, not for the Efí.
+          if (result.status === "PENDING" && !(result.card?.declined && !result.processing))
             timer = setTimeout(load, Date.now() - started < FAST_WINDOW_MS ? FAST_POLL_MS : SLOW_POLL_MS);
         })
         .catch((caught: unknown) => {
@@ -142,7 +143,8 @@ export function OrderStatus({ token }: { token: string }) {
           </>
         ) : current.status === "PENDING" && current.processing ? (
           <p className="flex items-center justify-center gap-2 py-8 text-slate-600">
-            <Loader2 size={18} className="animate-spin" /> Gerando seu Pix…
+            <Loader2 size={18} className="animate-spin" />{" "}
+            {current.paymentMethod === "CARD" ? "Confirmando o pagamento no cartão…" : "Gerando seu Pix…"}
           </p>
         ) : current.status === "PENDING" && current.pix ? (
           <>
@@ -168,6 +170,20 @@ export function OrderStatus({ token }: { token: string }) {
               </div>
             )}
             <p className="text-xs text-slate-500">A confirmação aparece aqui sozinha depois do pagamento.</p>
+          </>
+        ) : current.paymentMethod === "CARD" ? (
+          <>
+            <h1 className="text-lg font-semibold text-slate-900">
+              {current.status === "DECLINED" || current.card?.declined ? "Pagamento não autorizado" : "Pagamento não concluído"}
+            </h1>
+            <p className="text-sm text-slate-600">Volte à página do produto para pagar com Pix ou com outro cartão.</p>
+            <Link
+              href={`/c/${current.productSlug}`}
+              className="flex h-12 w-full items-center justify-center rounded-md font-semibold text-white"
+              style={{ backgroundColor: color }}
+            >
+              Voltar ao pagamento
+            </Link>
           </>
         ) : (
           <>

@@ -8,6 +8,7 @@ import { useApiClient } from "@/lib/use-api-client";
 import { errorCode, formatDateTime } from "@/lib/disbursements";
 import { formatPercentageBps } from "@/lib/billing-fees";
 import { parsePercentToBps } from "@/lib/checkout";
+import { PlatformCardForm } from "./PlatformCardForm";
 import { buttonClass, Field, inputClass, messageOf, NoticeText, secondaryButtonClass, type Notice } from "./ui";
 
 const CREDENTIAL_STATUS: Record<string, string> = {
@@ -226,6 +227,18 @@ export function PlatformAccountPanel() {
                 Salvar tarifa
               </button>
             </form>
+          )}
+
+          {view.current && (
+            <PlatformCardForm
+              key={view.current.version}
+              current={view.current}
+              onSaved={(next) => {
+                setView(next);
+                setNotice({ error: false, text: "Cartão salvo em uma nova versão." });
+              }}
+              onConflict={() => refresh({ error: true, text: "Outra pessoa alterou a conta. Os dados foram recarregados." })}
+            />
           )}
         </>
       )}

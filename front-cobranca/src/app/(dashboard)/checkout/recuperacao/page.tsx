@@ -136,6 +136,7 @@ export default function CheckoutRecoveryPage() {
         <select aria-label="Tipo" className={`${inputClass} w-auto`} value={kind} onChange={(event) => load(() => { setPage(1); setKind(event.target.value as CheckoutRecoveryKind | ""); })}>
           <option value="">Todos os tipos</option>
           <option value="PIX">Pix não pago</option>
+          <option value="CARD">Cartão recusado</option>
           <option value="LEAD">Saiu antes de gerar o Pix</option>
         </select>
         <select aria-label="Produto" className={`${inputClass} w-auto`} value={productId} onChange={(event) => load(() => { setPage(1); setProductId(event.target.value); })}>

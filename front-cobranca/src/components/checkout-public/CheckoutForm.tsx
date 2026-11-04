@@ -4,11 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Loader2, QrCode, Tag, X } from "lucide-react";
+import { CreditCard, Loader2, QrCode, Tag, X } from "lucide-react";
 import {
   accessPeriodLabel,
   checkoutImageUrl,
+  createCheckoutCardOrder,
   createCheckoutOrder,
+  payCheckoutCard,
   formatBRL,
   quoteCheckout,
   saveCheckoutLead,
@@ -18,6 +20,10 @@ import {
   type PublicCheckoutQuote,
 } from "@/lib/checkout-public";
 import { validateDebtorDocument } from "@/lib/debtor-document";
+import { CardPayment, type CardOption, type CardPaymentHandle } from "./CardPayment";
+
+const CARD_DECLINED = "Pagamento não autorizado pelo banco. Confira os dados, use outro cartão ou pague com Pix.";
+const CARD_GIVE_UP = "Não foi possível pagar com cartão. Pague com Pix.";
 
 const BUYER_STORAGE_KEY = "cifra-checkout-buyer";
 const inputClass =
@@ -63,6 +69,14 @@ export function CheckoutForm({ data }: { data: PublicCheckoutProduct }) {
   const [buyer, setBuyer] = useState<CheckoutBuyer>(savedBuyer);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [method, setMethod] = useState<"PIX" | "CARD">(data.payment.pixEnabled ? "PIX" : "CARD");
+  const [cardOption, setCardOption] = useState<{ option: CardOption | null; subtotalCents: number | null }>({
+    option: null,
+    subtotalCents: null,
+  });
+  // A declined card order is tried again on the same order, for the same cart.
+  const [cardOrder, setCardOrder] = useState<{ token: string; cartKey: string } | null>(null);
+  const cardRef = useRef<CardPaymentHandle>(null);
   const requestId = useRef(0);
   const sessionKey = useRef<string | null>(null);
   const leadSent = useRef("");
@@ -116,6 +130,10 @@ export function CheckoutForm({ data }: { data: PublicCheckoutProduct }) {
     } catch {
       /* storage may be blocked; the order does not need it */
     }
+    if (method === "CARD") {
+      await payByCard(cleaned);
+      return;
+    }
     try {
       const order = await createCheckoutOrder(data.product.slug, {
         bumpIds: selected,
@@ -130,6 +148,39 @@ export function CheckoutForm({ data }: { data: PublicCheckoutProduct }) {
       setSubmitError(caught instanceof Error ? caught.message : "Não foi possível gerar o Pix.");
       setSubmitting(false);
     }
+  }
+
+  async function payByCard(cleaned: CheckoutBuyer) {
+    const cartKey = JSON.stringify({ selected, coupon });
+    try {
+      const charge = { ...(await cardRef.current!.prepare()), idempotencyKey: crypto.randomUUID() };
+      const order =
+        cardOrder?.cartKey === cartKey
+          ? await payCheckoutCard(cardOrder.token, charge)
+          : await createCheckoutCardOrder(data.product.slug, {
+              ...charge,
+              bumpIds: selected,
+              couponCode: coupon,
+              buyer: cleaned,
+              utm: utmFrom(window.location.search),
+              sessionKey: sessionKey.current ?? undefined,
+            });
+      if (order.status === "PAID" || order.processing) {
+        router.push(`/c/pedido/${order.token}`);
+        return;
+      }
+      if (order.card?.canRetry) {
+        setCardOrder({ token: order.token, cartKey });
+        setSubmitError(CARD_DECLINED);
+      } else {
+        setCardOrder(null);
+        setSubmitError(CARD_GIVE_UP);
+        if (data.payment.pixEnabled) setMethod("PIX");
+      }
+    } catch (caught) {
+      setSubmitError(caught instanceof Error ? caught.message : "Não foi possível pagar com cartão.");
+    }
+    setSubmitting(false);
   }
 
   const set = (change: Partial<CheckoutBuyer>) => setBuyer((current) => ({ ...current, ...change }));
@@ -189,6 +240,45 @@ export function CheckoutForm({ data }: { data: PublicCheckoutProduct }) {
         <input className={inputClass} aria-label="CPF ou CNPJ" placeholder="CPF ou CNPJ" inputMode="numeric" value={buyer.document} onChange={(event) => set({ document: event.target.value })} />
         <input className={inputClass} aria-label="Celular com DDD" placeholder="Celular com DDD" inputMode="tel" autoComplete="tel" value={buyer.phone} onChange={(event) => set({ phone: event.target.value })} />
       </section>
+
+      {data.payment.cardEnabled && (
+        <section className="space-y-3 rounded-lg bg-white p-4 shadow-sm">
+          <h2 className="text-sm font-semibold text-slate-800">Forma de pagamento</h2>
+          {data.payment.pixEnabled && (
+            <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Forma de pagamento">
+              {(["PIX", "CARD"] as const).map((option) => (
+                <label
+                  key={option}
+                  className="flex h-12 cursor-pointer items-center justify-center gap-2 rounded-md border-2 text-sm font-semibold text-slate-800"
+                  style={{ borderColor: method === option ? color : "#e2e8f0" }}
+                >
+                  <input
+                    type="radio"
+                    name="method"
+                    className="sr-only"
+                    checked={method === option}
+                    onChange={() => {
+                      setMethod(option);
+                      setSubmitError(null);
+                    }}
+                  />
+                  {option === "PIX" ? <QrCode size={18} /> : <CreditCard size={18} />}
+                  {option === "PIX" ? "Pix" : "Cartão"}
+                </label>
+              ))}
+            </div>
+          )}
+          {method === "CARD" && (
+            <CardPayment
+              ref={cardRef}
+              slug={data.product.slug}
+              cart={{ bumpIds: selected, couponCode: coupon }}
+              buyerDocument={buyer.document}
+              onOption={(option, subtotalCents) => setCardOption({ option, subtotalCents })}
+            />
+          )}
+        </section>
+      )}
 
       {data.bumps.length > 0 && (
         <section className="space-y-3">
@@ -260,13 +350,26 @@ export function CheckoutForm({ data }: { data: PublicCheckoutProduct }) {
             {quote.discountCents > 0 && (
               <div className="flex justify-between text-emerald-700"><dt>Desconto</dt><dd>− {formatBRL(quote.discountCents)}</dd></div>
             )}
-            {quote.surchargeCents > 0 && (
+            {method === "PIX" && quote.surchargeCents > 0 && (
               <div className="flex justify-between"><dt>Taxa do Pix</dt><dd>{formatBRL(quote.surchargeCents)}</dd></div>
+            )}
+            {method === "CARD" && cardOption.option && cardOption.subtotalCents !== null && cardOption.option.totalCents > cardOption.subtotalCents && (
+              <div className="flex justify-between">
+                <dt>Acréscimo do cartão</dt>
+                <dd>{formatBRL(cardOption.option.totalCents - cardOption.subtotalCents)}</dd>
+              </div>
             )}
             <div className="flex justify-between border-t border-slate-100 pt-2 text-base font-semibold text-slate-900">
               <dt>Total</dt>
-              <dd data-testid="checkout-total">{formatBRL(quote.totalCents)}</dd>
+              <dd data-testid="checkout-total">
+                {formatBRL(method === "CARD" && cardOption.option ? cardOption.option.totalCents : quote.totalCents)}
+              </dd>
             </div>
+            {method === "CARD" && cardOption.option && cardOption.option.installments > 1 && (
+              <p className="text-right text-xs text-slate-500">
+                em {cardOption.option.installments}x de {formatBRL(cardOption.option.installmentValueCents)}
+              </p>
+            )}
           </dl>
         )}
       </section>
@@ -274,12 +377,18 @@ export function CheckoutForm({ data }: { data: PublicCheckoutProduct }) {
       {submitError && <p role="alert" className="text-sm text-red-600">{submitError}</p>}
       <button
         type="submit"
-        disabled={submitting || !quote}
+        disabled={submitting || !quote || (method === "CARD" && !cardOption.option)}
         className="flex h-14 w-full items-center justify-center gap-2 rounded-md text-base font-semibold text-white disabled:opacity-60"
         style={{ backgroundColor: color }}
       >
-        {submitting ? <Loader2 size={20} className="animate-spin" /> : <QrCode size={20} />}
-        Gerar Pix
+        {submitting ? (
+          <Loader2 size={20} className="animate-spin" />
+        ) : method === "CARD" ? (
+          <CreditCard size={20} />
+        ) : (
+          <QrCode size={20} />
+        )}
+        {method === "CARD" ? "Pagar com cartão" : "Gerar Pix"}
       </button>
     </form>
   );
