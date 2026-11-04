@@ -154,14 +154,14 @@ describe("Cifra+ Checkout routes", () => {
     for (const path of ["/", "/cobrancas", "/configuracoes/geral"])
       expect(seller(path)).toEqual({
         kind: "redirect",
-        url: "http://localhost:3000/checkout/produtos",
+        url: "http://localhost:3000/checkout/vendas",
       });
   });
 
   it("sends a checkout user to its products after the first password change", () => {
     expect(seller("/primeiro-acesso", { mustChangePassword: false })).toEqual({
       kind: "redirect",
-      url: "http://localhost:3000/checkout/produtos",
+      url: "http://localhost:3000/checkout/vendas",
     });
     expect(seller("/checkout/produtos", { mustChangePassword: true })).toEqual({
       kind: "redirect",
@@ -181,7 +181,7 @@ describe("Cifra+ Checkout routes", () => {
 
 describe("public checkout pages", () => {
   it("opens the product and order pages to any visitor, with or without a session", () => {
-    for (const path of ["/c/porquim-anual-ab12", "/c/pedido/abcDEF123_-"]) {
+    for (const path of ["/c/porquim-anual-ab12", "/c/pedido/abcDEF123_-", "/c/pedido/abcDEF123_-/reembolso"]) {
       expect(runMiddleware(createRequest(path, null))).toEqual({ kind: "next" });
       expect(
         runMiddleware(createRequest(path, "COMPANY_ADMIN", { mustChangePassword: true })),

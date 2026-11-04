@@ -13,6 +13,7 @@ import { formatDebtorDocument } from "@/lib/debtor-document";
 import { errorCode, formatDateTime } from "@/lib/disbursements";
 import { parsePercentToBps } from "@/lib/checkout";
 import { PlatformAccountPanel } from "@/components/features/checkout/PlatformAccountPanel";
+import { FinancePanel } from "@/components/features/checkout/FinancePanel";
 
 const inputClass =
   "h-11 w-full rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100";
@@ -316,6 +317,7 @@ function ClientDetail({
           ))}
         </ul>
       </div>
+      <FinancePanel companyId={client.id} />
     </section>
   );
 }
@@ -449,6 +451,7 @@ export default function AdminCheckoutPage() {
                 <th className="px-4 py-3">CPF/CNPJ</th>
                 <th className="px-4 py-3">% Cifra+</th>
                 <th className="px-4 py-3">Produtos ativos</th>
+                <th className="px-4 py-3">Reembolsos pedidos</th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
@@ -463,13 +466,16 @@ export default function AdminCheckoutPage() {
                       : "—"}
                   </td>
                   <td className="px-4 py-3 text-slate-600">{client.activeProducts}</td>
+                  <td className={`px-4 py-3 ${client.pendingRefundRequests ? "font-semibold text-amber-700" : "text-slate-600"}`}>
+                    {client.pendingRefundRequests}
+                  </td>
                   <td className="px-4 py-3 text-right">
                     <button
                       type="button"
                       className="font-semibold text-emerald-700 hover:underline"
                       onClick={() => selectClient(client.id)}
                     >
-                      Ver termos
+                      Ver termos e financeiro
                     </button>
                   </td>
                 </tr>

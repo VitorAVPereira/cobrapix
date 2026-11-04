@@ -87,7 +87,7 @@ it("sends a checkout company to its products, without the billing dashboard", ()
   mockProduct = "CHECKOUT";
   render(<DashboardPage />);
 
-  expect(mockReplace).toHaveBeenCalledWith("/checkout/produtos");
+  expect(mockReplace).toHaveBeenCalledWith("/checkout/vendas");
   expect(mockApi.getCompanyDashboard).not.toHaveBeenCalled();
 });
 

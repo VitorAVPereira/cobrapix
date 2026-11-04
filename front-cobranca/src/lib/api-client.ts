@@ -1374,6 +1374,7 @@ export interface CheckoutClientSummary {
   createdAt: string;
   currentTerms: { version: number; platformFeeBasisPoints: number } | null;
   activeProducts: number;
+  pendingRefundRequests: number;
 }
 export interface CheckoutClientDetail {
   id: string;
@@ -1461,6 +1462,67 @@ export interface CheckoutCouponInput {
   expiresAt: string | null;
   maxUses: number | null;
   active: boolean;
+}
+export type CheckoutSaleStatus = "PAID" | "REFUNDED" | "CHARGEBACK";
+export interface CheckoutBalance {
+  releasedCents: number;
+  pendingCents: number;
+  paidOutCents: number;
+  nextReleaseAt: string | null;
+}
+export interface CheckoutSale {
+  orderId: string;
+  status: CheckoutSaleStatus;
+  paidAt: string;
+  buyer: { name: string; email: string; phone: string };
+  items: Array<{ kind: "MAIN" | "BUMP"; name: string; unitPriceCents: number; discountCents: number }>;
+  couponCode: string | null;
+  utm: Record<string, string> | null;
+  totalCents: number;
+  efiFeeCents: number;
+  platformFeeCents: number;
+  refundedCents: number;
+  chargebackCents: number;
+  netCents: number;
+  availableAt: string | null;
+  openRefundRequest: { id: string; origin: "BUYER" | "SELLER"; createdAt: string } | null;
+}
+export interface CheckoutSalesPage {
+  total: number;
+  page: number;
+  pageSize: number;
+  items: CheckoutSale[];
+}
+export interface CheckoutRefundRequestRow {
+  id: string;
+  origin: "BUYER" | "SELLER";
+  reason: string;
+  status: "REQUESTED" | "DONE" | "REJECTED";
+  resolutionNote: string | null;
+  createdAt: string;
+  order: { id: string; buyerName: string; buyerEmail: string; totalCents: number; paidAt: string | null; status: string };
+}
+export interface CheckoutFinanceOverview {
+  balance: CheckoutBalance;
+  refundRequests: CheckoutRefundRequestRow[];
+  entries: Array<{
+    id: string;
+    kind: "PAYOUT" | "ADJUSTMENT" | "CHARGEBACK";
+    amountCents: number;
+    orderId: string | null;
+    evidenceReference: string | null;
+    note: string | null;
+    createdAt: string;
+  }>;
+  chargebackIndex: {
+    windowDays: number;
+    salesCount: number;
+    salesCents: number;
+    chargebackCount: number;
+    chargebackCents: number;
+    ratioBasisPoints: number;
+  };
+  sales: CheckoutSalesPage;
 }
 export interface CheckoutPlatformView {
   current: {
@@ -2790,6 +2852,62 @@ class ApiClient {
   }
   setCheckoutPlatformPixFee(input: { expectedVersion: number; pixFeeBasisPoints: number }): Promise<CheckoutPlatformView> {
     return this.fetch("/admin/checkout/platform-account/pix-fee", { method: "PUT", body: JSON.stringify(input) });
+  }
+
+  // Cifra+ Checkout: the seller's money
+  getCheckoutBalance(signal?: AbortSignal): Promise<CheckoutBalance> {
+    return this.fetch("/checkout/balance", { signal });
+  }
+  listCheckoutSales(
+    query: { from?: string; to?: string; status?: CheckoutSaleStatus; page?: number; pageSize?: number },
+    signal?: AbortSignal,
+  ): Promise<CheckoutSalesPage> {
+    return this.fetch(`/checkout/sales${this.buildQueryString(query)}`, { signal });
+  }
+  requestCheckoutRefund(orderId: string, reason: string): Promise<{ id: string }> {
+    return this.fetch(`/checkout/sales/${encodeURIComponent(orderId)}/refund-request`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    });
+  }
+
+  // Cifra+ Checkout: admin money operations on one client
+  getCheckoutFinance(companyId: string, signal?: AbortSignal): Promise<CheckoutFinanceOverview> {
+    return this.fetch(`/admin/checkout/clients/${encodeURIComponent(companyId)}/finance`, { signal });
+  }
+  recordCheckoutPayout(
+    companyId: string,
+    input: { idempotencyKey: string; amountCents: number; paidOn: string; reference?: string; note?: string },
+  ): Promise<{ warning: string | null; balance: CheckoutBalance }> {
+    return this.fetch(`/admin/checkout/clients/${encodeURIComponent(companyId)}/payouts`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+  recordCheckoutOrderMoney(
+    companyId: string,
+    kind: "refunds" | "chargebacks",
+    input: { idempotencyKey: string; orderId: string; amountCents: number; reference?: string; note?: string },
+  ): Promise<CheckoutBalance> {
+    return this.fetch(`/admin/checkout/clients/${encodeURIComponent(companyId)}/${kind}`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+  recordCheckoutAdjustment(
+    companyId: string,
+    input: { idempotencyKey: string; amountCents: number; note: string; orderId?: string; reference?: string },
+  ): Promise<CheckoutBalance> {
+    return this.fetch(`/admin/checkout/clients/${encodeURIComponent(companyId)}/adjustments`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+  rejectCheckoutRefundRequest(companyId: string, requestId: string, note: string): Promise<void> {
+    return this.fetch(
+      `/admin/checkout/clients/${encodeURIComponent(companyId)}/refund-requests/${encodeURIComponent(requestId)}/reject`,
+      { method: "POST", body: JSON.stringify({ note }) },
+    );
   }
 
   // Cifra+ Checkout: the session company
