@@ -98,6 +98,7 @@ O vendedor configura em **Configurações do checkout → Webhook**:
 | `refund.requested` | O comprador ou o vendedor pediu reembolso |
 | `order.refunded` | Uma devolução foi concluída (com valor e total devolvido) |
 | `order.chargeback` | Uma contestação foi registrada |
+| `lead.abandoned` | Alguém preencheu os dados e ficou 30 min sem gerar o Pix (traz `data.lead`, sem pedido) |
 
 **O que o sistema do vendedor recebe e confere:**
 - **corpo:** um POST em JSON, com `data.order` trazendo comprador, itens (`kind` `MAIN` ou `BUMP`) e
@@ -110,3 +111,19 @@ O vendedor configura em **Configurações do checkout → Webhook**:
 - qualquer resposta fora de 2xx é repetida por até 24 horas;
 - depois de **3 dias seguidos sem sucesso**, o webhook é desligado e o vendedor recebe um e-mail;
 - os avisos desse período ficam no histórico para “Reenviar” depois de “Religar”.
+
+## Recuperação (Parte 5)
+
+O vendedor vê em **Recuperação** quem gerou o Pix e não pagou e quem preencheu os dados e saiu.
+
+- **Lead:** a página grava o que já foi digitado quando o comprador sai de um campo, desde que
+  haja e-mail ou celular válidos. Depois de 30 minutos sem pedido, o lead aparece na lista e o
+  webhook recebe `lead.abandoned`, uma vez.
+- **Recuperado:** quando o mesmo comprador (CPF/CNPJ, ou e-mail no lead) paga o mesmo produto em
+  até 30 dias, os registros anteriores saem de "A recuperar" e vão para "Recuperados".
+- **CSV:** segue os filtros da tela, com até 5.000 linhas. Cada exportação fica na auditoria
+  (`CHECKOUT_RECOVERY_EXPORTED`, com filtros e quantidade, sem os dados).
+- **Anonimização:** todo dia às 03:40 (horário de Brasília), pedidos não pagos e leads com mais de
+  12 meses perdem nome, e-mail, CPF/CNPJ, celular e UTMs, e os avisos de webhook deles perdem o
+  corpo. Vendas pagas não mudam. Se um titular pedir exclusão antes disso, a correção é manual
+  no banco, com registro na auditoria.
