@@ -7,6 +7,7 @@ import { CheckoutSellerTerms, CheckoutSettings } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CheckoutPlatformService,
+  type CheckoutCardAccount,
   type CheckoutPlatformAccount,
 } from './checkout-platform.service';
 import {
@@ -41,6 +42,16 @@ export interface SaleContext {
   terms: CheckoutSellerTerms;
   platform: CheckoutPlatformAccount;
   quote: OrderQuote;
+  // Present only for a card sale.
+  card: CheckoutCardAccount | null;
+}
+
+/** Card sells when the CifraMais account, the seller and the admin all allow it. */
+function cardOn(
+  settings: CheckoutSettings,
+  card: CheckoutCardAccount | null,
+): card is CheckoutCardAccount {
+  return Boolean(card && settings.cardEnabled && !settings.cardPausedAt);
 }
 
 @Injectable()
@@ -54,7 +65,10 @@ export class CheckoutCatalogService {
   async view(slug: string) {
     const { product, settings, terms } = await this.load(slug);
     const platform = await this.platform.ready();
-    const available = Boolean(platform && terms && settings.pixEnabled);
+    const card = cardOn(settings, await this.platform.cardReady());
+    const available = Boolean(
+      platform && terms && (settings.pixEnabled || card),
+    );
     return {
       available,
       unavailableMessage: available
@@ -88,7 +102,11 @@ export class CheckoutCatalogService {
         supportWhatsapp: settings.supportWhatsapp,
         whatsappButtonPhone: settings.whatsappButtonPhone,
       },
-      payment: { pixEnabled: settings.pixEnabled, cardEnabled: false },
+      payment: {
+        pixEnabled: settings.pixEnabled,
+        cardEnabled: card,
+        maxInstallments: card ? settings.maxInstallments : null,
+      },
     };
   }
 
@@ -112,15 +130,27 @@ export class CheckoutCatalogService {
   /** Validates the choice and prices it with the current account and terms. */
   async prepare(
     slug: string,
-    dto: CheckoutQuoteDto,
+    dto: Pick<CheckoutQuoteDto, 'bumpIds' | 'couponCode'>,
     now: Date,
+    method: 'PIX' | 'CARD' = 'PIX',
   ): Promise<SaleContext & { productId: string; productName: string }> {
     const { product, settings, terms, companyId } = await this.load(slug);
     const platform = await this.platform.ready();
-    if (!platform || !terms || !settings.pixEnabled)
+    if (!platform || !terms)
       throw this.invalid(
         'CHECKOUT_UNAVAILABLE',
         'Pagamento indisponível no momento. Fale com o vendedor.',
+      );
+    const cardAccount =
+      method === 'CARD' ? await this.platform.cardReady() : null;
+    if (
+      method === 'PIX' ? !settings.pixEnabled : !cardOn(settings, cardAccount)
+    )
+      throw this.invalid(
+        method === 'PIX' ? 'CHECKOUT_UNAVAILABLE' : 'CARD_NOT_AVAILABLE',
+        method === 'PIX'
+          ? 'Pagamento indisponível no momento. Fale com o vendedor.'
+          : 'O cartão está indisponível no momento. Pague com Pix.',
       );
     const bumps = dto.bumpIds.map((id) => {
       const bump = product.bumps.find((candidate) => candidate.id === id);
@@ -152,12 +182,15 @@ export class CheckoutCatalogService {
       settings,
       terms,
       platform,
+      card: cardAccount,
+      // Card: P only here; the installment total comes from the card quote.
       quote: quoteOrder({
         product,
         bumps,
         coupon,
-        feePayer: settings.pixFeePayer,
-        efiFeeBasisPoints: platform.settings.pixFeeBasisPoints,
+        feePayer: method === 'PIX' ? settings.pixFeePayer : 'SELLER',
+        efiFeeBasisPoints:
+          method === 'PIX' ? platform.settings.pixFeeBasisPoints : 0,
         platformFeeBasisPoints: terms.platformFeeBasisPoints,
       }),
     };

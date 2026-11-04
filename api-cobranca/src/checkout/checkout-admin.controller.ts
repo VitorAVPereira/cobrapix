@@ -14,6 +14,7 @@ import { GetUser } from '../auth/decorators/get-user.decorator';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { CheckoutAdminService } from './checkout-admin.service';
 import {
+  CardPauseDto,
   CreateCheckoutClientDto,
   UpdateCheckoutTermsDto,
 } from './dto/checkout-admin.dto';
@@ -46,5 +47,18 @@ export class CheckoutAdminController {
     @Body() dto: UpdateCheckoutTermsDto,
   ) {
     return this.admin.updateTerms(companyId, dto, user.userId);
+  }
+
+  @Put(':companyId/card-pause') setCardPause(
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+    @GetUser() user: AuthenticatedUser,
+    @Body() dto: CardPauseDto,
+  ) {
+    return this.admin.setCardPause(
+      companyId,
+      dto.paused,
+      dto.reason.trim(),
+      user.userId,
+    );
   }
 }

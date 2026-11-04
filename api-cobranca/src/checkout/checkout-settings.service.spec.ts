@@ -107,6 +107,7 @@ describe('CheckoutAssetsService', () => {
 describe('CheckoutSettingsService', () => {
   const prisma = {
     checkoutSettings: { findUnique: jest.fn(), updateMany: jest.fn() },
+    checkoutPlatformSettings: { findFirst: jest.fn() },
   };
   const assets = { assertOwned: jest.fn() };
   const service = new CheckoutSettingsService(
@@ -164,7 +165,10 @@ describe('CheckoutSettingsService', () => {
     });
   });
 
-  it('recusa ligar o cartão e desligar todas as formas de pagamento', async () => {
+  it('recusa ligar o cartão antes da Cifra+ liberar e desligar todas as formas de pagamento', async () => {
+    prisma.checkoutPlatformSettings.findFirst.mockResolvedValue({
+      cardEnabled: false,
+    });
     await expect(
       service.update('company-a', { ...dto, cardEnabled: true }),
     ).rejects.toMatchObject({ response: { code: 'CARD_NOT_AVAILABLE' } });
@@ -174,5 +178,19 @@ describe('CheckoutSettingsService', () => {
       response: { code: 'CHECKOUT_NO_PAYMENT_METHOD' },
     });
     expect(prisma.checkoutSettings.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('liga o cartão depois que a Cifra+ libera', async () => {
+    prisma.checkoutPlatformSettings.findFirst.mockResolvedValue({
+      cardEnabled: true,
+    });
+    prisma.checkoutSettings.updateMany.mockResolvedValue({ count: 1 });
+    prisma.checkoutSettings.findUnique.mockResolvedValue({ id: 's' });
+    await service.update('company-a', { ...dto, cardEnabled: true });
+    expect(prisma.checkoutSettings.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ cardEnabled: true }) as unknown,
+      }),
+    );
   });
 });

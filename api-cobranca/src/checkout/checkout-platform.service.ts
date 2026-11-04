@@ -1,5 +1,6 @@
 import {
   BadGatewayException,
+  BadRequestException,
   HttpException,
   Injectable,
   NotFoundException,
@@ -20,12 +21,41 @@ import type { EfiCertificate } from '../payment/efi-certificate';
 import { EfiAccountRegistryService } from '../financial-activation/efi-account-registry.service';
 import { CERTIFICATE_MAX_BYTES } from '../financial-activation/financial-activation.service';
 import { classifyEfiError } from '../financial-activation/financial-validation.types';
+import { cardProcessingBasisPoints } from '../payment/efi-card.client';
+import { checkoutCardNotificationUrl } from './efi-checkout-card.client';
 import { conflict, versionChanged } from './checkout-rules';
 import {
+  SetPlatformCardDto,
   SetPlatformPixFeeDto,
   UploadPlatformCredentialsDto,
   ValidatePlatformAccountDto,
 } from './dto/checkout-platform.dto';
+
+/** Card rates of the CifraMais account: anticipated receipt only. */
+export interface CheckoutCardRates {
+  receipt: 'ANTICIPATED';
+  cashBasisPoints: number;
+  anticipationBasisPoints: number;
+}
+
+/** Everything a card sale needs; null while the card is off or incomplete. */
+export interface CheckoutCardAccount {
+  account: CheckoutPlatformAccount;
+  rates: CheckoutCardRates;
+  creditDays: number;
+  payeeCode: string;
+}
+
+// A new version keeps what it does not change.
+function carriedCard(previous: CheckoutPlatformSettings | null) {
+  return {
+    cardEnabled: previous?.cardEnabled ?? false,
+    cardRates: (previous?.cardRates ?? Prisma.DbNull) as
+      | Prisma.InputJsonValue
+      | typeof Prisma.DbNull,
+    cardCreditDays: previous?.cardCreditDays ?? null,
+  };
+}
 
 export interface UploadedCertificate {
   buffer: Buffer;
@@ -73,6 +103,9 @@ export class CheckoutPlatformService {
         id: true,
         version: true,
         pixFeeBasisPoints: true,
+        cardEnabled: true,
+        cardRates: true,
+        cardCreditDays: true,
         webhookConfiguredAt: true,
         createdAt: true,
         identityId: true,
@@ -285,6 +318,7 @@ export class CheckoutPlatformService {
           version: (previous?.version ?? 0) + 1,
           identityId: identity.id,
           pixFeeBasisPoints: previous?.pixFeeBasisPoints ?? null,
+          ...carriedCard(previous),
           webhookConfiguredAt: now,
           changedByUserId: userId,
         },
@@ -318,6 +352,7 @@ export class CheckoutPlatformService {
             version: current.version + 1,
             identityId: current.identityId,
             pixFeeBasisPoints: dto.pixFeeBasisPoints,
+            ...carriedCard(current),
             webhookConfiguredAt: current.webhookConfiguredAt,
             changedByUserId: userId,
           },
@@ -332,6 +367,95 @@ export class CheckoutPlatformService {
       throw error;
     }
     return this.view();
+  }
+
+  /**
+   * Card rates, days until the Efí credit and on/off. Turning it on needs the
+   * Pix side ready, the payee code (browser tokenization) and the notice URL.
+   */
+  async setCard(
+    userId: string,
+    auditCompanyId: string,
+    dto: SetPlatformCardDto,
+  ) {
+    const rates: CheckoutCardRates = {
+      receipt: 'ANTICIPATED',
+      cashBasisPoints: dto.cashBasisPoints,
+      anticipationBasisPoints: dto.anticipationBasisPoints,
+    };
+    if (cardProcessingBasisPoints(rates, 12) >= 10000)
+      throw new BadRequestException({
+        code: 'CHECKOUT_INVALID',
+        message: 'Tarifa de cartão inválida: em 12x ela passaria de 100%.',
+      });
+    if (dto.cardEnabled) {
+      const ready = await this.ready();
+      if (
+        !ready?.identity.payeeCode ||
+        !checkoutCardNotificationUrl(this.config, ready.identity.id)
+      )
+        throw this.unprocessable(
+          'CARD_ACCOUNT_NOT_READY',
+          'Valide a conta Cifra+, defina a tarifa do Pix e confira o código do recebedor e a URL de notificações antes de ligar o cartão.',
+        );
+    }
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const current = await tx.checkoutPlatformSettings.findFirst({
+          orderBy: { version: 'desc' },
+        });
+        if (!current)
+          throw new NotFoundException('Valide a conta Cifra+ antes do cartão.');
+        if (current.version !== dto.expectedVersion) versionChanged();
+        await tx.checkoutPlatformSettings.create({
+          data: {
+            version: current.version + 1,
+            identityId: current.identityId,
+            pixFeeBasisPoints: current.pixFeeBasisPoints,
+            webhookConfiguredAt: current.webhookConfiguredAt,
+            cardEnabled: dto.cardEnabled,
+            cardRates: rates as unknown as Prisma.InputJsonValue,
+            cardCreditDays: dto.cardCreditDays,
+            changedByUserId: userId,
+          },
+        });
+        await this.audit(tx, auditCompanyId, userId, current.identityId, {
+          action: 'CHECKOUT_PLATFORM_CARD_CHANGED',
+          changes: {
+            cardEnabled: dto.cardEnabled,
+            cashBasisPoints: dto.cashBasisPoints,
+            anticipationBasisPoints: dto.anticipationBasisPoints,
+            cardCreditDays: dto.cardCreditDays,
+          },
+        });
+      });
+    } catch (error) {
+      if (isUniqueViolation(error)) versionChanged();
+      throw error;
+    }
+    return this.view();
+  }
+
+  /** The card side of the current account, or null while it does not sell. */
+  async cardReady(): Promise<CheckoutCardAccount | null> {
+    const account = await this.ready();
+    const settings = account?.settings;
+    const rates = settings?.cardRates as CheckoutCardRates | null | undefined;
+    if (
+      !account ||
+      !settings?.cardEnabled ||
+      rates?.receipt !== 'ANTICIPATED' ||
+      !settings.cardCreditDays ||
+      !account.identity.payeeCode ||
+      !checkoutCardNotificationUrl(this.config, account.identity.id)
+    )
+      return null;
+    return {
+      account,
+      rates,
+      creditDays: settings.cardCreditDays,
+      payeeCode: account.identity.payeeCode,
+    };
   }
 
   /** The current account, or null while anything the Pix needs is missing. */

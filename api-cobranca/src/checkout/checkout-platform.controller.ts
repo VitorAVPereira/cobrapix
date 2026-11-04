@@ -19,6 +19,7 @@ import {
   type UploadedCertificate,
 } from './checkout-platform.service';
 import {
+  SetPlatformCardDto,
   SetPlatformPixFeeDto,
   UploadPlatformCredentialsDto,
   ValidatePlatformAccountDto,
@@ -64,6 +65,13 @@ export class CheckoutPlatformController {
     @Body() dto: ValidatePlatformAccountDto,
   ) {
     return this.platform.validate(user.userId, user.companyId, dto);
+  }
+
+  @Put('card') setCard(
+    @GetUser() user: AuthenticatedUser,
+    @Body() dto: SetPlatformCardDto,
+  ) {
+    return this.platform.setCard(user.userId, user.companyId, dto);
   }
 
   @Put('pix-fee') setPixFee(

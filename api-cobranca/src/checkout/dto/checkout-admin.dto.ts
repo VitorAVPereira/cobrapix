@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsEmail,
   IsInt,
   IsString,
@@ -36,6 +37,11 @@ export class CreateCheckoutClientDto {
   @Type(() => CheckoutFirstUserDto)
   firstUser!: CheckoutFirstUserDto;
   @ValidateNested() @Type(() => CheckoutTermsDto) terms!: CheckoutTermsDto;
+}
+
+export class CardPauseDto {
+  @IsBoolean() paused!: boolean;
+  @IsString() @Length(5, 500) reason!: string;
 }
 
 export class UpdateCheckoutTermsDto extends CheckoutTermsDto {

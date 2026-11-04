@@ -26,12 +26,18 @@ export class CheckoutSettingsService {
         'CHECKOUT_NO_PAYMENT_METHOD',
         'Deixe ao menos uma forma de pagamento ligada.',
       );
-    // Card waits for the Efí card approval on the CifraMais account (part 6).
-    if (dto.cardEnabled)
-      conflict(
-        'CARD_NOT_AVAILABLE',
-        'O cartão ainda não está disponível no checkout.',
-      );
+    // Card waits for the Efí card approval on the CifraMais account.
+    if (dto.cardEnabled) {
+      const platform = await this.prisma.checkoutPlatformSettings.findFirst({
+        orderBy: { version: 'desc' },
+        select: { cardEnabled: true },
+      });
+      if (!platform?.cardEnabled)
+        conflict(
+          'CARD_NOT_AVAILABLE',
+          'O cartão ainda não foi liberado pela Cifra+.',
+        );
+    }
     await this.assets.assertOwned(
       this.prisma,
       companyId,
