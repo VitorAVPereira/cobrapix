@@ -24,6 +24,9 @@ import {
   type UploadedImageFile,
 } from './checkout-assets.service';
 import { CheckoutCouponsService } from './checkout-coupons.service';
+import { CheckoutLedgerService } from './checkout-ledger.service';
+import { CheckoutRefundsService } from './checkout-refunds.service';
+import { RefundRequestDto, SalesQueryDto } from './dto/checkout-finance.dto';
 import { CheckoutProductsService } from './checkout-products.service';
 import { CheckoutSettingsService } from './checkout-settings.service';
 import {
@@ -64,7 +67,34 @@ export class CheckoutController {
     private readonly assets: CheckoutAssetsService,
     private readonly products: CheckoutProductsService,
     private readonly coupons: CheckoutCouponsService,
+    private readonly ledger: CheckoutLedgerService,
+    private readonly refunds: CheckoutRefundsService,
   ) {}
+
+  @Get('balance') balance(@GetUser() user: AuthenticatedUser) {
+    return this.ledger.balance(user.companyId);
+  }
+
+  @Get('sales') sales(
+    @GetUser() user: AuthenticatedUser,
+    @Query() query: SalesQueryDto,
+  ) {
+    return this.ledger.sales(user.companyId, {
+      from: query.from ? new Date(query.from) : undefined,
+      to: query.to ? new Date(query.to) : undefined,
+      status: query.status,
+      page: query.page ?? 1,
+      pageSize: query.pageSize ?? 20,
+    });
+  }
+
+  @Post('sales/:orderId/refund-request') requestRefund(
+    @GetUser() user: AuthenticatedUser,
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+    @Body() dto: RefundRequestDto,
+  ) {
+    return this.refunds.requestBySeller(user.companyId, orderId, dto.reason);
+  }
 
   @Get('settings') getSettings(@GetUser() user: AuthenticatedUser) {
     return this.settings.get(user.companyId);

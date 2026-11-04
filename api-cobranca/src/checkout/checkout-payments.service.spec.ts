@@ -1,5 +1,7 @@
 import { PrismaService } from '../prisma/prisma.service';
 import type { CheckoutMailJobs } from './checkout-mail.service';
+import type { CheckoutLedgerService } from './checkout-ledger.service';
+import type { CheckoutRefundsService } from './checkout-refunds.service';
 import {
   CheckoutPaymentsService,
   splitCheckoutPixEvents,
@@ -46,9 +48,13 @@ describe('CheckoutPaymentsService', () => {
     $transaction: jest.fn((run: (client: typeof tx) => unknown) => run(tx)),
   };
   const mail = { accessEmail: jest.fn() };
+  const ledger = { recordSale: jest.fn() };
+  const refunds = { record: jest.fn() };
   const service = new CheckoutPaymentsService(
     prisma as unknown as PrismaService,
     mail as unknown as CheckoutMailJobs,
+    ledger as unknown as CheckoutLedgerService,
+    refunds as unknown as CheckoutRefundsService,
   );
   const event = {
     txid: TXID,
@@ -63,6 +69,7 @@ describe('CheckoutPaymentsService', () => {
     prisma.checkoutPaymentAttempt.findUnique.mockResolvedValue({
       id: 'attempt-1',
       companyId: 'company-a',
+      orderId: 'order-1',
       amountCents: 8289,
       issuerIdentity: { pixKey: 'pix@ciframais.test' },
     });
@@ -72,8 +79,13 @@ describe('CheckoutPaymentsService', () => {
     tx.checkoutPaymentAttempt.updateMany.mockResolvedValue({ count: 1 });
     tx.checkoutOrder.update.mockResolvedValue({
       id: 'order-1',
+      companyId: 'company-a',
       couponId: 'coupon-1',
+      totalCents: 8289,
+      efiFeeCents: 99,
+      platformFeeCents: 205,
     });
+    refunds.record.mockResolvedValue(true);
   });
 
   it('dá baixa, conta o cupom e enfileira o e-mail', async () => {
@@ -93,6 +105,31 @@ describe('CheckoutPaymentsService', () => {
       data: { usedCount: { increment: 1 } },
     });
     expect(mail.accessEmail).toHaveBeenCalledWith('order-1');
+    expect(ledger.recordSale).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ id: 'order-1', totalCents: 8289 }),
+      99,
+    );
+  });
+
+  it('devolução concluída vira reembolso; em processamento não mexe no saldo', async () => {
+    await service.handlePixEvent({
+      ...event,
+      devolucoes: [
+        { id: 'D1', valor: '10.00', status: 'DEVOLVIDO' },
+        { id: 'D2', valor: '5.00', status: 'EM_PROCESSAMENTO' },
+      ],
+    });
+
+    expect(refunds.record).toHaveBeenCalledTimes(1);
+    expect(refunds.record).toHaveBeenCalledWith({
+      orderId: 'order-1',
+      amountCents: 1000,
+      idempotencyKey: 'pix:E123:D1',
+      evidenceReference: 'E123:D1',
+      fromProvider: true,
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('webhook repetido não repete a baixa nem o cupom', async () => {
@@ -112,7 +149,6 @@ describe('CheckoutPaymentsService', () => {
       'CHECKOUT_RECEIVER_MISMATCH',
     ],
     ['valor diferente', { valor: '1.00' }, 'CHECKOUT_AMOUNT_MISMATCH'],
-    ['devolução', { devolucoes: [{ id: 'd1' }] }, 'CHECKOUT_REFUND_PENDING'],
   ])('%s vira anomalia sem baixa', async (_label, change, reasonCode) => {
     await expect(service.handlePixEvent({ ...event, ...change })).resolves.toBe(
       false,
