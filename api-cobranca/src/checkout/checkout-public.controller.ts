@@ -8,6 +8,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   Res,
   UseGuards,
 } from '@nestjs/common';
@@ -20,6 +21,12 @@ import { CheckoutRefundsService } from './checkout-refunds.service';
 import { RefundRequestDto } from './dto/checkout-finance.dto';
 import { CheckoutRecoveryService } from './checkout-recovery.service';
 import { CheckoutCardService } from './checkout-card.service';
+import { CheckoutOffersService } from './checkout-offers.service';
+import {
+  CheckoutOfferAcceptDto,
+  CheckoutOfferChoiceDto,
+  CheckoutOfferQueryDto,
+} from './dto/checkout-offer.dto';
 import {
   CheckoutCardOrderDto,
   CheckoutCardPayDto,
@@ -42,6 +49,11 @@ function tokenOf(value: string): string {
     throw new NotFoundException('Pedido não encontrado.');
   return value;
 }
+function offerTokenOf(value: string): string {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(value))
+    throw new NotFoundException('Oferta não encontrada.');
+  return value;
+}
 
 @Controller('checkout/public')
 @UseGuards(ThrottleGuard)
@@ -53,6 +65,7 @@ export class CheckoutPublicController {
     private readonly refunds: CheckoutRefundsService,
     private readonly recovery: CheckoutRecoveryService,
     private readonly card: CheckoutCardService,
+    private readonly offers: CheckoutOffersService,
   ) {}
 
   // An asset never changes once uploaded (a new image is a new id).
@@ -114,6 +127,42 @@ export class CheckoutPublicController {
   @Header('Cache-Control', 'no-store')
   cardPay(@Param('token') token: string, @Body() dto: CheckoutCardPayDto) {
     return this.card.pay(tokenOf(token), dto);
+  }
+
+  @Get('offers/:token')
+  @Header('Cache-Control', 'no-store')
+  offer(@Param('token') token: string, @Query() query: CheckoutOfferQueryDto) {
+    return this.offers.view(offerTokenOf(token), query.oferta);
+  }
+
+  @Post('offers/:token/card/quote')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  offerCardQuote(
+    @Param('token') token: string,
+    @Body() dto: CheckoutOfferChoiceDto,
+  ) {
+    return this.offers.cardQuote(offerTokenOf(token), dto);
+  }
+
+  @Post('offers/:token/accept')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  acceptOffer(
+    @Param('token') token: string,
+    @Body() dto: CheckoutOfferAcceptDto,
+  ) {
+    return this.offers.accept(offerTokenOf(token), dto);
+  }
+
+  @Post('offers/:token/decline')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  declineOffer(
+    @Param('token') token: string,
+    @Body() dto: CheckoutOfferChoiceDto,
+  ) {
+    return this.offers.decline(offerTokenOf(token), dto);
   }
 
   @Get('orders/:token')

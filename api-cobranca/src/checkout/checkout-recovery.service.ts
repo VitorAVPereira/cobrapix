@@ -285,7 +285,9 @@ export class CheckoutRecoveryService {
       ...orders.map((order) => ({
         id: order.id,
         kind: order.paymentMethod,
-        reason: orderReason(order.status, order.paymentMethod),
+        reason: order.offerId
+          ? 'Oferta não paga'
+          : orderReason(order.status, order.paymentMethod),
         productId: order.productId,
         productName: order.product.name,
         name: order.buyerName,

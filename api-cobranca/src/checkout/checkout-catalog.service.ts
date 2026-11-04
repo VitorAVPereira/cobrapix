@@ -3,7 +3,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { CheckoutSellerTerms, CheckoutSettings } from '@prisma/client';
+import {
+  CheckoutAfterPurchase,
+  CheckoutSellerTerms,
+  CheckoutSettings,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CheckoutPlatformService,
@@ -44,10 +48,12 @@ export interface SaleContext {
   quote: OrderQuote;
   // Present only for a card sale.
   card: CheckoutCardAccount | null;
+  // Not ACCESS: the card is kept (reusable token) for the offer after payment.
+  afterPurchase: CheckoutAfterPurchase;
 }
 
 /** Card sells when the CifraMais account, the seller and the admin all allow it. */
-function cardOn(
+export function cardOn(
   settings: CheckoutSettings,
   card: CheckoutCardAccount | null,
 ): card is CheckoutCardAccount {
@@ -106,6 +112,9 @@ export class CheckoutCatalogService {
         pixEnabled: settings.pixEnabled,
         cardEnabled: card,
         maxInstallments: card ? settings.maxInstallments : null,
+        // The page asks the Efí for a reusable token: the offer after the
+        // purchase charges the same card without asking for it again.
+        cardReuse: card && product.afterPurchase !== 'ACCESS',
       },
     };
   }
@@ -135,23 +144,11 @@ export class CheckoutCatalogService {
     method: 'PIX' | 'CARD' = 'PIX',
   ): Promise<SaleContext & { productId: string; productName: string }> {
     const { product, settings, terms, companyId } = await this.load(slug);
-    const platform = await this.platform.ready();
-    if (!platform || !terms)
-      throw this.invalid(
-        'CHECKOUT_UNAVAILABLE',
-        'Pagamento indisponível no momento. Fale com o vendedor.',
-      );
-    const cardAccount =
-      method === 'CARD' ? await this.platform.cardReady() : null;
-    if (
-      method === 'PIX' ? !settings.pixEnabled : !cardOn(settings, cardAccount)
-    )
-      throw this.invalid(
-        method === 'PIX' ? 'CHECKOUT_UNAVAILABLE' : 'CARD_NOT_AVAILABLE',
-        method === 'PIX'
-          ? 'Pagamento indisponível no momento. Fale com o vendedor.'
-          : 'O cartão está indisponível no momento. Pague com Pix.',
-      );
+    const { platform, cardAccount, sellerTerms } = await this.accounts(
+      settings,
+      terms,
+      method,
+    );
     const bumps = dto.bumpIds.map((id) => {
       const bump = product.bumps.find((candidate) => candidate.id === id);
       if (!bump)
@@ -179,8 +176,9 @@ export class CheckoutCatalogService {
       companyId,
       productId: product.id,
       productName: product.name,
+      afterPurchase: product.afterPurchase,
       settings,
-      terms,
+      terms: sellerTerms,
       platform,
       card: cardAccount,
       // Card: P only here; the installment total comes from the card quote.
@@ -191,9 +189,98 @@ export class CheckoutCatalogService {
         feePayer: method === 'PIX' ? settings.pixFeePayer : 'SELLER',
         efiFeeBasisPoints:
           method === 'PIX' ? platform.settings.pixFeeBasisPoints : 0,
-        platformFeeBasisPoints: terms.platformFeeBasisPoints,
+        platformFeeBasisPoints: sellerTerms.platformFeeBasisPoints,
       }),
     };
+  }
+
+  /**
+   * An accepted offer, priced like a purchase of its own: the offer price,
+   * no bump and no coupon, with the current account and terms.
+   */
+  async prepareOffer(
+    companyId: string,
+    offerId: string,
+    method: 'PIX' | 'CARD',
+  ): Promise<SaleContext & { productId: string; productName: string }> {
+    const offer = await this.prisma.checkoutOffer.findFirst({
+      where: {
+        id: offerId,
+        companyId,
+        active: true,
+        offeredProduct: { active: true },
+        company: { product: 'CHECKOUT', status: 'ACTIVE' },
+      },
+      select: { priceCents: true, offeredProduct: { select: productFields } },
+    });
+    if (!offer)
+      throw this.invalid(
+        'CHECKOUT_OFFER_UNAVAILABLE',
+        'Esta oferta não está mais disponível.',
+      );
+    const [settings, terms] = await Promise.all([
+      this.prisma.checkoutSettings.findUnique({ where: { companyId } }),
+      this.prisma.checkoutSellerTerms.findFirst({
+        where: { companyId },
+        orderBy: { version: 'desc' },
+      }),
+    ]);
+    if (!settings)
+      throw this.invalid(
+        'CHECKOUT_UNAVAILABLE',
+        'Pagamento indisponível no momento. Fale com o vendedor.',
+      );
+    const { platform, cardAccount, sellerTerms } = await this.accounts(
+      settings,
+      terms,
+      method,
+    );
+    const product = offer.offeredProduct;
+    return {
+      companyId,
+      productId: product.id,
+      productName: product.name,
+      afterPurchase: 'ACCESS',
+      settings,
+      terms: sellerTerms,
+      platform,
+      card: cardAccount,
+      quote: quoteOrder({
+        product: { ...product, priceCents: offer.priceCents },
+        bumps: [],
+        coupon: null,
+        feePayer: method === 'PIX' ? settings.pixFeePayer : 'SELLER',
+        efiFeeBasisPoints:
+          method === 'PIX' ? platform.settings.pixFeeBasisPoints : 0,
+        platformFeeBasisPoints: sellerTerms.platformFeeBasisPoints,
+      }),
+    };
+  }
+
+  /** The Cifra+ account and terms a sale needs, and the method switched on. */
+  private async accounts(
+    settings: CheckoutSettings,
+    terms: CheckoutSellerTerms | null,
+    method: 'PIX' | 'CARD',
+  ) {
+    const platform = await this.platform.ready();
+    if (!platform || !terms)
+      throw this.invalid(
+        'CHECKOUT_UNAVAILABLE',
+        'Pagamento indisponível no momento. Fale com o vendedor.',
+      );
+    const cardAccount =
+      method === 'CARD' ? await this.platform.cardReady() : null;
+    if (
+      method === 'PIX' ? !settings.pixEnabled : !cardOn(settings, cardAccount)
+    )
+      throw this.invalid(
+        method === 'PIX' ? 'CHECKOUT_UNAVAILABLE' : 'CARD_NOT_AVAILABLE',
+        method === 'PIX'
+          ? 'Pagamento indisponível no momento. Fale com o vendedor.'
+          : 'O cartão está indisponível no momento. Pague com Pix.',
+      );
+    return { platform, cardAccount, sellerTerms: terms };
   }
 
   private async load(slug: string) {
@@ -206,6 +293,7 @@ export class CheckoutCatalogService {
       select: {
         ...productFields,
         companyId: true,
+        afterPurchase: true,
         bumps: {
           where: { active: true, offeredProduct: { active: true } },
           orderBy: { position: 'asc' },

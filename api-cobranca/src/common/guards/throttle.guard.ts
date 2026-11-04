@@ -287,6 +287,13 @@ export class ThrottleGuard implements CanActivate, OnModuleDestroy {
         return this.findConfigs(['throttle:checkout:card-quote:ip']);
       if (path.endsWith('/card/orders') || path.endsWith('/card/pay'))
         return this.findConfigs(['throttle:checkout:card-pay:ip']);
+      // Accepting an offer may charge the kept card: same limit as a card payment.
+      if (path.startsWith('/checkout/public/offers/'))
+        return this.findConfigs([
+          path.endsWith('/accept')
+            ? 'throttle:checkout:card-pay:ip'
+            : 'throttle:checkout:quote:ip',
+        ]);
     }
 
     if (path.startsWith('/checkout/public/products/') && method === 'POST') {

@@ -33,6 +33,7 @@ import { CheckoutWebhooksService } from './checkout-webhooks.service';
 import { CheckoutWebhookSender } from './checkout-webhook.sender';
 import { CheckoutRecoveryService } from './checkout-recovery.service';
 import { CheckoutCardService } from './checkout-card.service';
+import { CheckoutOffersService } from './checkout-offers.service';
 import { EfiCheckoutCardClient } from './efi-checkout-card.client';
 
 @Module({
@@ -70,6 +71,7 @@ import { EfiCheckoutCardClient } from './efi-checkout-card.client';
     CheckoutWebhookSender,
     CheckoutRecoveryService,
     CheckoutCardService,
+    CheckoutOffersService,
     EfiCheckoutCardClient,
     ResendMailerService,
     PlatformAdminGuard,

@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { CheckoutCardAttempt, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { grossUpCard } from '../payment/card-amounts';
 import { cardProcessingBasisPoints } from '../payment/efi-card.client';
 import {
@@ -46,6 +47,13 @@ const NOT_FOUND_AFTER_MS = 30 * 60_000;
 const BUSY = ['SUBMITTING', 'APPROVED', 'UNCERTAIN'] as const;
 // The anomaly table accepts PIX, CHARGES or CARD; checkout reasons carry a prefix.
 const ANOMALY_SOURCE = 'CARD';
+
+/** What a second charge on the same card needs; stored only encrypted. */
+export interface KeptCard {
+  paymentToken: string;
+  holderDocument: string;
+  address: CheckoutCardAddress;
+}
 
 export interface CardOption {
   installments: number;
@@ -117,13 +125,23 @@ export class CheckoutCardService {
     private readonly payments: CheckoutPaymentsService,
     private readonly webhooks: CheckoutWebhooksService,
     private readonly client: EfiCheckoutCardClient,
+    private readonly crypto: PaymentCryptoService,
   ) {}
 
   /** Installments for the cart and brand, priced by the server. */
   async quote(slug: string, dto: CheckoutCardQuoteDto, now = new Date()) {
     const sale = await this.catalog.prepare(slug, dto, now, 'CARD');
+    return this.quoteFor(sale, dto.brand, now);
+  }
+
+  /** Quotes a prepared card sale (a purchase or an accepted offer). */
+  async quoteFor(
+    sale: SaleContext & { productId: string },
+    brand: CheckoutCardBrand,
+    now = new Date(),
+  ) {
     const card = sale.card!;
-    const options = await this.price(sale, card, dto.brand);
+    const options = await this.price(sale, card, brand);
     const quote = await this.prisma.checkoutCardQuote.create({
       data: {
         companyId: sale.companyId,
@@ -133,7 +151,7 @@ export class CheckoutCardService {
           ...sale.quote,
           productId: sale.productId,
         }),
-        brand: dto.brand,
+        brand,
         options: options as unknown as Prisma.InputJsonValue,
         validUntil: new Date(now.getTime() + CARD_QUOTE_VALIDITY_MS),
       },
@@ -217,6 +235,8 @@ export class CheckoutCardService {
           option,
           idempotencyKey: dto.idempotencyKey,
           requestHash: requestHash(dto),
+          reuse:
+            sale.afterPurchase !== 'ACCESS' ? { ...dto, holderDocument } : null,
         });
         return { orderId: order.id, token: order.publicToken, attempt };
       });
@@ -258,10 +278,11 @@ export class CheckoutCardService {
       where: { publicToken: token },
       include: {
         cardAttempts: { orderBy: { createdAt: 'desc' } },
-        product: { select: { name: true } },
+        product: { select: { name: true, afterPurchase: true } },
       },
     });
-    if (!order || order.paymentMethod !== 'CARD')
+    // An offer order is charged once with the kept card; no retries here.
+    if (!order || order.paymentMethod !== 'CARD' || order.parentOrderId)
       throw new NotFoundException('Pedido não encontrado.');
     const repeated = order.cardAttempts.find(
       (attempt) => attempt.idempotencyKey === dto.idempotencyKey,
@@ -351,6 +372,10 @@ export class CheckoutCardService {
           option,
           idempotencyKey: dto.idempotencyKey,
           requestHash: requestHash(dto),
+          reuse:
+            order.product.afterPurchase !== 'ACCESS'
+              ? { ...dto, holderDocument }
+              : null,
         });
       });
     } catch (error) {
@@ -680,6 +705,8 @@ export class CheckoutCardService {
       option: CardOption;
       idempotencyKey: string;
       requestHash: string;
+      // Kept for the offer after the purchase: token, holder CPF and address.
+      reuse?: KeptCard | null;
     },
   ): Promise<CheckoutCardAttempt> {
     return tx.checkoutCardAttempt.create({
@@ -696,7 +723,154 @@ export class CheckoutCardService {
         submissionCents: input.option.submissionCents,
         totalCents: input.option.totalCents,
         efiFeeCents: input.option.efiFeeCents,
+        reuseEncrypted: input.reuse
+          ? this.crypto.encrypt(
+              JSON.stringify({
+                paymentToken: input.reuse.paymentToken,
+                holderDocument: input.reuse.holderDocument,
+                address: input.reuse.address,
+              } satisfies KeptCard),
+            )
+          : null,
       },
+    });
+  }
+
+  /**
+   * The card of a paid purchase, kept for its offer window: the brand and
+   * what the next charge needs. Null when nothing was kept or it was wiped.
+   */
+  async keptCard(
+    orderId: string,
+  ): Promise<(KeptCard & { brand: CheckoutCardBrand }) | null> {
+    const attempt = await this.prisma.checkoutCardAttempt.findFirst({
+      where: { orderId, status: 'PAID', reuseEncrypted: { not: null } },
+      select: { brand: true, reuseEncrypted: true },
+    });
+    if (!attempt?.reuseEncrypted) return null;
+    try {
+      const kept = JSON.parse(
+        this.crypto.decrypt(attempt.reuseEncrypted),
+      ) as KeptCard;
+      return { ...kept, brand: attempt.brand as CheckoutCardBrand };
+    } catch {
+      this.logger.error('CHECKOUT_KEPT_CARD_UNREADABLE');
+      return null;
+    }
+  }
+
+  /**
+   * An accepted offer charged on the card kept from the purchase: its own
+   * order, one attempt, sent once like any card sale. `inTx` records the
+   * answer to the offer in the same transaction.
+   */
+  async createOfferOrder(
+    sale: SaleContext & { productId: string; productName: string },
+    origin: {
+      id: string;
+      buyerName: string;
+      buyerEmail: string;
+      buyerPhone: string;
+      buyerDocument: string;
+      utm: Prisma.JsonValue;
+    },
+    kept: KeptCard,
+    input: {
+      offerId: string;
+      quoteId: string;
+      installments: number;
+      idempotencyKey: string;
+    },
+    inTx: (tx: Prisma.TransactionClient) => Promise<unknown>,
+    now = new Date(),
+  ) {
+    const card = sale.card!;
+    await this.assertDocumentLimit(origin.buyerDocument, now);
+    const { quote, option } = await this.usableQuote(
+      input.quoteId,
+      input.installments,
+      sale.companyId,
+      cartFingerprint({ ...sale.quote, productId: sale.productId }),
+      card,
+      now,
+    );
+    const created = await this.prisma.$transaction(async (tx) => {
+      await inTx(tx);
+      const order = await tx.checkoutOrder.create({
+        data: {
+          ...this.orders.orderData(
+            sale,
+            {
+              buyer: {
+                name: origin.buyerName,
+                email: origin.buyerEmail,
+                phone: origin.buyerPhone,
+              },
+              utm: origin.utm as object | null,
+              idempotencyKey: input.idempotencyKey,
+            },
+            origin.buyerDocument,
+            now,
+          ),
+          paymentMethod: 'CARD',
+          installments: option.installments,
+          totalCents: option.totalCents,
+          surchargeCents: option.totalCents - sale.quote.subtotalCents,
+          efiFeeBasisPoints: cardProcessingBasisPoints(
+            card.rates,
+            option.installments,
+          ),
+          efiFeeCents: option.efiFeeCents,
+          feePayer: sale.settings.cardFeePayer,
+          platformSettingsId: card.account.settings.id,
+          parentOrderId: origin.id,
+          offerId: input.offerId,
+        },
+      });
+      const attempt = await this.reserve(tx, order.id, sale.companyId, card, {
+        quoteId: quote.id,
+        brand: quote.brand,
+        option,
+        idempotencyKey: input.idempotencyKey,
+        requestHash: requestHash(input),
+      });
+      return { orderId: order.id, token: order.publicToken, attempt };
+    });
+    try {
+      await this.webhooks.emit(
+        this.prisma,
+        sale.companyId,
+        'order.created',
+        created.orderId,
+      );
+    } catch {
+      this.logger.warn('CHECKOUT_ORDER_CREATED_EVENT_FAILED');
+    }
+    await this.send(card, created.attempt, {
+      ...kept,
+      description: sale.productName,
+    });
+    return this.orders.view(created.token, now);
+  }
+
+  /**
+   * Kept cards live only while the offer can use them: wiped after a
+   * decline, when the offer window closes, or a day after an unpaid try.
+   */
+  async wipeKeptCards(now = new Date()): Promise<void> {
+    await this.prisma.checkoutCardAttempt.updateMany({
+      where: {
+        reuseEncrypted: { not: null },
+        OR: [
+          { status: { in: ['DECLINED', 'CANCELED'] } },
+          { order: { offerExpiresAt: { lt: now } } },
+          {
+            order: { offerExpiresAt: null },
+            createdAt: { lt: new Date(now.getTime() - 86_400_000) },
+          },
+        ],
+      },
+      data: { reuseEncrypted: null, reuseWipedAt: now },
     });
   }
 

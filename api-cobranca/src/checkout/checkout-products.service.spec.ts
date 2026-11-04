@@ -37,6 +37,12 @@ describe('CheckoutProductsService', () => {
       deleteMany: jest.fn(),
       count: jest.fn(),
     },
+    checkoutOffer: {
+      findFirst: jest.fn(),
+      create: jest.fn(),
+      updateMany: jest.fn(),
+      count: jest.fn(),
+    },
     $transaction: jest.fn(),
   };
   const assets = { assertOwned: jest.fn() };
@@ -71,6 +77,129 @@ describe('CheckoutProductsService', () => {
     prisma.checkoutOrderBump.count.mockResolvedValue(0);
     prisma.checkoutOrderBump.findFirst.mockResolvedValue(null);
     prisma.checkoutOrderBump.create.mockResolvedValue({ id: 'bump-1' });
+    prisma.checkoutOffer.count.mockResolvedValue(1);
+  });
+
+  describe('ofertas depois da compra', () => {
+    const offer = {
+      kind: 'UPSELL' as const,
+      offeredProductId: OFFERED,
+      priceCents: 4900,
+      compareAtPriceCents: 9700,
+      headline: 'Leve o guia completo',
+      active: true,
+    };
+
+    it('cria o upsell de outro produto da empresa', async () => {
+      await service.createOffer('company-a', 'product-1', offer);
+      expect(prisma.checkoutOffer.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          companyId: 'company-a',
+          productId: 'product-1',
+          kind: 'UPSELL',
+          offeredProductId: OFFERED,
+          priceCents: 4900,
+        }) as unknown,
+      });
+      expect(prisma.checkoutProduct.count).toHaveBeenCalledWith({
+        where: { id: OFFERED, companyId: 'company-a' },
+      });
+    });
+
+    it('downsell só depois do upsell; um de cada por produto', async () => {
+      prisma.checkoutOffer.count.mockResolvedValue(0);
+      await expect(
+        service.createOffer('company-a', 'product-1', {
+          ...offer,
+          kind: 'DOWNSELL',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      prisma.checkoutOffer.create.mockRejectedValue(uniqueViolation());
+      await expect(
+        service.createOffer('company-a', 'product-1', offer),
+      ).rejects.toMatchObject({ response: { code: 'CHECKOUT_OFFER_EXISTS' } });
+    });
+
+    it('produto de outra empresa ou o próprio produto não viram oferta', async () => {
+      prisma.checkoutProduct.count.mockResolvedValue(0);
+      await expect(
+        service.createOffer('company-a', 'product-1', offer),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      await expect(
+        service.createOffer('company-a', OFFERED, offer),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('edição com versão antiga responde 409 e o tipo não muda', async () => {
+      prisma.checkoutOffer.findFirst.mockResolvedValue({ kind: 'UPSELL' });
+      prisma.checkoutOffer.updateMany.mockResolvedValue({ count: 0 });
+      await expect(
+        service.updateOffer('company-a', 'product-1', 'offer-1', {
+          ...offer,
+          expectedVersion: 1,
+        }),
+      ).rejects.toMatchObject({ response: { code: 'VERSION_CHANGED' } });
+      await expect(
+        service.updateOffer('company-a', 'product-1', 'offer-1', {
+          ...offer,
+          kind: 'DOWNSELL',
+          expectedVersion: 2,
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      prisma.checkoutOffer.findFirst.mockResolvedValue(null);
+      await expect(
+        service.updateOffer('company-b', 'product-1', 'offer-1', {
+          ...offer,
+          expectedVersion: 2,
+        }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('página externa depois da compra exige https', async () => {
+      await expect(
+        service.create('company-a', { ...product, afterPurchase: 'EXTERNAL' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(
+        service.create('company-a', {
+          ...product,
+          afterPurchase: 'EXTERNAL',
+          afterPurchaseUrl: 'http://vendedor.test/oferta',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      await service.create('company-a', {
+        ...product,
+        afterPurchase: 'EXTERNAL',
+        afterPurchaseUrl: 'https://vendedor.test/oferta',
+        offerWindowMinutes: 60,
+      });
+      expect(prisma.checkoutProduct.create).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            afterPurchase: 'EXTERNAL',
+            afterPurchaseUrl: 'https://vendedor.test/oferta',
+            offerWindowMinutes: 60,
+          }) as unknown,
+        }),
+      );
+    });
+
+    it('tela antiga sem os campos novos não muda o destino salvo', async () => {
+      prisma.checkoutProduct.updateMany.mockResolvedValue({ count: 1 });
+      await service.update('company-a', 'product-1', {
+        ...product,
+        expectedVersion: 3,
+      });
+      const data = (
+        prisma.checkoutProduct.updateMany.mock.calls as [
+          { data: Record<string, unknown> },
+        ][]
+      )[0]?.[0].data;
+      expect(data).not.toHaveProperty('afterPurchase');
+      expect(data).not.toHaveProperty('offerWindowMinutes');
+    });
   });
 
   it('cria produto da empresa com link fixo', async () => {

@@ -139,6 +139,7 @@ export class CheckoutLedgerService {
             where: { status: 'REQUESTED' },
             select: { id: true, origin: true, createdAt: true },
           },
+          offer: { select: { kind: true } },
         },
       }),
     ]);
@@ -169,6 +170,9 @@ export class CheckoutLedgerService {
           })),
           paymentMethod: order.paymentMethod,
           installments: order.installments,
+          // Upsell or downsell accepted after the purchase `parentOrderId`.
+          offerKind: order.offer?.kind ?? null,
+          parentOrderId: order.parentOrderId,
           couponCode: order.couponCode,
           utm: order.utm,
           totalCents: order.totalCents,
