@@ -1942,7 +1942,8 @@ class ApiClient {
       "Sessao autenticada ainda nao carregada.",
     );
     error.status = 401;
-    error.data = { message: error.message };
+    // Not a failure to show: the request runs again once the session loads.
+    error.data = { code: "SESSION_NOT_READY", message: error.message };
     return error;
   }
 

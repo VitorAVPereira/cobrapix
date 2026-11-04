@@ -1,5 +1,6 @@
 "use client";
 
+import { loadFailed } from "@/components/features/checkout/ui";
 import { useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { AlertTriangle, Loader2, Plus, ShoppingBag } from "lucide-react";
@@ -354,7 +355,7 @@ export default function AdminCheckoutPage() {
       .listCheckoutClients(controller.signal)
       .then((result) => setClients(result))
       .catch((caught: unknown) => {
-        if (!controller.signal.aborted)
+        if (loadFailed(controller.signal, caught))
           setListError(messageOf(caught, "Não foi possível carregar os clientes."));
       });
     return () => controller.abort();
@@ -368,7 +369,7 @@ export default function AdminCheckoutPage() {
       .getCheckoutClient(selectedId, controller.signal)
       .then((result) => setDetail(result))
       .catch((caught: unknown) => {
-        if (!controller.signal.aborted)
+        if (loadFailed(controller.signal, caught))
           setDetailError(messageOf(caught, "Não foi possível carregar o cliente."));
       });
     return () => controller.abort();

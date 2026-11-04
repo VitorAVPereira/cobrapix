@@ -15,6 +15,7 @@ import {
   NoticeText,
   secondaryButtonClass,
   type Notice,
+  loadFailed,
 } from "@/components/features/checkout/ui";
 
 const CHANGED_ELSEWHERE: Notice = {
@@ -43,7 +44,7 @@ export default function CheckoutProductPage() {
         setCatalog(all);
       })
       .catch((caught: unknown) => {
-        if (!controller.signal.aborted)
+        if (loadFailed(controller.signal, caught))
           setError(messageOf(caught, "Não foi possível carregar o produto."));
       });
     return () => controller.abort();

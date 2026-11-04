@@ -13,6 +13,7 @@ import {
   NoticeText,
   secondaryButtonClass,
   type Notice,
+  loadFailed,
 } from "@/components/features/checkout/ui";
 
 const STATUS_LABELS: Record<CheckoutSaleStatus, string> = {
@@ -114,7 +115,7 @@ export default function CheckoutSalesPage() {
         setSales(loadedSales);
       })
       .catch((caught: unknown) => {
-        if (!controller.signal.aborted) setError(messageOf(caught, "Não foi possível carregar as vendas."));
+        if (loadFailed(controller.signal, caught)) setError(messageOf(caught, "Não foi possível carregar as vendas."));
       });
     return () => controller.abort();
   }, [api, period, status, page, reload]);

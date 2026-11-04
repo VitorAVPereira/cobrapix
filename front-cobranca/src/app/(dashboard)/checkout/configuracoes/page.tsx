@@ -18,6 +18,7 @@ import {
   messageOf,
   NoticeText,
   type Notice,
+  loadFailed,
 } from "@/components/features/checkout/ui";
 import { WebhookPanel } from "@/components/features/checkout/WebhookPanel";
 
@@ -244,7 +245,7 @@ export default function CheckoutSettingsPage() {
       .getCheckoutSettings(controller.signal)
       .then((result) => setSettings(result))
       .catch((caught: unknown) => {
-        if (!controller.signal.aborted)
+        if (loadFailed(controller.signal, caught))
           setError(messageOf(caught, "Não foi possível carregar as configurações."));
       });
     return () => controller.abort();

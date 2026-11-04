@@ -40,6 +40,15 @@ export function Field({
   );
 }
 
+/**
+ * A load failed for real: not a replaced request, and not the first one sent
+ * before the session loaded (the screen loads again once it does).
+ */
+export function loadFailed(signal: AbortSignal, error: unknown): boolean {
+  const data = (error as { data?: { code?: unknown } } | null)?.data;
+  return !signal.aborted && data?.code !== "SESSION_NOT_READY";
+}
+
 export function NoticeText({ notice }: { notice: Notice }) {
   if (!notice) return null;
   return (

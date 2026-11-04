@@ -21,6 +21,7 @@ import {
   NoticeText,
   secondaryButtonClass,
   type Notice,
+  loadFailed,
 } from "@/components/features/checkout/ui";
 
 interface CouponForm {
@@ -264,7 +265,7 @@ export default function CheckoutCouponsPage() {
         setProducts(loadedProducts);
       })
       .catch((caught: unknown) => {
-        if (!controller.signal.aborted)
+        if (loadFailed(controller.signal, caught))
           setError(messageOf(caught, "Não foi possível carregar os cupons."));
       });
     return () => controller.abort();

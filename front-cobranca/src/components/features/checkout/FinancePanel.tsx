@@ -8,7 +8,7 @@ import { useApiClient } from "@/lib/use-api-client";
 import { formatCents, formatDateTime, parseAmountToCents } from "@/lib/disbursements";
 import { formatPercentageBps } from "@/lib/billing-fees";
 import { centsToInput } from "@/lib/checkout";
-import { buttonClass, Field, inputClass, messageOf, NoticeText, secondaryButtonClass, type Notice } from "./ui";
+import { buttonClass, Field, inputClass, messageOf, NoticeText, secondaryButtonClass, type Notice, loadFailed } from "./ui";
 
 const ENTRY_LABELS: Record<string, string> = { PAYOUT: "Repasse", ADJUSTMENT: "Ajuste", CHARGEBACK: "Contestação" };
 const ORIGIN_LABELS = { BUYER: "comprador", SELLER: "vendedor" } as const;
@@ -165,7 +165,7 @@ export function FinancePanel({ companyId }: { companyId: string }) {
       .getCheckoutFinance(companyId, controller.signal)
       .then((result) => setData(result))
       .catch((caught: unknown) => {
-        if (!controller.signal.aborted) setError(messageOf(caught, "Não foi possível carregar o financeiro."));
+        if (loadFailed(controller.signal, caught)) setError(messageOf(caught, "Não foi possível carregar o financeiro."));
       });
     return () => controller.abort();
   }, [api, companyId, reload]);
