@@ -1524,6 +1524,26 @@ export interface CheckoutFinanceOverview {
   };
   sales: CheckoutSalesPage;
 }
+export interface CheckoutWebhookView {
+  url: string | null;
+  hasSecret: boolean;
+  failingSince: string | null;
+  disabledAt: string | null;
+  version: number;
+}
+export interface CheckoutWebhookDelivery {
+  id: string;
+  eventId: string;
+  eventType: string;
+  orderId: string | null;
+  status: "PENDING" | "DELIVERED" | "FAILED" | "SKIPPED";
+  attempts: number;
+  lastStatusCode: number | null;
+  lastError: string | null;
+  nextAttemptAt: string | null;
+  deliveredAt: string | null;
+  createdAt: string;
+}
 export interface CheckoutPlatformView {
   current: {
     id: string;
@@ -2908,6 +2928,32 @@ class ApiClient {
       `/admin/checkout/clients/${encodeURIComponent(companyId)}/refund-requests/${encodeURIComponent(requestId)}/reject`,
       { method: "POST", body: JSON.stringify({ note }) },
     );
+  }
+
+  // Cifra+ Checkout: the seller's webhook
+  getCheckoutWebhook(signal?: AbortSignal): Promise<CheckoutWebhookView> {
+    return this.fetch("/checkout/webhook", { signal });
+  }
+  setCheckoutWebhookUrl(input: { url: string | null }): Promise<CheckoutWebhookView & { secret: string | null }> {
+    return this.fetch("/checkout/webhook", { method: "PUT", body: JSON.stringify(input) });
+  }
+  rotateCheckoutWebhookSecret(): Promise<{ secret: string }> {
+    return this.fetch("/checkout/webhook/secret", { method: "POST" });
+  }
+  enableCheckoutWebhook(): Promise<CheckoutWebhookView> {
+    return this.fetch("/checkout/webhook/enable", { method: "POST" });
+  }
+  testCheckoutWebhook(): Promise<CheckoutWebhookDelivery> {
+    return this.fetch("/checkout/webhook/test", { method: "POST" });
+  }
+  listCheckoutWebhookDeliveries(
+    query: { page?: number; pageSize?: number },
+    signal?: AbortSignal,
+  ): Promise<{ total: number; page: number; pageSize: number; items: CheckoutWebhookDelivery[] }> {
+    return this.fetch(`/checkout/webhook/deliveries${this.buildQueryString(query)}`, { signal });
+  }
+  resendCheckoutWebhook(deliveryId: string): Promise<void> {
+    return this.fetch(`/checkout/webhook/deliveries/${encodeURIComponent(deliveryId)}/resend`, { method: "POST" });
   }
 
   // Cifra+ Checkout: the session company

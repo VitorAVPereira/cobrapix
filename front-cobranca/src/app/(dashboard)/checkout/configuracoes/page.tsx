@@ -19,6 +19,7 @@ import {
   NoticeText,
   type Notice,
 } from "@/components/features/checkout/ui";
+import { WebhookPanel } from "@/components/features/checkout/WebhookPanel";
 
 const FEE_PAYER_LABELS: Record<CheckoutFeePayer, string> = {
   SELLER: "Eu pago (o comprador paga o preço do produto)",
@@ -281,6 +282,7 @@ export default function CheckoutSettingsPage() {
           }}
         />
       )}
+      <WebhookPanel />
     </div>
   );
 }
