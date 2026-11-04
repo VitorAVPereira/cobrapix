@@ -423,6 +423,7 @@ model Company {
   checkoutProducts         CheckoutProduct[]
   checkoutOrderBumps       CheckoutOrderBump[]
   checkoutCoupons          CheckoutCoupon[]
+  checkoutOrders           CheckoutOrder[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -779,6 +780,8 @@ model EfiAccountIdentity {
   updatedAt           DateTime                @updatedAt
 
   credentialVersions EfiCredentialVersion[]
+  checkoutPlatformSettings CheckoutPlatformSettings[]
+  checkoutPaymentAttempts  CheckoutPaymentAttempt[]
   financialProfiles  FinancialProfileVersion[]
   paymentCharges     PaymentCharge[]
   gatewayAccount     GatewayAccount?
@@ -2327,6 +2330,7 @@ model CheckoutSellerTerms {
   payoutPixKey           String
   changedByUserId        String
   createdAt              DateTime @default(now())
+  orders                 CheckoutOrder[]
 
   @@unique([companyId, version])
 }
@@ -2396,6 +2400,7 @@ model CheckoutProduct {
   bumps               CheckoutOrderBump[]     @relation("CheckoutBumpProduct")
   offeredAsBump       CheckoutOrderBump[]     @relation("CheckoutBumpOffered")
   couponProducts      CheckoutCouponProduct[]
+  orders              CheckoutOrder[]
 
   @@unique([id, companyId])
   @@index([companyId, active, createdAt])
@@ -2443,6 +2448,7 @@ model CheckoutCoupon {
   createdAt            DateTime                @default(now())
   updatedAt            DateTime                @updatedAt
   products             CheckoutCouponProduct[]
+  orders               CheckoutOrder[]
 
   @@unique([companyId, code])
   @@unique([id, companyId])
@@ -2457,4 +2463,104 @@ model CheckoutCouponProduct {
 
   @@id([couponId, productId])
   @@index([productId])
+}
+
+enum CheckoutOrderStatus {
+  PENDING
+  PAID
+  EXPIRED
+  FAILED
+}
+
+enum CheckoutAttemptStatus {
+  CREATING
+  ACTIVE
+  PAID
+  EXPIRED
+  UNCERTAIN
+  FAILED
+}
+
+// The CifraMais Efí account the checkout issues from, and its Pix tariff.
+// Versioned: the highest version is current; each order points to its own.
+model CheckoutPlatformSettings {
+  id                  String             @id @default(uuid())
+  version             Int                @unique
+  identityId          String
+  identity            EfiAccountIdentity @relation(fields: [identityId], references: [id], onDelete: Restrict)
+  pixFeeBasisPoints   Int?
+  webhookConfiguredAt DateTime?
+  changedByUserId     String
+  createdAt           DateTime           @default(now())
+  orders              CheckoutOrder[]
+}
+
+// What was sold, to whom and for how much. Prices, fees and terms are copied
+// at creation; later changes to products or settings never alter an order.
+model CheckoutOrder {
+  id                     String                   @id @default(uuid())
+  companyId              String
+  company                Company                  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  productId              String
+  product                CheckoutProduct          @relation(fields: [productId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  publicToken            String                   @unique
+  idempotencyKey         String                   @unique
+  status                 CheckoutOrderStatus      @default(PENDING)
+  buyerName              String
+  buyerEmail             String
+  buyerDocument          String
+  buyerPhone             String
+  items                  Json
+  couponId               String?
+  coupon                 CheckoutCoupon?          @relation(fields: [couponId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  couponCode             String?
+  subtotalCents          Int
+  discountCents          Int
+  surchargeCents         Int
+  totalCents             Int
+  efiFeeBasisPoints      Int
+  efiFeeCents            Int
+  platformFeeBasisPoints Int
+  platformFeeCents       Int
+  feePayer               CheckoutFeePayer
+  termsId                String
+  terms                  CheckoutSellerTerms      @relation(fields: [termsId], references: [id], onDelete: Restrict)
+  platformSettingsId     String
+  platformSettings       CheckoutPlatformSettings @relation(fields: [platformSettingsId], references: [id], onDelete: Restrict)
+  utm                    Json?
+  expiresAt              DateTime
+  paidAt                 DateTime?
+  accessEmailSentAt      DateTime?
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @updatedAt
+  attempt                CheckoutPaymentAttempt?
+
+  @@unique([id, companyId])
+  @@index([companyId, status, createdAt])
+  @@index([status, expiresAt])
+}
+
+// One Pix per order: a new Pix is a new order. The txid starts with "ckt" so
+// the Pix webhook tells checkout payments from billing charges.
+model CheckoutPaymentAttempt {
+  id               String                @id @default(uuid())
+  orderId          String                @unique
+  companyId        String
+  order            CheckoutOrder         @relation(fields: [orderId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  issuerIdentityId String
+  issuerIdentity   EfiAccountIdentity    @relation(fields: [issuerIdentityId], references: [id], onDelete: Restrict)
+  efiTxid          String                @unique
+  status           CheckoutAttemptStatus @default(CREATING)
+  amountCents      Int
+  pixCopyPaste     String?               @db.Text
+  pixQrCodeImage   String?               @db.Text
+  endToEndId       String?
+  paidAmountCents  Int?
+  providerFeeCents Int?
+  lastCheckedAt    DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  @@unique([orderId, companyId])
+  @@index([status, createdAt])
 }
