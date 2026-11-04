@@ -80,3 +80,33 @@ O estado passa a **Pronta para vender**.
   últimos 90 dias. Enquanto o checkout só aceitar Pix, o índice fica em 0%.
 - **Ajuste:** crédito ou débito com motivo, para corrigir qualquer valor. Nenhum lançamento é
   editado.
+
+## Webhook ao vendedor (Parte 4)
+
+O vendedor configura em **Configurações do checkout → Webhook**:
+- **URL:** só `https`, com nome de domínio público;
+- **segredo:** gerado pelo sistema e mostrado uma vez;
+- **“Enviar teste”:** manda um aviso de exemplo e mostra a resposta do sistema dele.
+
+**Eventos:**
+
+| Evento | Quando |
+| --- | --- |
+| `order.created` | O Pix foi gerado |
+| `order.paid` | O pagamento foi confirmado |
+| `order.pix_expired` | O Pix venceu sem pagamento |
+| `refund.requested` | O comprador ou o vendedor pediu reembolso |
+| `order.refunded` | Uma devolução foi concluída (com valor e total devolvido) |
+| `order.chargeback` | Uma contestação foi registrada |
+
+**O que o sistema do vendedor recebe e confere:**
+- **corpo:** um POST em JSON, com `data.order` trazendo comprador, itens (`kind` `MAIN` ou `BUMP`) e
+  a data de fim do acesso de cada item (`accessExpiresAt`);
+- **assinatura:** o cabeçalho `X-Cifra-Signature: t=<unix>,v1=<hex>`. Ele calcula o HMAC-SHA256 do
+  segredo sobre `<t>.<corpo bruto>`, compara com `v1` e recusa avisos com mais de 5 minutos;
+- **repetições:** `X-Cifra-Event-Id` é o mesmo em todas, e serve para descartar avisos repetidos.
+
+**Quando o sistema do vendedor falha:**
+- qualquer resposta fora de 2xx é repetida por até 24 horas;
+- depois de **3 dias seguidos sem sucesso**, o webhook é desligado e o vendedor recebe um e-mail;
+- os avisos desse período ficam no histórico para “Reenviar” depois de “Religar”.
