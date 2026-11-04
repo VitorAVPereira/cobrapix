@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CheckoutLedgerService } from './checkout-ledger.service';
 import { CheckoutRefundsService } from './checkout-refunds.service';
+import { CheckoutWebhooksService } from './checkout-webhooks.service';
 import {
   AdjustmentDto,
   OrderMoneyDto,
@@ -19,6 +20,7 @@ export class CheckoutFinanceService {
     private readonly prisma: PrismaService,
     private readonly ledger: CheckoutLedgerService,
     private readonly refunds: CheckoutRefundsService,
+    private readonly webhooks: CheckoutWebhooksService,
   ) {}
 
   async overview(companyId: string, now = new Date()) {
@@ -158,6 +160,9 @@ export class CheckoutFinanceService {
           status: { in: ['PAID', 'REFUNDED'] },
         },
         data: { status: 'CHARGEBACK' },
+      });
+      await this.webhooks.emit(tx, companyId, 'order.chargeback', dto.orderId, {
+        chargeback: { amountCents: dto.amountCents },
       });
     });
     return this.ledger.balance(companyId);

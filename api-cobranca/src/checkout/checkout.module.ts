@@ -29,6 +29,8 @@ import { CheckoutLedgerService } from './checkout-ledger.service';
 import { CheckoutRefundsService } from './checkout-refunds.service';
 import { CheckoutFinanceService } from './checkout-finance.service';
 import { CheckoutFinanceController } from './checkout-finance.controller';
+import { CheckoutWebhooksService } from './checkout-webhooks.service';
+import { CheckoutWebhookSender } from './checkout-webhook.sender';
 
 @Module({
   imports: [
@@ -61,6 +63,8 @@ import { CheckoutFinanceController } from './checkout-finance.controller';
     CheckoutLedgerService,
     CheckoutRefundsService,
     CheckoutFinanceService,
+    CheckoutWebhooksService,
+    CheckoutWebhookSender,
     ResendMailerService,
     PlatformAdminGuard,
   ],

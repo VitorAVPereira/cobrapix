@@ -2,6 +2,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import type { CheckoutMailJobs } from './checkout-mail.service';
 import type { CheckoutLedgerService } from './checkout-ledger.service';
 import type { CheckoutRefundsService } from './checkout-refunds.service';
+import type { CheckoutWebhooksService } from './checkout-webhooks.service';
 import {
   CheckoutPaymentsService,
   splitCheckoutPixEvents,
@@ -50,11 +51,13 @@ describe('CheckoutPaymentsService', () => {
   const mail = { accessEmail: jest.fn() };
   const ledger = { recordSale: jest.fn() };
   const refunds = { record: jest.fn() };
+  const webhooks = { emit: jest.fn() };
   const service = new CheckoutPaymentsService(
     prisma as unknown as PrismaService,
     mail as unknown as CheckoutMailJobs,
     ledger as unknown as CheckoutLedgerService,
     refunds as unknown as CheckoutRefundsService,
+    webhooks as unknown as CheckoutWebhooksService,
   );
   const event = {
     txid: TXID,

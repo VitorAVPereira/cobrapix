@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CheckoutMailJobs } from './checkout-mail.service';
 import { CheckoutLedgerService } from './checkout-ledger.service';
 import { CheckoutRefundsService } from './checkout-refunds.service';
+import { CheckoutWebhooksService } from './checkout-webhooks.service';
 
 export const CHECKOUT_TXID_PREFIX = 'ckt';
 // The anomaly table accepts PIX, CHARGES or CARD; checkout reasons carry a prefix.
@@ -56,6 +57,7 @@ export class CheckoutPaymentsService {
     private readonly mail: CheckoutMailJobs,
     private readonly ledger: CheckoutLedgerService,
     private readonly refunds: CheckoutRefundsService,
+    private readonly webhooks: CheckoutWebhooksService,
   ) {}
 
   /**
@@ -136,6 +138,7 @@ export class CheckoutPaymentsService {
         { ...order, paidAt: now },
         payment.providerFeeCents,
       );
+      await this.webhooks.emit(tx, order.companyId, 'order.paid', order.id);
       // Coupon limits count paid orders only.
       if (order.couponId)
         await tx.checkoutCoupon.update({

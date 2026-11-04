@@ -7,6 +7,7 @@ import {
   RELEASE_DELAY_MS,
 } from './checkout-ledger.service';
 import { CheckoutRefundsService } from './checkout-refunds.service';
+import type { CheckoutWebhooksService } from './checkout-webhooks.service';
 
 interface EntryArg {
   data: Array<{
@@ -77,6 +78,7 @@ describe('CheckoutRefundsService', () => {
   };
   const ledger = { record: jest.fn() };
   const mailer = { sendEmail: jest.fn() };
+  const webhooks = { emit: jest.fn() };
   const env: Record<string, string> = {
     PLATFORM_ALERT_EMAIL: 'alertas@ciframais.test',
     RESEND_API_KEY: 're_test',
@@ -87,6 +89,7 @@ describe('CheckoutRefundsService', () => {
     ledger as unknown as CheckoutLedgerService,
     { get: (key: string) => env[key] } as unknown as ConfigService,
     mailer as unknown as ResendMailerService,
+    webhooks as unknown as CheckoutWebhooksService,
   );
   const order = (
     entries: Array<{

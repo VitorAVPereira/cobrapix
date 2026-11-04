@@ -13,6 +13,7 @@ import type { OrderItem } from './checkout-pricing';
 import { conflict, normalizeDocument } from './checkout-rules';
 import { EfiCheckoutPixClient } from './efi-checkout-pix.client';
 import { CheckoutPaymentsService } from './checkout-payments.service';
+import { CheckoutWebhooksService } from './checkout-webhooks.service';
 import { CreateCheckoutOrderDto } from './dto/checkout-public.dto';
 
 export const PIX_VALIDITY_MS = 30 * 60_000;
@@ -45,6 +46,7 @@ export class CheckoutOrdersService {
     private readonly platform: CheckoutPlatformService,
     private readonly pix: EfiCheckoutPixClient,
     private readonly payments: CheckoutPaymentsService,
+    private readonly webhooks: CheckoutWebhooksService,
   ) {}
 
   async create(slug: string, dto: CreateCheckoutOrderDto, now = new Date()) {
@@ -144,6 +146,17 @@ export class CheckoutOrdersService {
         where: { orderId: order.id, status: 'CREATING' },
         data: { status: 'UNCERTAIN' },
       });
+    try {
+      await this.webhooks.emit(
+        this.prisma,
+        sale.companyId,
+        'order.created',
+        order.id,
+      );
+    } catch {
+      // The order and its Pix stand; only the seller notice is missing.
+      this.logger.warn('CHECKOUT_ORDER_CREATED_EVENT_FAILED');
+    }
     return this.view(order.publicToken, now);
   }
 
@@ -273,7 +286,7 @@ export class CheckoutOrdersService {
         });
         continue;
       }
-      await this.prisma.$transaction([
+      const [, expired] = await this.prisma.$transaction([
         this.prisma.checkoutPaymentAttempt.updateMany({
           where: { id: attempt.id, status: 'ACTIVE' },
           data: { status: 'EXPIRED', lastCheckedAt: now },
@@ -283,6 +296,14 @@ export class CheckoutOrdersService {
           data: { status: 'EXPIRED' },
         }),
       ]);
+      // The seller's own recovery starts here.
+      if (expired.count === 1)
+        await this.webhooks.emit(
+          this.prisma,
+          order.companyId,
+          'order.pix_expired',
+          order.id,
+        );
     }
   }
 

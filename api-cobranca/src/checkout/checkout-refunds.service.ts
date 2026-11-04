@@ -9,6 +9,7 @@ import { CheckoutRefundOrigin } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ResendMailerService } from '../common/resend-mailer.service';
 import { CheckoutLedgerService } from './checkout-ledger.service';
+import { CheckoutWebhooksService } from './checkout-webhooks.service';
 
 export const BUYER_REFUND_WINDOW_MS = 7 * 86_400_000;
 
@@ -32,6 +33,7 @@ export class CheckoutRefundsService {
     private readonly ledger: CheckoutLedgerService,
     private readonly config: ConfigService,
     private readonly mailer: ResendMailerService,
+    private readonly webhooks: CheckoutWebhooksService,
   ) {}
 
   /**
@@ -124,6 +126,19 @@ export class CheckoutRefundsService {
           resolvedByUserId: input.createdByUserId ?? null,
         },
       });
+      // The seller system takes the access away (or part of it) from here.
+      await this.webhooks.emit(
+        tx,
+        order.companyId,
+        'order.refunded',
+        order.id,
+        {
+          refund: {
+            amountCents: input.amountCents,
+            totalRefundedCents: refundedAfter,
+          },
+        },
+      );
       return true;
     });
   }
@@ -204,6 +219,18 @@ export class CheckoutRefundsService {
       select: { id: true, status: true, createdAt: true },
     });
     await this.alertAdmin(order.companyId, origin);
+    try {
+      await this.webhooks.emit(
+        this.prisma,
+        order.companyId,
+        'refund.requested',
+        order.id,
+        { refundRequest: { id: created.id, origin, reason: reason.trim() } },
+      );
+    } catch {
+      // The request is saved; only the seller notice is missing.
+      this.logger.warn('CHECKOUT_REFUND_REQUESTED_EVENT_FAILED');
+    }
     return created;
   }
 
