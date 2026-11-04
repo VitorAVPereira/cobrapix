@@ -16,11 +16,14 @@ import {
   LogOut,
   MessageSquareText,
   MessageSquare,
+  Package,
   Settings,
   Settings2,
   SlidersHorizontal,
   Scale,
   Send,
+  ShoppingBag,
+  TicketPercent,
   Users,
   Wallet,
   X,
@@ -107,6 +110,22 @@ const adminItems = [
     label: "Clientes",
     icon: Building2,
   },
+  {
+    href: "/admin/checkout",
+    label: "Checkout",
+    icon: ShoppingBag,
+  },
+];
+
+// A checkout company sees only the Cifra+ Checkout screens.
+const checkoutItems = [
+  { href: "/checkout/produtos", label: "Produtos", icon: Package },
+  { href: "/checkout/cupons", label: "Cupons", icon: TicketPercent },
+  {
+    href: "/checkout/configuracoes",
+    label: "Configurações do checkout",
+    icon: Settings2,
+  },
 ];
 
 // Shown only to companies with collaborator payments released by the admin.
@@ -154,8 +173,12 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const [settingsOpen, setSettingsOpen] = useState(true);
   const DashboardIcon = dashboardItem.icon;
   const isPlatformAdmin = session?.user.role === "PLATFORM_ADMIN";
+  const isCheckout =
+    !isPlatformAdmin && session?.user.companyProduct === "CHECKOUT";
   const { openingEnabled, canIssue } = useFinancialActivation();
-  const disbursementsEnabled = useDisbursementsEnabled(!isPlatformAdmin);
+  const disbursementsEnabled = useDisbursementsEnabled(
+    !isPlatformAdmin && !isCheckout,
+  );
   // Self-service activation stays hidden while the opening API is disabled,
   // and an active company is never invited to activate again.
   const visibleSettingsItems = settingsItems.filter(
@@ -220,6 +243,29 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                   );
                 })}
               </div>
+            </div>
+          ) : isCheckout ? (
+            <div className="space-y-1">
+              {checkoutItems.map((item) => {
+                const Icon = item.icon;
+                const isActive = isCurrentPath(pathname, item.href);
+
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={onClose}
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
+                      isActive
+                        ? "bg-emerald-500/15 text-emerald-400 font-semibold border-l-[3px] border-emerald-400 pl-[9px]"
+                        : "hover:bg-slate-800 hover:text-white"
+                    }`}
+                  >
+                    <Icon size={18} />
+                    <span>{item.label}</span>
+                  </Link>
+                );
+              })}
             </div>
           ) : (
             <>

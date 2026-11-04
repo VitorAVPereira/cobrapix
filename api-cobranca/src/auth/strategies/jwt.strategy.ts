@@ -29,6 +29,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         role: true,
         mustChangePassword: true,
         tokenVersion: true,
+        company: { select: { product: true } },
       },
     });
 
@@ -42,6 +43,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       name: user.name,
       companyId: user.companyId,
       role: user.role,
+      companyProduct: user.company.product,
       mustChangePassword: user.mustChangePassword,
       tokenVersion: user.tokenVersion,
     };

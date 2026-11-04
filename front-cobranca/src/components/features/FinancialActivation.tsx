@@ -29,7 +29,9 @@ export function FinancialActivationProvider({
     if (
       status !== "authenticated" ||
       session?.user.role !== "COMPANY_ADMIN" ||
-      session.user.mustChangePassword
+      session.user.mustChangePassword ||
+      // Checkout companies sell through the Cifra+ account: no activation.
+      session.user.companyProduct === "CHECKOUT"
     ) {
       setState(null);
       setProfile(null);
@@ -65,6 +67,7 @@ export function FinancialActivationProvider({
     session?.user.role,
     session?.user.mustChangePassword,
     session?.user.companyId,
+    session?.user.companyProduct,
   ]);
   useEffect(() => {
     const activeRequest = requestId;
@@ -106,6 +109,7 @@ export function FinancialActivationBanner(): ReactNode {
   if (
     session?.user.role !== "COMPANY_ADMIN" ||
     session.user.mustChangePassword ||
+    session.user.companyProduct === "CHECKOUT" ||
     (canIssue && !error)
   )
     return null;

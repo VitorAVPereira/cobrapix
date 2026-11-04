@@ -7,6 +7,7 @@ type MockRole = "PLATFORM_ADMIN" | "COMPANY_ADMIN";
 
 let mockPathname = "/cobrancas";
 let mockRole: MockRole = "COMPANY_ADMIN";
+let mockProduct: "BILLING" | "CHECKOUT" | undefined = "BILLING";
 
 jest.mock("next/navigation", () => ({
   usePathname: () => mockPathname,
@@ -26,6 +27,7 @@ jest.mock("next-auth/react", () => ({
         email: "admin@cobrapix.com",
         name: "Admin CobraPix",
         role: mockRole,
+        companyProduct: mockProduct,
       },
     },
   }),
@@ -39,6 +41,42 @@ describe("Sidebar", () => {
   beforeEach(() => {
     mockPathname = "/cobrancas";
     mockRole = "COMPANY_ADMIN";
+    mockProduct = "BILLING";
+    mockApi.getDisbursementStatus.mockClear();
+  });
+
+  it("shows only checkout screens to a checkout company", () => {
+    mockPathname = "/checkout/produtos";
+    mockProduct = "CHECKOUT";
+
+    renderSidebar();
+
+    expect(screen.getByRole("link", { name: /produtos/i })).toHaveAttribute(
+      "href",
+      "/checkout/produtos",
+    );
+    expect(screen.getByRole("link", { name: /cupons/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /configurações do checkout/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: /cobranças/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: /dashboard/i }),
+    ).not.toBeInTheDocument();
+    expect(mockApi.getDisbursementStatus).not.toHaveBeenCalled();
+  });
+
+  it("treats an old session without product as billing", () => {
+    mockProduct = undefined;
+
+    renderSidebar();
+
+    expect(screen.getByRole("link", { name: /cobranças/i })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: /cupons/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows only admin navigation for platform admins", () => {
@@ -53,6 +91,9 @@ describe("Sidebar", () => {
     expect(
       screen.getByRole("link", { name: /clientes/i }),
     ).toHaveAttribute("href", "/admin/clientes");
+    expect(
+      screen.getByRole("link", { name: /^checkout$/i }),
+    ).toHaveAttribute("href", "/admin/checkout");
     expect(
       screen.queryByRole("link", { name: /dashboard/i }),
     ).not.toBeInTheDocument();

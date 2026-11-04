@@ -44,6 +44,7 @@ describe("useApiClient", () => {
           email: "admin@cobrapix.com",
           companyId: "company-1",
           role: "COMPANY_ADMIN",
+          companyProduct: "BILLING",
           mustChangePassword: false,
           tokenVersion: 0,
           authInvalidated: false,

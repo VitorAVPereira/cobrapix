@@ -1,4 +1,4 @@
-import { UserRole } from '@prisma/client';
+import { CompanyProduct, UserRole } from '@prisma/client';
 
 export interface AuthenticatedUser {
   userId: string;
@@ -6,6 +6,7 @@ export interface AuthenticatedUser {
   name?: string | null;
   companyId: string;
   role: UserRole;
+  companyProduct: CompanyProduct;
   mustChangePassword: boolean;
   tokenVersion: number;
 }

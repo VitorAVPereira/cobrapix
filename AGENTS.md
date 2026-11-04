@@ -172,6 +172,13 @@ VPS e na Vercel antes de afirmar que algo está em produção.
   (visitante, orçamento e WhatsApp; pedidos de titular pelo WhatsApp comercial; pedidos
   guardados até 12 meses sem contratação). Mudou a coleta, mude a política.
   Contexto para o projeto de captação de leads: `docs/contexto-ciframais.md`.
+- **Cifra+ Checkout (03/11), Parte 1 de 9:** venda de produtos digitais pela conta Efí da
+  **Cifra+** (não a do cliente). A empresa ganha `product` (`BILLING` ou `CHECKOUT`); uma empresa
+  de checkout só vê as telas do checkout, e as rotas de um produto respondem 404 ao outro
+  (`@CompanyProducts` no `JwtAuthGuard`). Nesta parte: Admin → Checkout (cliente, % Cifra+ e dados
+  de repasse versionados), configurações da página, imagens, produtos, até 6 order bumps e
+  cupons. Ainda não há venda: a página pública e o Pix chegam na Parte 2. Spec com as 9 partes:
+  `docs/superpowers/specs/2026-10-30-cifra-checkout-design.md`.
 - **Em aberto:**
   - Planos de 29/09 (`docs/superpowers/plans/2026-09-29-0*.md`): código entregue; faltam as
     verificações depois da publicação e a conciliação das duas tentativas BOLIX reais pelo
@@ -198,6 +205,7 @@ VPS e na Vercel antes de afirmar que algo está em produção.
 | `financial-activation/` | Ativação manual: perfil versionado, credenciais cifradas, validação em fila, elegibilidade, certificados |
 | `settlements/` | Lançamentos imutáveis (`FinancialLedgerEntry`), conciliação e divergências |
 | `disbursements/` | Pagamentos a colaboradores: liberação pelo admin, colaboradores, lotes, aprovação no WhatsApp, envio Pix e resultado pelo webhook Pix |
+| `checkout/` | Cifra+ Checkout: clientes de checkout e termos (admin), configurações da página, imagens públicas, produtos, order bumps e cupons |
 | `efi-onboarding/` | Abertura de contas (desligada) e chaves de integração (`PlatformIntegrationState`) |
 | `communications/` | Conversas, mensagens, intenções de envio, atribuição por empresa, pendências e retomada de templates |
 | `whatsapp/` | Transporte Datafy e `OutboundDispatcherService` (ver `whatsapp/transport/README.md`) |
@@ -438,6 +446,7 @@ npm run test:template-transition:postgres
 node test/e2e-disposable.cjs <arquivo>.e2e-spec.ts [...]   # ex.: npm run test:e2e:templates
 npm run test:e2e:disbursements                             # pagamentos a colaboradores
 npm run test:e2e:invoice-import                             # importação de cobranças com revisão
+npm run test:e2e:checkout                                   # Cifra+ Checkout (clientes, produtos, cupons, isolamento)
 ```
 
 - Testes que escrevem em banco ou Redis usam **somente** a infraestrutura descartável dos

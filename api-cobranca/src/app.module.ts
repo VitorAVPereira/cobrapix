@@ -22,6 +22,7 @@ import { SettlementsModule } from './settlements/settlements.module';
 import { CommunicationsModule } from './communications/communications.module';
 import { ContactModule } from './contact/contact.module';
 import { DisbursementsModule } from './disbursements/disbursements.module';
+import { CheckoutModule } from './checkout/checkout.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { DisbursementsModule } from './disbursements/disbursements.module';
     CommunicationsModule,
     ContactModule,
     DisbursementsModule,
+    CheckoutModule,
   ],
   providers: [
     {

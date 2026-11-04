@@ -3,12 +3,15 @@ import Credentials from "next-auth/providers/credentials";
 import { revalidateAuthToken } from "./auth-session";
 
 export type UserRole = "PLATFORM_ADMIN" | "COMPANY_ADMIN";
+// CHECKOUT companies sell through Cifra+ Checkout and see only its screens.
+export type CompanyProduct = "BILLING" | "CHECKOUT";
 
 declare module "next-auth" {
   interface User {
     companyId: string;
     access_token: string;
     role: UserRole;
+    companyProduct: CompanyProduct;
     mustChangePassword: boolean;
     tokenVersion: number;
   }
@@ -21,6 +24,7 @@ declare module "next-auth" {
       name?: string | null;
       companyId: string;
       role: UserRole;
+      companyProduct: CompanyProduct;
       mustChangePassword: boolean;
       tokenVersion: number;
       authInvalidated: boolean;
@@ -34,6 +38,7 @@ declare module "@auth/core/jwt" {
     userId?: string;
     access_token?: string;
     role?: UserRole;
+    companyProduct?: CompanyProduct;
     mustChangePassword?: boolean;
     tokenVersion?: number;
     authInvalidated?: boolean;
@@ -53,6 +58,7 @@ interface LoginResponse {
     name?: string | null;
     companyId: string;
     role: UserRole;
+    companyProduct?: CompanyProduct;
     mustChangePassword: boolean;
     tokenVersion: number;
   };
@@ -104,6 +110,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             name: data.user.name,
             companyId: data.user.companyId,
             role: data.user.role,
+            companyProduct: data.user.companyProduct ?? "BILLING",
             mustChangePassword: data.user.mustChangePassword,
             tokenVersion: data.user.tokenVersion,
             access_token: data.access_token,
@@ -122,6 +129,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.userId = user.id;
         token.access_token = user.access_token;
         token.role = user.role;
+        token.companyProduct = user.companyProduct;
         token.mustChangePassword = user.mustChangePassword;
         token.tokenVersion = user.tokenVersion;
         token.authInvalidated = false;
@@ -134,6 +142,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       session.user.id = token.userId as string;
       session.access_token = token.access_token;
       session.user.role = (token.role ?? "COMPANY_ADMIN") as UserRole;
+      // Sessions created before checkout existed are billing companies.
+      session.user.companyProduct = token.companyProduct ?? "BILLING";
       session.user.mustChangePassword = token.mustChangePassword ?? false;
       session.user.tokenVersion = token.tokenVersion ?? 0;
       session.user.authInvalidated = token.authInvalidated ?? false;

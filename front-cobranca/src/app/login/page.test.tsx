@@ -68,6 +68,7 @@ describe("LoginPage", () => {
         email: "admin@cliente.com",
         companyId: "company-1",
         role: "COMPANY_ADMIN",
+        companyProduct: "BILLING",
         mustChangePassword,
         tokenVersion: 0,
         authInvalidated: false,

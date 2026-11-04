@@ -7,7 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bullmq';
 import { JwtService } from '@nestjs/jwt';
-import { UserRole } from '@prisma/client';
+import { CompanyProduct, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { Queue } from 'bullmq';
 import { createHash, createHmac, randomUUID } from 'crypto';
@@ -33,6 +33,7 @@ interface ValidatedUser {
   name: string | null;
   companyId: string;
   role: UserRole;
+  companyProduct: CompanyProduct;
   mustChangePassword: boolean;
   tokenVersion: number;
 }
@@ -79,6 +80,7 @@ export class AuthService {
       name: user.name,
       companyId: user.companyId,
       role: user.role,
+      companyProduct: user.company.product,
       mustChangePassword: user.mustChangePassword,
       tokenVersion: user.tokenVersion,
     };

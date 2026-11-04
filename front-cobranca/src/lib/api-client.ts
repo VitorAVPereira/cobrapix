@@ -1349,6 +1349,127 @@ function normalizeUpdateAdminClientPayload(
   };
 }
 
+// Cifra+ Checkout
+export type CheckoutFeePayer = "BUYER" | "SELLER";
+export type CheckoutDeliveryMode = "ACCESS_LINK" | "WEBHOOK" | "BOTH";
+export type CheckoutAssetKind = "LOGO" | "BANNER" | "PRODUCT_IMAGE";
+export type CheckoutCouponType = "PERCENT" | "FIXED";
+export interface CheckoutTermsInput {
+  platformFeeBasisPoints: number;
+  payoutDocument: string;
+  payoutPixKey: string;
+}
+export interface CheckoutTermsVersion extends CheckoutTermsInput {
+  id: string;
+  version: number;
+  changedByUserId: string;
+  createdAt: string;
+}
+export interface CheckoutClientSummary {
+  id: string;
+  corporateName: string;
+  document: string;
+  email: string;
+  status: string;
+  createdAt: string;
+  currentTerms: { version: number; platformFeeBasisPoints: number } | null;
+  activeProducts: number;
+}
+export interface CheckoutClientDetail {
+  id: string;
+  corporateName: string;
+  document: string;
+  email: string;
+  phoneNumber: string;
+  status: string;
+  createdAt: string;
+  users: Array<{ id: string; name: string | null; email: string; mustChangePassword: boolean }>;
+  terms: CheckoutTermsVersion[];
+}
+export interface CreateCheckoutClientInput {
+  company: { corporateName: string; document: string; email: string; phoneNumber: string };
+  firstUser: { name: string; email: string };
+  terms: CheckoutTermsInput;
+}
+export interface CheckoutSettingsInput {
+  displayName: string;
+  logoAssetId: string | null;
+  bannerAssetId: string | null;
+  primaryColor: string;
+  supportEmail: string | null;
+  supportWhatsapp: string | null;
+  whatsappButtonPhone: string | null;
+  pixEnabled: boolean;
+  cardEnabled: boolean;
+  maxInstallments: number;
+  pixFeePayer: CheckoutFeePayer;
+  cardFeePayer: CheckoutFeePayer;
+}
+export interface CheckoutSettings extends CheckoutSettingsInput {
+  id: string;
+  version: number;
+  updatedAt: string;
+}
+export interface CheckoutAsset {
+  id: string;
+  kind: CheckoutAssetKind;
+  contentType: string;
+  sizeBytes: number;
+  url: string;
+}
+export interface CheckoutProductInput {
+  name: string;
+  description: string | null;
+  priceCents: number;
+  compareAtPriceCents: number | null;
+  imageAssetId: string | null;
+  accessPeriodMonths: number | null;
+  deliveryMode: CheckoutDeliveryMode;
+  accessUrl: string | null;
+  accessInstructions: string | null;
+}
+export interface CheckoutBumpInput {
+  offeredProductId: string;
+  priceCents: number;
+  compareAtPriceCents: number | null;
+  headline: string | null;
+  description: string | null;
+  active: boolean;
+}
+export interface CheckoutBump extends CheckoutBumpInput {
+  id: string;
+  position: number;
+  version: number;
+  offeredProduct: { id: string; name: string; priceCents: number; active: boolean };
+}
+export interface CheckoutProduct extends CheckoutProductInput {
+  id: string;
+  slug: string;
+  active: boolean;
+  version: number;
+  createdAt: string;
+  bumps?: CheckoutBump[];
+  _count?: { bumps: number };
+}
+export interface CheckoutCouponInput {
+  code: string;
+  type: CheckoutCouponType;
+  value: number;
+  appliesToAllProducts: boolean;
+  productIds: string[];
+  startsAt: string | null;
+  expiresAt: string | null;
+  maxUses: number | null;
+  active: boolean;
+}
+export interface CheckoutCoupon extends Omit<CheckoutCouponInput, "productIds"> {
+  id: string;
+  usedCount: number;
+  version: number;
+  createdAt: string;
+  products: Array<{ productId: string }>;
+}
+
 class ApiClient {
   getEfiOnboarding(): Promise<EfiOnboardingState> {
     return this.fetch("/onboarding/efi");
@@ -2600,6 +2721,132 @@ class ApiClient {
       `/admin/clients/${clientId}/reset-password`,
       { method: "POST", body: JSON.stringify({}) },
     );
+  }
+
+  // Cifra+ Checkout: admin
+  listCheckoutClients(signal?: AbortSignal): Promise<CheckoutClientSummary[]> {
+    return this.fetch("/admin/checkout/clients", { signal });
+  }
+  getCheckoutClient(id: string, signal?: AbortSignal): Promise<CheckoutClientDetail> {
+    return this.fetch(`/admin/checkout/clients/${encodeURIComponent(id)}`, { signal });
+  }
+  createCheckoutClient(
+    input: CreateCheckoutClientInput,
+  ): Promise<{ client: CheckoutClientDetail; temporaryPassword: string }> {
+    return this.fetch("/admin/checkout/clients", { method: "POST", body: JSON.stringify(input) });
+  }
+  updateCheckoutTerms(
+    id: string,
+    input: CheckoutTermsInput & { expectedVersion: number },
+  ): Promise<CheckoutClientDetail> {
+    return this.fetch(`/admin/checkout/clients/${encodeURIComponent(id)}/terms`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  }
+
+  // Cifra+ Checkout: the session company
+  getCheckoutSettings(signal?: AbortSignal): Promise<CheckoutSettings> {
+    return this.fetch("/checkout/settings", { signal });
+  }
+  updateCheckoutSettings(
+    input: CheckoutSettingsInput & { expectedVersion: number },
+  ): Promise<CheckoutSettings> {
+    return this.fetch("/checkout/settings", { method: "PUT", body: JSON.stringify(input) });
+  }
+  uploadCheckoutAsset(kind: CheckoutAssetKind, file: File): Promise<CheckoutAsset> {
+    const form = new FormData();
+    form.append("kind", kind);
+    form.append("file", file);
+    return this.fetch("/checkout/assets", { method: "POST", body: form });
+  }
+  /** Public image address, usable directly in an <img>. */
+  checkoutAssetUrl(id: string): string {
+    return `${this.baseUrl}/checkout/public/assets/${encodeURIComponent(id)}`;
+  }
+  listCheckoutProducts(active?: boolean, signal?: AbortSignal): Promise<CheckoutProduct[]> {
+    return this.fetch(
+      `/checkout/products${this.buildQueryString({
+        active: active === undefined ? undefined : String(active),
+      })}`,
+      { signal },
+    );
+  }
+  getCheckoutProduct(id: string, signal?: AbortSignal): Promise<CheckoutProduct> {
+    return this.fetch(`/checkout/products/${encodeURIComponent(id)}`, { signal });
+  }
+  createCheckoutProduct(input: CheckoutProductInput): Promise<CheckoutProduct> {
+    return this.fetch("/checkout/products", { method: "POST", body: JSON.stringify(input) });
+  }
+  updateCheckoutProduct(
+    id: string,
+    input: CheckoutProductInput & { expectedVersion: number },
+  ): Promise<CheckoutProduct> {
+    return this.fetch(`/checkout/products/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  }
+  setCheckoutProductActive(
+    id: string,
+    input: { expectedVersion: number; active: boolean },
+  ): Promise<CheckoutProduct> {
+    return this.fetch(`/checkout/products/${encodeURIComponent(id)}/active`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+  }
+  createCheckoutBump(productId: string, input: CheckoutBumpInput): Promise<CheckoutProduct> {
+    return this.fetch(`/checkout/products/${encodeURIComponent(productId)}/bumps`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+  updateCheckoutBump(
+    productId: string,
+    bumpId: string,
+    input: CheckoutBumpInput & { expectedVersion: number },
+  ): Promise<CheckoutProduct> {
+    return this.fetch(
+      `/checkout/products/${encodeURIComponent(productId)}/bumps/${encodeURIComponent(bumpId)}`,
+      { method: "PUT", body: JSON.stringify(input) },
+    );
+  }
+  removeCheckoutBump(productId: string, bumpId: string): Promise<CheckoutProduct> {
+    return this.fetch(
+      `/checkout/products/${encodeURIComponent(productId)}/bumps/${encodeURIComponent(bumpId)}`,
+      { method: "DELETE" },
+    );
+  }
+  reorderCheckoutBumps(productId: string, bumpIds: string[]): Promise<CheckoutProduct> {
+    return this.fetch(`/checkout/products/${encodeURIComponent(productId)}/bumps/order`, {
+      method: "PUT",
+      body: JSON.stringify({ bumpIds }),
+    });
+  }
+  listCheckoutCoupons(signal?: AbortSignal): Promise<CheckoutCoupon[]> {
+    return this.fetch("/checkout/coupons", { signal });
+  }
+  createCheckoutCoupon(input: CheckoutCouponInput): Promise<CheckoutCoupon> {
+    return this.fetch("/checkout/coupons", { method: "POST", body: JSON.stringify(input) });
+  }
+  updateCheckoutCoupon(
+    id: string,
+    input: CheckoutCouponInput & { expectedVersion: number },
+  ): Promise<CheckoutCoupon> {
+    return this.fetch(`/checkout/coupons/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  }
+  setCheckoutCouponActive(
+    id: string,
+    input: { expectedVersion: number; active: boolean },
+  ): Promise<CheckoutCoupon> {
+    return this.fetch(`/checkout/coupons/${encodeURIComponent(id)}/active`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
   }
 
   // Health

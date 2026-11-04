@@ -11,6 +11,7 @@ describe('tenant onboarding draft and submission API', () => {
     userId: 'user',
     email: 'user@example.test',
     role: 'COMPANY_ADMIN',
+    companyProduct: 'BILLING',
     mustChangePassword: false,
     tokenVersion: 0,
   };

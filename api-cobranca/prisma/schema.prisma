@@ -370,6 +370,9 @@ model Company {
   paymentNotificationEnabled            Boolean                  @default(true)
   paymentNotificationEmails             String[]                 @default([])
   status                                CompanyStatus            @default(ACTIVE)
+  // CHECKOUT companies sell digital products through the CifraMais Efí account;
+  // they never use billing routes, and BILLING companies never use checkout routes.
+  product                               CompanyProduct           @default(BILLING)
   enabledBillingMethods                 BillingMethod[]          @default([PIX, BOLIX])
   defaultLateFineBasisPoints            Int                      @default(0)
   defaultLateInterestMonthlyBasisPoints Int                      @default(0)
@@ -414,6 +417,12 @@ model Company {
   disbursementRecipients   DisbursementRecipient[]
   disbursementBatches      DisbursementBatch[]
   disbursementSchedules    DisbursementSchedule[]
+  checkoutSellerTerms      CheckoutSellerTerms[]
+  checkoutSettings         CheckoutSettings?
+  checkoutAssets           CheckoutAsset[]
+  checkoutProducts         CheckoutProduct[]
+  checkoutOrderBumps       CheckoutOrderBump[]
+  checkoutCoupons          CheckoutCoupon[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2271,4 +2280,181 @@ model DisbursementScheduleItem {
   recipient DisbursementRecipient @relation(fields: [recipientId, companyId], references: [id, companyId], onDelete: Restrict)
   amountCents Int
   @@unique([scheduleId, recipientId])
+}
+
+// ---------------------------------------------------------------------------
+// Cifra+ Checkout: digital products sold through the CifraMais Efí account.
+// Every record belongs to a CHECKOUT company; composite relations keep a
+// company's records from pointing at another company's.
+// ---------------------------------------------------------------------------
+
+enum CompanyProduct {
+  BILLING
+  CHECKOUT
+}
+
+enum CheckoutFeePayer {
+  BUYER
+  SELLER
+}
+
+enum CheckoutDeliveryMode {
+  ACCESS_LINK
+  WEBHOOK
+  BOTH
+}
+
+enum CheckoutCouponType {
+  PERCENT
+  FIXED
+}
+
+enum CheckoutAssetKind {
+  LOGO
+  BANNER
+  PRODUCT_IMAGE
+}
+
+// What the seller owes CifraMais and where payouts go. A change is a new
+// version; versions are never edited, so each sale can point to its terms.
+model CheckoutSellerTerms {
+  id                     String   @id @default(uuid())
+  companyId              String
+  company                Company  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  version                Int
+  platformFeeBasisPoints Int
+  payoutDocument         String
+  payoutPixKey           String
+  changedByUserId        String
+  createdAt              DateTime @default(now())
+
+  @@unique([companyId, version])
+}
+
+model CheckoutSettings {
+  id                  String           @id @default(uuid())
+  companyId           String           @unique
+  company             Company          @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  version             Int              @default(1)
+  displayName         String
+  logoAssetId         String?
+  logoAsset           CheckoutAsset?   @relation("CheckoutSettingsLogo", fields: [logoAssetId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  bannerAssetId       String?
+  bannerAsset         CheckoutAsset?   @relation("CheckoutSettingsBanner", fields: [bannerAssetId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  primaryColor        String           @default("#0F766E")
+  supportEmail        String?
+  supportWhatsapp     String?
+  whatsappButtonPhone String?
+  pixEnabled          Boolean          @default(true)
+  cardEnabled         Boolean          @default(false)
+  maxInstallments     Int              @default(12)
+  pixFeePayer         CheckoutFeePayer @default(SELLER)
+  cardFeePayer        CheckoutFeePayer @default(BUYER)
+  updatedAt           DateTime         @updatedAt
+}
+
+// Public images (logo, banner, product). Small and few, so they live in the
+// database; the type is checked from the file's first bytes, never trusted.
+model CheckoutAsset {
+  id             String             @id @default(uuid())
+  companyId      String
+  company        Company            @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  kind           CheckoutAssetKind
+  contentType    String
+  sizeBytes      Int
+  sha256         String
+  data           Bytes
+  createdAt      DateTime           @default(now())
+  settingsLogo   CheckoutSettings[] @relation("CheckoutSettingsLogo")
+  settingsBanner CheckoutSettings[] @relation("CheckoutSettingsBanner")
+  products       CheckoutProduct[]
+
+  @@unique([id, companyId])
+  @@index([companyId, createdAt])
+}
+
+model CheckoutProduct {
+  id                  String                  @id @default(uuid())
+  companyId           String
+  company             Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  name                String
+  description         String?                 @db.Text
+  priceCents          Int
+  compareAtPriceCents Int?
+  imageAssetId        String?
+  imageAsset          CheckoutAsset?          @relation(fields: [imageAssetId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  accessPeriodMonths  Int?
+  deliveryMode        CheckoutDeliveryMode    @default(ACCESS_LINK)
+  accessUrl           String?                 @db.Text
+  accessInstructions  String?                 @db.Text
+  // Fixed at creation: links already shared must keep working.
+  slug                String                  @unique
+  active              Boolean                 @default(true)
+  version             Int                     @default(1)
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+  bumps               CheckoutOrderBump[]     @relation("CheckoutBumpProduct")
+  offeredAsBump       CheckoutOrderBump[]     @relation("CheckoutBumpOffered")
+  couponProducts      CheckoutCouponProduct[]
+
+  @@unique([id, companyId])
+  @@index([companyId, active, createdAt])
+}
+
+model CheckoutOrderBump {
+  id                  String          @id @default(uuid())
+  companyId           String
+  company             Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  productId           String
+  product             CheckoutProduct @relation("CheckoutBumpProduct", fields: [productId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  offeredProductId    String
+  offeredProduct      CheckoutProduct @relation("CheckoutBumpOffered", fields: [offeredProductId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  priceCents          Int
+  compareAtPriceCents Int?
+  headline            String?
+  description         String?         @db.Text
+  position            Int
+  active              Boolean         @default(true)
+  version             Int             @default(1)
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  @@unique([productId, offeredProductId])
+  @@index([productId, active, position])
+}
+
+model CheckoutCoupon {
+  id                   String                  @id @default(uuid())
+  companyId            String
+  company              Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  // Stored upper-case; unique per company only.
+  code                 String
+  type                 CheckoutCouponType
+  // Basis points for PERCENT, cents for FIXED.
+  value                Int
+  appliesToAllProducts Boolean                 @default(true)
+  startsAt             DateTime?
+  expiresAt            DateTime?
+  maxUses              Int?
+  // Counts paid orders only (Part 2).
+  usedCount            Int                     @default(0)
+  active               Boolean                 @default(true)
+  version              Int                     @default(1)
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+  products             CheckoutCouponProduct[]
+
+  @@unique([companyId, code])
+  @@unique([id, companyId])
+}
+
+model CheckoutCouponProduct {
+  couponId  String
+  productId String
+  companyId String
+  coupon    CheckoutCoupon  @relation(fields: [couponId, companyId], references: [id, companyId], onDelete: Cascade, onUpdate: Restrict)
+  product   CheckoutProduct @relation(fields: [productId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+
+  @@id([couponId, productId])
+  @@index([productId])
 }

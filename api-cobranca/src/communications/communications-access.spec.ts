@@ -43,6 +43,7 @@ const companyUser: AuthenticatedUser = {
   email: 'a@example.test',
   companyId: 'company-a',
   role: 'COMPANY_ADMIN',
+  companyProduct: 'BILLING',
   mustChangePassword: false,
   tokenVersion: 1,
 };

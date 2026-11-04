@@ -102,6 +102,7 @@ describe('EFI_OPENING_ENABLED=false', () => {
           email: 'u@example.test',
           companyId: 'c',
           role: 'COMPANY_ADMIN',
+          companyProduct: 'BILLING',
           mustChangePassword: false,
           tokenVersion: 0,
         }),
@@ -131,6 +132,7 @@ describe('EFI_OPENING_ENABLED=false', () => {
     email: 'u@example.test',
     companyId: 'c',
     role: 'COMPANY_ADMIN' as const,
+    companyProduct: 'BILLING' as const,
     mustChangePassword: false,
     tokenVersion: 0,
   };
