@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CheckoutMailJobs } from './checkout-mail.service';
 import { CheckoutLedgerService } from './checkout-ledger.service';
@@ -122,36 +123,100 @@ export class CheckoutPaymentsService {
         data: { status: 'PAID', ...payment },
       });
       if (updated.count !== 1) return null;
-      const order = await tx.checkoutOrder.update({
-        where: { id: attempt.orderId },
-        data: { status: 'PAID', paidAt: now },
+      return this.settle(tx, attempt.orderId, now, payment.providerFeeCents);
+    });
+    return this.afterSettle(orderId);
+  }
+
+  /**
+   * A card charge the Efí reports paid. The order takes the amounts of the
+   * attempt that was paid, and its sale is released at the later of 7 days
+   * and the card credit date of the account version it was sold with.
+   */
+  async confirmCard(attemptId: string, now = new Date()): Promise<boolean> {
+    const orderId = await this.prisma.$transaction(async (tx) => {
+      const attempt = await tx.checkoutCardAttempt.findUnique({
+        where: { id: attemptId },
         select: {
-          id: true,
-          companyId: true,
-          productId: true,
-          buyerDocument: true,
-          buyerEmail: true,
-          couponId: true,
+          orderId: true,
+          installments: true,
           totalCents: true,
           efiFeeCents: true,
-          platformFeeCents: true,
         },
       });
-      await markRecovered(tx, { ...order, paidAt: now });
-      await this.ledger.recordSale(
+      if (!attempt) return null;
+      const updated = await tx.checkoutCardAttempt.updateMany({
+        where: { id: attemptId, status: { not: 'PAID' } },
+        data: { status: 'PAID' },
+      });
+      if (updated.count !== 1) return null;
+      const order = await tx.checkoutOrder.findUniqueOrThrow({
+        where: { id: attempt.orderId },
+        select: {
+          subtotalCents: true,
+          platformSettings: { select: { cardCreditDays: true } },
+        },
+      });
+      const creditDays = order.platformSettings.cardCreditDays ?? 0;
+      return this.settle(
         tx,
-        { ...order, paidAt: now },
-        payment.providerFeeCents,
+        attempt.orderId,
+        now,
+        null,
+        {
+          installments: attempt.installments,
+          totalCents: attempt.totalCents,
+          efiFeeCents: attempt.efiFeeCents,
+          surchargeCents: attempt.totalCents - order.subtotalCents,
+        },
+        new Date(now.getTime() + creditDays * 86_400_000),
       );
-      await this.webhooks.emit(tx, order.companyId, 'order.paid', order.id);
-      // Coupon limits count paid orders only.
-      if (order.couponId)
-        await tx.checkoutCoupon.update({
-          where: { id: order.couponId },
-          data: { usedCount: { increment: 1 } },
-        });
-      return order.id;
     });
+    return this.afterSettle(orderId);
+  }
+
+  /** Everything a payment does to its order, inside the payment transaction. */
+  private async settle(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    now: Date,
+    providerFeeCents: number | null,
+    amounts: Prisma.CheckoutOrderUpdateInput = {},
+    releaseNotBefore?: Date,
+  ): Promise<string> {
+    const order = await tx.checkoutOrder.update({
+      where: { id: orderId },
+      data: { ...amounts, status: 'PAID', paidAt: now },
+      select: {
+        id: true,
+        companyId: true,
+        productId: true,
+        buyerDocument: true,
+        buyerEmail: true,
+        couponId: true,
+        totalCents: true,
+        efiFeeCents: true,
+        platformFeeCents: true,
+      },
+    });
+    await markRecovered(tx, { ...order, paidAt: now });
+    await this.ledger.recordSale(
+      tx,
+      { ...order, paidAt: now },
+      providerFeeCents,
+      releaseNotBefore,
+    );
+    await this.webhooks.emit(tx, order.companyId, 'order.paid', order.id);
+    // Coupon limits count paid orders only.
+    if (order.couponId)
+      await tx.checkoutCoupon.update({
+        where: { id: order.couponId },
+        data: { usedCount: { increment: 1 } },
+      });
+    return order.id;
+  }
+
+  private async afterSettle(orderId: string | null): Promise<boolean> {
     if (!orderId) return false;
     try {
       await this.mail.accessEmail(orderId);

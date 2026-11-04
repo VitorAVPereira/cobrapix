@@ -19,6 +19,12 @@ import { CheckoutOrdersService } from './checkout-orders.service';
 import { CheckoutRefundsService } from './checkout-refunds.service';
 import { RefundRequestDto } from './dto/checkout-finance.dto';
 import { CheckoutRecoveryService } from './checkout-recovery.service';
+import { CheckoutCardService } from './checkout-card.service';
+import {
+  CheckoutCardOrderDto,
+  CheckoutCardPayDto,
+  CheckoutCardQuoteDto,
+} from './dto/checkout-card.dto';
 import {
   CheckoutLeadDto,
   CheckoutQuoteDto,
@@ -46,6 +52,7 @@ export class CheckoutPublicController {
     private readonly orders: CheckoutOrdersService,
     private readonly refunds: CheckoutRefundsService,
     private readonly recovery: CheckoutRecoveryService,
+    private readonly card: CheckoutCardService,
   ) {}
 
   // An asset never changes once uploaded (a new image is a new id).
@@ -87,6 +94,26 @@ export class CheckoutPublicController {
   @Header('Cache-Control', 'no-store')
   order(@Param('slug') slug: string, @Body() dto: CreateCheckoutOrderDto) {
     return this.orders.create(slugOf(slug), dto);
+  }
+
+  @Post('products/:slug/card/quote')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  cardQuote(@Param('slug') slug: string, @Body() dto: CheckoutCardQuoteDto) {
+    return this.card.quote(slugOf(slug), dto);
+  }
+
+  @Post('products/:slug/card/orders')
+  @Header('Cache-Control', 'no-store')
+  cardOrder(@Param('slug') slug: string, @Body() dto: CheckoutCardOrderDto) {
+    return this.card.createOrder(slugOf(slug), dto);
+  }
+
+  @Post('orders/:token/card/pay')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  cardPay(@Param('token') token: string, @Body() dto: CheckoutCardPayDto) {
+    return this.card.pay(tokenOf(token), dto);
   }
 
   @Get('orders/:token')

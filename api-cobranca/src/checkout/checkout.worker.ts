@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { CheckoutOrdersService } from './checkout-orders.service';
 import { CheckoutRecoveryService } from './checkout-recovery.service';
+import { CheckoutCardService } from './checkout-card.service';
 import { CheckoutWebhooksService } from './checkout-webhooks.service';
 
 /**
@@ -15,6 +16,7 @@ export class CheckoutWorker {
     private readonly orders: CheckoutOrdersService,
     private readonly webhooks: CheckoutWebhooksService,
     private readonly recovery: CheckoutRecoveryService,
+    private readonly card: CheckoutCardService,
   ) {}
 
   // Seller notices are claimed row by row, so this is also safe on two instances.
@@ -27,6 +29,8 @@ export class CheckoutWorker {
   async tick(): Promise<void> {
     await this.step('uncertain', () => this.orders.reconcileUncertain());
     await this.step('expire', () => this.orders.expireOverdue());
+    await this.step('card', () => this.card.reconcileDue());
+    await this.step('card-close', () => this.card.closeOverdue());
     await this.step('abandoned', () => this.recovery.notifyAbandoned());
   }
 

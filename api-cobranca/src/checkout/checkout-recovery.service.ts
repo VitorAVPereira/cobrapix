@@ -10,7 +10,13 @@ export const LEAD_ABANDON_MS = 30 * 60_000;
 export const RECOVERY_WINDOW_MS = 30 * 86_400_000;
 export const ANONYMIZE_AFTER_MS = 365 * 86_400_000;
 export const CSV_LIMIT = 5000;
-const UNPAID = ['EXPIRED', 'FAILED'] as const;
+const UNPAID = ['EXPIRED', 'FAILED', 'DECLINED'] as const;
+
+function orderReason(status: string, method: string): string {
+  if (method === 'CARD')
+    return status === 'DECLINED' ? 'Cartão recusado' : 'Cartão não concluído';
+  return status === 'FAILED' ? 'Pix não gerado' : 'Pix não pago';
+}
 const BOM = String.fromCharCode(0xfeff);
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -24,7 +30,7 @@ export interface LeadInput {
 }
 
 export interface RecoveryQuery {
-  kind?: 'PIX' | 'LEAD';
+  kind?: 'PIX' | 'CARD' | 'LEAD';
   productId?: string;
   from?: Date;
   to?: Date;
@@ -35,7 +41,7 @@ export interface RecoveryQuery {
 
 export interface RecoveryItem {
   id: string;
-  kind: 'PIX' | 'LEAD';
+  kind: 'PIX' | 'CARD' | 'LEAD';
   reason: string;
   productId: string;
   productName: string;
@@ -235,6 +241,9 @@ export class CheckoutRecoveryService {
       status: { in: [...UNPAID] },
       anonymizedAt: null,
       ...recovered,
+      ...(query.kind === 'PIX' || query.kind === 'CARD'
+        ? { paymentMethod: query.kind }
+        : {}),
       ...(query.productId ? { productId: query.productId } : {}),
       ...(query.from || query.to ? { createdAt: created } : {}),
     };
@@ -252,7 +261,7 @@ export class CheckoutRecoveryService {
       query.kind === 'LEAD'
         ? 0
         : this.prisma.checkoutOrder.count({ where: orderWhere }),
-      query.kind === 'PIX'
+      query.kind === 'PIX' || query.kind === 'CARD'
         ? 0
         : this.prisma.checkoutLead.count({ where: leadWhere }),
       query.kind === 'LEAD'
@@ -263,7 +272,7 @@ export class CheckoutRecoveryService {
             take,
             include: { product: { select: { name: true } } },
           }),
-      query.kind === 'PIX'
+      query.kind === 'PIX' || query.kind === 'CARD'
         ? []
         : this.prisma.checkoutLead.findMany({
             where: leadWhere,
@@ -275,8 +284,8 @@ export class CheckoutRecoveryService {
     const items: RecoveryItem[] = [
       ...orders.map((order) => ({
         id: order.id,
-        kind: 'PIX' as const,
-        reason: order.status === 'FAILED' ? 'Pix não gerado' : 'Pix não pago',
+        kind: order.paymentMethod,
+        reason: orderReason(order.status, order.paymentMethod),
         productId: order.productId,
         productName: order.product.name,
         name: order.buyerName,
@@ -338,7 +347,7 @@ export class CheckoutRecoveryService {
     ];
     const rows = items.map((item) =>
       [
-        item.kind === 'PIX' ? 'Pix' : 'Lead',
+        { PIX: 'Pix', CARD: 'Cartão', LEAD: 'Lead' }[item.kind],
         item.reason,
         item.productName,
         item.name,

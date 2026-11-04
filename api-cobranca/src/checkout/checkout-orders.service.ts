@@ -7,7 +7,10 @@ import {
 } from '@nestjs/common';
 import { CheckoutOrder, CheckoutPaymentAttempt, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { CheckoutCatalogService } from './checkout-catalog.service';
+import {
+  CheckoutCatalogService,
+  type SaleContext,
+} from './checkout-catalog.service';
 import { CheckoutPlatformService } from './checkout-platform.service';
 import type { OrderItem } from './checkout-pricing';
 import { conflict, normalizeDocument } from './checkout-rules';
@@ -18,6 +21,8 @@ import { markConverted } from './checkout-recovery.service';
 import { CreateCheckoutOrderDto } from './dto/checkout-public.dto';
 
 export const PIX_VALIDITY_MS = 30 * 60_000;
+// Against testing stolen cards: tries per order, then the page offers Pix.
+export const CARD_ATTEMPTS_PER_ORDER = 3;
 const TXID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 
 /** "ckt" + 29 random characters: 32 in all, inside the Efí 26–35 range. */
@@ -36,6 +41,13 @@ type OrderWithAttempt = CheckoutOrder & {
   attempt: CheckoutPaymentAttempt | null;
   product: { slug: string };
 };
+
+/** The buyer data an order is created with (Pix or card). */
+export interface OrderBuyerInput {
+  buyer: { name: string; email: string; phone: string };
+  utm?: object;
+  idempotencyKey: string;
+}
 
 @Injectable()
 export class CheckoutOrdersService {
@@ -66,34 +78,7 @@ export class CheckoutOrdersService {
     try {
       order = await this.prisma.$transaction(async (tx) => {
         const created = await tx.checkoutOrder.create({
-          data: {
-            companyId: sale.companyId,
-            productId: sale.productId,
-            publicToken: randomBytes(32).toString('base64url'),
-            idempotencyKey: dto.idempotencyKey,
-            buyerName: dto.buyer.name.trim(),
-            buyerEmail: dto.buyer.email.trim().toLowerCase(),
-            buyerDocument,
-            buyerPhone: dto.buyer.phone,
-            items: sale.quote.items as unknown as Prisma.InputJsonValue,
-            couponId: sale.quote.couponId,
-            couponCode: sale.quote.couponCode,
-            subtotalCents: sale.quote.subtotalCents,
-            discountCents: sale.quote.discountCents,
-            surchargeCents: sale.quote.surchargeCents,
-            totalCents: sale.quote.totalCents,
-            efiFeeBasisPoints: sale.quote.efiFeeBasisPoints,
-            efiFeeCents: sale.quote.efiFeeCents,
-            platformFeeBasisPoints: sale.quote.platformFeeBasisPoints,
-            platformFeeCents: sale.quote.platformFeeCents,
-            feePayer: sale.quote.feePayer,
-            termsId: sale.terms.id,
-            platformSettingsId: sale.platform.settings.id,
-            utm: dto.utm
-              ? (dto.utm as unknown as Prisma.InputJsonValue)
-              : Prisma.JsonNull,
-            expiresAt: new Date(now.getTime() + PIX_VALIDITY_MS),
-          },
+          data: this.orderData(sale, dto, buyerDocument, now),
         });
         if (dto.sessionKey)
           await markConverted(tx, sale.productId, dto.sessionKey, created.id);
@@ -163,20 +148,74 @@ export class CheckoutOrdersService {
     return this.view(order.publicToken, now);
   }
 
+  /** The order row as sold: items and amounts copied, valid for 30 minutes. */
+  orderData(
+    sale: SaleContext & { productId: string },
+    dto: OrderBuyerInput,
+    buyerDocument: string,
+    now: Date,
+  ): Prisma.CheckoutOrderUncheckedCreateInput {
+    return {
+      companyId: sale.companyId,
+      productId: sale.productId,
+      publicToken: randomBytes(32).toString('base64url'),
+      idempotencyKey: dto.idempotencyKey,
+      buyerName: dto.buyer.name.trim(),
+      buyerEmail: dto.buyer.email.trim().toLowerCase(),
+      buyerDocument,
+      buyerPhone: dto.buyer.phone,
+      items: sale.quote.items as unknown as Prisma.InputJsonValue,
+      couponId: sale.quote.couponId,
+      couponCode: sale.quote.couponCode,
+      subtotalCents: sale.quote.subtotalCents,
+      discountCents: sale.quote.discountCents,
+      surchargeCents: sale.quote.surchargeCents,
+      totalCents: sale.quote.totalCents,
+      efiFeeBasisPoints: sale.quote.efiFeeBasisPoints,
+      efiFeeCents: sale.quote.efiFeeCents,
+      platformFeeBasisPoints: sale.quote.platformFeeBasisPoints,
+      platformFeeCents: sale.quote.platformFeeCents,
+      feePayer: sale.quote.feePayer,
+      termsId: sale.terms.id,
+      platformSettingsId: sale.platform.settings.id,
+      utm: dto.utm
+        ? (dto.utm as unknown as Prisma.InputJsonValue)
+        : Prisma.JsonNull,
+      expiresAt: new Date(now.getTime() + PIX_VALIDITY_MS),
+    };
+  }
+
   /** The buyer's view of one order: the token is the only key. */
   async view(token: string, now = new Date()) {
     const order = await this.prisma.checkoutOrder.findUnique({
       where: { publicToken: token },
-      include: { attempt: true, product: { select: { slug: true } } },
+      include: {
+        attempt: true,
+        product: { select: { slug: true } },
+        cardAttempts: {
+          orderBy: { createdAt: 'desc' },
+          select: { status: true },
+        },
+      },
     });
     if (!order) throw new NotFoundException('Pedido não encontrado.');
     const settings = await this.prisma.checkoutSettings.findUnique({
       where: { companyId: order.companyId },
     });
     const items = order.items as unknown as OrderItem[];
+    const lastCard = order.cardAttempts[0]?.status;
+    const cardBusy =
+      lastCard === 'SUBMITTING' ||
+      lastCard === 'APPROVED' ||
+      lastCard === 'UNCERTAIN';
+    const cardDeclined = order.cardAttempts.some(
+      (attempt) => attempt.status === 'DECLINED',
+    );
     const status =
-      order.status === 'PENDING' && now > order.expiresAt
-        ? 'EXPIRED'
+      order.status === 'PENDING' && now > order.expiresAt && !cardBusy
+        ? cardDeclined
+          ? 'DECLINED'
+          : 'EXPIRED'
         : order.status;
     const attempt = order.attempt;
     const paid = status === 'PAID';
@@ -185,9 +224,24 @@ export class CheckoutOrdersService {
       token: order.publicToken,
       productSlug: order.product.slug,
       status,
+      paymentMethod: order.paymentMethod,
+      installments: order.installments,
       processing:
         status === 'PENDING' &&
-        (attempt?.status === 'CREATING' || attempt?.status === 'UNCERTAIN'),
+        (attempt?.status === 'CREATING' ||
+          attempt?.status === 'UNCERTAIN' ||
+          cardBusy),
+      card:
+        order.paymentMethod === 'CARD'
+          ? {
+              declined: lastCard === 'DECLINED' || lastCard === 'CANCELED',
+              // Another try on the same order, while it is open.
+              canRetry:
+                status === 'PENDING' &&
+                !cardBusy &&
+                order.cardAttempts.length < CARD_ATTEMPTS_PER_ORDER,
+            }
+          : null,
       expiresAt: order.expiresAt,
       items: items.map((line) => ({
         kind: line.kind,
