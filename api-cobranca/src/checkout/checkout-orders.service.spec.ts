@@ -42,6 +42,7 @@ function order(change: Record<string, unknown> = {}) {
     paymentMethod: 'PIX',
     installments: null,
     cardAttempts: [],
+    refundRequests: [],
     attempt: {
       id: 'attempt-1',
       status: 'ACTIVE',

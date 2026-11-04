@@ -1,5 +1,6 @@
 import {
   couponIssue,
+  itemShares,
   quoteOrder,
   type PricedCoupon,
   type PricedProduct,
@@ -118,5 +119,31 @@ describe('couponIssue', () => {
         now,
       ),
     ).toBeNull();
+  });
+});
+
+describe('itemShares', () => {
+  const line = (unitPriceCents: number, discountCents = 0) => ({
+    unitPriceCents,
+    discountCents,
+  });
+
+  it('divide o total pago (com acréscimo) na proporção de cada item, somando exatamente o total', () => {
+    // 67,00 − 6,70 de cupom + bump 14,90 = 75,20; comprador pagou 76,11 com a tarifa.
+    const shares = itemShares([line(6700, 670), line(1490)], 7611);
+    expect(shares).toEqual([6103, 1508]);
+    expect(shares[0]! + shares[1]!).toBe(7611);
+  });
+
+  it('o resto dos centavos vai para quem tem a maior fração', () => {
+    expect(itemShares([line(100), line(100), line(100)], 1000)).toEqual([
+      334, 333, 333,
+    ]);
+  });
+
+  it('sem acréscimo, cada item devolve o que custou', () => {
+    expect(itemShares([line(6700, 670), line(1490)], 7520)).toEqual([
+      6030, 1490,
+    ]);
   });
 });

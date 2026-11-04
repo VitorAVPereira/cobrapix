@@ -15,6 +15,7 @@ interface MailArg {
 describe('CheckoutMailProcessor', () => {
   const prisma = {
     checkoutOrder: { findUnique: jest.fn(), updateMany: jest.fn() },
+    checkoutRefundRequest: { findUnique: jest.fn() },
   };
   const mailer = { sendEmail: jest.fn() };
   const env: Record<string, string> = {
@@ -63,6 +64,66 @@ describe('CheckoutMailProcessor', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     prisma.checkoutOrder.findUnique.mockResolvedValue(paid);
+  });
+
+  describe('reembolso', () => {
+    const refundJob = (data: object) =>
+      ({ name: 'refund', data: { orderId: 'order-1', ...data } }) as Job<{
+        orderId: string;
+      }>;
+    const request = {
+      id: 'r1',
+      status: 'REQUESTED',
+      itemIndexes: [1],
+      amountCents: 1508,
+      holdUntil: new Date('2026-11-17T15:00:00Z'),
+    };
+
+    it('recebido: valor, itens, prazo do vendedor e o link para desistir, sem o motivo', async () => {
+      prisma.checkoutRefundRequest.findUnique.mockResolvedValue({
+        ...request,
+        reason: 'Motivo interno do vendedor',
+      });
+      await processor.process(
+        refundJob({ step: 'RECEIVED', requestId: 'r1', ref: 'r1' }),
+      );
+
+      const mail = (mailer.sendEmail.mock.calls as [MailArg][])[0]?.[0];
+      expect(mail?.subject).toBe(
+        'Recebemos seu pedido de reembolso: Porquim Anual',
+      );
+      expect(mail?.html).toContain('Acesso Extra &lt;b&gt;');
+      expect(mail?.html).toContain('R$ 15,08');
+      expect(mail?.html).toContain('17/11/2026');
+      expect(mail?.html).toContain(
+        'href="https://app.ciframais.test/c/pedido/tok/reembolso"',
+      );
+      expect(mail?.html).not.toContain('Motivo interno');
+      expect(mail?.idempotencyKey).toBe('checkout-refund-RECEIVED-r1');
+    });
+
+    it('lembrete de um pedido já resolvido não sai', async () => {
+      prisma.checkoutRefundRequest.findUnique.mockResolvedValue({
+        ...request,
+        status: 'WITHDRAWN',
+      });
+      await processor.process(
+        refundJob({ step: 'RECEIVED', requestId: 'r1', ref: 'r1-1' }),
+      );
+      expect(mailer.sendEmail).not.toHaveBeenCalled();
+    });
+
+    it('concluído: valor devolvido e o caminho do dinheiro no Pix', async () => {
+      await processor.process(
+        refundJob({ step: 'DONE', amountCents: 7611, ref: 'pix:E1:D1' }),
+      );
+      const mail = (mailer.sendEmail.mock.calls as [MailArg][])[0]?.[0];
+      expect(mail?.subject).toBe('Reembolso concluído: Porquim Anual');
+      expect(mail?.html).toContain('Devolvemos R$ 76,11');
+      expect(mail?.html).toContain(
+        'No Pix, o valor volta para a conta que fez o pagamento.',
+      );
+    });
   });
 
   it('manda o link de cada item por link e as instruções dos itens por webhook', async () => {

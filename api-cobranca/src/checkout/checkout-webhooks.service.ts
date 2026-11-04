@@ -27,6 +27,7 @@ export type CheckoutEventType =
   | 'order.refunded'
   | 'order.chargeback'
   | 'refund.requested'
+  | 'refund.withdrawn'
   | 'lead.abandoned'
   | 'order.card_declined'
   | 'webhook.test';

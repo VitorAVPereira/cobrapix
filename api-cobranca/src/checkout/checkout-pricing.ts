@@ -144,3 +144,31 @@ export function quoteOrder(input: {
     feePayer: input.feePayer,
   };
 }
+
+/**
+ * What the buyer paid for each item: the total (surcharge included) split in
+ * proportion to price minus discount, by largest remainder, so the shares
+ * add up to the total exactly and refunding every item returns all of it.
+ */
+export function itemShares(
+  items: Pick<OrderItem, 'unitPriceCents' | 'discountCents'>[],
+  totalCents: number,
+): number[] {
+  const weights = items.map((line) =>
+    Math.max(0, line.unitPriceCents - line.discountCents),
+  );
+  const sum = weights.reduce((total, weight) => total + weight, 0);
+  if (!sum) return items.map((_, index) => (index === 0 ? totalCents : 0));
+  const exact = weights.map((weight) => (totalCents * weight) / sum);
+  const shares = exact.map(Math.floor);
+  let rest = totalCents - shares.reduce((total, share) => total + share, 0);
+  const order = exact
+    .map((value, index) => ({ index, fraction: value - Math.floor(value) }))
+    .sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+  for (const { index } of order) {
+    if (rest <= 0) break;
+    shares[index]! += 1;
+    rest -= 1;
+  }
+  return shares;
+}

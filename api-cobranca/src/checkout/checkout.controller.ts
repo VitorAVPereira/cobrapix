@@ -197,7 +197,20 @@ export class CheckoutController {
     @Param('orderId', ParseUUIDPipe) orderId: string,
     @Body() dto: RefundRequestDto,
   ) {
-    return this.refunds.requestBySeller(user.companyId, orderId, dto.reason);
+    return this.refunds.requestBySeller(
+      user.companyId,
+      orderId,
+      dto.reason,
+      dto.itemIndexes,
+    );
+  }
+
+  // Cifra+ sends the buyer the refund e-mail again (it has the withdraw button).
+  @Post('sales/:orderId/refund-request/remind') remindRefund(
+    @GetUser() user: AuthenticatedUser,
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+  ) {
+    return this.refunds.remindBuyer(user.companyId, orderId, user.userId);
   }
 
   @Get('settings') getSettings(@GetUser() user: AuthenticatedUser) {

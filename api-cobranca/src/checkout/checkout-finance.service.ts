@@ -40,6 +40,7 @@ export class CheckoutFinanceService {
               totalCents: true,
               paidAt: true,
               status: true,
+              items: true,
             },
           },
         },
