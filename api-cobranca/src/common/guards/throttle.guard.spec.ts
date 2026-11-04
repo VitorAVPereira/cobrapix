@@ -8,6 +8,7 @@ interface TestRequest {
   originalUrl?: string;
   url?: string;
   ip?: string;
+  headers?: Record<string, string>;
   body?: unknown;
   user?: unknown;
   socket: {
@@ -185,6 +186,36 @@ describe('ThrottleGuard', () => {
           socket: {},
         }),
       ),
+    ).resolves.toBe(true);
+
+    guard.onModuleDestroy();
+  });
+
+  it('limita a API do vendedor a 60 por minuto por chave, sem afetar outra chave', async () => {
+    const guard = buildGuard();
+    const call = (key: string, ip: string): TestRequest => ({
+      method: 'GET',
+      path: '/checkout/api/v1/orders',
+      ip,
+      headers: { authorization: `Bearer ${key}` },
+      socket: {},
+    });
+
+    // The same key from two addresses shares one limit.
+    for (let attempt = 0; attempt < 60; attempt++) {
+      await expect(
+        guard.canActivate(
+          buildContext(
+            call('ckapi_a', attempt % 2 ? '203.0.113.50' : '203.0.113.51'),
+          ),
+        ),
+      ).resolves.toBe(true);
+    }
+    await expect(
+      guard.canActivate(buildContext(call('ckapi_a', '203.0.113.52'))),
+    ).rejects.toMatchObject({ status: HttpStatus.TOO_MANY_REQUESTS });
+    await expect(
+      guard.canActivate(buildContext(call('ckapi_b', '203.0.113.52'))),
     ).resolves.toBe(true);
 
     guard.onModuleDestroy();

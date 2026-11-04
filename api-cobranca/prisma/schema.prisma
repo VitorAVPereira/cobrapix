@@ -432,6 +432,8 @@ model Company {
   checkoutCardAttempts     CheckoutCardAttempt[]
   checkoutOffers           CheckoutOffer[]
   checkoutOfferResponses   CheckoutOfferResponse[]
+  checkoutWebhookRules     CheckoutWebhookRule[]
+  checkoutApiKeys          CheckoutApiKey[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2363,7 +2365,8 @@ model CheckoutSettings {
   maxInstallments     Int              @default(12)
   pixFeePayer         CheckoutFeePayer @default(SELLER)
   cardFeePayer        CheckoutFeePayer @default(BUYER)
-  // The seller system notified of each order event (one URL; the secret signs).
+  // Before Part 9: the single webhook, copied to the first CheckoutWebhookRule.
+  // Kept for old rows only; nothing reads it anymore.
   webhookUrl             String?   @db.Text
   webhookSecretEncrypted String?   @db.Text
   webhookFailingSince    DateTime?
@@ -2828,8 +2831,11 @@ model CheckoutWebhookDelivery {
   id             String                @id @default(uuid())
   companyId      String
   company        Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  // The rule this notice goes to; one event reaches each matching rule once.
+  ruleId         String?
+  rule           CheckoutWebhookRule?  @relation(fields: [ruleId], references: [id], onDelete: Restrict)
   orderId        String?
-  eventId        String                @unique
+  eventId        String
   eventType      String
   payload        Json
   status         CheckoutWebhookStatus @default(PENDING)
@@ -2842,9 +2848,50 @@ model CheckoutWebhookDelivery {
   createdAt      DateTime              @default(now())
   updatedAt      DateTime              @updatedAt
 
+  @@unique([eventId, ruleId])
   @@index([status, nextAttemptAt])
   @@index([companyId, createdAt])
+  @@index([ruleId, createdAt])
   @@index([orderId])
+}
+
+// One seller system to notify: its URL, the events and products it wants, its
+// own secret and failure state. Deleted rules stay for their history.
+model CheckoutWebhookRule {
+  id              String                    @id @default(uuid())
+  companyId       String
+  company         Company                   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  version         Int                       @default(1)
+  name            String
+  url             String                    @db.Text
+  // Empty = every event / every product.
+  events          String[]                  @default([])
+  productIds      String[]                  @default([])
+  secretEncrypted String                    @db.Text
+  failingSince    DateTime?
+  disabledAt      DateTime?
+  deletedAt       DateTime?
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+  deliveries      CheckoutWebhookDelivery[]
+
+  @@index([companyId, deletedAt])
+}
+
+// Read-only API key of a seller: only its SHA-256 is kept; shown once.
+model CheckoutApiKey {
+  id              String    @id @default(uuid())
+  companyId       String
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  name            String
+  prefix          String
+  keyHash         String    @unique
+  createdByUserId String?
+  lastUsedAt      DateTime?
+  revokedAt       DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([companyId, revokedAt])
 }
 
 // Someone who typed their data on the payment page and left before the Pix.

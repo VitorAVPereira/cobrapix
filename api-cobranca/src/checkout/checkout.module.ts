@@ -35,6 +35,11 @@ import { CheckoutRecoveryService } from './checkout-recovery.service';
 import { CheckoutCardService } from './checkout-card.service';
 import { CheckoutOffersService } from './checkout-offers.service';
 import { EfiCheckoutCardClient } from './efi-checkout-card.client';
+import { CheckoutApiKeysService } from './checkout-api-keys.service';
+import {
+  CheckoutApiController,
+  CheckoutApiKeyGuard,
+} from './checkout-api.controller';
 
 @Module({
   imports: [
@@ -49,6 +54,7 @@ import { EfiCheckoutCardClient } from './efi-checkout-card.client';
     CheckoutPublicController,
     CheckoutPlatformController,
     CheckoutFinanceController,
+    CheckoutApiController,
   ],
   providers: [
     CheckoutAdminService,
@@ -73,6 +79,8 @@ import { EfiCheckoutCardClient } from './efi-checkout-card.client';
     CheckoutCardService,
     CheckoutOffersService,
     EfiCheckoutCardClient,
+    CheckoutApiKeysService,
+    CheckoutApiKeyGuard,
     ResendMailerService,
     PlatformAdminGuard,
   ],
