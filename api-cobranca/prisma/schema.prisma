@@ -430,6 +430,8 @@ model Company {
   checkoutLeads            CheckoutLead[]
   checkoutCardQuotes       CheckoutCardQuote[]
   checkoutCardAttempts     CheckoutCardAttempt[]
+  checkoutOffers           CheckoutOffer[]
+  checkoutOfferResponses   CheckoutOfferResponse[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2407,12 +2409,18 @@ model CheckoutProduct {
   accessInstructions  String?                 @db.Text
   // Fixed at creation: links already shared must keep working.
   slug                String                  @unique
+  // Where the buyer goes once paid; OFFER and EXTERNAL open a one-click offer window.
+  afterPurchase       CheckoutAfterPurchase   @default(ACCESS)
+  afterPurchaseUrl    String?                 @db.Text
+  offerWindowMinutes  Int                     @default(30)
   active              Boolean                 @default(true)
   version             Int                     @default(1)
   createdAt           DateTime                @default(now())
   updatedAt           DateTime                @updatedAt
   bumps               CheckoutOrderBump[]     @relation("CheckoutBumpProduct")
   offeredAsBump       CheckoutOrderBump[]     @relation("CheckoutBumpOffered")
+  offers              CheckoutOffer[]         @relation("CheckoutOfferSource")
+  offeredAsOffer      CheckoutOffer[]         @relation("CheckoutOfferOffered")
   couponProducts      CheckoutCouponProduct[]
   orders              CheckoutOrder[]
   leads               CheckoutLead[]
@@ -2420,6 +2428,63 @@ model CheckoutProduct {
 
   @@unique([id, companyId])
   @@index([companyId, active, createdAt])
+}
+
+enum CheckoutAfterPurchase {
+  ACCESS
+  OFFER
+  EXTERNAL
+}
+
+enum CheckoutOfferKind {
+  UPSELL
+  DOWNSELL
+}
+
+enum CheckoutOfferDecision {
+  ACCEPTED
+  DECLINED
+}
+
+// One-click offer shown after a paid purchase of the product; a downsell
+// appears only after the upsell is declined.
+model CheckoutOffer {
+  id                  String                  @id @default(uuid())
+  companyId           String
+  company             Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  productId           String
+  product             CheckoutProduct         @relation("CheckoutOfferSource", fields: [productId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  kind                CheckoutOfferKind
+  offeredProductId    String
+  offeredProduct      CheckoutProduct         @relation("CheckoutOfferOffered", fields: [offeredProductId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  priceCents          Int
+  compareAtPriceCents Int?
+  headline            String?
+  description         String?                 @db.Text
+  active              Boolean                 @default(true)
+  version             Int                     @default(1)
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+  responses           CheckoutOfferResponse[]
+  orders              CheckoutOrder[]
+
+  @@unique([productId, kind])
+  @@unique([id, companyId])
+}
+
+// The buyer's answer to one offer of one purchase: each offer is answered once.
+model CheckoutOfferResponse {
+  id        String                @id @default(uuid())
+  orderId   String
+  companyId String
+  order     CheckoutOrder         @relation("CheckoutOfferOrigin", fields: [orderId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  company   Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  offerId   String
+  offer     CheckoutOffer         @relation(fields: [offerId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  decision  CheckoutOfferDecision
+  createdAt DateTime              @default(now())
+
+  @@unique([orderId, offerId])
 }
 
 model CheckoutOrderBump {
@@ -2547,6 +2612,10 @@ model CheckoutCardAttempt {
   status           CheckoutCardAttemptStatus @default(SUBMITTING)
   efiChargeId      String?                   @unique
   providerStatus   String?
+  // Reusable token, holder CPF and billing address (encrypted), kept only
+  // while the offer window of the purchase is open.
+  reuseEncrypted   String?                   @db.Text
+  reuseWipedAt     DateTime?
   createdAt        DateTime                  @default(now())
   updatedAt        DateTime                  @updatedAt
 
@@ -2627,16 +2696,27 @@ model CheckoutOrder {
   recoveredByOrderId     String?
   // Personal data wiped 12 months after an unpaid order (LGPD).
   anonymizedAt           DateTime?
+  // An accepted offer is its own order, tied to the purchase it came from.
+  parentOrderId          String?
+  parent                 CheckoutOrder?           @relation("CheckoutOfferOrders", fields: [parentOrderId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  offerId                String?
+  offer                  CheckoutOffer?           @relation(fields: [offerId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  // Hash of the one-click offer token, and the end of the offer window.
+  offerTokenHash         String?                  @unique
+  offerExpiresAt         DateTime?
   createdAt              DateTime                 @default(now())
   updatedAt              DateTime                 @updatedAt
   attempt                CheckoutPaymentAttempt?
   cardAttempts           CheckoutCardAttempt[]
   ledgerEntries          CheckoutLedgerEntry[]
   refundRequests         CheckoutRefundRequest[]
+  offerOrders            CheckoutOrder[]          @relation("CheckoutOfferOrders")
+  offerResponses         CheckoutOfferResponse[]  @relation("CheckoutOfferOrigin")
 
   @@unique([id, companyId])
   @@index([companyId, status, createdAt])
   @@index([status, expiresAt])
+  @@index([parentOrderId, offerId])
 }
 
 // One Pix per order: a new Pix is a new order. The txid starts with "ckt" so
