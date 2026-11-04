@@ -33,8 +33,11 @@ import {
   RecoveryQueryDto,
   RefundRequestDto,
   SalesQueryDto,
-  WebhookUrlDto,
+  ApiKeyDto,
+  UpdateWebhookRuleDto,
+  WebhookRuleDto,
 } from './dto/checkout-finance.dto';
+import { CheckoutApiKeysService } from './checkout-api-keys.service';
 import { CheckoutWebhooksService } from './checkout-webhooks.service';
 import {
   CheckoutRecoveryService,
@@ -101,51 +104,98 @@ export class CheckoutController {
     private readonly refunds: CheckoutRefundsService,
     private readonly webhooks: CheckoutWebhooksService,
     private readonly recovery: CheckoutRecoveryService,
+    private readonly apiKeys: CheckoutApiKeysService,
   ) {}
 
-  @Get('webhook') webhook(@GetUser() user: AuthenticatedUser) {
-    return this.webhooks.view(user.companyId);
+  @Get('webhooks') webhookRules(@GetUser() user: AuthenticatedUser) {
+    return this.webhooks.list(user.companyId);
   }
 
-  @Put('webhook') setWebhook(
+  @Post('webhooks') createWebhookRule(
     @GetUser() user: AuthenticatedUser,
-    @Body() dto: WebhookUrlDto,
+    @Body() dto: WebhookRuleDto,
   ) {
-    return this.webhooks.setUrl(user.companyId, dto.url ?? null);
+    return this.webhooks.create(user.companyId, dto);
   }
 
-  @Post('webhook/secret') rotateWebhookSecret(
+  @Put('webhooks/:id') updateWebhookRule(
     @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateWebhookRuleDto,
   ) {
-    return this.webhooks.rotateSecret(user.companyId);
+    return this.webhooks.update(user.companyId, id, dto);
   }
 
-  @Post('webhook/enable') enableWebhook(@GetUser() user: AuthenticatedUser) {
-    return this.webhooks.enable(user.companyId);
-  }
-
-  @Post('webhook/test') testWebhook(@GetUser() user: AuthenticatedUser) {
-    return this.webhooks.test(user.companyId);
-  }
-
-  @Get('webhook/deliveries') webhookDeliveries(
+  @Delete('webhooks/:id')
+  @HttpCode(204)
+  async removeWebhookRule(
     @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<void> {
+    await this.webhooks.remove(user.companyId, id);
+  }
+
+  @Post('webhooks/:id/secret') rotateWebhookSecret(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.webhooks.rotateSecret(user.companyId, id);
+  }
+
+  @Post('webhooks/:id/enable') enableWebhookRule(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.webhooks.enable(user.companyId, id);
+  }
+
+  @Post('webhooks/:id/test') testWebhookRule(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.webhooks.test(user.companyId, id);
+  }
+
+  @Get('webhooks/:id/deliveries') webhookDeliveries(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
     @Query() query: PageQueryDto,
   ) {
     return this.webhooks.deliveries(
       user.companyId,
+      id,
       query.page ?? 1,
       query.pageSize ?? 20,
     );
   }
 
-  @Post('webhook/deliveries/:id/resend')
+  @Post('webhooks/deliveries/:id/resend')
   @HttpCode(204)
   async resendWebhook(
     @GetUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<void> {
     await this.webhooks.resend(user.companyId, id);
+  }
+
+  @Get('api-keys') apiKeyList(@GetUser() user: AuthenticatedUser) {
+    return this.apiKeys.list(user.companyId);
+  }
+
+  @Post('api-keys') createApiKey(
+    @GetUser() user: AuthenticatedUser,
+    @Body() dto: ApiKeyDto,
+  ) {
+    return this.apiKeys.create(user.companyId, user.userId, dto.name);
+  }
+
+  @Delete('api-keys/:id')
+  @HttpCode(204)
+  async revokeApiKey(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<void> {
+    await this.apiKeys.revoke(user.companyId, user.userId, id);
   }
 
   @Get('balance') balance(@GetUser() user: AuthenticatedUser) {

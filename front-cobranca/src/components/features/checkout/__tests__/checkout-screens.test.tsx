@@ -12,14 +12,9 @@ const mockApi = {
   uploadCheckoutAsset: jest.fn(),
   checkoutAssetUrl: (id: string) => `http://api.test/checkout/public/assets/${id}`,
   createCheckoutBump: jest.fn(),
-  getCheckoutWebhook: jest.fn().mockResolvedValue({
-    url: null,
-    hasSecret: false,
-    failingSince: null,
-    disabledAt: null,
-    version: 1,
-  }),
-  listCheckoutWebhookDeliveries: jest.fn().mockResolvedValue({ total: 0, page: 1, pageSize: 20, items: [] }),
+  listCheckoutWebhookRules: jest.fn().mockResolvedValue([]),
+  listCheckoutProducts: jest.fn().mockResolvedValue([]),
+  listCheckoutApiKeys: jest.fn().mockResolvedValue([]),
 };
 jest.mock("@/lib/use-api-client", () => ({ useApiClient: () => mockApi }));
 

@@ -52,7 +52,7 @@ import type {
   WhatsappSyncResult,
   WhatsappSyncState,
 } from "@/components/features/templates/types";
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
 export interface ApiError extends Error {
   status?: number;
@@ -1607,15 +1607,31 @@ export interface CheckoutFinanceOverview {
   };
   sales: CheckoutSalesPage;
 }
-export interface CheckoutWebhookView {
-  url: string | null;
-  hasSecret: boolean;
+export interface CheckoutWebhookRuleInput {
+  name: string;
+  url: string;
+  /** Empty = every event / every product. */
+  events: string[];
+  productIds: string[];
+}
+export interface CheckoutWebhookRule extends CheckoutWebhookRuleInput {
+  id: string;
   failingSince: string | null;
   disabledAt: string | null;
   version: number;
+  createdAt: string;
+}
+export interface CheckoutApiKey {
+  id: string;
+  name: string;
+  prefix: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
 }
 export interface CheckoutWebhookDelivery {
   id: string;
+  ruleId: string | null;
   eventId: string;
   eventType: string;
   orderId: string | null;
@@ -3046,30 +3062,53 @@ class ApiClient {
     );
   }
 
-  // Cifra+ Checkout: the seller's webhook
-  getCheckoutWebhook(signal?: AbortSignal): Promise<CheckoutWebhookView> {
-    return this.fetch("/checkout/webhook", { signal });
+  // Cifra+ Checkout: the seller's webhook rules
+  listCheckoutWebhookRules(signal?: AbortSignal): Promise<CheckoutWebhookRule[]> {
+    return this.fetch("/checkout/webhooks", { signal });
   }
-  setCheckoutWebhookUrl(input: { url: string | null }): Promise<CheckoutWebhookView & { secret: string | null }> {
-    return this.fetch("/checkout/webhook", { method: "PUT", body: JSON.stringify(input) });
+  createCheckoutWebhookRule(input: CheckoutWebhookRuleInput): Promise<CheckoutWebhookRule & { secret: string }> {
+    return this.fetch("/checkout/webhooks", { method: "POST", body: JSON.stringify(input) });
   }
-  rotateCheckoutWebhookSecret(): Promise<{ secret: string }> {
-    return this.fetch("/checkout/webhook/secret", { method: "POST" });
+  updateCheckoutWebhookRule(
+    ruleId: string,
+    input: CheckoutWebhookRuleInput & { version: number },
+  ): Promise<CheckoutWebhookRule> {
+    return this.fetch(`/checkout/webhooks/${encodeURIComponent(ruleId)}`, { method: "PUT", body: JSON.stringify(input) });
   }
-  enableCheckoutWebhook(): Promise<CheckoutWebhookView> {
-    return this.fetch("/checkout/webhook/enable", { method: "POST" });
+  deleteCheckoutWebhookRule(ruleId: string): Promise<void> {
+    return this.fetch(`/checkout/webhooks/${encodeURIComponent(ruleId)}`, { method: "DELETE" });
   }
-  testCheckoutWebhook(): Promise<CheckoutWebhookDelivery> {
-    return this.fetch("/checkout/webhook/test", { method: "POST" });
+  rotateCheckoutWebhookSecret(ruleId: string): Promise<{ secret: string }> {
+    return this.fetch(`/checkout/webhooks/${encodeURIComponent(ruleId)}/secret`, { method: "POST" });
+  }
+  enableCheckoutWebhookRule(ruleId: string): Promise<CheckoutWebhookRule> {
+    return this.fetch(`/checkout/webhooks/${encodeURIComponent(ruleId)}/enable`, { method: "POST" });
+  }
+  testCheckoutWebhookRule(ruleId: string): Promise<CheckoutWebhookDelivery> {
+    return this.fetch(`/checkout/webhooks/${encodeURIComponent(ruleId)}/test`, { method: "POST" });
   }
   listCheckoutWebhookDeliveries(
+    ruleId: string,
     query: { page?: number; pageSize?: number },
     signal?: AbortSignal,
   ): Promise<{ total: number; page: number; pageSize: number; items: CheckoutWebhookDelivery[] }> {
-    return this.fetch(`/checkout/webhook/deliveries${this.buildQueryString(query)}`, { signal });
+    return this.fetch(`/checkout/webhooks/${encodeURIComponent(ruleId)}/deliveries${this.buildQueryString(query)}`, {
+      signal,
+    });
   }
   resendCheckoutWebhook(deliveryId: string): Promise<void> {
-    return this.fetch(`/checkout/webhook/deliveries/${encodeURIComponent(deliveryId)}/resend`, { method: "POST" });
+    return this.fetch(`/checkout/webhooks/deliveries/${encodeURIComponent(deliveryId)}/resend`, { method: "POST" });
+  }
+
+  // Cifra+ Checkout: read-only API keys
+  listCheckoutApiKeys(signal?: AbortSignal): Promise<CheckoutApiKey[]> {
+    return this.fetch("/checkout/api-keys", { signal });
+  }
+  createCheckoutApiKey(name: string): Promise<CheckoutApiKey & { key: string }> {
+    return this.fetch("/checkout/api-keys", { method: "POST", body: JSON.stringify({ name }) });
+  }
+  revokeCheckoutApiKey(keyId: string): Promise<void> {
+    return this.fetch(`/checkout/api-keys/${encodeURIComponent(keyId)}`, { method: "DELETE" });
   }
 
   // Cifra+ Checkout: the session company

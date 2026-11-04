@@ -509,6 +509,10 @@ Depende da Parte 3 (e do CK-17).
 
 ### Parte 9: Integrações
 
+> **Situação (11/11/2026):** CK-37 e CK-38 implementados no branch
+> `feat/cifra-checkout-parte-9`. Plano e registro:
+> [Parte 9](../plans/2026-11-11-cifra-checkout-parte-9-integracoes.md).
+
 Depende da Parte 4.
 
 - [x] **CK-37** *(Hubla)* API pública do vendedor: chaves (até 5, mostradas uma vez, guardadas só

@@ -15,6 +15,7 @@ import {
 } from 'rate-limiter-flexible';
 import type { Request, Response } from 'express';
 import Redis from 'ioredis';
+import { createHash } from 'node:crypto';
 
 interface AuthenticatedUser {
   companyId: string;
@@ -24,7 +25,7 @@ interface ThrottleConfig {
   points: number;
   duration: number;
   keyPrefix: string;
-  scope: 'ip' | 'company' | 'login';
+  scope: 'ip' | 'company' | 'login' | 'apiKey';
 }
 
 type RateLimiter = RateLimiterMemory | RateLimiterRedis;
@@ -129,6 +130,19 @@ export class ThrottleGuard implements CanActivate, OnModuleDestroy {
       duration: 60,
       keyPrefix: 'throttle:checkout:lead:ip',
       scope: 'ip',
+    },
+    // Seller read-only API: per IP before the key is checked, then per key.
+    {
+      points: 120,
+      duration: 60,
+      keyPrefix: 'throttle:checkout:api:ip',
+      scope: 'ip',
+    },
+    {
+      points: 60,
+      duration: 60,
+      keyPrefix: 'throttle:checkout:api:key',
+      scope: 'apiKey',
     },
   ];
 
@@ -311,6 +325,13 @@ export class ThrottleGuard implements CanActivate, OnModuleDestroy {
       return this.findConfigs(['throttle:checkout:order:ip']);
     }
 
+    if (path.startsWith('/checkout/api/')) {
+      return this.findConfigs([
+        'throttle:checkout:api:ip',
+        'throttle:checkout:api:key',
+      ]);
+    }
+
     if (path.startsWith('/checkout/public/') && method === 'GET') {
       return this.findConfigs(['throttle:checkout:read:ip']);
     }
@@ -322,6 +343,14 @@ export class ThrottleGuard implements CanActivate, OnModuleDestroy {
     if (config.scope === 'company') {
       const user = request.user as AuthenticatedUser | undefined;
       return user?.companyId ?? this.resolveClientIp(request);
+    }
+
+    // Counted by the hash of the presented key: the key never reaches Redis.
+    if (config.scope === 'apiKey') {
+      const header = request.headers.authorization;
+      return header
+        ? createHash('sha256').update(header).digest('hex')
+        : this.resolveClientIp(request);
     }
 
     if (config.scope === 'login') {

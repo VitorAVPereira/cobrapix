@@ -99,10 +99,17 @@ O estado passa a **Pronta para vender**.
 
 ## Webhook ao vendedor (Parte 4)
 
-O vendedor configura em **Configurações do checkout → Webhook**:
+O vendedor configura em **Configurações do checkout → Webhooks** uma ou mais regras (até 10).
+Cada regra tem:
 - **URL:** só `https`, com nome de domínio público;
+- **eventos e produtos:** nenhum marcado quer dizer todos. Uma regra de produto recebe o pedido em
+  que ele foi vendido como principal ou como order bump (o aviso é o pedido inteiro);
 - **segredo:** gerado pelo sistema e mostrado uma vez;
-- **“Enviar teste”:** manda um aviso de exemplo e mostra a resposta do sistema dele.
+- **“Enviar teste”:** manda um aviso de exemplo só para essa regra e mostra a resposta do sistema;
+- **histórico:** o próprio, sem o corpo.
+
+A URL única de antes da Parte 9 virou a regra "Webhook principal", com o mesmo segredo e o mesmo
+histórico: o vendedor não precisa refazer nada.
 
 **Eventos:**
 
@@ -122,12 +129,34 @@ O vendedor configura em **Configurações do checkout → Webhook**:
   a data de fim do acesso de cada item (`accessExpiresAt`);
 - **assinatura:** o cabeçalho `X-Cifra-Signature: t=<unix>,v1=<hex>`. Ele calcula o HMAC-SHA256 do
   segredo sobre `<t>.<corpo bruto>`, compara com `v1` e recusa avisos com mais de 5 minutos;
-- **repetições:** `X-Cifra-Event-Id` é o mesmo em todas, e serve para descartar avisos repetidos.
+- **repetições:** `X-Cifra-Event-Id` é o mesmo em todas as tentativas e em todas as regras que
+  recebem o evento, e serve para descartar avisos repetidos.
 
 **Quando o sistema do vendedor falha:**
 - qualquer resposta fora de 2xx é repetida por até 24 horas;
-- depois de **3 dias seguidos sem sucesso**, o webhook é desligado e o vendedor recebe um e-mail;
-- os avisos desse período ficam no histórico para “Reenviar” depois de “Religar”.
+- depois de **3 dias seguidos sem sucesso**, só aquela regra é desligada e o vendedor recebe um
+  e-mail com o nome dela; as outras regras continuam;
+- os avisos desse período ficam no histórico da regra para “Reenviar” depois de “Religar”.
+
+## API de consulta (Parte 9)
+
+Para o sistema do vendedor buscar pedidos e produtos, por exemplo quando perdeu um aviso. Só
+consulta: não cria nem altera nada.
+
+- **Chaves:** em **Configurações do checkout → API de consulta**, até 5 ativas. A chave
+  (`ckapi_…`) aparece uma vez; o banco guarda só o SHA-256 e o começo, para reconhecer. Criar e
+  revogar ficam na auditoria (`CHECKOUT_API_KEY_CREATED` e `CHECKOUT_API_KEY_REVOKED`), sem a
+  chave. Revogada, para na hora e não volta.
+- **Uso:** `Authorization: Bearer <chave>` em `<URL da API>/checkout/api/v1`:
+  - `GET /orders`: do mais antigo alterado ao mais novo, com `status`, `productId` (principal ou
+    bump), `updatedFrom`, `updatedTo`, `page` e `pageSize` (até 100);
+  - `GET /orders/<id>`: o mesmo corpo do aviso do webhook, mais `createdAt` e `updatedAt`;
+  - `GET /products` e `GET /products/<id>`.
+- **Dados pessoais:** os pedidos trazem nome, e-mail, CPF e celular do comprador, como o webhook.
+  Oriente o vendedor a guardar a chave só no servidor dele.
+- **Limites:** 60 consultas por minuto por chave e 120 por IP (`429` com `Retry-After`).
+- **Respostas:** chave ausente, errada ou revogada dá `401 CHECKOUT_API_KEY_INVALID`; pedido ou
+  produto de outra empresa dá `404`.
 
 ## Recuperação (Parte 5)
 

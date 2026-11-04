@@ -15,9 +15,19 @@ import {
   Min,
   NotEquals,
 } from 'class-validator';
+import { WEBHOOK_EVENTS } from '../checkout-webhooks.service';
 
 const MAX_CENTS = 100_000_000;
 const STATUSES = ['PAID', 'REFUNDED', 'CHARGEBACK'] as const;
+const ORDER_STATUSES = [
+  'PENDING',
+  'PAID',
+  'EXPIRED',
+  'FAILED',
+  'DECLINED',
+  'REFUNDED',
+  'CHARGEBACK',
+] as const;
 
 export class SalesQueryDto {
   @IsOptional() @IsDateString() from?: string;
@@ -89,9 +99,44 @@ export class AdjustmentDto extends AdminMoneyDto {
   @IsString() @Length(5, 1000) note!: string;
 }
 
-export class WebhookUrlDto {
-  // null turns the webhook off; https is checked by the service.
-  @IsOptional() @IsString() @MaxLength(500) url?: string | null;
+export class WebhookRuleDto {
+  @IsString() @Length(1, 80) name!: string;
+  // https and a public host are checked by the service.
+  @IsString() @MaxLength(500) url!: string;
+  // Empty = every event / every product.
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsIn(WEBHOOK_EVENTS, { each: true })
+  events?: string[];
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  productIds?: string[];
+}
+
+export class UpdateWebhookRuleDto extends WebhookRuleDto {
+  @IsInt() @Min(1) version!: number;
+}
+
+export class ApiKeyDto {
+  @IsString() @Length(1, 80) name!: string;
+}
+
+export class ApiOrdersQueryDto {
+  @IsOptional() @IsIn(ORDER_STATUSES) status?: (typeof ORDER_STATUSES)[number];
+  @IsOptional() @IsUUID() productId?: string;
+  @IsOptional() @IsDateString() updatedFrom?: string;
+  @IsOptional() @IsDateString() updatedTo?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  pageSize?: number;
 }
 
 export class PageQueryDto {
