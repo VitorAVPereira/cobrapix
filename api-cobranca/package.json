@@ -38,6 +38,7 @@
     "test:e2e:disbursements": "node test/e2e-disposable.cjs disbursements.e2e-spec.ts",
     "test:e2e:invoice-import": "node test/e2e-disposable.cjs invoice-import.e2e-spec.ts",
     "test:e2e:checkout": "node test/e2e-disposable.cjs checkout-base.e2e-spec.ts",
+    "test:e2e:checkout-pix": "node test/e2e-disposable.cjs checkout-pix.e2e-spec.ts",
     "test:e2e:smoke": "jest --config ./test/jest-e2e.json --runInBand cobrapix-flow.e2e-spec.ts",
     "seed:production": "node dist/scripts/seed-production.js",
     "templates:transition": "node dist/scripts/transition-whatsapp-templates.js",
