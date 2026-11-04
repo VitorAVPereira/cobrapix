@@ -17,7 +17,7 @@ interface WriteArg {
 }
 
 function firstArg(mock: jest.Mock): WriteArg {
-  return (mock.mock.calls as WriteArg[][])[0][0];
+  return (mock.mock.calls as [WriteArg][])[0]?.[0] as WriteArg;
 }
 
 function uniqueViolation(): Prisma.PrismaClientKnownRequestError {

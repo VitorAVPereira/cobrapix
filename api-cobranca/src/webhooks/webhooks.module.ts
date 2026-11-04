@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { EmailModule } from '../email/email.module';
 import { PaymentModule } from '../payment/payment.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { CheckoutModule } from '../checkout/checkout.module';
 import { QueueModule } from '../queue/queue.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { EfiWebhookGuard } from './efi-webhook.guard';
@@ -17,6 +18,7 @@ import { PlatformAdminGuard } from '../admin/guards/platform-admin.guard';
   imports: [
     PrismaModule,
     PaymentModule,
+    CheckoutModule,
     QueueModule,
     WhatsappModule,
     EmailModule,

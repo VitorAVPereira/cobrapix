@@ -157,6 +157,39 @@ describe('ThrottleGuard', () => {
     guard.onModuleDestroy();
   });
 
+  it('limita pedidos do checkout público por IP, sem afetar a consulta do pedido', async () => {
+    const guard = buildGuard();
+    const response = new TestResponse();
+    const order: TestRequest = {
+      method: 'POST',
+      path: '/checkout/public/products/porquim-anual-ab12/orders',
+      ip: '203.0.113.40',
+      body: {},
+      socket: {},
+    };
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await expect(
+        guard.canActivate(buildContext(order, response)),
+      ).resolves.toBe(true);
+    }
+    await expect(
+      guard.canActivate(buildContext(order, response)),
+    ).rejects.toMatchObject({ status: HttpStatus.TOO_MANY_REQUESTS });
+    await expect(
+      guard.canActivate(
+        buildContext({
+          method: 'GET',
+          path: '/checkout/public/orders/token',
+          ip: '203.0.113.40',
+          socket: {},
+        }),
+      ),
+    ).resolves.toBe(true);
+
+    guard.onModuleDestroy();
+  });
+
   it('ignora rotas sem regra de rate limiting', async () => {
     const guard = buildGuard();
     const context = buildContext({

@@ -77,8 +77,8 @@ describe('CheckoutProductsService', () => {
     await service.create('company-a', product);
 
     const arg = (
-      prisma.checkoutProduct.create.mock.calls as CreateArg[][]
-    )[0][0];
+      prisma.checkoutProduct.create.mock.calls as [CreateArg][]
+    )[0]?.[0] as CreateArg;
     expect(arg.data.companyId).toBe('company-a');
     expect(arg.data.slug).toMatch(/^porquim-anual-[a-z2-9]{4}$/);
     expect(arg.data.accessUrl).toBe('https://porquim.test/acesso');

@@ -1,6 +1,7 @@
 import { HttpException, Injectable } from '@nestjs/common';
 import {
   EfiAccountIdentity,
+  EfiAccountOwnership,
   EfiCredentialVersion,
   EfiEnvironment,
   Prisma,
@@ -40,6 +41,29 @@ export class EfiAccountRegistryService {
     identity: EfiAccountIdentity;
     credential: EfiCredentialVersion;
   }> {
+    return this.register(tx, input, 'COMPANY', input.companyId);
+  }
+
+  // The CifraMais own account (checkout): an identity of no company.
+  async registerPlatformCredential(
+    tx: Prisma.TransactionClient,
+    input: Omit<CompanyCredentialInput, 'companyId'>,
+  ): Promise<{
+    identity: EfiAccountIdentity;
+    credential: EfiCredentialVersion;
+  }> {
+    return this.register(tx, input, 'PLATFORM', null);
+  }
+
+  private async register(
+    tx: Prisma.TransactionClient,
+    input: Omit<CompanyCredentialInput, 'companyId'>,
+    ownership: EfiAccountOwnership,
+    companyId: string | null,
+  ): Promise<{
+    identity: EfiAccountIdentity;
+    credential: EfiCredentialVersion;
+  }> {
     const existing = await tx.efiAccountIdentity.findUnique({
       where: {
         environment_efiAccountNumber: {
@@ -50,10 +74,7 @@ export class EfiAccountRegistryService {
     });
     let identity: EfiAccountIdentity;
     if (existing) {
-      if (
-        existing.ownership !== 'COMPANY' ||
-        existing.companyId !== input.companyId
-      )
+      if (existing.ownership !== ownership || existing.companyId !== companyId)
         this.fail(409, 'ACCOUNT_ALREADY_REGISTERED');
       if (
         existing.holderDocument !== input.holderDocument ||
@@ -73,8 +94,8 @@ export class EfiAccountRegistryService {
     } else {
       identity = await tx.efiAccountIdentity.create({
         data: {
-          ownership: 'COMPANY',
-          companyId: input.companyId,
+          ownership,
+          companyId,
           environment: input.environment,
           holderDocument: input.holderDocument,
           efiAccountNumber: input.efiAccountNumber,

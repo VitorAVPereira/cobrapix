@@ -1,10 +1,46 @@
-import { Controller, Get, Param, ParseUUIDPipe, Res } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Header,
+  HttpCode,
+  NotFoundException,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import type { Response } from 'express';
+import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { CheckoutAssetsService } from './checkout-assets.service';
+import { CheckoutCatalogService } from './checkout-catalog.service';
+import { CheckoutOrdersService } from './checkout-orders.service';
+import {
+  CheckoutQuoteDto,
+  CreateCheckoutOrderDto,
+} from './dto/checkout-public.dto';
+
+// Malformed addresses never reach the database.
+function slugOf(value: string): string {
+  if (!/^[a-z0-9-]{1,64}$/.test(value))
+    throw new NotFoundException('Produto não encontrado.');
+  return value;
+}
+function tokenOf(value: string): string {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(value))
+    throw new NotFoundException('Pedido não encontrado.');
+  return value;
+}
 
 @Controller('checkout/public')
+@UseGuards(ThrottleGuard)
 export class CheckoutPublicController {
-  constructor(private readonly assets: CheckoutAssetsService) {}
+  constructor(
+    private readonly assets: CheckoutAssetsService,
+    private readonly catalog: CheckoutCatalogService,
+    private readonly orders: CheckoutOrdersService,
+  ) {}
 
   // An asset never changes once uploaded (a new image is a new id).
   @Get('assets/:id') async asset(
@@ -19,5 +55,27 @@ export class CheckoutPublicController {
         'X-Content-Type-Options': 'nosniff',
       })
       .send(asset.data);
+  }
+
+  @Get('products/:slug') product(@Param('slug') slug: string) {
+    return this.catalog.view(slugOf(slug));
+  }
+
+  @Post('products/:slug/quote')
+  @HttpCode(200)
+  quote(@Param('slug') slug: string, @Body() dto: CheckoutQuoteDto) {
+    return this.catalog.quote(slugOf(slug), dto);
+  }
+
+  @Post('products/:slug/orders')
+  @Header('Cache-Control', 'no-store')
+  order(@Param('slug') slug: string, @Body() dto: CreateCheckoutOrderDto) {
+    return this.orders.create(slugOf(slug), dto);
+  }
+
+  @Get('orders/:token')
+  @Header('Cache-Control', 'no-store')
+  orderStatus(@Param('token') token: string) {
+    return this.orders.view(tokenOf(token));
   }
 }

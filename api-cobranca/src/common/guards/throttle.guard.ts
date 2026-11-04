@@ -91,6 +91,25 @@ export class ThrottleGuard implements CanActivate, OnModuleDestroy {
       keyPrefix: 'throttle:billing:run',
       scope: 'company',
     },
+    // Public checkout: a buyer reads, quotes and polls; few orders per IP.
+    {
+      points: 120,
+      duration: 60,
+      keyPrefix: 'throttle:checkout:read:ip',
+      scope: 'ip',
+    },
+    {
+      points: 60,
+      duration: 60,
+      keyPrefix: 'throttle:checkout:quote:ip',
+      scope: 'ip',
+    },
+    {
+      points: 10,
+      duration: 15 * 60,
+      keyPrefix: 'throttle:checkout:order:ip',
+      scope: 'ip',
+    },
   ];
 
   constructor(private configService: ConfigService) {
@@ -240,6 +259,18 @@ export class ThrottleGuard implements CanActivate, OnModuleDestroy {
 
     if (method === 'POST' && path === '/billing/run') {
       return this.findConfigs(['throttle:billing:run']);
+    }
+
+    if (path.startsWith('/checkout/public/products/') && method === 'POST') {
+      return this.findConfigs([
+        path.endsWith('/orders')
+          ? 'throttle:checkout:order:ip'
+          : 'throttle:checkout:quote:ip',
+      ]);
+    }
+
+    if (path.startsWith('/checkout/public/') && method === 'GET') {
+      return this.findConfigs(['throttle:checkout:read:ip']);
     }
 
     return [];

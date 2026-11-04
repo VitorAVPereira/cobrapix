@@ -71,12 +71,14 @@ describe('CheckoutCouponsService', () => {
   it('cria cupom em maiúsculas ligado aos produtos da empresa', async () => {
     await service.create('company-a', coupon);
 
-    const arg = (tx.checkoutCoupon.create.mock.calls as CreateArg[][])[0][0];
+    const arg = (
+      tx.checkoutCoupon.create.mock.calls as [CreateArg][]
+    )[0]?.[0] as CreateArg;
     expect(arg.data.code).toBe('PORQUIM10');
     expect(arg.data.companyId).toBe('company-a');
     const links = (
-      tx.checkoutCouponProduct.createMany.mock.calls as LinksArg[][]
-    )[0][0];
+      tx.checkoutCouponProduct.createMany.mock.calls as [LinksArg][]
+    )[0]?.[0] as LinksArg;
     expect(links.data).toEqual([
       { couponId: 'coupon-1', productId: PRODUCT, companyId: 'company-a' },
     ]);
@@ -123,8 +125,8 @@ describe('CheckoutCouponsService', () => {
       appliesToAllProducts: true,
     });
     const links = (
-      tx.checkoutCouponProduct.createMany.mock.calls as LinksArg[][]
-    )[0][0];
+      tx.checkoutCouponProduct.createMany.mock.calls as [LinksArg][]
+    )[0]?.[0] as LinksArg;
     expect(links.data).toEqual([]);
   });
 
