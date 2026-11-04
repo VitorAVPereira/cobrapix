@@ -31,6 +31,7 @@ export class CheckoutWorker {
     await this.step('expire', () => this.orders.expireOverdue());
     await this.step('card', () => this.card.reconcileDue());
     await this.step('card-close', () => this.card.closeOverdue());
+    await this.step('kept-cards', () => this.card.wipeKeptCards());
     await this.step('abandoned', () => this.recovery.notifyAbandoned());
   }
 

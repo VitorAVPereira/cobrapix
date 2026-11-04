@@ -7,6 +7,7 @@ import {
   CheckoutPaymentsService,
   splitCheckoutPixEvents,
 } from './checkout-payments.service';
+import { offerTokenHash, offerTokenOf } from './checkout-rules';
 
 const TXID = 'cktabcdefghijklmnopqrstuvwxyz012';
 
@@ -91,8 +92,45 @@ describe('CheckoutPaymentsService', () => {
       totalCents: 8289,
       efiFeeCents: 99,
       platformFeeCents: 205,
+      publicToken: 'token-1',
+      parentOrderId: null,
+      product: { afterPurchase: 'ACCESS', offerWindowMinutes: 30 },
     });
     refunds.record.mockResolvedValue(true);
+  });
+
+  it('produto com oferta: o pagamento abre a janela do link de 1 clique, guardando só o hash', async () => {
+    const paidAt = new Date('2026-11-09T12:00:00Z');
+    tx.checkoutOrder.update.mockResolvedValueOnce({
+      id: 'order-1',
+      companyId: 'company-a',
+      productId: 'product-1',
+      buyerDocument: '52998224725',
+      buyerEmail: 'maria@exemplo.test',
+      couponId: null,
+      totalCents: 8289,
+      efiFeeCents: 99,
+      platformFeeCents: 205,
+      publicToken: 'token-1',
+      parentOrderId: null,
+      product: { afterPurchase: 'OFFER', offerWindowMinutes: 45 },
+    });
+
+    await service.confirm(
+      'attempt-1',
+      { paidAmountCents: 8289, endToEndId: 'E1', providerFeeCents: null },
+      paidAt,
+    );
+
+    expect(tx.checkoutOrder.update).toHaveBeenLastCalledWith({
+      where: { id: 'order-1' },
+      data: {
+        offerTokenHash: offerTokenHash(offerTokenOf('token-1')),
+        offerExpiresAt: new Date('2026-11-09T12:45:00Z'),
+      },
+    });
+    expect(offerTokenOf('token-1')).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(offerTokenOf('token-1')).not.toContain('token-1');
   });
 
   it('dá baixa, conta o cupom e enfileira o e-mail', async () => {

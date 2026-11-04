@@ -1431,6 +1431,25 @@ export interface CheckoutProductInput {
   deliveryMode: CheckoutDeliveryMode;
   accessUrl: string | null;
   accessInstructions: string | null;
+  afterPurchase?: CheckoutAfterPurchase;
+  afterPurchaseUrl?: string | null;
+  offerWindowMinutes?: number;
+}
+export type CheckoutAfterPurchase = "ACCESS" | "OFFER" | "EXTERNAL";
+export type CheckoutOfferKind = "UPSELL" | "DOWNSELL";
+export interface CheckoutOfferInput {
+  kind: CheckoutOfferKind;
+  offeredProductId: string;
+  priceCents: number;
+  compareAtPriceCents: number | null;
+  headline: string | null;
+  description: string | null;
+  active: boolean;
+}
+export interface CheckoutOffer extends CheckoutOfferInput {
+  id: string;
+  version: number;
+  offeredProduct: { id: string; name: string; priceCents: number; active: boolean };
 }
 export interface CheckoutBumpInput {
   offeredProductId: string;
@@ -1453,6 +1472,7 @@ export interface CheckoutProduct extends CheckoutProductInput {
   version: number;
   createdAt: string;
   bumps?: CheckoutBump[];
+  offers?: CheckoutOffer[];
   _count?: { bumps: number };
 }
 export interface CheckoutCouponInput {
@@ -1481,6 +1501,9 @@ export interface CheckoutSale {
   items: Array<{ kind: "MAIN" | "BUMP"; name: string; unitPriceCents: number; discountCents: number }>;
   paymentMethod: "PIX" | "CARD";
   installments: number | null;
+  // An accepted upsell or downsell, and the purchase it came from.
+  offerKind?: CheckoutOfferKind | null;
+  parentOrderId?: string | null;
   couponCode: string | null;
   utm: Record<string, string> | null;
   totalCents: number;
@@ -3089,6 +3112,22 @@ class ApiClient {
     return this.fetch(
       `/checkout/products/${encodeURIComponent(productId)}/bumps/${encodeURIComponent(bumpId)}`,
       { method: "DELETE" },
+    );
+  }
+  createCheckoutOffer(productId: string, input: CheckoutOfferInput): Promise<CheckoutProduct> {
+    return this.fetch(`/checkout/products/${encodeURIComponent(productId)}/offers`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+  updateCheckoutOffer(
+    productId: string,
+    offerId: string,
+    input: CheckoutOfferInput & { expectedVersion: number },
+  ): Promise<CheckoutProduct> {
+    return this.fetch(
+      `/checkout/products/${encodeURIComponent(productId)}/offers/${encodeURIComponent(offerId)}`,
+      { method: "PUT", body: JSON.stringify(input) },
     );
   }
   reorderCheckoutBumps(productId: string, bumpIds: string[]): Promise<CheckoutProduct> {

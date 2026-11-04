@@ -12,6 +12,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { ResendMailerService } from '../common/resend-mailer.service';
 import type { OrderItem } from './checkout-pricing';
+import { addMonths } from './checkout-rules';
 import {
   CheckoutWebhookSender,
   webhookUrlProblem,
@@ -44,12 +45,6 @@ export const RETRY_DELAYS_MS = [
 export const RETRY_WINDOW_MS = 24 * 3_600_000;
 export const DISABLE_AFTER_MS = 3 * 86_400_000;
 const CLAIM_MS = 2 * 60_000;
-
-function addMonths(date: Date, months: number): Date {
-  const copy = new Date(date);
-  copy.setUTCMonth(copy.getUTCMonth() + months);
-  return copy;
-}
 
 @Injectable()
 export class CheckoutWebhooksService {
@@ -373,12 +368,16 @@ export class CheckoutWebhooksService {
   private async orderData(client: Client, orderId: string) {
     const order = await client.checkoutOrder.findUnique({
       where: { id: orderId },
+      include: { offer: { select: { id: true, kind: true } } },
     });
     if (!order) return null;
     const items = order.items as unknown as OrderItem[];
     return {
       id: order.id,
       status: order.status,
+      // An accepted upsell or downsell: its own order, tied to the purchase.
+      parentOrderId: order.parentOrderId,
+      offer: order.offer,
       paidAt: order.paidAt,
       totalCents: order.totalCents,
       subtotalCents: order.subtotalCents,

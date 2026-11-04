@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { validateDebtorDocument } from '../common/debtor-document';
 import { normalizePixKey } from '../disbursements/disbursement-recipient-rules';
@@ -31,18 +31,26 @@ export function assertPrices(
     throw invalid('O preço "De" precisa ser maior que o preço de venda.');
 }
 
-/** Access links go to the buyer by e-mail and redirect: https only. */
-export function normalizeAccessUrl(value: string | null | undefined) {
+/** Access links and offer pages receive the buyer by redirect: https only. */
+export function normalizeAccessUrl(
+  value: string | null | undefined,
+  what: 'acesso' | 'página' = 'acesso',
+) {
   const text = value?.trim();
   if (!text) return null;
+  const label = what === 'acesso' ? 'O link de acesso' : 'O endereço da página';
   let url: URL;
   try {
     url = new URL(text);
   } catch {
-    throw invalid('Informe um link de acesso válido.');
+    throw invalid(
+      what === 'acesso'
+        ? 'Informe um link de acesso válido.'
+        : 'Informe um endereço de página válido.',
+    );
   }
-  if (url.protocol !== 'https:')
-    throw invalid('O link de acesso precisa começar com https://.');
+  if (url.protocol !== 'https:' || url.username || url.password)
+    throw invalid(`${label} precisa começar com https://.`);
   return url.toString();
 }
 
@@ -62,7 +70,28 @@ export function maskDocument(document: string): string {
   return `•••${document.slice(-4)}`;
 }
 
-/** "Porquim Anual!" → "porquim-anual-7k2m". The suffix keeps names reusable. */
+/**
+ * The one-click offer key of a paid purchase. It comes one-way from the order
+ * token, so the seller's page can hold it without seeing the order (refund,
+ * access); only its hash is stored.
+ */
+export function offerTokenOf(publicToken: string): string {
+  return createHash('sha256')
+    .update(`cifra-offer:${publicToken}`)
+    .digest('base64url');
+}
+
+export function offerTokenHash(offerToken: string): string {
+  return createHash('sha256').update(offerToken).digest('hex');
+}
+
+export function addMonths(date: Date, months: number): Date {
+  const copy = new Date(date);
+  copy.setUTCMonth(copy.getUTCMonth() + months);
+  return copy;
+}
+
+/** "Porquim Anual!"→ "porquim-anual-7k2m". The suffix keeps names reusable. */
 export function productSlug(name: string, suffix = randomSuffix()): string {
   const base = name
     .normalize('NFD')

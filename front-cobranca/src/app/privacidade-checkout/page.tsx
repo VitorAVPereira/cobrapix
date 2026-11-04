@@ -44,13 +44,19 @@ export default function CheckoutPrivacyPage() {
             </li>
             <li>
               <strong>Cartão de crédito:</strong> o número, a validade e o código de segurança vão direto
-              do seu navegador para a Efí, que devolve um código de uso único. A Cifra+ e o vendedor não
-              recebem nem guardam esses dados.
+              do seu navegador para a Efí, que devolve um código. A Cifra+ e o vendedor não recebem nem
+              guardam esses dados.
+            </li>
+            <li>
+              <strong>Oferta depois da compra:</strong> quando o produto tem uma oferta de 1 clique, o código
+              do cartão, o CPF do titular e o endereço de cobrança ficam guardados de forma cifrada só até o
+              fim do prazo da oferta (no máximo 24 horas), para você aceitar sem digitar o cartão de novo.
+              Depois disso, são apagados.
             </li>
             <li>
               <strong>Endereço de cobrança (só no cartão):</strong> enviado à Efí junto com o pagamento,
-              sem ficar guardado na Cifra+. Para preencher rua e cidade, o CEP digitado é consultado no
-              ViaCEP.
+              sem ficar guardado na Cifra+, salvo durante a oferta depois da compra (abaixo). Para preencher
+              rua e cidade, o CEP digitado é consultado no ViaCEP.
             </li>
             <li>
               <strong>Itens escolhidos, cupom e valores:</strong> para calcular o total e registrar a venda.

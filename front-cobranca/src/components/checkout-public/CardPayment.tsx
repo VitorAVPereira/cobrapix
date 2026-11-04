@@ -52,12 +52,15 @@ export function CardPayment({
   slug,
   cart,
   buyerDocument,
+  reuse = false,
   onOption,
   ref,
 }: {
   slug: string;
   cart: { bumpIds: string[]; couponCode: string | null };
   buyerDocument: string;
+  // The product offers something after the purchase, charged on this card.
+  reuse?: boolean;
   onOption: (option: CardOption | null, subtotalCents: number | null) => void;
   ref: Ref<CardPaymentHandle>;
 }) {
@@ -139,7 +142,7 @@ export function CardPayment({
         expirationYear: expiry.year,
         holderName: fields.holderName.trim(),
         holderDocument: holder,
-      });
+      }, reuse);
       // The card leaves the page as soon as the Efí gave the token.
       set({ number: "", cvv: "", expiry: "" });
       setBrand(null);

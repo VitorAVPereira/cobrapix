@@ -471,8 +471,11 @@ conta Cifra+.
 
 ### Parte 7: Upsell e downsell
 
-Depende das Partes 2 e 6. Antes do plano, confirmar com a Efí se o cartão pode ser reaproveitado
-na conta Cifra+.
+> **Situação (09/11/2026):** implementada no branch `feat/cifra-checkout-parte-7`. O token
+> reutilizável segue a documentação da Efí (`reuse: true` na tokenização). Plano e registro:
+> [Parte 7](../plans/2026-11-09-cifra-checkout-parte-7-upsell.md).
+
+Depende das Partes 2 e 6.
 
 - [x] **CK-31** *(Hubla)* Upsell de 1 clique na página de agradecimento: uma oferta por produto,
   paga pelo mesmo meio da compra (cartão reaproveitado; no Pix, um novo QR Code com os dados já

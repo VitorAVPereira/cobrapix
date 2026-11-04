@@ -44,11 +44,13 @@ import { CheckoutProductsService } from './checkout-products.service';
 import { CheckoutSettingsService } from './checkout-settings.service';
 import {
   CheckoutBumpDto,
+  CheckoutOfferDto,
   CheckoutProductDto,
   ListCheckoutProductsQueryDto,
   ReorderCheckoutBumpsDto,
   SetCheckoutActiveDto,
   UpdateCheckoutBumpDto,
+  UpdateCheckoutOfferDto,
   UpdateCheckoutProductDto,
 } from './dto/checkout-product.dto';
 import {
@@ -289,6 +291,23 @@ export class CheckoutController {
     @Param('bumpId', ParseUUIDPipe) bumpId: string,
   ) {
     return this.products.removeBump(user.companyId, id, bumpId);
+  }
+
+  @Post('products/:id/offers') createOffer(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CheckoutOfferDto,
+  ) {
+    return this.products.createOffer(user.companyId, id, dto);
+  }
+
+  @Put('products/:id/offers/:offerId') updateOffer(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Body() dto: UpdateCheckoutOfferDto,
+  ) {
+    return this.products.updateOffer(user.companyId, id, offerId, dto);
   }
 
   @Get('coupons') listCoupons(@GetUser() user: AuthenticatedUser) {

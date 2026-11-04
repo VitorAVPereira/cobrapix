@@ -6,6 +6,7 @@ import type { CheckoutPaymentsService } from './checkout-payments.service';
 import type { EfiCheckoutPixClient } from './efi-checkout-pix.client';
 import type { CheckoutWebhooksService } from './checkout-webhooks.service';
 import { CheckoutOrdersService, checkoutTxid } from './checkout-orders.service';
+import { offerTokenOf } from './checkout-rules';
 
 const KEY = '0b4f7c2e-8a6d-4f1b-9c3e-2d5a7b8c9e01';
 const now = new Date('2026-11-04T15:00:00Z');
@@ -258,6 +259,49 @@ describe('CheckoutOrdersService', () => {
     const paid = await service.view('token', now);
     expect(paid.redirectUrl).toBe('https://acesso.test/porquim');
     expect(paid.pix).toBeNull();
+  });
+
+  it('compra paga com janela de oferta aberta segue para a oferta, depois para o acesso', async () => {
+    const offerToken = offerTokenOf('token');
+    const open = { offerExpiresAt: new Date(now.getTime() + 60_000) };
+    prisma.checkoutOrder.findUnique.mockReset().mockResolvedValue(
+      order({
+        status: 'PAID',
+        ...open,
+        product: { slug: 'porquim-anual-ab12', afterPurchase: 'OFFER' },
+      }),
+    );
+    await expect(service.view('token', now)).resolves.toMatchObject({
+      redirectUrl: `/c/oferta/${offerToken}`,
+      redirectKind: 'OFFER',
+    });
+
+    prisma.checkoutOrder.findUnique.mockResolvedValue(
+      order({
+        status: 'PAID',
+        ...open,
+        product: {
+          slug: 'porquim-anual-ab12',
+          afterPurchase: 'EXTERNAL',
+          afterPurchaseUrl: 'https://vendedor.test/oferta?x=1',
+        },
+      }),
+    );
+    await expect(service.view('token', now)).resolves.toMatchObject({
+      redirectUrl: `https://vendedor.test/oferta?x=1&cifra_oferta=${offerToken}`,
+    });
+
+    prisma.checkoutOrder.findUnique.mockResolvedValue(
+      order({
+        status: 'PAID',
+        offerExpiresAt: new Date(now.getTime() - 1),
+        product: { slug: 'porquim-anual-ab12', afterPurchase: 'OFFER' },
+      }),
+    );
+    await expect(service.view('token', now)).resolves.toMatchObject({
+      redirectUrl: 'https://acesso.test/porquim',
+      redirectKind: 'ACCESS',
+    });
   });
 
   it('pedido vencido aparece expirado mesmo antes do worker', async () => {

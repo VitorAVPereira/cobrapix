@@ -6,6 +6,7 @@ import { CheckoutLedgerService } from './checkout-ledger.service';
 import { CheckoutRefundsService } from './checkout-refunds.service';
 import { CheckoutWebhooksService } from './checkout-webhooks.service';
 import { markRecovered } from './checkout-recovery.service';
+import { offerTokenHash, offerTokenOf } from './checkout-rules';
 
 export const CHECKOUT_TXID_PREFIX = 'ckt';
 // The anomaly table accepts PIX, CHARGES or CARD; checkout reasons carry a prefix.
@@ -197,8 +198,25 @@ export class CheckoutPaymentsService {
         totalCents: true,
         efiFeeCents: true,
         platformFeeCents: true,
+        publicToken: true,
+        parentOrderId: true,
+        product: {
+          select: { afterPurchase: true, offerWindowMinutes: true },
+        },
       },
     });
+    // The one-click offer window opens with the payment. An offer order does
+    // not open another one: longer chains belong to the seller's page.
+    if (!order.parentOrderId && order.product.afterPurchase !== 'ACCESS')
+      await tx.checkoutOrder.update({
+        where: { id: order.id },
+        data: {
+          offerTokenHash: offerTokenHash(offerTokenOf(order.publicToken)),
+          offerExpiresAt: new Date(
+            now.getTime() + order.product.offerWindowMinutes * 60_000,
+          ),
+        },
+      });
     await markRecovered(tx, { ...order, paidAt: now });
     await this.ledger.recordSale(
       tx,

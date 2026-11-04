@@ -10,6 +10,7 @@ import { errorCode } from "@/lib/disbursements";
 import { checkoutLink } from "@/lib/checkout";
 import { ProductForm } from "@/components/features/checkout/ProductForm";
 import { BumpsPanel } from "@/components/features/checkout/BumpsPanel";
+import { OffersPanel } from "@/components/features/checkout/OffersPanel";
 import {
   messageOf,
   NoticeText,
@@ -139,6 +140,13 @@ export default function CheckoutProductPage() {
       </section>
 
       <BumpsPanel
+        product={product}
+        catalog={catalog}
+        onChanged={setProduct}
+        onConflict={() => setReload((value) => value + 1)}
+      />
+
+      <OffersPanel
         product={product}
         catalog={catalog}
         onChanged={setProduct}

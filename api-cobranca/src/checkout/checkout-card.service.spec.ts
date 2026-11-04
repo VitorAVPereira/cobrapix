@@ -5,6 +5,7 @@ import type { CheckoutOrdersService } from './checkout-orders.service';
 import type { CheckoutPaymentsService } from './checkout-payments.service';
 import type { CheckoutWebhooksService } from './checkout-webhooks.service';
 import type { EfiCheckoutCardClient } from './efi-checkout-card.client';
+import type { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { CheckoutCardService, cartFingerprint } from './checkout-card.service';
 
 const now = new Date('2026-11-08T12:00:00Z');
@@ -108,6 +109,7 @@ describe('CheckoutCardService', () => {
     settings: { maxInstallments: 12, cardFeePayer: 'BUYER' },
     quote: { items, couponId: null, subtotalCents: 10000 },
     card,
+    afterPurchase: 'ACCESS',
   };
   const catalog = { prepare: jest.fn() };
   const platform = { ready: jest.fn(), cardReady: jest.fn() };
@@ -122,6 +124,10 @@ describe('CheckoutCardService', () => {
     findByAttempt: jest.fn(),
     notification: jest.fn(),
   };
+  const crypto = {
+    encrypt: jest.fn((value: string) => `enc:${value}`),
+    decrypt: jest.fn((value: string) => value.slice(4)),
+  };
   const service = new CheckoutCardService(
     prisma as unknown as PrismaService,
     catalog as unknown as CheckoutCatalogService,
@@ -130,6 +136,7 @@ describe('CheckoutCardService', () => {
     payments as unknown as CheckoutPaymentsService,
     webhooks as unknown as CheckoutWebhooksService,
     client as unknown as EfiCheckoutCardClient,
+    crypto as unknown as PaymentCryptoService,
   );
   const attempt = {
     id: 'attempt-1',
@@ -285,6 +292,116 @@ describe('CheckoutCardService', () => {
       'order.created',
       'order-1',
     );
+  });
+
+  it('compra sem oferta não guarda o cartão; com oferta, guarda token, CPF e endereço cifrados', async () => {
+    client.submit.mockResolvedValue({
+      chargeId: '991',
+      status: 'approved',
+      totalCents: 10310,
+    });
+    await service.createOrder('porquim', orderDto, now);
+    expect(tx.checkoutCardAttempt.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ reuseEncrypted: null }) as unknown,
+    });
+
+    catalog.prepare.mockResolvedValue({ ...sale, afterPurchase: 'OFFER' });
+    await service.createOrder('porquim', orderDto, now);
+    const data = (
+      tx.checkoutCardAttempt.create.mock.calls as [
+        { data: { reuseEncrypted: string } },
+      ][]
+    )[1]?.[0].data;
+    expect(data?.reuseEncrypted.startsWith('enc:')).toBe(true);
+    expect(JSON.parse(data!.reuseEncrypted.slice(4))).toEqual({
+      paymentToken: 'a'.repeat(40),
+      holderDocument: '52998224725',
+      address,
+    });
+  });
+
+  it('oferta no cartão: pedido próprio ligado à compra, cobrado com o cartão guardado', async () => {
+    const calls: string[] = [];
+    const inTx = jest.fn(() => {
+      calls.push('answer');
+      return Promise.resolve();
+    });
+    tx.checkoutOrder.create.mockImplementation(() => {
+      calls.push('order');
+      return { id: 'order-2', publicToken: 'token-2' };
+    });
+    client.submit.mockResolvedValue({
+      chargeId: '992',
+      status: 'approved',
+      totalCents: 10310,
+    });
+
+    await service.createOfferOrder(
+      sale as never,
+      {
+        id: 'order-1',
+        buyerName: 'Maria Souza',
+        buyerEmail: 'maria@exemplo.test',
+        buyerPhone: '11999999999',
+        buyerDocument: '52998224725',
+        utm: null,
+      },
+      { paymentToken: 'b'.repeat(40), holderDocument: '52998224725', address },
+      {
+        offerId: 'offer-1',
+        quoteId: 'quote-1',
+        installments: 1,
+        idempotencyKey: '9c9e6679-7425-40de-944b-e07fc1f90ae7',
+      },
+      inTx,
+      now,
+    );
+
+    expect(calls).toEqual(['answer', 'order']);
+    expect(tx.checkoutOrder.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        parentOrderId: 'order-1',
+        offerId: 'offer-1',
+        paymentMethod: 'CARD',
+        totalCents: 10310,
+      }) as unknown,
+    });
+    // An offer order never keeps the card again.
+    expect(tx.checkoutCardAttempt.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ reuseEncrypted: null }) as unknown,
+    });
+    expect(client.submit).toHaveBeenCalledWith(
+      card.account,
+      expect.objectContaining({ paymentToken: 'b'.repeat(40) }),
+    );
+  });
+
+  it('cartão guardado: lido só da tentativa paga e apagado quando a janela fecha', async () => {
+    prisma.checkoutCardAttempt.findFirst.mockResolvedValue({
+      brand: 'visa',
+      reuseEncrypted: `enc:${JSON.stringify({ paymentToken: 'c'.repeat(40), holderDocument: '52998224725', address })}`,
+    });
+    await expect(service.keptCard('order-1')).resolves.toMatchObject({
+      brand: 'visa',
+      paymentToken: 'c'.repeat(40),
+    });
+    expect(prisma.checkoutCardAttempt.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          orderId: 'order-1',
+          status: 'PAID',
+          reuseEncrypted: { not: null },
+        },
+      }),
+    );
+
+    await service.wipeKeptCards(now);
+    expect(prisma.checkoutCardAttempt.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        reuseEncrypted: { not: null },
+      }) as unknown,
+      data: { reuseEncrypted: null, reuseWipedAt: now },
+    });
   });
 
   it('resposta perdida fica incerta e nunca é reenviada', async () => {

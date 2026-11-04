@@ -163,3 +163,27 @@ pedido fica pago só depois do aviso da Efí e que a venda aparece em Vendas lib
   motivo. O Pix continua; "Retomar cartão" desfaz.
 - **Comprador barrado:** 3 tentativas por pedido, 5 por CPF/CNPJ em 24 h e 10 por IP por hora.
   Depois disso, a página sugere o Pix.
+
+## Ofertas depois da compra (Parte 7)
+
+O vendedor escolhe no produto, em "Depois da compra", para onde o comprador vai depois de pagar e por
+quanto tempo a oferta vale (15 minutos a 24 horas). Upsell e downsell ficam em "Ofertas depois da
+compra", no mesmo produto. Não há chave do admin: o upsell no cartão segue o cartão da conta Cifra+ e
+a pausa por vendedor.
+
+**Antes de ligar em produção:** em homologação, comprar com um cartão de teste num produto com
+oferta e aceitar o upsell no cartão. Conferir na Efí que saíram duas cobranças com o mesmo
+`payment_token`, sem digitar o cartão de novo. A documentação da Efí não diz se a resposta da
+primeira cobrança devolve um token novo; se devolver, o cliente da Efí precisa guardá-lo.
+
+**O que fazer quando:**
+- **Comprador diz que pagou a oferta e não recebeu:** a oferta é um pedido próprio, ligado à compra
+  de origem. Em Vendas aparece como "Upsell" ou "Downsell"; o acesso sai por e-mail como em qualquer
+  venda.
+- **Reembolso de uma oferta:** é um pedido separado; reembolse só ele (Parte 3). A compra de origem
+  não muda.
+- **Cartão guardado:** o worker apaga token, CPF do titular e endereço quando a janela fecha, depois
+  de uma recusa ou um dia depois de uma tentativa sem pagamento. Nunca copie esses dados para fora
+  do banco.
+- **Link de 1 clique vazado:** vale só para aquela compra, até o fim da janela, e cada oferta é
+  aceita uma vez. Para cortar antes, desative a oferta no produto.

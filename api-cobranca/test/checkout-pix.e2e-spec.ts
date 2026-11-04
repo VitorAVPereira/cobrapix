@@ -5,7 +5,7 @@
  * Disposable PostgreSQL/Redis (test/e2e-disposable.cjs); the Efí is simulated.
  */
 import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_PIPE } from '@nestjs/core';
 import { getQueueToken } from '@nestjs/bullmq';
 import { Test } from '@nestjs/testing';
@@ -29,6 +29,7 @@ import { CheckoutCardService } from '../src/checkout/checkout-card.service';
 import { EfiCheckoutCardClient } from '../src/checkout/efi-checkout-card.client';
 import { CheckoutWebhooksService } from '../src/checkout/checkout-webhooks.service';
 import { GlobalExceptionFilter } from '../src/common/filters/http-exception.filter';
+import { ThrottleGuard } from '../src/common/guards/throttle.guard';
 import { validateEnv } from '../src/config/env.validation';
 import { PaymentCryptoService } from '../src/payment/payment-crypto.service';
 import { PrismaModule } from '../src/prisma/prisma.module';
@@ -77,6 +78,8 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
     notification: jest.fn(),
   };
   const tokens = { admin: '', seller: '' };
+  // The real limits, with a handle to start a scenario fresh (one IP here).
+  const throttle = new ThrottleGuard(new ConfigService({ NODE_ENV: 'test' }));
   // The seller system: always answers 200 unless a test says otherwise.
   const webhookSender = {
     send: jest.fn().mockResolvedValue({ ok: true, statusCode: 200 }),
@@ -134,6 +137,8 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
       .useValue(webhookSender)
       .overrideProvider(EfiCheckoutCardClient)
       .useValue(cardClient)
+      .overrideGuard(ThrottleGuard)
+      .useValue(throttle)
       .compile();
     app = moduleRef.createNestApplication({ logger: false });
     await app.init();
@@ -976,6 +981,7 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
       pixEnabled: true,
       cardEnabled: true,
       maxInstallments: 3,
+      cardReuse: false,
     });
   });
 
@@ -1162,6 +1168,427 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
         reason: 'Cartão recusado',
       }),
     ]);
+  });
+
+  // Part 7: one-click offers after the purchase.
+  const offer = {
+    mainId: '',
+    mainSlug: '',
+    upsellId: '',
+    downsellId: '',
+    upsellProductId: '',
+  };
+  const payPix = async (orderToken: string) => {
+    const attempt = await prisma.checkoutPaymentAttempt.findFirstOrThrow({
+      where: { order: { publicToken: orderToken } },
+    });
+    await app.get(CheckoutPaymentsService).handlePixEvent({
+      txid: attempt.efiTxid,
+      chave: PIX_KEY,
+      valor: (attempt.amountCents / 100).toFixed(2),
+      endToEndId: `E2E${attempt.efiTxid.slice(-8)}`,
+    });
+  };
+  const buyPix = async (document: string, name: string) => {
+    const created = await request(http)
+      .post(`/checkout/public/products/${offer.mainSlug}/orders`)
+      .send({
+        bumpIds: [],
+        couponCode: null,
+        method: 'PIX',
+        buyer: holder(document, name),
+        idempotencyKey: randomUUID(),
+      })
+      .expect(201);
+    const orderToken = (created.body as { token: string }).token;
+    await payPix(orderToken);
+    const view = await request(http)
+      .get(`/checkout/public/orders/${orderToken}`)
+      .expect(200);
+    return {
+      orderToken,
+      view: view.body as { redirectUrl: string; redirectKind: string },
+    };
+  };
+  const offerTokenFrom = (url: string) => url.split('/c/oferta/')[1] ?? '';
+
+  it('o vendedor cria upsell e downsell e liga a oferta depois da compra', async () => {
+    // The whole suite comes from one IP: the offer scenarios start with fresh
+    // per-IP limits (card payments are 10 per hour).
+    (throttle as unknown as { useMemoryLimiters(): void }).useMemoryLimiters();
+    const product = async (name: string, priceCents: number) =>
+      (
+        await request(http)
+          .post('/checkout/products')
+          .set(auth(tokens.seller))
+          .send({
+            name,
+            priceCents,
+            accessPeriodMonths: 12,
+            deliveryMode: 'ACCESS_LINK',
+            accessUrl: `https://acesso.e2e.test/${encodeURIComponent(name)}`,
+          })
+          .expect(201)
+      ).body as { id: string; slug: string; version: number };
+    const main = await product('Porquim Premium', 9700);
+    const upsellProduct = await product('Mentoria Porquim', 19700);
+    const downsellProduct = await product('Planilha Porquim', 2900);
+    offer.mainId = main.id;
+    offer.mainSlug = main.slug;
+    offer.upsellProductId = upsellProduct.id;
+
+    // A downsell only exists after an upsell.
+    await request(http)
+      .post(`/checkout/products/${main.id}/offers`)
+      .set(auth(tokens.seller))
+      .send({
+        kind: 'DOWNSELL',
+        offeredProductId: downsellProduct.id,
+        priceCents: 1900,
+        active: true,
+      })
+      .expect(400);
+    const withUpsell = await request(http)
+      .post(`/checkout/products/${main.id}/offers`)
+      .set(auth(tokens.seller))
+      .send({
+        kind: 'UPSELL',
+        offeredProductId: upsellProduct.id,
+        priceCents: 9700,
+        compareAtPriceCents: 19700,
+        headline: 'Só agora: a mentoria pela metade',
+        active: true,
+      })
+      .expect(201);
+    const withDownsell = await request(http)
+      .post(`/checkout/products/${main.id}/offers`)
+      .set(auth(tokens.seller))
+      .send({
+        kind: 'DOWNSELL',
+        offeredProductId: downsellProduct.id,
+        priceCents: 1900,
+        active: true,
+      })
+      .expect(201);
+    const offers = (
+      withDownsell.body as { offers: { id: string; kind: string }[] }
+    ).offers;
+    offer.upsellId = offers.find((row) => row.kind === 'UPSELL')!.id;
+    offer.downsellId = offers.find((row) => row.kind === 'DOWNSELL')!.id;
+    expect((withUpsell.body as { offers: unknown[] }).offers).toHaveLength(1);
+
+    const current = (
+      await request(http)
+        .get(`/checkout/products/${main.id}`)
+        .set(auth(tokens.seller))
+        .expect(200)
+    ).body as { version: number };
+    await request(http)
+      .put(`/checkout/products/${main.id}`)
+      .set(auth(tokens.seller))
+      .send({
+        expectedVersion: current.version,
+        name: 'Porquim Premium',
+        priceCents: 9700,
+        accessPeriodMonths: 12,
+        deliveryMode: 'ACCESS_LINK',
+        accessUrl: 'https://acesso.e2e.test/premium',
+        afterPurchase: 'OFFER',
+        offerWindowMinutes: 30,
+      })
+      .expect(200);
+    const page = await request(http)
+      .get(`/checkout/public/products/${main.slug}`)
+      .expect(200);
+    expect(
+      (page.body as { payment: { cardReuse: boolean } }).payment.cardReuse,
+    ).toBe(true);
+  });
+
+  it('upsell no Pix aceito vira venda separada, ligada à compra, uma vez só', async () => {
+    const { orderToken, view } = await buyPix('12345678062', 'Ester Nunes');
+    expect(view.redirectKind).toBe('OFFER');
+    const offerToken = offerTokenFrom(view.redirectUrl);
+    expect(offerToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(offerToken).not.toBe(orderToken);
+
+    const shown = await request(http)
+      .get(`/checkout/public/offers/${offerToken}`)
+      .expect(200);
+    expect(shown.body).toMatchObject({
+      state: 'OFFER',
+      offer: { id: offer.upsellId, kind: 'UPSELL', priceCents: 9700 },
+      payment: { pixEnabled: true, card: null },
+    });
+    // The offer page never shows the purchase token.
+    expect(JSON.stringify(shown.body)).not.toContain(orderToken);
+
+    const accept = {
+      offerId: offer.upsellId,
+      method: 'PIX',
+      idempotencyKey: randomUUID(),
+    };
+    const pixCalls = pix.create.mock.calls.length;
+    const first = await request(http)
+      .post(`/checkout/public/offers/${offerToken}/accept`)
+      .send(accept)
+      .expect(200);
+    const again = await request(http)
+      .post(`/checkout/public/offers/${offerToken}/accept`)
+      .send(accept)
+      .expect(200);
+    const offerOrder = (first.body as { token: string }).token;
+    expect((again.body as { token: string }).token).toBe(offerOrder);
+    expect(pix.create.mock.calls.length).toBe(pixCalls + 1);
+    // Another click with a new key while the Pix is open: no second order.
+    await request(http)
+      .post(`/checkout/public/offers/${offerToken}/accept`)
+      .send({ ...accept, idempotencyKey: randomUUID() })
+      .expect(409);
+
+    await payPix(offerOrder);
+    const origin = await prisma.checkoutOrder.findUniqueOrThrow({
+      where: { publicToken: orderToken },
+    });
+    const sold = await prisma.checkoutOrder.findUniqueOrThrow({
+      where: { publicToken: offerOrder },
+      include: { ledgerEntries: true },
+    });
+    expect(sold).toMatchObject({
+      status: 'PAID',
+      parentOrderId: origin.id,
+      offerId: offer.upsellId,
+      buyerDocument: '12345678062',
+      totalCents: 9700,
+      couponId: null,
+      offerTokenHash: null,
+    });
+    expect(sold.ledgerEntries.some((entry) => entry.kind === 'SALE')).toBe(
+      true,
+    );
+    const paidEvent = await prisma.checkoutWebhookDelivery.findFirstOrThrow({
+      where: { orderId: sold.id, eventType: 'order.paid' },
+    });
+    expect(paidEvent.payload).toMatchObject({
+      data: {
+        order: {
+          parentOrderId: origin.id,
+          offer: { id: offer.upsellId, kind: 'UPSELL' },
+        },
+      },
+    });
+    const sales = await request(http)
+      .get('/checkout/sales')
+      .set(auth(tokens.seller))
+      .expect(200);
+    expect(
+      (sales.body as { items: { orderId: string; offerKind: string | null }[] })
+        .items,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ orderId: sold.id, offerKind: 'UPSELL' }),
+      ]),
+    );
+    // Bought: the page moves on to the access.
+    const after = await request(http)
+      .get(`/checkout/public/offers/${offerToken}`)
+      .expect(200);
+    expect(after.body).toMatchObject({
+      state: 'DONE',
+      accessUrl: 'https://acesso.e2e.test/premium',
+    });
+  });
+
+  it('quem já tem o produto não vê a oferta de novo', async () => {
+    const { view } = await buyPix('12345678062', 'Ester Nunes');
+    const shown = await request(http)
+      .get(`/checkout/public/offers/${offerTokenFrom(view.redirectUrl)}`)
+      .expect(200);
+    expect(shown.body).toMatchObject({ state: 'DONE' });
+  });
+
+  it('recusa leva ao downsell e depois ao acesso; link vencido ou desconhecido não vende', async () => {
+    const { orderToken, view } = await buyPix('23456789173', 'Fabio Reis');
+    const offerToken = offerTokenFrom(view.redirectUrl);
+    const next = await request(http)
+      .post(`/checkout/public/offers/${offerToken}/decline`)
+      .send({ offerId: offer.upsellId })
+      .expect(200);
+    expect(next.body).toMatchObject({
+      state: 'OFFER',
+      offer: { id: offer.downsellId, kind: 'DOWNSELL', priceCents: 1900 },
+    });
+    await request(http)
+      .post(`/checkout/public/offers/${offerToken}/accept`)
+      .send({
+        offerId: offer.upsellId,
+        method: 'PIX',
+        idempotencyKey: randomUUID(),
+      })
+      .expect(409);
+    const done = await request(http)
+      .post(`/checkout/public/offers/${offerToken}/decline`)
+      .send({ offerId: offer.downsellId })
+      .expect(200);
+    expect(done.body).toMatchObject({
+      state: 'DONE',
+      accessUrl: 'https://acesso.e2e.test/premium',
+    });
+
+    await request(http)
+      .get(`/checkout/public/offers/${'x'.repeat(43)}`)
+      .expect(404);
+    // The order token is not an offer key.
+    await request(http)
+      .get(`/checkout/public/offers/${orderToken}`)
+      .expect(404);
+
+    const late = await buyPix('34567891228', 'Gabi Prado');
+    const lateToken = offerTokenFrom(late.view.redirectUrl);
+    await prisma.checkoutOrder.update({
+      where: { publicToken: late.orderToken },
+      data: { offerExpiresAt: new Date(Date.now() - 1000) },
+    });
+    const closedView = await request(http)
+      .get(`/checkout/public/offers/${lateToken}`)
+      .expect(200);
+    expect(closedView.body).toMatchObject({ state: 'CLOSED' });
+    const closed = await request(http)
+      .post(`/checkout/public/offers/${lateToken}/accept`)
+      .send({
+        offerId: offer.upsellId,
+        method: 'PIX',
+        idempotencyKey: randomUUID(),
+      })
+      .expect(409);
+    expect(closed.body).toMatchObject({ code: 'CHECKOUT_OFFER_CLOSED' });
+    const order = await request(http)
+      .get(`/checkout/public/orders/${late.orderToken}`)
+      .expect(200);
+    expect(order.body).toMatchObject({
+      redirectKind: 'ACCESS',
+      redirectUrl: 'https://acesso.e2e.test/premium',
+    });
+  });
+
+  it('upsell no cartão cobra o cartão guardado da compra, e os dados somem depois da janela', async () => {
+    const quote = (
+      await request(http)
+        .post(`/checkout/public/products/${offer.mainSlug}/card/quote`)
+        .send({ bumpIds: [], couponCode: null, brand: 'visa' })
+        .expect(200)
+    ).body as { quoteId: string; options: { totalCents: number }[] };
+    let chargeId = 9100;
+    const paid = (installments: number, totalCents: number) => () => ({
+      chargeId: String(chargeId++),
+      status: 'paid',
+      totalCents,
+      installments,
+    });
+    cardClient.submit.mockImplementationOnce(
+      paid(1, quote.options[0]!.totalCents),
+    );
+    const body = charge(quote.quoteId, '45678912364');
+    const created = await request(http)
+      .post(`/checkout/public/products/${offer.mainSlug}/card/orders`)
+      .send({
+        bumpIds: [],
+        couponCode: null,
+        buyer: holder('45678912364', 'Helena Paz'),
+        ...body,
+      })
+      .expect(201);
+    const view = created.body as {
+      token: string;
+      status: string;
+      redirectUrl: string;
+    };
+    expect(view.status).toBe('PAID');
+    const offerToken = offerTokenFrom(view.redirectUrl);
+    const kept = await prisma.checkoutCardAttempt.findFirstOrThrow({
+      where: { order: { publicToken: view.token } },
+    });
+    expect(kept.reuseEncrypted).toBeTruthy();
+    expect(kept.reuseEncrypted).not.toContain(body.paymentToken);
+
+    const shown = await request(http)
+      .get(`/checkout/public/offers/${offerToken}`)
+      .expect(200);
+    expect(shown.body).toMatchObject({
+      state: 'OFFER',
+      payment: { card: { brand: 'visa', maxInstallments: 3 } },
+    });
+    const offerQuote = (
+      await request(http)
+        .post(`/checkout/public/offers/${offerToken}/card/quote`)
+        .send({ offerId: offer.upsellId })
+        .expect(200)
+    ).body as {
+      quoteId: string;
+      options: { installments: number; totalCents: number }[];
+    };
+    const two = offerQuote.options.find((option) => option.installments === 2)!;
+    cardClient.submit.mockImplementationOnce(paid(2, two.totalCents));
+    const accepted = await request(http)
+      .post(`/checkout/public/offers/${offerToken}/accept`)
+      .send({
+        offerId: offer.upsellId,
+        method: 'CARD',
+        quoteId: offerQuote.quoteId,
+        installments: 2,
+        idempotencyKey: randomUUID(),
+      })
+      .expect(200);
+    expect(accepted.body).toMatchObject({ status: 'PAID', installments: 2 });
+    // Charged again with the kept token, without the card being typed.
+    const sent = (cardClient.submit.mock.calls as unknown[][]).at(-1)?.[1] as {
+      paymentToken: string;
+      customer: { cpf: string };
+    };
+    expect(sent.paymentToken).toBe(body.paymentToken);
+    expect(sent.customer.cpf).toBe('45678912364');
+    const upsellOrder = await prisma.checkoutOrder.findUniqueOrThrow({
+      where: { publicToken: (accepted.body as { token: string }).token },
+      include: { cardAttempts: true },
+    });
+    expect(upsellOrder).toMatchObject({
+      paymentMethod: 'CARD',
+      parentOrderId: kept.orderId,
+      offerId: offer.upsellId,
+    });
+    expect(upsellOrder.cardAttempts[0]?.reuseEncrypted).toBeNull();
+
+    await app
+      .get(CheckoutCardService)
+      .wipeKeptCards(new Date(Date.now() + 31 * 60_000));
+    const wiped = await prisma.checkoutCardAttempt.findUniqueOrThrow({
+      where: { id: kept.id },
+    });
+    expect(wiped.reuseEncrypted).toBeNull();
+    expect(wiped.reuseWipedAt).toBeTruthy();
+  });
+
+  it('outra empresa não vê nem altera as ofertas deste vendedor', async () => {
+    const other = await login(`olga-${suffix}@e2e.test`, 'Nova-senha-e2e-2');
+    await request(http)
+      .get(`/checkout/products/${offer.mainId}`)
+      .set(auth(other))
+      .expect(404);
+    await request(http)
+      .put(`/checkout/products/${offer.mainId}/offers/${offer.upsellId}`)
+      .set(auth(other))
+      .send({
+        kind: 'UPSELL',
+        offeredProductId: offer.upsellProductId,
+        priceCents: 500,
+        active: true,
+        expectedVersion: 1,
+      })
+      .expect(404);
+    const unchanged = await prisma.checkoutOffer.findUniqueOrThrow({
+      where: { id: offer.upsellId },
+    });
+    expect(unchanged.priceCents).toBe(9700);
   });
 
   it('cartão pausado pelo admin some da página e o Pix continua', async () => {

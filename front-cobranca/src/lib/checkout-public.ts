@@ -34,7 +34,13 @@ export interface PublicCheckoutProduct {
     supportWhatsapp: string | null;
     whatsappButtonPhone: string | null;
   };
-  payment: { pixEnabled: boolean; cardEnabled: boolean; maxInstallments: number | null };
+  payment: {
+    pixEnabled: boolean;
+    cardEnabled: boolean;
+    maxInstallments: number | null;
+    // The product has an offer after the purchase: the card token is reusable.
+    cardReuse?: boolean;
+  };
 }
 
 export interface PublicCheckoutQuote {
@@ -71,6 +77,10 @@ export interface PublicCheckoutOrder {
   totalCents: number;
   pix: { copyPaste: string | null; qrCodeImage: string | null } | null;
   redirectUrl: string | null;
+  // OFFER: the paid purchase goes to its one-click offer first.
+  redirectKind?: "ACCESS" | "OFFER";
+  // An offer order goes back to its offer page (e.g. Pix after a card decline).
+  offerPage?: string | null;
   page: {
     displayName: string;
     primaryColor: string;
@@ -236,6 +246,70 @@ export function payCheckoutCard(token: string, body: CardCharge) {
 
 export function getCheckoutOrder(token: string, signal?: AbortSignal) {
   return request<PublicCheckoutOrder>(`/checkout/public/orders/${encodeURIComponent(token)}`, { signal });
+}
+
+export type OfferKind = "UPSELL" | "DOWNSELL";
+
+/** The one-click offer after a paid purchase; the token is the offer key. */
+export interface PublicOffer {
+  state: "OFFER" | "DONE" | "CLOSED";
+  expiresAt: string | null;
+  accessUrl: string | null;
+  page: PublicCheckoutOrder["page"];
+  offer: {
+    id: string;
+    kind: OfferKind;
+    name: string;
+    headline: string | null;
+    description: string | null;
+    priceCents: number;
+    compareAtPriceCents: number | null;
+    imageUrl: string | null;
+    accessPeriodMonths: number | null;
+  } | null;
+  // An order already started for this offer: the page follows it.
+  order: { token: string; status: PublicOrderStatus } | null;
+  payment?: {
+    pixEnabled: boolean;
+    card: { brand: CardBrand; maxInstallments: number } | null;
+  };
+}
+
+export interface OfferCardQuote {
+  quoteId: string;
+  validUntil: string;
+  subtotalCents: number;
+  options: CardQuote["options"];
+}
+
+export function getCheckoutOffer(token: string, offerId: string | null, signal?: AbortSignal) {
+  const query = offerId ? `?oferta=${encodeURIComponent(offerId)}` : "";
+  return request<PublicOffer>(`/checkout/public/offers/${encodeURIComponent(token)}${query}`, { signal });
+}
+
+export function quoteCheckoutOfferCard(token: string, offerId: string, signal?: AbortSignal) {
+  return request<OfferCardQuote>(`/checkout/public/offers/${encodeURIComponent(token)}/card/quote`, {
+    method: "POST",
+    body: JSON.stringify({ offerId }),
+    signal,
+  });
+}
+
+export function acceptCheckoutOffer(
+  token: string,
+  body: { offerId: string; method: "PIX" | "CARD"; quoteId?: string; installments?: number; idempotencyKey: string },
+) {
+  return request<PublicCheckoutOrder>(`/checkout/public/offers/${encodeURIComponent(token)}/accept`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function declineCheckoutOffer(token: string, offerId: string) {
+  return request<PublicOffer>(`/checkout/public/offers/${encodeURIComponent(token)}/decline`, {
+    method: "POST",
+    body: JSON.stringify({ offerId }),
+  });
 }
 
 /** UTM parameters of the link the buyer arrived by. */

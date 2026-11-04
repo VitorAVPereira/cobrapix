@@ -172,7 +172,7 @@ VPS e na Vercel antes de afirmar que algo está em produção.
   (visitante, orçamento e WhatsApp; pedidos de titular pelo WhatsApp comercial; pedidos
   guardados até 12 meses sem contratação). Mudou a coleta, mude a política.
   Contexto para o projeto de captação de leads: `docs/contexto-ciframais.md`.
-- **Cifra+ Checkout, Partes 1 a 6 (03 a 08/11) de 9:** venda de produtos digitais pela conta
+- **Cifra+ Checkout, Partes 1 a 7 (03 a 09/11) de 9:** venda de produtos digitais pela conta
   Efí da **Cifra+** (não a do cliente).
   - **Separação:** a empresa ganha `product` (`BILLING` ou `CHECKOUT`). Uma empresa de checkout só
     vê as telas do checkout, e as rotas de um produto respondem 404 ao outro (`@CompanyProducts`
@@ -226,6 +226,20 @@ VPS e na Vercel antes de afirmar que algo está em produção.
       `order.card_declined` e entra na Recuperação;
     - **controle:** o admin liga o cartão na conta Cifra+ (só depois da homologação) e pode pausar o
       cartão de um vendedor; o Pix continua.
+  - **Parte 7 (upsell e downsell):**
+    - **destino depois da compra**, por produto: link de acesso, oferta de 1 clique na página da
+      Cifra+ (`/c/oferta/<token>`) ou página do vendedor (`https`, recebe `cifra_oferta`), com
+      validade de 15 min a 24 h (padrão 30); o e-mail de acesso sai em qualquer caso;
+    - **ofertas** (`CheckoutOffer`): um upsell e um downsell por produto; o downsell aparece só para
+      quem recusa o upsell. Cada resposta é gravada uma vez (`CheckoutOfferResponse`) e quem já tem o
+      produto não vê a oferta;
+    - **token da oferta:** derivado do token do pedido (sem dar acesso a ele), guardado só como hash,
+      aberto no pagamento e válido até o fim da janela;
+    - **venda da oferta:** pedido próprio (`parentOrderId`, `offerId`), sem cupom nem bump, com
+      saldo, reembolso e webhook próprios (os eventos trazem `parentOrderId` e `offer`);
+    - **cartão reaproveitado:** com oferta, a página tokeniza com `reuse: true` e a tentativa guarda
+      token, CPF do titular e endereço cifrados (`reuseEncrypted`) só até o fim da janela; a oferta
+      cobra esse cartão uma vez, pelo fluxo da Parte 6. Recusou, a oferta segue só no Pix.
   - **Docs:** a spec com as 9 partes é `docs/superpowers/specs/2026-10-30-cifra-checkout-design.md`,
     e o runbook é `docs/operations/checkout-conta-cifra.md`.
 - **Em aberto:**
@@ -233,8 +247,9 @@ VPS e na Vercel antes de afirmar que algo está em produção.
     verificações depois da publicação e a conciliação das duas tentativas BOLIX reais pelo
     painel.
   - Homologação e habilitação do cartão por empresa.
-  - Homologação do cartão na conta Cifra+ para o checkout, o prazo real de crédito e o nome na
-    fatura (`docs/operations/checkout-conta-cifra.md`).
+  - Cartão do checkout: homologado no ambiente de homologação da Efí (informado em 09/11); falta
+    ligar na conta Cifra+ de produção pelo admin, conferir o prazo real de crédito, o nome na fatura e
+    a segunda cobrança com o token reutilizável (`docs/operations/checkout-conta-cifra.md`).
   - A política de `/privacidade` não passou por revisão jurídica; a da ativação financeira
     (`/onboarding/privacidade`) segue como texto de homologação.
 
@@ -256,7 +271,7 @@ VPS e na Vercel antes de afirmar que algo está em produção.
 | `financial-activation/` | Ativação manual: perfil versionado, credenciais cifradas, validação em fila, elegibilidade, certificados |
 | `settlements/` | Lançamentos imutáveis (`FinancialLedgerEntry`), conciliação e divergências |
 | `disbursements/` | Pagamentos a colaboradores: liberação pelo admin, colaboradores, lotes, aprovação no WhatsApp, envio Pix e resultado pelo webhook Pix |
-| `checkout/` | Cifra+ Checkout: clientes de checkout e termos (admin), conta Efí da Cifra+ e tarifa, configurações da página, imagens públicas, produtos, order bumps, cupons, página pública, pedidos, Pix imediato e confirmação, saldo e reembolso, webhook ao vendedor, leads, recuperação e anonimização, cartão (cotação, tentativas, conciliação e pausa) |
+| `checkout/` | Cifra+ Checkout: clientes de checkout e termos (admin), conta Efí da Cifra+ e tarifa, configurações da página, imagens públicas, produtos, order bumps, cupons, página pública, pedidos, Pix imediato e confirmação, saldo e reembolso, webhook ao vendedor, leads, recuperação e anonimização, cartão (cotação, tentativas, conciliação e pausa), ofertas depois da compra (upsell, downsell, link de 1 clique e cartão reaproveitado) |
 | `efi-onboarding/` | Abertura de contas (desligada) e chaves de integração (`PlatformIntegrationState`) |
 | `communications/` | Conversas, mensagens, intenções de envio, atribuição por empresa, pendências e retomada de templates |
 | `whatsapp/` | Transporte Datafy e `OutboundDispatcherService` (ver `whatsapp/transport/README.md`) |
@@ -498,7 +513,7 @@ node test/e2e-disposable.cjs <arquivo>.e2e-spec.ts [...]   # ex.: npm run test:e
 npm run test:e2e:disbursements                             # pagamentos a colaboradores
 npm run test:e2e:invoice-import                             # importação de cobranças com revisão
 npm run test:e2e:checkout                                   # Cifra+ Checkout (clientes, produtos, cupons, isolamento)
-npm run test:e2e:checkout-pix                               # Cifra+ Checkout: cotação, pedido, Pix, cartão, confirmação, saldo, reembolso, webhook e recuperação
+npm run test:e2e:checkout-pix                               # Cifra+ Checkout: cotação, pedido, Pix, cartão, confirmação, saldo, reembolso, webhook, recuperação e ofertas
 ```
 
 - Testes que escrevem em banco ou Redis usam **somente** a infraestrutura descartável dos
@@ -603,6 +618,8 @@ Descontinuadas: `EFI_ONBOARDING_NOTICE_TEMPLATE`, `EFI_ONBOARDING_REMINDER_TEMPL
 | POST | `/checkout/public/products/:slug/card/quote` e `.../card/orders` | Parcelas do cartão e pedido com a primeira cobrança (chave idempotente) |
 | POST | `/checkout/public/orders/:token/card/pay` | Nova tentativa no cartão depois de uma recusa |
 | GET | `/checkout/public/orders/:token` | Estado do pedido; o acesso só depois de pago |
+| GET | `/checkout/public/offers/:token` | Oferta depois da compra (`?oferta=<id>` na página do vendedor) |
+| POST | `/checkout/public/offers/:token/card/quote`, `.../accept` e `.../decline` | Parcelas no cartão guardado, aceite (Pix ou cartão, chave idempotente) e recusa |
 
 ### Webhooks
 
