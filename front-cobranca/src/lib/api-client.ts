@@ -1462,6 +1462,36 @@ export interface CheckoutCouponInput {
   maxUses: number | null;
   active: boolean;
 }
+export interface CheckoutPlatformView {
+  current: {
+    id: string;
+    version: number;
+    pixFeeBasisPoints: number | null;
+    webhookConfiguredAt: string | null;
+    createdAt: string;
+    identityId: string;
+  } | null;
+  history: Array<{ id: string; version: number; pixFeeBasisPoints: number | null; createdAt: string }>;
+  identity: {
+    id: string;
+    environment: "HOMOLOGATION" | "PRODUCTION";
+    holderDocument: string;
+    efiAccountNumber: string;
+    efiAccountDigit: string | null;
+    payeeCode: string | null;
+    pixKey: string | null;
+    credentialVersions: Array<{
+      id: string;
+      version: number;
+      status: "CANDIDATE" | "ACTIVE" | "RETIRED" | "REJECTED";
+      certificateExpiresAt: string;
+      activatedAt: string | null;
+      createdAt: string;
+    }>;
+  } | null;
+  webhookTarget: string;
+  ready: boolean;
+}
 export interface CheckoutCoupon extends Omit<CheckoutCouponInput, "productIds"> {
   id: string;
   usedCount: number;
@@ -2743,6 +2773,23 @@ class ApiClient {
       method: "PUT",
       body: JSON.stringify(input),
     });
+  }
+
+  getCheckoutPlatformAccount(signal?: AbortSignal): Promise<CheckoutPlatformView> {
+    return this.fetch("/admin/checkout/platform-account", { signal });
+  }
+  /** Multipart with the .p12; the browser sets the boundary. */
+  uploadCheckoutPlatformCredentials(form: FormData): Promise<{ credentialId: string; version: number }> {
+    return this.fetch("/admin/checkout/platform-account/credentials", { method: "POST", body: form });
+  }
+  validateCheckoutPlatformAccount(confirmOverwrite: boolean): Promise<CheckoutPlatformView> {
+    return this.fetch("/admin/checkout/platform-account/validate", {
+      method: "POST",
+      body: JSON.stringify({ confirmOverwrite }),
+    });
+  }
+  setCheckoutPlatformPixFee(input: { expectedVersion: number; pixFeeBasisPoints: number }): Promise<CheckoutPlatformView> {
+    return this.fetch("/admin/checkout/platform-account/pix-fee", { method: "PUT", body: JSON.stringify(input) });
   }
 
   // Cifra+ Checkout: the session company

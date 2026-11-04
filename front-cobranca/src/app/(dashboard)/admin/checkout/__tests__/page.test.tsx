@@ -9,6 +9,13 @@ const mockApi = {
   getCheckoutClient: jest.fn(),
   createCheckoutClient: jest.fn(),
   updateCheckoutTerms: jest.fn(),
+  getCheckoutPlatformAccount: jest.fn().mockResolvedValue({
+    current: null,
+    history: [],
+    identity: null,
+    webhookTarget: "https://api.test/webhooks/efi/pix?ignorar=",
+    ready: false,
+  }),
 };
 jest.mock("@/lib/use-api-client", () => ({ useApiClient: () => mockApi }));
 
