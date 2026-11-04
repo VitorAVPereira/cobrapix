@@ -1,5 +1,8 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayUnique,
+  IsArray,
   IsDateString,
   IsIn,
   IsInt,
@@ -46,6 +49,15 @@ export class RecoveryQueryDto {
 
 export class RefundRequestDto {
   @IsString() @Length(5, 1000) reason!: string;
+  // Items of the order (indexes); missing or empty is the whole order.
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ArrayUnique()
+  @IsInt({ each: true })
+  @Min(0, { each: true })
+  @Max(19, { each: true })
+  itemIndexes?: number[];
 }
 
 export class RejectRefundRequestDto {

@@ -33,3 +33,14 @@ export function recoveryWhatsAppLink(phone: string, name: string | null, product
   const text = `${greeting} Vi que você começou a compra de ${productName} e não concluiu. Posso ajudar?`;
   return `https://wa.me/55${phone}?text=${encodeURIComponent(text)}`;
 }
+
+/**
+ * WhatsApp to a buyer who asked for a refund. No link: only the buyer can
+ * give the refund up, from the Cifra+ e-mail.
+ */
+export function refundWhatsAppLink(phone: string, name: string | null, productName: string): string {
+  const first = name?.trim().split(/\s+/)[0];
+  const greeting = first ? `Olá, ${first}!` : "Olá!";
+  const text = `${greeting} Vi que você pediu o reembolso de ${productName}. Posso ajudar em alguma coisa? Se quiser continuar com o produto, abra o e-mail da Cifra+ sobre o reembolso e toque em "Desistir do reembolso".`;
+  return `https://wa.me/55${phone}?text=${encodeURIComponent(text)}`;
+}

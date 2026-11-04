@@ -2764,6 +2764,8 @@ enum CheckoutRefundStatus {
   REQUESTED
   DONE
   REJECTED
+  // The buyer gave up the refund (only the buyer can).
+  WITHDRAWN
 }
 
 // The seller's balance: signed, never edited (a correction is a new entry).
@@ -2795,6 +2797,14 @@ model CheckoutRefundRequest {
   order            CheckoutOrder        @relation(fields: [orderId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
   origin           CheckoutRefundOrigin
   reason           String               @db.Text
+  // Items of the order (indexes); empty is the whole order.
+  itemIndexes      Int[]                @default([])
+  // What goes back to the buyer; null on requests made before items existed.
+  amountCents      Int?
+  // A buyer's request is held 7 days for the seller to win the buyer back.
+  holdUntil        DateTime?
+  withdrawnAt      DateTime?
+  buyerRemindedAt  DateTime?
   status           CheckoutRefundStatus @default(REQUESTED)
   resolutionNote   String?              @db.Text
   resolvedByUserId String?

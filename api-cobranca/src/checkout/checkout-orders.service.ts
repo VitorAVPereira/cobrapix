@@ -12,7 +12,7 @@ import {
   type SaleContext,
 } from './checkout-catalog.service';
 import { CheckoutPlatformService } from './checkout-platform.service';
-import type { OrderItem } from './checkout-pricing';
+import { itemShares, type OrderItem } from './checkout-pricing';
 import { conflict, normalizeDocument, offerTokenOf } from './checkout-rules';
 import { EfiCheckoutPixClient } from './efi-checkout-pix.client';
 import { CheckoutPaymentsService } from './checkout-payments.service';
@@ -235,6 +235,17 @@ export class CheckoutOrdersService {
           select: { status: true },
         },
         parent: { select: { publicToken: true, offerExpiresAt: true } },
+        refundRequests: {
+          where: { status: { in: ['REQUESTED', 'DONE'] } },
+          orderBy: { createdAt: 'desc' },
+          select: {
+            status: true,
+            itemIndexes: true,
+            amountCents: true,
+            holdUntil: true,
+            createdAt: true,
+          },
+        },
       },
     });
     if (!order) throw new NotFoundException('Pedido não encontrado.');
@@ -274,6 +285,10 @@ export class CheckoutOrdersService {
           ? withOfferParam(order.product.afterPurchaseUrl, offerToken)
           : null;
     const parent = order.parent;
+    const shares = itemShares(items, order.totalCents);
+    const openRefund = order.refundRequests.find(
+      (request) => request.status === 'REQUESTED',
+    );
     return {
       token: order.publicToken,
       productSlug: order.product.slug,
@@ -297,11 +312,13 @@ export class CheckoutOrdersService {
             }
           : null,
       expiresAt: order.expiresAt,
-      items: items.map((line) => ({
+      items: items.map((line, index) => ({
         kind: line.kind,
         name: line.name,
         unitPriceCents: line.unitPriceCents,
         discountCents: line.discountCents,
+        // What this item returns if refunded alone (surcharge included).
+        refundCents: shares[index] ?? 0,
         // Access only after the payment is confirmed.
         accessUrl:
           paid && line.deliveryMode !== 'WEBHOOK' ? line.accessUrl : null,
@@ -321,6 +338,19 @@ export class CheckoutOrdersService {
       redirectUrl: offerUrl ?? accessUrl,
       redirectKind: offerUrl ? ('OFFER' as const) : ('ACCESS' as const),
       // An offer order goes back to its offer page (e.g. Pix after a decline).
+      refund: {
+        open: openRefund
+          ? {
+              itemIndexes: openRefund.itemIndexes,
+              amountCents: openRefund.amountCents,
+              holdUntil: openRefund.holdUntil,
+              createdAt: openRefund.createdAt,
+            }
+          : null,
+        refundedItemIndexes: order.refundRequests.flatMap((request) =>
+          request.status === 'DONE' ? request.itemIndexes : [],
+        ),
+      },
       offerPage:
         parent?.offerExpiresAt && now <= parent.offerExpiresAt
           ? `/c/oferta/${offerTokenOf(parent.publicToken)}`

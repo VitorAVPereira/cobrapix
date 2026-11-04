@@ -174,6 +174,18 @@ export class CheckoutPublicController {
   @Post('orders/:token/refund-request')
   @Header('Cache-Control', 'no-store')
   requestRefund(@Param('token') token: string, @Body() dto: RefundRequestDto) {
-    return this.refunds.requestByBuyer(tokenOf(token), dto.reason);
+    return this.refunds.requestByBuyer(
+      tokenOf(token),
+      dto.reason,
+      dto.itemIndexes,
+    );
+  }
+
+  // Only the buyer's order token gives up a refund; the seller never has it.
+  @Post('orders/:token/refund-request/withdraw')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  withdrawRefund(@Param('token') token: string) {
+    return this.refunds.withdrawByBuyer(tokenOf(token));
   }
 }

@@ -12,6 +12,17 @@ type Client = Prisma.TransactionClient | PrismaService;
 export const RELEASE_DELAY_MS = 7 * 86_400_000;
 const SOLD: CheckoutOrderStatus[] = ['PAID', 'REFUNDED', 'CHARGEBACK'];
 
+/** The refund request still open on a sale, without its status. */
+function openRequest<T extends { status: string }>(
+  requests: T[],
+): Omit<T, 'status'> | null {
+  const open = requests.find((request) => request.status === 'REQUESTED');
+  if (!open) return null;
+  const rest: Partial<T> = { ...open };
+  delete rest.status;
+  return rest as Omit<T, 'status'>;
+}
+
 export interface LedgerEntryInput {
   companyId: string;
   orderId?: string | null;
@@ -95,7 +106,7 @@ export class CheckoutLedgerService {
    * what can still be paid out; "pending" is released later, by date.
    */
   async balance(companyId: string, now = new Date()) {
-    const [released, pending, paidOut, next] = await Promise.all([
+    const [released, pending, paidOut, next, openRefunds] = await Promise.all([
       this.sum({ companyId, availableAt: { lte: now } }),
       this.sum({ companyId, availableAt: { gt: now } }),
       this.sum({ companyId, kind: 'PAYOUT' }),
@@ -104,9 +115,20 @@ export class CheckoutLedgerService {
         orderBy: { availableAt: 'asc' },
         select: { availableAt: true },
       }),
+      this.prisma.checkoutRefundRequest.findMany({
+        where: { companyId, status: 'REQUESTED' },
+        select: { amountCents: true, order: { select: { totalCents: true } } },
+      }),
     ]);
+    // A sale with a refund still open may leave the balance: not for payout.
+    const onHold = openRefunds.reduce(
+      (sum, open) => sum + (open.amountCents ?? open.order.totalCents),
+      0,
+    );
     return {
       releasedCents: released,
+      suggestedPayoutCents: Math.max(0, released - onHold),
+      openRefundCents: onHold,
       pendingCents: pending,
       paidOutCents: -paidOut,
       nextReleaseAt: next?.availableAt ?? null,
@@ -136,8 +158,18 @@ export class CheckoutLedgerService {
             select: { kind: true, amountCents: true, availableAt: true },
           },
           refundRequests: {
-            where: { status: 'REQUESTED' },
-            select: { id: true, origin: true, createdAt: true },
+            where: { status: { in: ['REQUESTED', 'DONE'] } },
+            orderBy: { createdAt: 'desc' },
+            select: {
+              id: true,
+              origin: true,
+              status: true,
+              createdAt: true,
+              itemIndexes: true,
+              amountCents: true,
+              holdUntil: true,
+              buyerRemindedAt: true,
+            },
           },
           offer: { select: { kind: true } },
         },
@@ -184,7 +216,11 @@ export class CheckoutLedgerService {
             .filter((entry) => entry.kind !== 'PAYOUT')
             .reduce((sum, entry) => sum + entry.amountCents, 0),
           availableAt: sale?.availableAt ?? null,
-          openRefundRequest: order.refundRequests[0] ?? null,
+          openRefundRequest: openRequest(order.refundRequests),
+          // Items already refunded cannot be asked for again.
+          refundedItemIndexes: order.refundRequests.flatMap((request) =>
+            request.status === 'DONE' ? request.itemIndexes : [],
+          ),
         };
       }),
     };

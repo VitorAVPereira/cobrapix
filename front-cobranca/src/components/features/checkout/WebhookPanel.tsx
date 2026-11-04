@@ -15,6 +15,7 @@ const EVENT_LABELS: Record<string, string> = {
   "order.refunded": "Reembolsado",
   "order.chargeback": "Contestado",
   "refund.requested": "Reembolso pedido",
+  "refund.withdrawn": "Reembolso desistido",
   "webhook.test": "Teste",
 };
 const STATUS_LABELS: Record<CheckoutWebhookDelivery["status"], string> = {
