@@ -179,6 +179,24 @@ describe("Cifra+ Checkout routes", () => {
   });
 });
 
+describe("public checkout pages", () => {
+  it("opens the product and order pages to any visitor, with or without a session", () => {
+    for (const path of ["/c/porquim-anual-ab12", "/c/pedido/abcDEF123_-"]) {
+      expect(runMiddleware(createRequest(path, null))).toEqual({ kind: "next" });
+      expect(
+        runMiddleware(createRequest(path, "COMPANY_ADMIN", { mustChangePassword: true })),
+      ).toEqual({ kind: "next" });
+    }
+  });
+
+  it("keeps deeper /c paths protected", () => {
+    expect(runMiddleware(createRequest("/c/a/b/c", null))).toEqual({
+      kind: "redirect",
+      url: "http://localhost:3000/login",
+    });
+  });
+});
+
 describe("public payment page", () => {
   // Same shape as the backend token: base64url payload "." base64url signature.
   const token =

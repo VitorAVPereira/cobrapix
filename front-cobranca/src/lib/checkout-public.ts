@@ -1,0 +1,182 @@
+// Calls of the public checkout pages (/c/...): no session, only the product
+// slug or the order token. The backend decides everything; these pages show it.
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+
+export interface PublicCheckoutProduct {
+  available: boolean;
+  unavailableMessage: string | null;
+  product: {
+    slug: string;
+    name: string;
+    description: string | null;
+    priceCents: number;
+    compareAtPriceCents: number | null;
+    imageUrl: string | null;
+    accessPeriodMonths: number | null;
+  };
+  bumps: Array<{
+    id: string;
+    name: string;
+    headline: string | null;
+    description: string | null;
+    priceCents: number;
+    compareAtPriceCents: number | null;
+    imageUrl: string | null;
+    accessPeriodMonths: number | null;
+  }>;
+  page: {
+    displayName: string;
+    logoUrl: string | null;
+    bannerUrl: string | null;
+    primaryColor: string;
+    supportEmail: string | null;
+    supportWhatsapp: string | null;
+    whatsappButtonPhone: string | null;
+  };
+  payment: { pixEnabled: boolean; cardEnabled: boolean };
+}
+
+export interface PublicCheckoutQuote {
+  items: Array<{ kind: "MAIN" | "BUMP"; name: string; unitPriceCents: number; discountCents: number }>;
+  couponCode: string | null;
+  discountCents: number;
+  subtotalCents: number;
+  surchargeCents: number;
+  totalCents: number;
+}
+
+export type PublicOrderStatus = "PENDING" | "PAID" | "EXPIRED" | "FAILED";
+
+export interface PublicCheckoutOrder {
+  token: string;
+  productSlug: string;
+  status: PublicOrderStatus;
+  processing: boolean;
+  expiresAt: string;
+  items: Array<{
+    kind: "MAIN" | "BUMP";
+    name: string;
+    unitPriceCents: number;
+    discountCents: number;
+    accessUrl: string | null;
+    accessInstructions: string | null;
+  }>;
+  subtotalCents: number;
+  discountCents: number;
+  surchargeCents: number;
+  totalCents: number;
+  pix: { copyPaste: string | null; qrCodeImage: string | null } | null;
+  redirectUrl: string | null;
+  page: {
+    displayName: string;
+    primaryColor: string;
+    logoUrl: string | null;
+    supportEmail: string | null;
+    supportWhatsapp: string | null;
+  } | null;
+}
+
+export interface CheckoutBuyer {
+  name: string;
+  email: string;
+  document: string;
+  phone: string;
+}
+
+export type Utm = Partial<Record<"utm_source" | "utm_medium" | "utm_campaign" | "utm_term" | "utm_content", string>>;
+
+/** A refusal the buyer can read (coupon, data, unavailable), or a generic one. */
+export class CheckoutPublicError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string | null,
+  ) {
+    super(message);
+  }
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(`${API_URL}${path}`, {
+    ...init,
+    cache: "no-store",
+    headers: init.body ? { "Content-Type": "application/json" } : undefined,
+  });
+  const body = (await response.json().catch(() => null)) as
+    | (T & { code?: unknown; message?: unknown })
+    | null;
+  if (!response.ok) {
+    const message = Array.isArray(body?.message) ? body.message[0] : body?.message;
+    throw new CheckoutPublicError(
+      typeof message === "string" && response.status < 500
+        ? message
+        : "Não foi possível falar com o servidor. Tente de novo.",
+      response.status,
+      typeof body?.code === "string" ? body.code : null,
+    );
+  }
+  return body as T;
+}
+
+/** Image paths come from the API ("/checkout/public/assets/<id>"). */
+export function checkoutImageUrl(path: string | null): string | null {
+  return path ? `${API_URL}${path}` : null;
+}
+
+export function getCheckoutProduct(slug: string, signal?: AbortSignal) {
+  return request<PublicCheckoutProduct>(`/checkout/public/products/${encodeURIComponent(slug)}`, { signal });
+}
+
+export function quoteCheckout(
+  slug: string,
+  body: { bumpIds: string[]; couponCode: string | null },
+  signal?: AbortSignal,
+) {
+  return request<PublicCheckoutQuote>(`/checkout/public/products/${encodeURIComponent(slug)}/quote`, {
+    method: "POST",
+    body: JSON.stringify({ ...body, method: "PIX" }),
+    signal,
+  });
+}
+
+export function createCheckoutOrder(
+  slug: string,
+  body: { bumpIds: string[]; couponCode: string | null; buyer: CheckoutBuyer; utm: Utm; idempotencyKey: string },
+) {
+  return request<PublicCheckoutOrder>(`/checkout/public/products/${encodeURIComponent(slug)}/orders`, {
+    method: "POST",
+    body: JSON.stringify({ ...body, method: "PIX" }),
+  });
+}
+
+export function getCheckoutOrder(token: string, signal?: AbortSignal) {
+  return request<PublicCheckoutOrder>(`/checkout/public/orders/${encodeURIComponent(token)}`, { signal });
+}
+
+/** UTM parameters of the link the buyer arrived by. */
+export function utmFrom(search: string): Utm {
+  const params = new URLSearchParams(search);
+  const utm: Utm = {};
+  for (const key of ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"] as const) {
+    const value = params.get(key)?.trim();
+    if (value) utm[key] = value.slice(0, 100);
+  }
+  return utm;
+}
+
+export function formatBRL(cents: number): string {
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(cents / 100).replace(/\s/g, " ");
+}
+
+/** "12 meses de acesso", "1 ano"…, for the product period. */
+export function accessPeriodLabel(months: number | null): string | null {
+  if (!months) return null;
+  if (months % 12 === 0) return months === 12 ? "1 ano de acesso" : `${months / 12} anos de acesso`;
+  return months === 1 ? "1 mês de acesso" : `${months} meses de acesso`;
+}
+
+/** Leaves the checkout for the seller's access page (kept apart so tests can stub it). */
+export function openAccess(url: string): void {
+  window.location.assign(url);
+}
