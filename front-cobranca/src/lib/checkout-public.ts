@@ -46,7 +46,7 @@ export interface PublicCheckoutQuote {
   totalCents: number;
 }
 
-export type PublicOrderStatus = "PENDING" | "PAID" | "EXPIRED" | "FAILED";
+export type PublicOrderStatus = "PENDING" | "PAID" | "EXPIRED" | "FAILED" | "REFUNDED" | "CHARGEBACK";
 
 export interface PublicCheckoutOrder {
   token: string;
@@ -179,4 +179,12 @@ export function accessPeriodLabel(months: number | null): string | null {
 /** Leaves the checkout for the seller's access page (kept apart so tests can stub it). */
 export function openAccess(url: string): void {
   window.location.assign(url);
+}
+
+/** The buyer's refund request from the e-mail link (7 days after payment). */
+export function requestCheckoutRefund(token: string, reason: string) {
+  return request<{ id: string; status: string }>(`/checkout/public/orders/${encodeURIComponent(token)}/refund-request`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
 }

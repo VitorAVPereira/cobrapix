@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { PublicCheckoutOrder, PublicCheckoutProduct } from "@/lib/checkout-public";
 import { CheckoutForm } from "../CheckoutForm";
 import { OrderStatus } from "../OrderStatus";
+import { RefundRequestPage } from "../RefundRequestPage";
 
 const mockPush = jest.fn();
 jest.mock("next/navigation", () => ({ useRouter: () => ({ push: mockPush }) }));
@@ -12,6 +13,7 @@ const mockQuote = jest.fn();
 const mockCreate = jest.fn();
 const mockGetOrder = jest.fn();
 const mockOpenAccess = jest.fn();
+const mockRequestRefund = jest.fn();
 jest.mock("@/lib/checkout-public", () => {
   const actual = jest.requireActual<typeof import("@/lib/checkout-public")>("@/lib/checkout-public");
   return {
@@ -20,6 +22,7 @@ jest.mock("@/lib/checkout-public", () => {
     createCheckoutOrder: (...args: unknown[]) => mockCreate(...args),
     getCheckoutOrder: (...args: unknown[]) => mockGetOrder(...args),
     openAccess: (url: string) => mockOpenAccess(url),
+    requestCheckoutRefund: (...args: unknown[]) => mockRequestRefund(...args),
   };
 });
 
@@ -211,5 +214,40 @@ describe("OrderStatus", () => {
     mockGetOrder.mockResolvedValue(order({ processing: true, pix: null }));
     render(<OrderStatus token="token" />);
     expect(await screen.findByText(/gerando seu pix/i)).toBeInTheDocument();
+  });
+});
+
+describe("RefundRequestPage", () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it("envia o motivo e confirma o recebimento", async () => {
+    const user = userEvent.setup();
+    mockGetOrder.mockResolvedValue(order({ status: "PAID", pix: null }));
+    mockRequestRefund.mockResolvedValue({ id: "r1", status: "REQUESTED" });
+    render(<RefundRequestPage token="token" />);
+
+    await user.type(await screen.findByLabelText("Conte o motivo"), "Não era o que eu esperava");
+    await user.click(screen.getByRole("button", { name: /enviar pedido de reembolso/i }));
+
+    expect(mockRequestRefund).toHaveBeenCalledWith("token", "Não era o que eu esperava");
+    expect(await screen.findByRole("status")).toHaveTextContent(/pedido recebido/i);
+  });
+
+  it("fora do prazo mostra a orientação do servidor", async () => {
+    const user = userEvent.setup();
+    mockGetOrder.mockResolvedValue(order({ status: "PAID", pix: null }));
+    mockRequestRefund.mockRejectedValue(new Error("O prazo de 7 dias para pedir reembolso por aqui terminou."));
+    render(<RefundRequestPage token="token" />);
+
+    await user.type(await screen.findByLabelText("Conte o motivo"), "Mudei de ideia");
+    await user.click(screen.getByRole("button", { name: /enviar pedido de reembolso/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/prazo de 7 dias/);
+  });
+
+  it("compra já reembolsada não mostra o formulário", async () => {
+    mockGetOrder.mockResolvedValue(order({ status: "REFUNDED", pix: null }));
+    render(<RefundRequestPage token="token" />);
+    expect(await screen.findByText("Esta compra já foi reembolsada.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Conte o motivo")).not.toBeInTheDocument();
   });
 });

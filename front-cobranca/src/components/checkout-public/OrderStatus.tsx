@@ -133,6 +133,13 @@ export function OrderStatus({ token }: { token: string }) {
               ))}
             </ul>
           </>
+        ) : current.status === "REFUNDED" || current.status === "CHARGEBACK" ? (
+          <>
+            <h1 className="text-lg font-semibold text-slate-900">
+              {current.status === "REFUNDED" ? "Compra reembolsada" : "Compra contestada no banco"}
+            </h1>
+            <p className="text-sm text-slate-600">O acesso a esta compra foi encerrado.</p>
+          </>
         ) : current.status === "PENDING" && current.processing ? (
           <p className="flex items-center justify-center gap-2 py-8 text-slate-600">
             <Loader2 size={18} className="animate-spin" /> Gerando seu Pix…
