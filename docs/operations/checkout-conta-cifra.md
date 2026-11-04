@@ -81,6 +81,22 @@ O estado passa a **Pronta para vender**.
 - **Ajuste:** crédito ou débito com motivo, para corrigir qualquer valor. Nenhum lançamento é
   editado.
 
+### Retenção, desistência e reembolso de item (Parte 8)
+
+- **Pedido do comprador:** fica 7 dias "em retenção" no financeiro do cliente. Nesse prazo o botão
+  de registrar a devolução fica desligado; depois, aparece "Pronto para executar". Pedido do
+  vendedor não tem retenção.
+- **Executar:** devolva pelo app da Efí o valor que aparece no pedido de reembolso (para um item, a
+  parte dele no total pago). Se a Efí avisar a devolução com esse valor, o pedido de reembolso se
+  fecha sozinho, com os itens no aviso ao vendedor. Uma devolução avisada pela Efí na retenção vale
+  mesmo assim, porque o dinheiro já saiu.
+- **Desistência:** só o comprador desiste, pelo e-mail da Cifra+. O pedido aparece como "O
+  comprador desistiu". O vendedor nunca recebe o link; ele pode pedir o reenvio do e-mail uma vez a
+  cada 24 h (fica na auditoria como `CHECKOUT_REFUND_BUYER_REMINDED`).
+- **Repasse:** use o "Repasse sugerido", que já desconta os reembolsos em aberto.
+- **E-mails ao comprador:** recebido, desistência e concluído saem pela fila `checkout-mail`. Se o
+  Resend falhar, a fila tenta de novo; o reembolso não depende do e-mail.
+
 ## Webhook ao vendedor (Parte 4)
 
 O vendedor configura em **Configurações do checkout → Webhook**:

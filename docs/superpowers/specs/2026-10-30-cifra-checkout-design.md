@@ -489,6 +489,10 @@ Depende das Partes 2 e 6.
 
 ### Parte 8: Reembolso avançado
 
+> **Situação (10/11/2026):** implementada no branch `feat/cifra-checkout-parte-8`. A retenção de 7
+> dias aguarda a revisão jurídica (art. 49 do CDC). Plano e registro:
+> [Parte 8](../plans/2026-11-10-cifra-checkout-parte-8-reembolso.md).
+
 Depende da Parte 3 (e do CK-17).
 
 - [x] **CK-34** *(Hubla)* Prazo de retenção: depois do pedido de reembolso, o vendedor tem 7 dias

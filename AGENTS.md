@@ -172,7 +172,7 @@ VPS e na Vercel antes de afirmar que algo está em produção.
   (visitante, orçamento e WhatsApp; pedidos de titular pelo WhatsApp comercial; pedidos
   guardados até 12 meses sem contratação). Mudou a coleta, mude a política.
   Contexto para o projeto de captação de leads: `docs/contexto-ciframais.md`.
-- **Cifra+ Checkout, Partes 1 a 7 (03 a 09/11) de 9:** venda de produtos digitais pela conta
+- **Cifra+ Checkout, Partes 1 a 8 (03 a 10/11) de 9:** venda de produtos digitais pela conta
   Efí da **Cifra+** (não a do cliente).
   - **Separação:** a empresa ganha `product` (`BILLING` ou `CHECKOUT`). Uma empresa de checkout só
     vê as telas do checkout, e as rotas de um produto respondem 404 ao outro (`@CompanyProducts`
@@ -240,6 +240,19 @@ VPS e na Vercel antes de afirmar que algo está em produção.
     - **cartão reaproveitado:** com oferta, a página tokeniza com `reuse: true` e a tentativa guarda
       token, CPF do titular e endereço cifrados (`reuseEncrypted`) só até o fim da janela; a oferta
       cobra esse cartão uma vez, pelo fluxo da Parte 6. Recusou, a oferta segue só no Pix.
+  - **Parte 8 (reembolso avançado):**
+    - **retenção:** o pedido de reembolso do comprador fica 7 dias com o vendedor (`holdUntil`); o
+      do vendedor não tem retenção. Na retenção o admin não registra a devolução
+      (`CHECKOUT_REFUND_ON_HOLD`); a devolução avisada pela Efí vale sempre;
+    - **desistência:** só o comprador, pela página do pedido aberta pelo e-mail
+      (`/c/pedido/<token>/reembolso`). O vendedor manda um WhatsApp sem link ou pede à Cifra+ o
+      reenvio do e-mail (uma vez a cada 24 h). Gera `refund.withdrawn`;
+    - **item:** o comprador ou o vendedor escolhem itens; o valor é a parte do item no total pago
+      (`itemShares`, maior resto, com o acréscimo), e a % Cifra+ volta na proporção. Os avisos
+      `refund.requested` e `order.refunded` dizem os itens;
+    - **repasse sugerido:** liberado menos os reembolsos em aberto (`suggestedPayoutCents`);
+    - **e-mails ao comprador:** recebido (com o link para desistir), desistência e concluído, pela
+      fila `checkout-mail`, como Cifra+.
   - **Docs:** a spec com as 9 partes é `docs/superpowers/specs/2026-10-30-cifra-checkout-design.md`,
     e o runbook é `docs/operations/checkout-conta-cifra.md`.
 - **Em aberto:**
@@ -250,6 +263,8 @@ VPS e na Vercel antes de afirmar que algo está em produção.
   - Cartão do checkout: homologado no ambiente de homologação da Efí (informado em 09/11); falta
     ligar na conta Cifra+ de produção pelo admin, conferir o prazo real de crédito, o nome na fatura e
     a segunda cobrança com o token reutilizável (`docs/operations/checkout-conta-cifra.md`).
+  - Retenção de 7 dias do reembolso do checkout (Parte 8): conferir na revisão jurídica com o
+    direito de arrependimento (art. 49 do CDC) e os textos dos e-mails.
   - A política de `/privacidade` não passou por revisão jurídica; a da ativação financeira
     (`/onboarding/privacidade`) segue como texto de homologação.
 
@@ -271,7 +286,7 @@ VPS e na Vercel antes de afirmar que algo está em produção.
 | `financial-activation/` | Ativação manual: perfil versionado, credenciais cifradas, validação em fila, elegibilidade, certificados |
 | `settlements/` | Lançamentos imutáveis (`FinancialLedgerEntry`), conciliação e divergências |
 | `disbursements/` | Pagamentos a colaboradores: liberação pelo admin, colaboradores, lotes, aprovação no WhatsApp, envio Pix e resultado pelo webhook Pix |
-| `checkout/` | Cifra+ Checkout: clientes de checkout e termos (admin), conta Efí da Cifra+ e tarifa, configurações da página, imagens públicas, produtos, order bumps, cupons, página pública, pedidos, Pix imediato e confirmação, saldo e reembolso, webhook ao vendedor, leads, recuperação e anonimização, cartão (cotação, tentativas, conciliação e pausa), ofertas depois da compra (upsell, downsell, link de 1 clique e cartão reaproveitado) |
+| `checkout/` | Cifra+ Checkout: clientes de checkout e termos (admin), conta Efí da Cifra+ e tarifa, configurações da página, imagens públicas, produtos, order bumps, cupons, página pública, pedidos, Pix imediato e confirmação, saldo e reembolso, webhook ao vendedor, leads, recuperação e anonimização, cartão (cotação, tentativas, conciliação e pausa), ofertas depois da compra (upsell, downsell, link de 1 clique e cartão reaproveitado), reembolso com retenção, desistência e por item |
 | `efi-onboarding/` | Abertura de contas (desligada) e chaves de integração (`PlatformIntegrationState`) |
 | `communications/` | Conversas, mensagens, intenções de envio, atribuição por empresa, pendências e retomada de templates |
 | `whatsapp/` | Transporte Datafy e `OutboundDispatcherService` (ver `whatsapp/transport/README.md`) |
@@ -513,7 +528,7 @@ node test/e2e-disposable.cjs <arquivo>.e2e-spec.ts [...]   # ex.: npm run test:e
 npm run test:e2e:disbursements                             # pagamentos a colaboradores
 npm run test:e2e:invoice-import                             # importação de cobranças com revisão
 npm run test:e2e:checkout                                   # Cifra+ Checkout (clientes, produtos, cupons, isolamento)
-npm run test:e2e:checkout-pix                               # Cifra+ Checkout: cotação, pedido, Pix, cartão, confirmação, saldo, reembolso, webhook, recuperação e ofertas
+npm run test:e2e:checkout-pix                               # Cifra+ Checkout: cotação, pedido, Pix, cartão, confirmação, saldo, reembolso (retenção e item), webhook, recuperação e ofertas
 ```
 
 - Testes que escrevem em banco ou Redis usam **somente** a infraestrutura descartável dos
@@ -618,6 +633,7 @@ Descontinuadas: `EFI_ONBOARDING_NOTICE_TEMPLATE`, `EFI_ONBOARDING_REMINDER_TEMPL
 | POST | `/checkout/public/products/:slug/card/quote` e `.../card/orders` | Parcelas do cartão e pedido com a primeira cobrança (chave idempotente) |
 | POST | `/checkout/public/orders/:token/card/pay` | Nova tentativa no cartão depois de uma recusa |
 | GET | `/checkout/public/orders/:token` | Estado do pedido; o acesso só depois de pago |
+| POST | `/checkout/public/orders/:token/refund-request` e `.../withdraw` | Pedido de reembolso (itens opcionais) e desistência, só com o token do comprador |
 | GET | `/checkout/public/offers/:token` | Oferta depois da compra (`?oferta=<id>` na página do vendedor) |
 | POST | `/checkout/public/offers/:token/card/quote`, `.../accept` e `.../decline` | Parcelas no cartão guardado, aceite (Pix ou cartão, chave idempotente) e recusa |
 
