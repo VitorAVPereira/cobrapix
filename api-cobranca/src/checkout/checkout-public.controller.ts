@@ -16,6 +16,8 @@ import { ThrottleGuard } from '../common/guards/throttle.guard';
 import { CheckoutAssetsService } from './checkout-assets.service';
 import { CheckoutCatalogService } from './checkout-catalog.service';
 import { CheckoutOrdersService } from './checkout-orders.service';
+import { CheckoutRefundsService } from './checkout-refunds.service';
+import { RefundRequestDto } from './dto/checkout-finance.dto';
 import {
   CheckoutQuoteDto,
   CreateCheckoutOrderDto,
@@ -40,6 +42,7 @@ export class CheckoutPublicController {
     private readonly assets: CheckoutAssetsService,
     private readonly catalog: CheckoutCatalogService,
     private readonly orders: CheckoutOrdersService,
+    private readonly refunds: CheckoutRefundsService,
   ) {}
 
   // An asset never changes once uploaded (a new image is a new id).
@@ -77,5 +80,11 @@ export class CheckoutPublicController {
   @Header('Cache-Control', 'no-store')
   orderStatus(@Param('token') token: string) {
     return this.orders.view(tokenOf(token));
+  }
+
+  @Post('orders/:token/refund-request')
+  @Header('Cache-Control', 'no-store')
+  requestRefund(@Param('token') token: string, @Body() dto: RefundRequestDto) {
+    return this.refunds.requestByBuyer(tokenOf(token), dto.reason);
   }
 }

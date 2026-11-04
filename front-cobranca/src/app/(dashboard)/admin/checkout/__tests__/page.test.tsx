@@ -9,6 +9,13 @@ const mockApi = {
   getCheckoutClient: jest.fn(),
   createCheckoutClient: jest.fn(),
   updateCheckoutTerms: jest.fn(),
+  getCheckoutFinance: jest.fn().mockResolvedValue({
+    balance: { releasedCents: 0, pendingCents: 0, paidOutCents: 0, nextReleaseAt: null },
+    refundRequests: [],
+    entries: [],
+    chargebackIndex: { windowDays: 90, salesCount: 0, salesCents: 0, chargebackCount: 0, chargebackCents: 0, ratioBasisPoints: 0 },
+    sales: { total: 0, page: 1, pageSize: 50, items: [] },
+  }),
   getCheckoutPlatformAccount: jest.fn().mockResolvedValue({
     current: null,
     history: [],

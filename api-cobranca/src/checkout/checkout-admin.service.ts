@@ -53,7 +53,10 @@ export class CheckoutAdminService {
           select: { version: true, platformFeeBasisPoints: true },
         },
         _count: {
-          select: { checkoutProducts: { where: { active: true } } },
+          select: {
+            checkoutProducts: { where: { active: true } },
+            checkoutRefundRequests: { where: { status: 'REQUESTED' } },
+          },
         },
       },
     });
@@ -61,6 +64,7 @@ export class CheckoutAdminService {
       ...company,
       currentTerms: checkoutSellerTerms[0] ?? null,
       activeProducts: _count.checkoutProducts,
+      pendingRefundRequests: _count.checkoutRefundRequests,
     }));
   }
 

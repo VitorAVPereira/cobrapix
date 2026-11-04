@@ -93,6 +93,8 @@ export class CheckoutMailProcessor extends WorkerHost {
           `<p>Seu pagamento para ${escapeHtml(seller)} foi confirmado. Veja como acessar:</p>`,
           `<ul>${lines.join('')}</ul>`,
           support ? `<p>Dúvidas sobre o produto: ${support}</p>` : '',
+          // Consumer law: 7 days to change one's mind; the link says so.
+          `<p>Se mudar de ideia, você pode <a href="${escapeHtml(this.refundUrl(order.publicToken))}">pedir reembolso</a> em até 7 dias.</p>`,
           '<p>Pagamento processado pela Cifra+.</p>',
         ].join(''),
         idempotencyKey: `checkout-access-${order.id}`,
@@ -106,6 +108,11 @@ export class CheckoutMailProcessor extends WorkerHost {
       where: { id: order.id, accessEmailSentAt: null },
       data: { accessEmailSentAt: new Date() },
     });
+  }
+
+  private refundUrl(token: string): string {
+    const base = this.required('FRONTEND_URL').replace(/\/+$/, '');
+    return `${base}/c/pedido/${token}/reembolso`;
   }
 
   private required(key: string): string {

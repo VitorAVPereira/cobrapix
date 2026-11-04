@@ -389,4 +389,124 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
       .get(`/checkout/public/orders/${'a'.repeat(43)}`)
       .expect(404);
   });
+
+  // Part 3: balance, refunds, payouts and adjustments on the same sale.
+  it('a venda paga entra no saldo a liberar, com tarifa e % Cifra+', async () => {
+    const balance = await request(http)
+      .get('/checkout/balance')
+      .set(auth(tokens.seller))
+      .expect(200);
+    // 75,20 − tarifa estimada (1,19% = 0,89) − 2,5% de 75,20 (1,88)
+    expect(balance.body).toMatchObject({
+      pendingCents: 7520 - 89 - 188,
+      releasedCents: 0,
+    });
+    const sales = await request(http)
+      .get('/checkout/sales')
+      .set(auth(tokens.seller))
+      .expect(200);
+    expect(sales.body).toMatchObject({
+      total: 1,
+      items: [{ totalCents: 7520, netCents: 7520 - 89 - 188, status: 'PAID' }],
+    });
+  });
+
+  it('comprador pede reembolso e o aviso de devolução da Efí fecha o pedido', async () => {
+    await request(http)
+      .post(`/checkout/public/orders/${token}/refund-request`)
+      .send({ reason: 'Não era o que eu esperava' })
+      .expect(201);
+    await request(http)
+      .post(`/checkout/public/orders/${token}/refund-request`)
+      .send({ reason: 'De novo, por favor' })
+      .expect(409);
+
+    const attempt = await prisma.checkoutPaymentAttempt.findFirstOrThrow({
+      where: { order: { publicToken: token } },
+    });
+    const payments = app.get(CheckoutPaymentsService);
+    const devolucao = {
+      txid: attempt.efiTxid,
+      chave: PIX_KEY,
+      valor: '75.20',
+      endToEndId: 'E2E1',
+      devolucoes: [{ id: 'D1', valor: '75.20', status: 'DEVOLVIDO' }],
+    };
+    await payments.handlePixEvent(devolucao);
+    await payments.handlePixEvent(devolucao);
+
+    const order = await prisma.checkoutOrder.findUniqueOrThrow({
+      where: { publicToken: token },
+      include: { refundRequests: true, ledgerEntries: true },
+    });
+    expect(order.status).toBe('REFUNDED');
+    expect(order.refundRequests[0]?.status).toBe('DONE');
+    expect(
+      order.ledgerEntries.filter((entry) => entry.kind === 'REFUND'),
+    ).toHaveLength(1);
+    // The seller keeps only the Efí tariff as cost: the Cifra+ % came back.
+    const balance = await request(http)
+      .get('/checkout/balance')
+      .set(auth(tokens.seller))
+      .expect(200);
+    expect(balance.body).toMatchObject({
+      releasedCents: -7520 + 188,
+      pendingCents: 7520 - 89 - 188,
+    });
+  });
+
+  it('o admin registra repasse e ajuste uma vez só; o vendedor não vê o financeiro do admin', async () => {
+    const company = await prisma.company.findFirstOrThrow({
+      where: { email: `porquim-${suffix}@e2e.test` },
+    });
+    const payout = {
+      idempotencyKey: randomUUID(),
+      amountCents: 1000,
+      paidOn: '2026-11-05',
+      reference: 'comprovante-1',
+    };
+    const first = await request(http)
+      .post(`/admin/checkout/clients/${company.id}/payouts`)
+      .set(auth(tokens.admin))
+      .send(payout)
+      .expect(201);
+    expect((first.body as { warning: string | null }).warning).toMatch(
+      /negativo/,
+    );
+    await request(http)
+      .post(`/admin/checkout/clients/${company.id}/payouts`)
+      .set(auth(tokens.admin))
+      .send(payout)
+      .expect(201);
+    await request(http)
+      .post(`/admin/checkout/clients/${company.id}/adjustments`)
+      .set(auth(tokens.admin))
+      .send({
+        idempotencyKey: randomUUID(),
+        amountCents: 500,
+        note: 'Crédito de cortesia',
+      })
+      .expect(201);
+
+    const finance = await request(http)
+      .get(`/admin/checkout/clients/${company.id}/finance`)
+      .set(auth(tokens.admin))
+      .expect(200);
+    const body = finance.body as {
+      balance: { paidOutCents: number };
+      entries: { kind: string }[];
+      refundRequests: { status: string }[];
+    };
+    expect(body.balance.paidOutCents).toBe(1000);
+    expect(body.entries.map((entry) => entry.kind).sort()).toEqual([
+      'ADJUSTMENT',
+      'PAYOUT',
+    ]);
+    expect(body.refundRequests[0]?.status).toBe('DONE');
+
+    await request(http)
+      .get(`/admin/checkout/clients/${company.id}/finance`)
+      .set(auth(tokens.seller))
+      .expect(404);
+  });
 });

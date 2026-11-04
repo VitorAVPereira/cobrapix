@@ -269,6 +269,11 @@ export class ThrottleGuard implements CanActivate, OnModuleDestroy {
       ]);
     }
 
+    // Refund requests by the buyer: few per IP, like orders.
+    if (path.startsWith('/checkout/public/orders/') && method === 'POST') {
+      return this.findConfigs(['throttle:checkout:order:ip']);
+    }
+
     if (path.startsWith('/checkout/public/') && method === 'GET') {
       return this.findConfigs(['throttle:checkout:read:ip']);
     }

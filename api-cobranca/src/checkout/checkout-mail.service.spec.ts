@@ -20,6 +20,7 @@ describe('CheckoutMailProcessor', () => {
   const env: Record<string, string> = {
     RESEND_API_KEY: 're_test',
     RESEND_FROM_EMAIL: 'Cifra+ <nao-responda@ciframais.test>',
+    FRONTEND_URL: 'https://app.ciframais.test/',
   };
   const processor = new CheckoutMailProcessor(
     prisma as unknown as PrismaService,
@@ -30,6 +31,7 @@ describe('CheckoutMailProcessor', () => {
   const paid = {
     id: 'order-1',
     status: 'PAID',
+    publicToken: 'tok',
     accessEmailSentAt: null,
     buyerName: 'Maria Souza',
     buyerEmail: 'maria@exemplo.test',
@@ -76,6 +78,9 @@ describe('CheckoutMailProcessor', () => {
     expect(mail?.html).toContain('Chega no seu WhatsApp.');
     expect(mail?.html).toContain('Acesso Extra &lt;b&gt;');
     expect(mail?.html).toContain('Pagamento processado pela Cifra+.');
+    expect(mail?.html).toContain(
+      'href="https://app.ciframais.test/c/pedido/tok/reembolso"',
+    );
     expect(prisma.checkoutOrder.updateMany).toHaveBeenCalledWith({
       where: { id: 'order-1', accessEmailSentAt: null },
       data: { accessEmailSentAt: expect.any(Date) as Date },

@@ -396,6 +396,9 @@ Depende da Parte 1. Ao fim, o primeiro cliente consegue vender por Pix.
 
 ### Parte 3: Saldo, repasse e reembolso
 
+> **Situação (05/11/2026):** implementada no branch `feat/cifra-checkout-parte-3`. Plano e registro:
+> [Parte 3](../plans/2026-11-05-cifra-checkout-parte-3-saldo.md).
+
 Depende da Parte 2. Ao fim, o dinheiro de cada venda fica rastreável até o repasse.
 
 - [x] **CK-13** Lançamentos imutáveis: venda, custo Efí, % Cifra+, reembolso, contestação,

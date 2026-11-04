@@ -28,7 +28,7 @@ function isAllowedPlatformAdminPath(pathname: string): boolean {
 // The internal route stays outside the matcher: Next runs this middleware again
 // on the rewrite target, and the page itself declares "/" as canonical.
 const LANDING_PATH = "/apresentacao";
-const CHECKOUT_HOME = "/checkout/produtos";
+const CHECKOUT_HOME = "/checkout/vendas";
 
 // Auth.js rebuilds the request with the AUTH_URL origin, so the rewrite takes
 // the URL the visitor actually reached; otherwise a different port or domain

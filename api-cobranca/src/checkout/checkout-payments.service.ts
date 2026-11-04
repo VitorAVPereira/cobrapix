@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CheckoutMailJobs } from './checkout-mail.service';
+import { CheckoutLedgerService } from './checkout-ledger.service';
+import { CheckoutRefundsService } from './checkout-refunds.service';
 
 export const CHECKOUT_TXID_PREFIX = 'ckt';
 // The anomaly table accepts PIX, CHARGES or CARD; checkout reasons carry a prefix.
@@ -52,6 +54,8 @@ export class CheckoutPaymentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly mail: CheckoutMailJobs,
+    private readonly ledger: CheckoutLedgerService,
+    private readonly refunds: CheckoutRefundsService,
   ) {}
 
   /**
@@ -69,11 +73,6 @@ export class CheckoutPaymentsService {
       await this.anomaly('CHECKOUT_UNKNOWN_TXID', txid);
       return false;
     }
-    // Refunds are handled in a later part; until then the admin sees them.
-    if (Array.isArray(event.devolucoes) && event.devolucoes.length) {
-      await this.anomaly('CHECKOUT_REFUND_PENDING', txid, attempt.companyId);
-      return false;
-    }
     if (
       typeof event.chave !== 'string' ||
       event.chave !== attempt.issuerIdentity.pixKey
@@ -81,6 +80,9 @@ export class CheckoutPaymentsService {
       await this.anomaly('CHECKOUT_RECEIVER_MISMATCH', txid, attempt.companyId);
       return false;
     }
+    // A refund notice is not a second payment: only finished refunds count.
+    if (Array.isArray(event.devolucoes) && event.devolucoes.length)
+      return this.applyRefunds(event, attempt.orderId, txid, attempt.companyId);
     const paid = amountCents(event.valor);
     if (paid !== attempt.amountCents) {
       await this.anomaly('CHECKOUT_AMOUNT_MISMATCH', txid, attempt.companyId);
@@ -120,8 +122,20 @@ export class CheckoutPaymentsService {
       const order = await tx.checkoutOrder.update({
         where: { id: attempt.orderId },
         data: { status: 'PAID', paidAt: now },
-        select: { id: true, couponId: true },
+        select: {
+          id: true,
+          companyId: true,
+          couponId: true,
+          totalCents: true,
+          efiFeeCents: true,
+          platformFeeCents: true,
+        },
       });
+      await this.ledger.recordSale(
+        tx,
+        { ...order, paidAt: now },
+        payment.providerFeeCents,
+      );
       // Coupon limits count paid orders only.
       if (order.couponId)
         await tx.checkoutCoupon.update({
@@ -138,6 +152,34 @@ export class CheckoutPaymentsService {
       this.logger.error('CHECKOUT_ACCESS_EMAIL_NOT_QUEUED');
     }
     return true;
+  }
+
+  private async applyRefunds(
+    event: Record<string, unknown>,
+    orderId: string,
+    txid: string,
+    companyId: string,
+  ): Promise<boolean> {
+    const endToEndId =
+      typeof event.endToEndId === 'string' ? event.endToEndId : null;
+    let applied = false;
+    for (const refund of event.devolucoes as unknown[]) {
+      if (!isRecord(refund) || refund.status !== 'DEVOLVIDO') continue;
+      const value = amountCents(refund.valor);
+      if (!endToEndId || typeof refund.id !== 'string' || value === null) {
+        await this.anomaly('CHECKOUT_REFUND_INVALID', txid, companyId);
+        continue;
+      }
+      applied =
+        (await this.refunds.record({
+          orderId,
+          amountCents: value,
+          idempotencyKey: `pix:${endToEndId}:${refund.id}`,
+          evidenceReference: `${endToEndId}:${refund.id}`,
+          fromProvider: true,
+        })) || applied;
+    }
+    return applied;
   }
 
   private async anomaly(

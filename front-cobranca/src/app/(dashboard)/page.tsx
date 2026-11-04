@@ -153,7 +153,7 @@ export default function DashboardPage() {
   const isCheckout = session?.user.companyProduct === "CHECKOUT";
 
   useEffect(() => {
-    if (isCheckout) router.replace("/checkout/produtos");
+    if (isCheckout) router.replace("/checkout/vendas");
   }, [isCheckout, router]);
 
   if (isCheckout) return null;

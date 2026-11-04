@@ -60,5 +60,23 @@ O estado passa a **Pronta para vender**.
 | A resposta da Efí se perdeu ao gerar o Pix | O pedido fica "Gerando seu Pix…". A cada minuto o sistema consulta a Efí pelo `txid`: se o Pix existe, aparece; se não existe depois de 10 minutos, o pedido falha sem cobrança | Nenhuma. Nunca gere outro Pix para o mesmo pedido |
 | O webhook do pagamento não chegou | Antes de expirar um pedido, o sistema consulta a Efí. Se estiver pago, confirma e manda o acesso | Nenhuma |
 | Aviso com outra chave ou outro valor | Nada é baixado; fica uma anomalia `PIX` com o motivo `CHECKOUT_…` | Conferir na Efí e no banco (`PaymentWebhookAnomaly`) |
-| Devolução de Pix do checkout | Ainda não é tratada (Parte 3); vira a anomalia `CHECKOUT_REFUND_PENDING` | Registrar o reembolso manualmente até a Parte 3 |
+| Pedido de reembolso (comprador ou vendedor) | Aparece em Admin → Checkout e chega por e-mail no `PLATFORM_ALERT_EMAIL` | Devolver o Pix pelo app da Efí; o aviso da Efí registra o reembolso e fecha o pedido |
+| Devolução feita por fora da Efí | O sistema não sabe dela | Em Admin → Checkout → financeiro do cliente, "Registrar devolução feita por fora" |
 | E-mail de acesso não saiu | A fila `checkout-mail` tenta 5 vezes, com intervalo crescente | Conferir `RESEND_API_KEY` e `RESEND_FROM_EMAIL` |
+
+## Saldo, repasse e reembolso (Parte 3)
+
+- **Saldo do vendedor:** cada venda paga entra "a liberar" e é liberada 7 dias depois do
+  pagamento, já descontadas a tarifa Efí e a % Cifra+.
+- **Reembolso:** devolva o Pix pelo app da Efí. Quando a Efí confirma a devolução, o sistema tira o
+  valor do saldo do vendedor, devolve a ele a % Cifra+ da parte devolvida (a tarifa Efí fica com
+  ele) e fecha o pedido de reembolso. Se o reembolso foi feito depois do repasse, o saldo do
+  vendedor fica negativo e o próximo repasse sugerido já sai descontado.
+- **Repasse:** faça o Pix pelo app da Efí e registre em Admin → Checkout → financeiro do cliente →
+  "Registrar repasse", com valor, data, referência do comprovante e observação (por exemplo, a
+  reserva de 1%). O sistema avisa quando o valor passa do liberado, mas aceita, porque a reserva é
+  manejada por você.
+- **Contestação (chargeback):** registre a venda e o valor. Ela entra no índice de chargeback dos
+  últimos 90 dias. Enquanto o checkout só aceitar Pix, o índice fica em 0%.
+- **Ajuste:** crédito ou débito com motivo, para corrigir qualquer valor. Nenhum lançamento é
+  editado.

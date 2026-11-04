@@ -424,6 +424,8 @@ model Company {
   checkoutOrderBumps       CheckoutOrderBump[]
   checkoutCoupons          CheckoutCoupon[]
   checkoutOrders           CheckoutOrder[]
+  checkoutLedgerEntries    CheckoutLedgerEntry[]
+  checkoutRefundRequests   CheckoutRefundRequest[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2470,6 +2472,8 @@ enum CheckoutOrderStatus {
   PAID
   EXPIRED
   FAILED
+  REFUNDED
+  CHARGEBACK
 }
 
 enum CheckoutAttemptStatus {
@@ -2534,6 +2538,8 @@ model CheckoutOrder {
   createdAt              DateTime                 @default(now())
   updatedAt              DateTime                 @updatedAt
   attempt                CheckoutPaymentAttempt?
+  ledgerEntries          CheckoutLedgerEntry[]
+  refundRequests         CheckoutRefundRequest[]
 
   @@unique([id, companyId])
   @@index([companyId, status, createdAt])
@@ -2563,4 +2569,65 @@ model CheckoutPaymentAttempt {
 
   @@unique([orderId, companyId])
   @@index([status, createdAt])
+}
+
+enum CheckoutLedgerKind {
+  SALE
+  EFI_FEE
+  PLATFORM_FEE
+  REFUND
+  PLATFORM_FEE_REVERSAL
+  CHARGEBACK
+  PAYOUT
+  ADJUSTMENT
+}
+
+enum CheckoutRefundOrigin {
+  BUYER
+  SELLER
+}
+
+enum CheckoutRefundStatus {
+  REQUESTED
+  DONE
+  REJECTED
+}
+
+// The seller's balance: signed, never edited (a correction is a new entry).
+// availableAt says when the amount counts as released for a payout.
+model CheckoutLedgerEntry {
+  id                String             @id @default(uuid())
+  companyId         String
+  company           Company            @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  orderId           String?
+  order             CheckoutOrder?     @relation(fields: [orderId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  kind              CheckoutLedgerKind
+  amountCents       Int
+  availableAt       DateTime
+  idempotencyKey    String             @unique
+  evidenceReference String?
+  note              String?            @db.Text
+  createdByUserId   String?
+  createdAt         DateTime           @default(now())
+
+  @@index([companyId, availableAt])
+  @@index([orderId])
+}
+
+model CheckoutRefundRequest {
+  id               String               @id @default(uuid())
+  companyId        String
+  company          Company              @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  orderId          String
+  order            CheckoutOrder        @relation(fields: [orderId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  origin           CheckoutRefundOrigin
+  reason           String               @db.Text
+  status           CheckoutRefundStatus @default(REQUESTED)
+  resolutionNote   String?              @db.Text
+  resolvedByUserId String?
+  resolvedAt       DateTime?
+  createdAt        DateTime             @default(now())
+
+  @@index([companyId, status, createdAt])
+  @@index([orderId, status])
 }

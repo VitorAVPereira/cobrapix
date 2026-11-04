@@ -25,6 +25,10 @@ import {
   CheckoutMailProcessor,
 } from './checkout-mail.service';
 import { CheckoutWorker } from './checkout.worker';
+import { CheckoutLedgerService } from './checkout-ledger.service';
+import { CheckoutRefundsService } from './checkout-refunds.service';
+import { CheckoutFinanceService } from './checkout-finance.service';
+import { CheckoutFinanceController } from './checkout-finance.controller';
 
 @Module({
   imports: [
@@ -38,6 +42,7 @@ import { CheckoutWorker } from './checkout.worker';
     CheckoutController,
     CheckoutPublicController,
     CheckoutPlatformController,
+    CheckoutFinanceController,
   ],
   providers: [
     CheckoutAdminService,
@@ -53,6 +58,9 @@ import { CheckoutWorker } from './checkout.worker';
     CheckoutMailJobs,
     CheckoutMailProcessor,
     CheckoutWorker,
+    CheckoutLedgerService,
+    CheckoutRefundsService,
+    CheckoutFinanceService,
     ResendMailerService,
     PlatformAdminGuard,
   ],

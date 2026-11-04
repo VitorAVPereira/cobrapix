@@ -17,6 +17,7 @@ import {
   MessageSquareText,
   MessageSquare,
   Package,
+  Receipt,
   Settings,
   Settings2,
   SlidersHorizontal,
@@ -119,6 +120,7 @@ const adminItems = [
 
 // A checkout company sees only the Cifra+ Checkout screens.
 const checkoutItems = [
+  { href: "/checkout/vendas", label: "Vendas", icon: Receipt },
   { href: "/checkout/produtos", label: "Produtos", icon: Package },
   { href: "/checkout/cupons", label: "Cupons", icon: TicketPercent },
   {
