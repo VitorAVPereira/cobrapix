@@ -142,11 +142,26 @@ export function quoteCheckout(
 
 export function createCheckoutOrder(
   slug: string,
-  body: { bumpIds: string[]; couponCode: string | null; buyer: CheckoutBuyer; utm: Utm; idempotencyKey: string },
+  body: {
+    bumpIds: string[];
+    couponCode: string | null;
+    buyer: CheckoutBuyer;
+    utm: Utm;
+    idempotencyKey: string;
+    sessionKey?: string;
+  },
 ) {
   return request<PublicCheckoutOrder>(`/checkout/public/products/${encodeURIComponent(slug)}/orders`, {
     method: "POST",
     body: JSON.stringify({ ...body, method: "PIX" }),
+  });
+}
+
+/** What the buyer typed so far; the seller may contact them if they leave. */
+export function saveCheckoutLead(slug: string, body: Partial<CheckoutBuyer> & { sessionKey: string; utm: Utm }) {
+  return request<{ saved: boolean }>(`/checkout/public/products/${encodeURIComponent(slug)}/lead`, {
+    method: "POST",
+    body: JSON.stringify(body),
   });
 }
 
