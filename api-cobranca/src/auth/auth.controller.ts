@@ -8,6 +8,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { CompanyProduct } from '@prisma/client';
 import { AuthService } from './auth.service';
 import { LocalAuthGuard } from './guards/local-auth.guard';
 import { ThrottleGuard } from '../common/guards/throttle.guard';
@@ -20,6 +21,7 @@ import {
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { GetUser } from './decorators/get-user.decorator';
 import { AllowPasswordChangeRequired } from './decorators/allow-password-change-required.decorator';
+import { CompanyProducts } from './decorators/company-products.decorator';
 import type { AuthenticatedUser, MessageResponse } from './auth.types';
 
 @Controller('auth')
@@ -65,6 +67,7 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @AllowPasswordChangeRequired()
+  @CompanyProducts(CompanyProduct.BILLING, CompanyProduct.CHECKOUT)
   @Post('change-password')
   @HttpCode(HttpStatus.OK)
   changePassword(
@@ -76,6 +79,7 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @AllowPasswordChangeRequired()
+  @CompanyProducts(CompanyProduct.BILLING, CompanyProduct.CHECKOUT)
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   logout(@Res({ passthrough: true }) res: Response): { message: string } {
@@ -85,6 +89,7 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @AllowPasswordChangeRequired()
+  @CompanyProducts(CompanyProduct.BILLING, CompanyProduct.CHECKOUT)
   @Post('session')
   @HttpCode(HttpStatus.OK)
   getSession(@GetUser() user: AuthenticatedUser): unknown {
@@ -95,6 +100,7 @@ export class AuthController {
         name: user.name,
         companyId: user.companyId,
         role: user.role,
+        companyProduct: user.companyProduct,
         mustChangePassword: user.mustChangePassword,
         tokenVersion: user.tokenVersion,
       },

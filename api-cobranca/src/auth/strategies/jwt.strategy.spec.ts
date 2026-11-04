@@ -35,6 +35,7 @@ describe('JwtStrategy', () => {
       role: UserRole.COMPANY_ADMIN,
       mustChangePassword: true,
       tokenVersion: 2,
+      company: { product: 'CHECKOUT' },
     });
     const strategy = new JwtStrategy(config, prisma);
 
@@ -44,6 +45,7 @@ describe('JwtStrategy', () => {
       name: 'Admin Cliente',
       companyId: 'company-1',
       role: UserRole.COMPANY_ADMIN,
+      companyProduct: 'CHECKOUT',
       mustChangePassword: true,
       tokenVersion: 2,
     });
@@ -57,6 +59,7 @@ describe('JwtStrategy', () => {
         role: true,
         mustChangePassword: true,
         tokenVersion: true,
+        company: { select: { product: true } },
       },
     });
   });
@@ -70,6 +73,7 @@ describe('JwtStrategy', () => {
       role: UserRole.COMPANY_ADMIN,
       mustChangePassword: false,
       tokenVersion: 3,
+      company: { product: 'BILLING' },
     });
     const strategy = new JwtStrategy(config, prisma);
 
