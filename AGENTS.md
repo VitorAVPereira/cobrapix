@@ -172,7 +172,7 @@ VPS e na Vercel antes de afirmar que algo está em produção.
   (visitante, orçamento e WhatsApp; pedidos de titular pelo WhatsApp comercial; pedidos
   guardados até 12 meses sem contratação). Mudou a coleta, mude a política.
   Contexto para o projeto de captação de leads: `docs/contexto-ciframais.md`.
-- **Cifra+ Checkout, Partes 1 (03/11) e 2 (04/11) de 9:** venda de produtos digitais pela conta
+- **Cifra+ Checkout, Partes 1 a 3 (03 a 05/11) de 9:** venda de produtos digitais pela conta
   Efí da **Cifra+** (não a do cliente).
   - **Separação:** a empresa ganha `product` (`BILLING` ou `CHECKOUT`). Uma empresa de checkout só
     vê as telas do checkout, e as rotas de um produto respondem 404 ao outro (`@CompanyProducts`
@@ -186,7 +186,13 @@ VPS e na Vercel antes de afirmar que algo está em produção.
     - o webhook Pix separa os `ckt…` para o checkout no `WebhooksService`;
     - o acesso chega por redirecionamento e por e-mail;
     - um worker concilia Pix incertos e, antes de expirar um pedido, consulta a Efí.
-  - **Ainda não há:** saldo, repasse nem reembolso (Parte 3).
+  - **Parte 3 (saldo, repasse e reembolso):**
+    - **razão imutável** (`CheckoutLedgerEntry`): venda, tarifa Efí e % Cifra+ liberadas em 7 dias;
+    - **reembolso de Pix:** entra pelo aviso de devolução da Efí, e a % Cifra+ volta ao vendedor;
+    - **o comprador pede** pelo link do e-mail em até 7 dias, e **o vendedor pede** em Vendas;
+    - **o admin registra** repasse (feito por fora, no app Efí), contestação, ajuste e devolução
+      feita fora da Efí, e vê o índice de chargeback;
+    - **a tela de entrada** do vendedor é Vendas.
   - **Docs:** a spec com as 9 partes é `docs/superpowers/specs/2026-10-30-cifra-checkout-design.md`,
     e o runbook é `docs/operations/checkout-conta-cifra.md`.
 - **Em aberto:**
@@ -457,7 +463,7 @@ node test/e2e-disposable.cjs <arquivo>.e2e-spec.ts [...]   # ex.: npm run test:e
 npm run test:e2e:disbursements                             # pagamentos a colaboradores
 npm run test:e2e:invoice-import                             # importação de cobranças com revisão
 npm run test:e2e:checkout                                   # Cifra+ Checkout (clientes, produtos, cupons, isolamento)
-npm run test:e2e:checkout-pix                               # Cifra+ Checkout: cotação, pedido, Pix e confirmação
+npm run test:e2e:checkout-pix                               # Cifra+ Checkout: cotação, pedido, Pix, confirmação, saldo e reembolso
 ```
 
 - Testes que escrevem em banco ou Redis usam **somente** a infraestrutura descartável dos
