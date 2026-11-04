@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { CheckoutOrdersService } from './checkout-orders.service';
+import { CheckoutWebhooksService } from './checkout-webhooks.service';
 
 /**
  * Every write is conditional on the current status, so two API instances
@@ -9,7 +10,16 @@ import { CheckoutOrdersService } from './checkout-orders.service';
 @Injectable()
 export class CheckoutWorker {
   private readonly logger = new Logger(CheckoutWorker.name);
-  constructor(private readonly orders: CheckoutOrdersService) {}
+  constructor(
+    private readonly orders: CheckoutOrdersService,
+    private readonly webhooks: CheckoutWebhooksService,
+  ) {}
+
+  // Seller notices are claimed row by row, so this is also safe on two instances.
+  @Cron(CronExpression.EVERY_30_SECONDS, { waitForCompletion: true })
+  async deliverWebhooks(): Promise<void> {
+    await this.step('webhooks', () => this.webhooks.deliverDue());
+  }
 
   @Cron(CronExpression.EVERY_MINUTE, { waitForCompletion: true })
   async tick(): Promise<void> {

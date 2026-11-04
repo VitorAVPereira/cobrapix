@@ -418,6 +418,9 @@ Depende da Parte 2. Ao fim, o dinheiro de cada venda fica rastreável até o rep
 
 ### Parte 4: Webhook ao vendedor
 
+> **Situação (06/11/2026):** implementada no branch `feat/cifra-checkout-parte-4`. Plano e registro:
+> [Parte 4](../plans/2026-11-06-cifra-checkout-parte-4-webhook.md).
+
 Depende da Parte 2; os eventos de reembolso e chargeback, da Parte 3.
 
 - [x] **CK-19** Eventos `order.paid`, `order.refunded` e `order.chargeback`, com assinatura HMAC,

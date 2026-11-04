@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -26,7 +27,13 @@ import {
 import { CheckoutCouponsService } from './checkout-coupons.service';
 import { CheckoutLedgerService } from './checkout-ledger.service';
 import { CheckoutRefundsService } from './checkout-refunds.service';
-import { RefundRequestDto, SalesQueryDto } from './dto/checkout-finance.dto';
+import {
+  PageQueryDto,
+  RefundRequestDto,
+  SalesQueryDto,
+  WebhookUrlDto,
+} from './dto/checkout-finance.dto';
+import { CheckoutWebhooksService } from './checkout-webhooks.service';
 import { CheckoutProductsService } from './checkout-products.service';
 import { CheckoutSettingsService } from './checkout-settings.service';
 import {
@@ -69,7 +76,53 @@ export class CheckoutController {
     private readonly coupons: CheckoutCouponsService,
     private readonly ledger: CheckoutLedgerService,
     private readonly refunds: CheckoutRefundsService,
+    private readonly webhooks: CheckoutWebhooksService,
   ) {}
+
+  @Get('webhook') webhook(@GetUser() user: AuthenticatedUser) {
+    return this.webhooks.view(user.companyId);
+  }
+
+  @Put('webhook') setWebhook(
+    @GetUser() user: AuthenticatedUser,
+    @Body() dto: WebhookUrlDto,
+  ) {
+    return this.webhooks.setUrl(user.companyId, dto.url ?? null);
+  }
+
+  @Post('webhook/secret') rotateWebhookSecret(
+    @GetUser() user: AuthenticatedUser,
+  ) {
+    return this.webhooks.rotateSecret(user.companyId);
+  }
+
+  @Post('webhook/enable') enableWebhook(@GetUser() user: AuthenticatedUser) {
+    return this.webhooks.enable(user.companyId);
+  }
+
+  @Post('webhook/test') testWebhook(@GetUser() user: AuthenticatedUser) {
+    return this.webhooks.test(user.companyId);
+  }
+
+  @Get('webhook/deliveries') webhookDeliveries(
+    @GetUser() user: AuthenticatedUser,
+    @Query() query: PageQueryDto,
+  ) {
+    return this.webhooks.deliveries(
+      user.companyId,
+      query.page ?? 1,
+      query.pageSize ?? 20,
+    );
+  }
+
+  @Post('webhook/deliveries/:id/resend')
+  @HttpCode(204)
+  async resendWebhook(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<void> {
+    await this.webhooks.resend(user.companyId, id);
+  }
 
   @Get('balance') balance(@GetUser() user: AuthenticatedUser) {
     return this.ledger.balance(user.companyId);

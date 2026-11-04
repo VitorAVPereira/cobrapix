@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import type { CheckoutLedgerService } from './checkout-ledger.service';
 import type { CheckoutRefundsService } from './checkout-refunds.service';
 import { CheckoutFinanceService } from './checkout-finance.service';
+import type { CheckoutWebhooksService } from './checkout-webhooks.service';
 
 const KEY = '0b4f7c2e-8a6d-4f1b-9c3e-2d5a7b8c9e01';
 
@@ -30,10 +31,12 @@ describe('CheckoutFinanceService', () => {
     balance: jest.fn(),
   };
   const refunds = { record: jest.fn() };
+  const webhooks = { emit: jest.fn() };
   const service = new CheckoutFinanceService(
     prisma as unknown as PrismaService,
     ledger as unknown as CheckoutLedgerService,
     refunds as unknown as CheckoutRefundsService,
+    webhooks as unknown as CheckoutWebhooksService,
   );
 
   beforeEach(() => {

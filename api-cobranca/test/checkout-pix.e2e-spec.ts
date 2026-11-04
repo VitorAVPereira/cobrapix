@@ -22,6 +22,8 @@ import {
   splitCheckoutPixEvents,
 } from '../src/checkout/checkout-payments.service';
 import { EfiCheckoutPixClient } from '../src/checkout/efi-checkout-pix.client';
+import { CheckoutWebhookSender } from '../src/checkout/checkout-webhook.sender';
+import { CheckoutWebhooksService } from '../src/checkout/checkout-webhooks.service';
 import { GlobalExceptionFilter } from '../src/common/filters/http-exception.filter';
 import { validateEnv } from '../src/config/env.validation';
 import { PaymentCryptoService } from '../src/payment/payment-crypto.service';
@@ -59,6 +61,11 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
     status: jest.fn(),
   };
   const tokens = { admin: '', seller: '' };
+  // The seller system: always answers 200 unless a test says otherwise.
+  const webhookSender = {
+    send: jest.fn().mockResolvedValue({ ok: true, statusCode: 200 }),
+  };
+  let webhookSecret = '';
   let slug = '';
 
   const login = async (email: string, password = PASSWORD) =>
@@ -106,6 +113,8 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
     })
       .overrideProvider(EfiCheckoutPixClient)
       .useValue(pix)
+      .overrideProvider(CheckoutWebhookSender)
+      .useValue(webhookSender)
       .compile();
     app = moduleRef.createNestApplication({ logger: false });
     await app.init();
@@ -201,6 +210,12 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
       })
       .expect(200);
     tokens.seller = await login(`pedro-${suffix}@e2e.test`, 'Nova-senha-e2e-1');
+    const hook = await request(http)
+      .put('/checkout/webhook')
+      .set(auth(tokens.seller))
+      .send({ url: 'https://hooks.porquim.e2e.test/cifra' })
+      .expect(200);
+    webhookSecret = (hook.body as { secret: string }).secret;
     const product = (name: string, priceCents: number) =>
       request(http)
         .post('/checkout/products')
@@ -508,5 +523,92 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
       .get(`/admin/checkout/clients/${company.id}/finance`)
       .set(auth(tokens.seller))
       .expect(404);
+  });
+  // Part 4: every event above went to the seller webhook, once each.
+  it('o sistema do vendedor recebe cada evento da venda, uma vez', async () => {
+    const webhooks = app.get(CheckoutWebhooksService);
+    await webhooks.deliverDue(new Date(Date.now() + 60_000));
+
+    const history = await request(http)
+      .get('/checkout/webhook/deliveries')
+      .set(auth(tokens.seller))
+      .expect(200);
+    const items = (
+      history.body as { items: { eventType: string; status: string }[] }
+    ).items;
+    expect(items.map((item) => item.eventType).sort()).toEqual([
+      'order.created',
+      'order.paid',
+      'order.refunded',
+      'refund.requested',
+    ]);
+    expect(items.every((item) => item.status === 'DELIVERED')).toBe(true);
+    // History never carries the body (buyer data).
+    expect(JSON.stringify(history.body)).not.toContain('52998224725');
+
+    const paid = webhookSender.send.mock.calls
+      .map((call) => call as unknown[])
+      .find((call) => (call[1] as { type: string }).type === 'order.paid');
+    const body = JSON.parse(String(paid?.[2])) as {
+      data: {
+        order: { items: { kind: string; accessExpiresAt: string | null }[] };
+      };
+    };
+    expect(body.data.order.items.map((line) => line.kind)).toEqual([
+      'MAIN',
+      'BUMP',
+    ]);
+    expect(body.data.order.items[0]?.accessExpiresAt).toEqual(
+      expect.any(String),
+    );
+    expect(paid?.[0]).toEqual({
+      url: 'https://hooks.porquim.e2e.test/cifra',
+      secret: webhookSecret,
+    });
+
+    // A second worker pass sends nothing again.
+    const sent = webhookSender.send.mock.calls.length;
+    await webhooks.deliverDue(new Date(Date.now() + 120_000));
+    expect(webhookSender.send.mock.calls.length).toBe(sent);
+  });
+
+  it('falha volta para a fila e o reenvio manual repete o mesmo evento', async () => {
+    const webhooks = app.get(CheckoutWebhooksService);
+    webhookSender.send.mockResolvedValueOnce({
+      ok: false,
+      statusCode: 500,
+      error: 'HTTP_STATUS',
+    });
+    const test = await request(http)
+      .post('/checkout/webhook/test')
+      .set(auth(tokens.seller))
+      .expect(201);
+    const delivery = test.body as {
+      id: string;
+      eventId: string;
+      status: string;
+    };
+    expect(delivery.status).toBe('PENDING');
+
+    await webhooks.deliverDue(new Date(Date.now() + 2 * 60_000));
+    const history = await request(http)
+      .get('/checkout/webhook/deliveries')
+      .set(auth(tokens.seller))
+      .expect(200);
+    const after = (
+      history.body as {
+        items: { id: string; status: string; eventId: string }[];
+      }
+    ).items.find((item) => item.id === delivery.id);
+    expect(after).toMatchObject({
+      status: 'DELIVERED',
+      eventId: delivery.eventId,
+    });
+
+    // The other checkout company sees none of these notices.
+    const other = await prisma.checkoutWebhookDelivery.count({
+      where: { company: { email: { not: `porquim-${suffix}@e2e.test` } } },
+    });
+    expect(other).toBe(0);
   });
 });

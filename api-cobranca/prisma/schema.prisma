@@ -426,6 +426,7 @@ model Company {
   checkoutOrders           CheckoutOrder[]
   checkoutLedgerEntries    CheckoutLedgerEntry[]
   checkoutRefundRequests   CheckoutRefundRequest[]
+  checkoutWebhookDeliveries CheckoutWebhookDelivery[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2356,6 +2357,11 @@ model CheckoutSettings {
   maxInstallments     Int              @default(12)
   pixFeePayer         CheckoutFeePayer @default(SELLER)
   cardFeePayer        CheckoutFeePayer @default(BUYER)
+  // The seller system notified of each order event (one URL; the secret signs).
+  webhookUrl             String?   @db.Text
+  webhookSecretEncrypted String?   @db.Text
+  webhookFailingSince    DateTime?
+  webhookDisabledAt      DateTime?
   updatedAt           DateTime         @updatedAt
 }
 
@@ -2630,4 +2636,36 @@ model CheckoutRefundRequest {
 
   @@index([companyId, status, createdAt])
   @@index([orderId, status])
+}
+
+enum CheckoutWebhookStatus {
+  PENDING
+  DELIVERED
+  FAILED
+  SKIPPED
+}
+
+// One notice to the seller system. The body is fixed when the event
+// happens, so retries and resends carry the same content and event id.
+model CheckoutWebhookDelivery {
+  id             String                @id @default(uuid())
+  companyId      String
+  company        Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  orderId        String?
+  eventId        String                @unique
+  eventType      String
+  payload        Json
+  status         CheckoutWebhookStatus @default(PENDING)
+  attempts       Int                   @default(0)
+  nextAttemptAt  DateTime?
+  retryUntil     DateTime
+  lastStatusCode Int?
+  lastError      String?
+  deliveredAt    DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([companyId, createdAt])
+  @@index([orderId])
 }

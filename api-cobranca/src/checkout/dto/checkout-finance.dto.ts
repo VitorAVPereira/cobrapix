@@ -61,3 +61,18 @@ export class AdjustmentDto extends AdminMoneyDto {
   @IsInt() @Min(-MAX_CENTS) @Max(MAX_CENTS) @NotEquals(0) amountCents!: number;
   @IsString() @Length(5, 1000) note!: string;
 }
+
+export class WebhookUrlDto {
+  // null turns the webhook off; https is checked by the service.
+  @IsOptional() @IsString() @MaxLength(500) url?: string | null;
+}
+
+export class PageQueryDto {
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  pageSize?: number;
+}

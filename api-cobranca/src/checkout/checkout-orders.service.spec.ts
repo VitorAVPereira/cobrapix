@@ -4,6 +4,7 @@ import type { CheckoutCatalogService } from './checkout-catalog.service';
 import type { CheckoutPlatformService } from './checkout-platform.service';
 import type { CheckoutPaymentsService } from './checkout-payments.service';
 import type { EfiCheckoutPixClient } from './efi-checkout-pix.client';
+import type { CheckoutWebhooksService } from './checkout-webhooks.service';
 import { CheckoutOrdersService, checkoutTxid } from './checkout-orders.service';
 
 const KEY = '0b4f7c2e-8a6d-4f1b-9c3e-2d5a7b8c9e01';
@@ -76,7 +77,7 @@ describe('CheckoutOrdersService', () => {
     $transaction: jest.fn((arg: unknown) =>
       typeof arg === 'function'
         ? (arg as (client: typeof tx) => unknown)(tx)
-        : arg,
+        : Promise.all(arg as Promise<unknown>[]),
     ),
   };
   const platformAccount = {
@@ -89,12 +90,14 @@ describe('CheckoutOrdersService', () => {
   const platform = { ready: jest.fn() };
   const pix = { create: jest.fn(), status: jest.fn() };
   const payments = { confirm: jest.fn() };
+  const webhooks = { emit: jest.fn() };
   const service = new CheckoutOrdersService(
     prisma as unknown as PrismaService,
     catalog as unknown as CheckoutCatalogService,
     platform as unknown as CheckoutPlatformService,
     pix as unknown as EfiCheckoutPixClient,
     payments as unknown as CheckoutPaymentsService,
+    webhooks as unknown as CheckoutWebhooksService,
   );
   const dto = {
     bumpIds: [],
@@ -155,6 +158,8 @@ describe('CheckoutOrdersService', () => {
       supportWhatsapp: null,
     });
     platform.ready.mockResolvedValue(platformAccount);
+    prisma.checkoutOrder.updateMany.mockResolvedValue({ count: 1 });
+    prisma.checkoutPaymentAttempt.updateMany.mockResolvedValue({ count: 1 });
   });
 
   it('cria o pedido com os valores fotografados e um único Pix', async () => {
@@ -304,6 +309,12 @@ describe('CheckoutOrdersService', () => {
       where: { id: 'order-1', status: 'PENDING' },
       data: { status: 'EXPIRED' },
     });
+    expect(webhooks.emit).toHaveBeenCalledWith(
+      prisma,
+      'company-a',
+      'order.pix_expired',
+      'order-1',
+    );
   });
 
   it('incerto que não existe na Efí falha depois de 10 minutos', async () => {
