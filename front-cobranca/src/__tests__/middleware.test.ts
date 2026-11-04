@@ -10,6 +10,7 @@ type MockMiddlewareRequest = {
       role?: MockUserRole;
       mustChangePassword?: boolean;
       authInvalidated?: boolean;
+      companyProduct?: "BILLING" | "CHECKOUT";
     };
   } | null;
 };
@@ -76,7 +77,11 @@ it("serves brand assets without redirecting unauthenticated visitors", () => {
 function createRequest(
   pathname: string,
   role: MockUserRole | null,
-  overrides: { mustChangePassword?: boolean; authInvalidated?: boolean } = {},
+  overrides: {
+    mustChangePassword?: boolean;
+    authInvalidated?: boolean;
+    companyProduct?: "BILLING" | "CHECKOUT";
+  } = {},
 ): MockMiddlewareRequest {
   return {
     auth: role ? { user: { role, ...overrides } } : null,
@@ -126,6 +131,51 @@ describe("middleware", () => {
       kind: "redirect",
       url: "http://localhost:3000/login?sessionExpired=1",
     });
+  });
+});
+
+describe("Cifra+ Checkout routes", () => {
+  const seller = (pathname: string, overrides = {}) =>
+    runMiddleware(
+      createRequest(pathname, "COMPANY_ADMIN", {
+        companyProduct: "CHECKOUT",
+        ...overrides,
+      }),
+    );
+
+  it("lets the platform admin open Admin → Checkout", () => {
+    expect(
+      runMiddleware(createRequest("/admin/checkout", "PLATFORM_ADMIN")),
+    ).toEqual({ kind: "next" });
+  });
+
+  it("keeps a checkout company on the checkout screens", () => {
+    expect(seller("/checkout/produtos/abc")).toEqual({ kind: "next" });
+    for (const path of ["/", "/cobrancas", "/configuracoes/geral"])
+      expect(seller(path)).toEqual({
+        kind: "redirect",
+        url: "http://localhost:3000/checkout/produtos",
+      });
+  });
+
+  it("sends a checkout user to its products after the first password change", () => {
+    expect(seller("/primeiro-acesso", { mustChangePassword: false })).toEqual({
+      kind: "redirect",
+      url: "http://localhost:3000/checkout/produtos",
+    });
+    expect(seller("/checkout/produtos", { mustChangePassword: true })).toEqual({
+      kind: "redirect",
+      url: "http://localhost:3000/primeiro-acesso",
+    });
+  });
+
+  it("keeps billing companies, including old sessions, out of the checkout screens", () => {
+    expect(
+      runMiddleware(createRequest("/checkout/cupons", "COMPANY_ADMIN")),
+    ).toEqual({ kind: "redirect", url: "http://localhost:3000/" });
+    expect(
+      runMiddleware(createRequest("/cobrancas", "COMPANY_ADMIN")),
+    ).toEqual({ kind: "next" });
   });
 });
 
