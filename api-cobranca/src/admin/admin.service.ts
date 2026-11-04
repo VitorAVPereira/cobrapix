@@ -152,7 +152,9 @@ export class AdminService {
   ) {}
 
   async listClients(): Promise<AdminClientResponse[]> {
+    // Checkout clients have their own admin screen and no billing settings.
     const companies = await this.prisma.company.findMany({
+      where: { product: 'BILLING' },
       orderBy: { createdAt: 'desc' },
       include: adminClientInclude,
     });
