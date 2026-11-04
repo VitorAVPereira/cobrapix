@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { FormEvent } from "react";
 import { Loader2 } from "lucide-react";
 import type {
+  CheckoutAfterPurchase,
   CheckoutDeliveryMode,
   CheckoutProduct,
   CheckoutProductInput,
@@ -13,6 +14,12 @@ import { centsToInput, DELIVERY_MODE_LABELS } from "@/lib/checkout";
 import { buttonClass, Field, ImageUpload, inputClass } from "./ui";
 
 const MIN_PRICE_CENTS = 500;
+
+const AFTER_PURCHASE_LABELS: Record<CheckoutAfterPurchase, string> = {
+  ACCESS: "Levar ao link de acesso",
+  OFFER: "Mostrar a oferta de 1 clique (upsell e downsell)",
+  EXTERNAL: "Levar à minha página de oferta",
+};
 
 interface FormState {
   name: string;
@@ -24,6 +31,9 @@ interface FormState {
   deliveryMode: CheckoutDeliveryMode;
   accessUrl: string;
   accessInstructions: string;
+  afterPurchase: CheckoutAfterPurchase;
+  afterPurchaseUrl: string;
+  offerWindowMinutes: string;
 }
 
 function initialState(product?: CheckoutProduct): FormState {
@@ -37,6 +47,9 @@ function initialState(product?: CheckoutProduct): FormState {
     deliveryMode: product?.deliveryMode ?? "ACCESS_LINK",
     accessUrl: product?.accessUrl ?? "",
     accessInstructions: product?.accessInstructions ?? "",
+    afterPurchase: product?.afterPurchase ?? "ACCESS",
+    afterPurchaseUrl: product?.afterPurchaseUrl ?? "",
+    offerWindowMinutes: String(product?.offerWindowMinutes ?? 30),
   };
 }
 
@@ -51,6 +64,12 @@ export function toProductInput(form: FormState): CheckoutProductInput {
   const months = form.accessPeriodMonths.trim() ? Number(form.accessPeriodMonths) : null;
   if (months !== null && (!Number.isInteger(months) || months < 1 || months > 120))
     throw new Error("O período de acesso vai de 1 a 120 meses.");
+  const window = Number(form.offerWindowMinutes);
+  if (!Number.isInteger(window) || window < 15 || window > 1440)
+    throw new Error("A oferta vale de 15 minutos a 24 horas (1.440 minutos).");
+  const afterPurchaseUrl = form.afterPurchaseUrl.trim();
+  if (form.afterPurchase === "EXTERNAL" && !afterPurchaseUrl.startsWith("https://"))
+    throw new Error("O endereço da sua página de oferta precisa começar com https://.");
   return {
     name: form.name.trim(),
     description: form.description.trim() || null,
@@ -61,6 +80,9 @@ export function toProductInput(form: FormState): CheckoutProductInput {
     deliveryMode: form.deliveryMode,
     accessUrl: form.deliveryMode === "WEBHOOK" ? null : form.accessUrl.trim() || null,
     accessInstructions: form.accessInstructions.trim() || null,
+    afterPurchase: form.afterPurchase,
+    afterPurchaseUrl: form.afterPurchase === "EXTERNAL" ? afterPurchaseUrl : null,
+    offerWindowMinutes: window,
   };
 }
 
@@ -186,6 +208,55 @@ export function ProductForm({
           required={form.deliveryMode === "WEBHOOK"}
         />
       </Field>
+      <fieldset className="space-y-3 rounded-md border border-slate-200 p-4">
+        <legend className="px-1 text-sm font-semibold text-slate-800">Depois da compra</legend>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Para onde o comprador vai">
+            <select
+              className={inputClass}
+              value={form.afterPurchase}
+              onChange={(event) => set({ afterPurchase: event.target.value as CheckoutAfterPurchase })}
+            >
+              {Object.entries(AFTER_PURCHASE_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          {form.afterPurchase !== "ACCESS" && (
+            <Field
+              label="Validade da oferta (minutos)"
+              hint="De 15 minutos a 24 horas (1.440), contados do pagamento. Depois disso, o link de 1 clique deixa de vender."
+            >
+              <input
+                className={inputClass}
+                inputMode="numeric"
+                value={form.offerWindowMinutes}
+                onChange={(event) => set({ offerWindowMinutes: event.target.value })}
+              />
+            </Field>
+          )}
+        </div>
+        {form.afterPurchase === "EXTERNAL" && (
+          <Field
+            label="Endereço da sua página de oferta"
+            hint="O comprador chega com o parâmetro cifra_oferta, que monta os links de 1 clique das suas ofertas."
+          >
+            <input
+              className={inputClass}
+              placeholder="https://"
+              value={form.afterPurchaseUrl}
+              onChange={(event) => set({ afterPurchaseUrl: event.target.value })}
+              required
+            />
+          </Field>
+        )}
+        <p className="text-xs text-slate-500">
+          O e-mail com o acesso sai em qualquer caso. Com oferta, o cartão da compra fica guardado só até o fim da
+          validade, para o comprador aceitar sem digitar de novo.
+        </p>
+      </fieldset>
       {error && (
         <p role="alert" className="text-sm text-red-600">
           {error}

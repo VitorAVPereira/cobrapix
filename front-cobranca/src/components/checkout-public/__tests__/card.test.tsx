@@ -133,6 +133,7 @@ describe("Cartão na página de pagamento", () => {
     expect(mockTokenize).toHaveBeenCalledWith(
       expect.objectContaining({ payeeCode: "payee-cifra", environment: "sandbox" }),
       expect.objectContaining({ brand: "visa", number: "4111111111111111", holderDocument: "52998224725" }),
+      false,
     );
     const body = mockCardOrder.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(body).toMatchObject({
@@ -143,6 +144,20 @@ describe("Cartão na página de pagamento", () => {
     });
     // The card number never goes to our API.
     expect(JSON.stringify(body)).not.toContain("4111111111111111");
+  });
+
+  it("produto com oferta depois da compra pede à Efí um token reutilizável", async () => {
+    const user = userEvent.setup();
+    mockCardOrder.mockResolvedValue(order({ processing: true }));
+    render(<CheckoutForm data={{ ...product, payment: { ...product.payment, cardReuse: true } }} />);
+    await screen.findByTestId("checkout-total");
+
+    await fillCard(user);
+    await screen.findByLabelText("Parcelas");
+    await user.click(screen.getByRole("button", { name: /pagar com cartão/i }));
+
+    await waitFor(() => expect(mockTokenize).toHaveBeenCalled());
+    expect(mockTokenize.mock.calls[0]?.[2]).toBe(true);
   });
 
   it("recusa permite tentar de novo no mesmo pedido; depois do limite, sugere o Pix", async () => {

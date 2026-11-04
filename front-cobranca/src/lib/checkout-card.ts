@@ -29,15 +29,19 @@ export interface CardData {
   holderDocument: string;
 }
 
-/** Card → one-time token at the Efí, for the CifraMais account. */
+/**
+ * Card → token at the Efí, for the CifraMais account. With reuse the Efí
+ * token also pays the offer after the purchase, without the card again.
+ */
 export async function tokenizeCard(
   account: { payeeCode: string; environment: "production" | "sandbox" },
   card: CardData,
+  reuse = false,
 ): Promise<string> {
   const { default: EfiPay } = await import("payment-token-efi");
   const response = await EfiPay.CreditCard.setAccount(account.payeeCode)
     .setEnvironment(account.environment)
-    .setCreditCardData({ ...card, number: card.number.replace(/\D/g, ""), reuse: false })
+    .setCreditCardData({ ...card, number: card.number.replace(/\D/g, ""), reuse })
     .getPaymentToken();
   if (!("payment_token" in response)) throw new Error("Confira os dados do cartão e tente de novo.");
   return response.payment_token;

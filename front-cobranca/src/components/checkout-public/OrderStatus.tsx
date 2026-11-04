@@ -118,7 +118,13 @@ export function OrderStatus({ token }: { token: string }) {
             <CheckCircle2 size={44} className="mx-auto text-emerald-600" />
             <h1 className="text-xl font-semibold text-slate-900">Pagamento confirmado</h1>
             <p className="text-sm text-slate-600">O acesso também foi enviado para o seu e-mail.</p>
-            {current.redirectUrl && <p className="text-sm text-slate-500">Levando você ao seu acesso…</p>}
+            {current.redirectUrl && (
+              <p className="text-sm text-slate-500">
+                {current.redirectKind === "OFFER"
+                  ? "Só um instante: separamos uma oferta para você."
+                  : "Levando você ao seu acesso…"}
+              </p>
+            )}
             <ul className="space-y-2 text-left text-sm">
               {current.items.map((line) => (
                 <li key={`${line.kind}-${line.name}`} className="rounded-md bg-slate-50 p-3">
@@ -176,9 +182,13 @@ export function OrderStatus({ token }: { token: string }) {
             <h1 className="text-lg font-semibold text-slate-900">
               {current.status === "DECLINED" || current.card?.declined ? "Pagamento não autorizado" : "Pagamento não concluído"}
             </h1>
-            <p className="text-sm text-slate-600">Volte à página do produto para pagar com Pix ou com outro cartão.</p>
+            <p className="text-sm text-slate-600">
+              {current.offerPage
+                ? "Volte à oferta para pagar com Pix."
+                : "Volte à página do produto para pagar com Pix ou com outro cartão."}
+            </p>
             <Link
-              href={`/c/${current.productSlug}`}
+              href={current.offerPage ?? `/c/${current.productSlug}`}
               className="flex h-12 w-full items-center justify-center rounded-md font-semibold text-white"
               style={{ backgroundColor: color }}
             >
@@ -192,7 +202,7 @@ export function OrderStatus({ token }: { token: string }) {
             </h1>
             <p className="text-sm text-slate-600">Gere um novo Pix para concluir a compra. Seus dados continuam preenchidos.</p>
             <Link
-              href={`/c/${current.productSlug}`}
+              href={current.offerPage ?? `/c/${current.productSlug}`}
               className="flex h-12 w-full items-center justify-center rounded-md font-semibold text-white"
               style={{ backgroundColor: color }}
             >

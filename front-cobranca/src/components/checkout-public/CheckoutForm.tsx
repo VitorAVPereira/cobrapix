@@ -274,6 +274,7 @@ export function CheckoutForm({ data }: { data: PublicCheckoutProduct }) {
               slug={data.product.slug}
               cart={{ bumpIds: selected, couponCode: coupon }}
               buyerDocument={buyer.document}
+              reuse={Boolean(data.payment.cardReuse)}
               onOption={(option, subtotalCents) => setCardOption({ option, subtotalCents })}
             />
           )}
