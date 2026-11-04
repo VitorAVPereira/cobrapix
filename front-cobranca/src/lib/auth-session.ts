@@ -3,6 +3,7 @@ export interface RefreshableAuthToken {
   companyId?: string;
   userId?: string;
   role?: "PLATFORM_ADMIN" | "COMPANY_ADMIN";
+  companyProduct?: "BILLING" | "CHECKOUT";
   mustChangePassword?: boolean;
   tokenVersion?: number;
   authInvalidated?: boolean;
@@ -16,6 +17,7 @@ interface BackendSessionResponse {
     name?: string | null;
     companyId: string;
     role: "PLATFORM_ADMIN" | "COMPANY_ADMIN";
+    companyProduct?: "BILLING" | "CHECKOUT";
     mustChangePassword: boolean;
     tokenVersion: number;
   };
@@ -50,6 +52,7 @@ export async function revalidateAuthToken(
       companyId: session.user.companyId,
       userId: session.user.id,
       role: session.user.role,
+      companyProduct: session.user.companyProduct ?? "BILLING",
       mustChangePassword: session.user.mustChangePassword,
       tokenVersion: session.user.tokenVersion,
       authInvalidated: false,

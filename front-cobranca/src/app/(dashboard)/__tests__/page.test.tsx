@@ -10,6 +10,16 @@ const mockApi = {
 let mockClient: typeof mockApi = mockApi;
 jest.mock("@/lib/use-api-client", () => ({ useApiClient: () => mockClient }));
 
+let mockProduct: "BILLING" | "CHECKOUT" = "BILLING";
+const mockReplace = jest.fn();
+jest.mock("next-auth/react", () => ({
+  useSession: () => ({
+    status: "authenticated",
+    data: { user: { role: "COMPANY_ADMIN", companyProduct: mockProduct } },
+  }),
+}));
+jest.mock("next/navigation", () => ({ useRouter: () => ({ replace: mockReplace }) }));
+
 // Recharts measures its container; jsdom has no ResizeObserver.
 global.ResizeObserver = class {
   observe() {}
@@ -69,7 +79,16 @@ function deferred<T>() {
 beforeEach(() => {
   jest.clearAllMocks();
   mockClient = mockApi;
+  mockProduct = "BILLING";
   mockApi.getCompanyDashboard.mockResolvedValue(dashboard());
+});
+
+it("sends a checkout company to its products, without the billing dashboard", () => {
+  mockProduct = "CHECKOUT";
+  render(<DashboardPage />);
+
+  expect(mockReplace).toHaveBeenCalledWith("/checkout/produtos");
+  expect(mockApi.getCompanyDashboard).not.toHaveBeenCalled();
 });
 
 it("shows the period, the indicators with their change and every block", async () => {

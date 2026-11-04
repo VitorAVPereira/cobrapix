@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import {
   AlertCircle,
   ArrowUpRight,
@@ -144,7 +146,21 @@ function Skeleton() {
   );
 }
 
+// Checkout companies have no billing dashboard: they start at their products.
 export default function DashboardPage() {
+  const { data: session } = useSession();
+  const router = useRouter();
+  const isCheckout = session?.user.companyProduct === "CHECKOUT";
+
+  useEffect(() => {
+    if (isCheckout) router.replace("/checkout/produtos");
+  }, [isCheckout, router]);
+
+  if (isCheckout) return null;
+  return <BillingDashboard />;
+}
+
+function BillingDashboard() {
   const apiClient = useApiClient();
   const [query, setQuery] = useState<DashboardQuery>({ period: "30d" });
   const [data, setData] = useState<CompanyDashboard | null>(null);
