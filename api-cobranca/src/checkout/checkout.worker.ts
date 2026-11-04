@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { CheckoutOrdersService } from './checkout-orders.service';
+import { CheckoutRecoveryService } from './checkout-recovery.service';
 import { CheckoutWebhooksService } from './checkout-webhooks.service';
 
 /**
@@ -13,6 +14,7 @@ export class CheckoutWorker {
   constructor(
     private readonly orders: CheckoutOrdersService,
     private readonly webhooks: CheckoutWebhooksService,
+    private readonly recovery: CheckoutRecoveryService,
   ) {}
 
   // Seller notices are claimed row by row, so this is also safe on two instances.
@@ -25,6 +27,16 @@ export class CheckoutWorker {
   async tick(): Promise<void> {
     await this.step('uncertain', () => this.orders.reconcileUncertain());
     await this.step('expire', () => this.orders.expireOverdue());
+    await this.step('abandoned', () => this.recovery.notifyAbandoned());
+  }
+
+  // Updates are conditional on anonymizedAt, so a second instance is harmless.
+  @Cron('40 3 * * *', {
+    timeZone: 'America/Sao_Paulo',
+    waitForCompletion: true,
+  })
+  async anonymize(): Promise<void> {
+    await this.step('anonymize', () => this.recovery.anonymize());
   }
 
   private async step(name: string, run: () => Promise<void>): Promise<void> {

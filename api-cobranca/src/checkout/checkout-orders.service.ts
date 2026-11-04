@@ -14,6 +14,7 @@ import { conflict, normalizeDocument } from './checkout-rules';
 import { EfiCheckoutPixClient } from './efi-checkout-pix.client';
 import { CheckoutPaymentsService } from './checkout-payments.service';
 import { CheckoutWebhooksService } from './checkout-webhooks.service';
+import { markConverted } from './checkout-recovery.service';
 import { CreateCheckoutOrderDto } from './dto/checkout-public.dto';
 
 export const PIX_VALIDITY_MS = 30 * 60_000;
@@ -94,6 +95,8 @@ export class CheckoutOrdersService {
             expiresAt: new Date(now.getTime() + PIX_VALIDITY_MS),
           },
         });
+        if (dto.sessionKey)
+          await markConverted(tx, sale.productId, dto.sessionKey, created.id);
         await tx.checkoutPaymentAttempt.create({
           data: {
             orderId: created.id,

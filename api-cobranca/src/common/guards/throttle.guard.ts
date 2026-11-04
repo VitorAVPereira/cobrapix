@@ -110,6 +110,13 @@ export class ThrottleGuard implements CanActivate, OnModuleDestroy {
       keyPrefix: 'throttle:checkout:order:ip',
       scope: 'ip',
     },
+    // Lead capture: one call per field the buyer leaves.
+    {
+      points: 30,
+      duration: 60,
+      keyPrefix: 'throttle:checkout:lead:ip',
+      scope: 'ip',
+    },
   ];
 
   constructor(private configService: ConfigService) {
@@ -265,7 +272,9 @@ export class ThrottleGuard implements CanActivate, OnModuleDestroy {
       return this.findConfigs([
         path.endsWith('/orders')
           ? 'throttle:checkout:order:ip'
-          : 'throttle:checkout:quote:ip',
+          : path.endsWith('/lead')
+            ? 'throttle:checkout:lead:ip'
+            : 'throttle:checkout:quote:ip',
       ]);
     }
 

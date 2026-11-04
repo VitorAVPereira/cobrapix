@@ -18,7 +18,9 @@ import { CheckoutCatalogService } from './checkout-catalog.service';
 import { CheckoutOrdersService } from './checkout-orders.service';
 import { CheckoutRefundsService } from './checkout-refunds.service';
 import { RefundRequestDto } from './dto/checkout-finance.dto';
+import { CheckoutRecoveryService } from './checkout-recovery.service';
 import {
+  CheckoutLeadDto,
   CheckoutQuoteDto,
   CreateCheckoutOrderDto,
 } from './dto/checkout-public.dto';
@@ -43,6 +45,7 @@ export class CheckoutPublicController {
     private readonly catalog: CheckoutCatalogService,
     private readonly orders: CheckoutOrdersService,
     private readonly refunds: CheckoutRefundsService,
+    private readonly recovery: CheckoutRecoveryService,
   ) {}
 
   // An asset never changes once uploaded (a new image is a new id).
@@ -68,6 +71,16 @@ export class CheckoutPublicController {
   @HttpCode(200)
   quote(@Param('slug') slug: string, @Body() dto: CheckoutQuoteDto) {
     return this.catalog.quote(slugOf(slug), dto);
+  }
+
+  @Post('products/:slug/lead')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  lead(@Param('slug') slug: string, @Body() dto: CheckoutLeadDto) {
+    return this.recovery.captureLead(slugOf(slug), {
+      ...dto,
+      utm: dto.utm as Record<string, string> | undefined,
+    });
   }
 
   @Post('products/:slug/orders')

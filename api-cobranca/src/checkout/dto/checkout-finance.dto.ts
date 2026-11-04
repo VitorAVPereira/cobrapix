@@ -29,6 +29,21 @@ export class SalesQueryDto {
   pageSize?: number;
 }
 
+export class RecoveryQueryDto {
+  @IsOptional() @IsIn(['PIX', 'LEAD']) kind?: 'PIX' | 'LEAD';
+  @IsOptional() @IsUUID() productId?: string;
+  @IsOptional() @IsDateString() from?: string;
+  @IsOptional() @IsDateString() to?: string;
+  @IsOptional() @IsIn(['OPEN', 'RECOVERED']) state?: 'OPEN' | 'RECOVERED';
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  pageSize?: number;
+}
+
 export class RefundRequestDto {
   @IsString() @Length(5, 1000) reason!: string;
 }

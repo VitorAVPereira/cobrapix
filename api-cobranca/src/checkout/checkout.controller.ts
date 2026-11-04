@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   Param,
   ParseUUIDPipe,
@@ -29,11 +30,16 @@ import { CheckoutLedgerService } from './checkout-ledger.service';
 import { CheckoutRefundsService } from './checkout-refunds.service';
 import {
   PageQueryDto,
+  RecoveryQueryDto,
   RefundRequestDto,
   SalesQueryDto,
   WebhookUrlDto,
 } from './dto/checkout-finance.dto';
 import { CheckoutWebhooksService } from './checkout-webhooks.service';
+import {
+  CheckoutRecoveryService,
+  RECOVERY_WINDOW_MS,
+} from './checkout-recovery.service';
 import { CheckoutProductsService } from './checkout-products.service';
 import { CheckoutSettingsService } from './checkout-settings.service';
 import {
@@ -65,6 +71,21 @@ const imageUpload = FileInterceptor('file', {
   },
 });
 
+function recoveryFilters(query: RecoveryQueryDto) {
+  const from = query.from
+    ? new Date(query.from)
+    : query.to
+      ? undefined
+      : new Date(Date.now() - RECOVERY_WINDOW_MS);
+  return {
+    kind: query.kind,
+    productId: query.productId,
+    from,
+    to: query.to ? new Date(query.to) : undefined,
+    state: query.state ?? ('OPEN' as const),
+  };
+}
+
 @Controller('checkout')
 @UseGuards(JwtAuthGuard)
 @CompanyProducts('CHECKOUT')
@@ -77,6 +98,7 @@ export class CheckoutController {
     private readonly ledger: CheckoutLedgerService,
     private readonly refunds: CheckoutRefundsService,
     private readonly webhooks: CheckoutWebhooksService,
+    private readonly recovery: CheckoutRecoveryService,
   ) {}
 
   @Get('webhook') webhook(@GetUser() user: AuthenticatedUser) {
@@ -139,6 +161,33 @@ export class CheckoutController {
       page: query.page ?? 1,
       pageSize: query.pageSize ?? 20,
     });
+  }
+
+  // Default view: who is still to recover, last 30 days.
+  @Get('recovery') recoveryList(
+    @GetUser() user: AuthenticatedUser,
+    @Query() query: RecoveryQueryDto,
+  ) {
+    return this.recovery.list(user.companyId, {
+      ...recoveryFilters(query),
+      page: query.page ?? 1,
+      pageSize: query.pageSize ?? 20,
+    });
+  }
+
+  @Get('recovery.csv')
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  @Header('Content-Disposition', 'attachment; filename="recuperacao.csv"')
+  @Header('Cache-Control', 'no-store')
+  recoveryCsv(
+    @GetUser() user: AuthenticatedUser,
+    @Query() query: RecoveryQueryDto,
+  ) {
+    return this.recovery.csv(
+      user.companyId,
+      user.userId,
+      recoveryFilters(query),
+    );
   }
 
   @Post('sales/:orderId/refund-request') requestRefund(

@@ -26,6 +26,7 @@ export type CheckoutEventType =
   | 'order.refunded'
   | 'order.chargeback'
   | 'refund.requested'
+  | 'lead.abandoned'
   | 'webhook.test';
 
 // After each failed attempt; the last one repeats until the 24 h window ends.
