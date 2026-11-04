@@ -172,7 +172,7 @@ VPS e na Vercel antes de afirmar que algo está em produção.
   (visitante, orçamento e WhatsApp; pedidos de titular pelo WhatsApp comercial; pedidos
   guardados até 12 meses sem contratação). Mudou a coleta, mude a política.
   Contexto para o projeto de captação de leads: `docs/contexto-ciframais.md`.
-- **Cifra+ Checkout, Partes 1 a 8 (03 a 10/11) de 9:** venda de produtos digitais pela conta
+- **Cifra+ Checkout, Partes 1 a 9 (03 a 11/11), completo:** venda de produtos digitais pela conta
   Efí da **Cifra+** (não a do cliente).
   - **Separação:** a empresa ganha `product` (`BILLING` ou `CHECKOUT`). Uma empresa de checkout só
     vê as telas do checkout, e as rotas de um produto respondem 404 ao outro (`@CompanyProducts`
@@ -194,7 +194,8 @@ VPS e na Vercel antes de afirmar que algo está em produção.
       feita fora da Efí, e vê o índice de chargeback;
     - **a tela de entrada** do vendedor é Vendas.
   - **Parte 4 (webhook ao vendedor):**
-    - uma URL `https` por vendedor, conferida a cada envio contra endereços privados;
+    - URL `https`, conferida a cada envio contra endereços privados (desde a Parte 9, uma por
+      regra);
     - eventos `order.created`, `order.paid`, `order.pix_expired`, `order.refunded`,
       `order.chargeback` e `refund.requested`, assinados com HMAC (`X-Cifra-Signature`);
     - fila no banco (`CheckoutWebhookDelivery`), com novas tentativas por 24 h;
@@ -253,6 +254,18 @@ VPS e na Vercel antes de afirmar que algo está em produção.
     - **repasse sugerido:** liberado menos os reembolsos em aberto (`suggestedPayoutCents`);
     - **e-mails ao comprador:** recebido (com o link para desistir), desistência e concluído, pela
       fila `checkout-mail`, como Cifra+.
+  - **Parte 9 (integrações):**
+    - **regras de webhook** (`CheckoutWebhookRule`, até 10 por vendedor): cada uma tem URL,
+      eventos, produtos, segredo, falhas e histórico próprios. Uma regra de produto recebe o pedido
+      em que ele foi vendido como principal ou como bump. O mesmo evento vai a cada regra com o
+      mesmo `id`. 3 dias de falha desligam só aquela regra. A migration fez da URL única a regra
+      "Webhook principal", com o mesmo segredo; as colunas `webhook*` de `CheckoutSettings`
+      ficaram sem uso;
+    - **API de consulta** (`/checkout/api/v1`, `Authorization: Bearer ckapi_…`): pedidos (o
+      corpo do webhook, com o comprador completo) e produtos, só leitura;
+    - **chaves** (`CheckoutApiKey`): até 5 ativas, mostradas uma vez, guardadas só como
+      SHA-256, revogáveis e auditadas;
+    - **limites:** 60 consultas por minuto por chave e 120 por IP; outra empresa responde 404.
   - **Docs:** a spec com as 9 partes é `docs/superpowers/specs/2026-10-30-cifra-checkout-design.md`,
     e o runbook é `docs/operations/checkout-conta-cifra.md`.
 - **Em aberto:**
@@ -286,7 +299,7 @@ VPS e na Vercel antes de afirmar que algo está em produção.
 | `financial-activation/` | Ativação manual: perfil versionado, credenciais cifradas, validação em fila, elegibilidade, certificados |
 | `settlements/` | Lançamentos imutáveis (`FinancialLedgerEntry`), conciliação e divergências |
 | `disbursements/` | Pagamentos a colaboradores: liberação pelo admin, colaboradores, lotes, aprovação no WhatsApp, envio Pix e resultado pelo webhook Pix |
-| `checkout/` | Cifra+ Checkout: clientes de checkout e termos (admin), conta Efí da Cifra+ e tarifa, configurações da página, imagens públicas, produtos, order bumps, cupons, página pública, pedidos, Pix imediato e confirmação, saldo e reembolso, webhook ao vendedor, leads, recuperação e anonimização, cartão (cotação, tentativas, conciliação e pausa), ofertas depois da compra (upsell, downsell, link de 1 clique e cartão reaproveitado), reembolso com retenção, desistência e por item |
+| `checkout/` | Cifra+ Checkout: clientes de checkout e termos (admin), conta Efí da Cifra+ e tarifa, configurações da página, imagens públicas, produtos, order bumps, cupons, página pública, pedidos, Pix imediato e confirmação, saldo e reembolso, webhook ao vendedor, leads, recuperação e anonimização, cartão (cotação, tentativas, conciliação e pausa), ofertas depois da compra (upsell, downsell, link de 1 clique e cartão reaproveitado), reembolso com retenção, desistência e por item, regras de webhook e API de consulta com chaves |
 | `efi-onboarding/` | Abertura de contas (desligada) e chaves de integração (`PlatformIntegrationState`) |
 | `communications/` | Conversas, mensagens, intenções de envio, atribuição por empresa, pendências e retomada de templates |
 | `whatsapp/` | Transporte Datafy e `OutboundDispatcherService` (ver `whatsapp/transport/README.md`) |
@@ -528,7 +541,7 @@ node test/e2e-disposable.cjs <arquivo>.e2e-spec.ts [...]   # ex.: npm run test:e
 npm run test:e2e:disbursements                             # pagamentos a colaboradores
 npm run test:e2e:invoice-import                             # importação de cobranças com revisão
 npm run test:e2e:checkout                                   # Cifra+ Checkout (clientes, produtos, cupons, isolamento)
-npm run test:e2e:checkout-pix                               # Cifra+ Checkout: cotação, pedido, Pix, cartão, confirmação, saldo, reembolso (retenção e item), webhook, recuperação e ofertas
+npm run test:e2e:checkout-pix                               # Cifra+ Checkout: cotação, pedido, Pix, cartão, confirmação, saldo, reembolso (retenção e item), regras de webhook, API de consulta, recuperação e ofertas
 ```
 
 - Testes que escrevem em banco ou Redis usam **somente** a infraestrutura descartável dos
@@ -636,6 +649,7 @@ Descontinuadas: `EFI_ONBOARDING_NOTICE_TEMPLATE`, `EFI_ONBOARDING_REMINDER_TEMPL
 | POST | `/checkout/public/orders/:token/refund-request` e `.../withdraw` | Pedido de reembolso (itens opcionais) e desistência, só com o token do comprador |
 | GET | `/checkout/public/offers/:token` | Oferta depois da compra (`?oferta=<id>` na página do vendedor) |
 | POST | `/checkout/public/offers/:token/card/quote`, `.../accept` e `.../decline` | Parcelas no cartão guardado, aceite (Pix ou cartão, chave idempotente) e recusa |
+| GET | `/checkout/api/v1/orders`, `.../orders/:id`, `.../products` e `.../products/:id` | API de consulta do vendedor, com a chave dele (não é login) |
 
 ### Webhooks
 
