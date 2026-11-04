@@ -86,6 +86,7 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
     send: jest.fn().mockResolvedValue({ ok: true, statusCode: 200 }),
   };
   let webhookSecret = '';
+  let webhookRuleId = '';
   let slug = '';
 
   const login = async (email: string, password = PASSWORD) =>
@@ -236,11 +237,15 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
       .expect(200);
     tokens.seller = await login(`pedro-${suffix}@e2e.test`, 'Nova-senha-e2e-1');
     const hook = await request(http)
-      .put('/checkout/webhook')
+      .post('/checkout/webhooks')
       .set(auth(tokens.seller))
-      .send({ url: 'https://hooks.porquim.e2e.test/cifra' })
-      .expect(200);
+      .send({
+        name: 'Área de membros',
+        url: 'https://hooks.porquim.e2e.test/cifra',
+      })
+      .expect(201);
     webhookSecret = (hook.body as { secret: string }).secret;
+    webhookRuleId = (hook.body as { id: string }).id;
     const product = (name: string, priceCents: number) =>
       request(http)
         .post('/checkout/products')
@@ -555,7 +560,7 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
     await webhooks.deliverDue(new Date(Date.now() + 60_000));
 
     const history = await request(http)
-      .get('/checkout/webhook/deliveries')
+      .get(`/checkout/webhooks/${webhookRuleId}/deliveries`)
       .set(auth(tokens.seller))
       .expect(200);
     const items = (
@@ -605,7 +610,7 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
       error: 'HTTP_STATUS',
     });
     const test = await request(http)
-      .post('/checkout/webhook/test')
+      .post(`/checkout/webhooks/${webhookRuleId}/test`)
       .set(auth(tokens.seller))
       .expect(201);
     const delivery = test.body as {
@@ -617,7 +622,7 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
 
     await webhooks.deliverDue(new Date(Date.now() + 2 * 60_000));
     const history = await request(http)
-      .get('/checkout/webhook/deliveries')
+      .get(`/checkout/webhooks/${webhookRuleId}/deliveries`)
       .set(auth(tokens.seller))
       .expect(200);
     const after = (
@@ -1822,5 +1827,283 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
           (job.data as { orderId: string }).orderId === refund.orderId,
       ),
     ).toBe(true);
+  });
+
+  // Part 9: several webhook rules and the read-only API.
+  const part9 = { bumpProductId: '', mainProductId: '', ruleId: '' };
+
+  it('regras por evento e produto: a regra do bump recebe o pedido inteiro, a de outro produto não', async () => {
+    const order = await prisma.checkoutOrder.findUniqueOrThrow({
+      where: { id: refund.orderId },
+    });
+    const items = order.items as unknown as OrderItem[];
+    part9.mainProductId = items[0]!.productId;
+    part9.bumpProductId = items[1]!.productId;
+    const created = await request(http)
+      .post('/checkout/webhooks')
+      .set(auth(tokens.seller))
+      .send({
+        name: 'Sistema do guia',
+        url: 'https://guia.porquim.e2e.test/hook',
+        events: ['order.paid'],
+        productIds: [part9.bumpProductId],
+      })
+      .expect(201);
+    const bumpRule = created.body as {
+      id: string;
+      secret: string;
+      version: number;
+    };
+    part9.ruleId = bumpRule.id;
+    const otherRule = (
+      await request(http)
+        .post('/checkout/webhooks')
+        .set(auth(tokens.seller))
+        .send({
+          name: 'Outro produto',
+          url: 'https://outro.porquim.e2e.test/hook',
+          productIds: [offer.upsellProductId],
+        })
+        .expect(201)
+    ).body as { id: string };
+
+    (throttle as unknown as { useMemoryLimiters(): void }).useMemoryLimiters();
+    const sale = await request(http)
+      .post(`/checkout/public/products/${slug}/orders`)
+      .send({
+        bumpIds: [bumpId],
+        couponCode: null,
+        method: 'PIX',
+        buyer: holder('39053344705', 'Iara Lopes'),
+        idempotencyKey: randomUUID(),
+      })
+      .expect(201);
+    const saleToken = (sale.body as { token: string }).token;
+    await payPix(saleToken);
+    const paid = await prisma.checkoutOrder.findUniqueOrThrow({
+      where: { publicToken: saleToken },
+    });
+    const notices = await prisma.checkoutWebhookDelivery.findMany({
+      where: { orderId: paid.id, eventType: 'order.paid' },
+    });
+    expect(notices.map((row) => row.ruleId).sort()).toEqual(
+      [webhookRuleId, bumpRule.id].sort(),
+    );
+    expect(new Set(notices.map((row) => row.eventId)).size).toBe(1);
+
+    webhookSender.send.mockClear();
+    // The worker takes 20 at a time; earlier scenarios left notices in the queue.
+    for (let pass = 0; pass < 5; pass++)
+      await app
+        .get(CheckoutWebhooksService)
+        .deliverDue(new Date(Date.now() + 60_000));
+    const toGuide = webhookSender.send.mock.calls
+      .map((call) => call as unknown[])
+      .find((call) => (call[0] as { url: string }).url.includes('guia.'));
+    expect(toGuide?.[0]).toEqual({
+      url: 'https://guia.porquim.e2e.test/hook',
+      secret: bumpRule.secret,
+    });
+    const body = JSON.parse(String(toGuide?.[2])) as {
+      data: { order: { items: { kind: string }[] } };
+    };
+    expect(body.data.order.items.map((line) => line.kind)).toEqual([
+      'MAIN',
+      'BUMP',
+    ]);
+
+    // Each rule has its own history.
+    const guideHistory = await request(http)
+      .get(`/checkout/webhooks/${bumpRule.id}/deliveries`)
+      .set(auth(tokens.seller))
+      .expect(200);
+    expect(
+      (guideHistory.body as { items: { eventType: string }[] }).items.map(
+        (item) => item.eventType,
+      ),
+    ).toEqual(['order.paid']);
+
+    // An old version is refused; another company sees nothing.
+    await request(http)
+      .put(`/checkout/webhooks/${bumpRule.id}`)
+      .set(auth(tokens.seller))
+      .send({
+        name: 'Guia',
+        url: 'https://guia.porquim.e2e.test/hook',
+        version: bumpRule.version + 1,
+      })
+      .expect(409);
+    const other = await login(`olga-${suffix}@e2e.test`, 'Nova-senha-e2e-2');
+    await request(http)
+      .get(`/checkout/webhooks/${bumpRule.id}/deliveries`)
+      .set(auth(other))
+      .expect(404);
+    await request(http)
+      .delete(`/checkout/webhooks/${bumpRule.id}`)
+      .set(auth(other))
+      .expect(404);
+    const olgaRules = await request(http)
+      .get('/checkout/webhooks')
+      .set(auth(other))
+      .expect(200);
+    expect(olgaRules.body).toEqual([]);
+
+    await request(http)
+      .delete(`/checkout/webhooks/${otherRule.id}`)
+      .set(auth(tokens.seller))
+      .expect(204);
+  });
+
+  it('3 dias de falha desligam só a regra que falha; as outras seguem', async () => {
+    await prisma.checkoutWebhookRule.update({
+      where: { id: part9.ruleId },
+      data: { failingSince: new Date(Date.now() - 3 * 86_400_000 - 60_000) },
+    });
+    webhookSender.send.mockResolvedValueOnce({
+      ok: false,
+      statusCode: 503,
+      error: 'HTTP_STATUS',
+    });
+    await request(http)
+      .post(`/checkout/webhooks/${part9.ruleId}/test`)
+      .set(auth(tokens.seller))
+      .expect(201);
+
+    const rules = (
+      await request(http)
+        .get('/checkout/webhooks')
+        .set(auth(tokens.seller))
+        .expect(200)
+    ).body as { id: string; disabledAt: string | null }[];
+    expect(rules.find((row) => row.id === part9.ruleId)?.disabledAt).toEqual(
+      expect.any(String),
+    );
+    expect(
+      rules.find((row) => row.id === webhookRuleId)?.disabledAt,
+    ).toBeNull();
+
+    await request(http)
+      .post(`/checkout/webhooks/${part9.ruleId}/enable`)
+      .set(auth(tokens.seller))
+      .expect(201);
+    await request(http)
+      .delete(`/checkout/webhooks/${part9.ruleId}`)
+      .set(auth(tokens.seller))
+      .expect(204);
+    const left = (
+      await request(http)
+        .get('/checkout/webhooks')
+        .set(auth(tokens.seller))
+        .expect(200)
+    ).body as { id: string }[];
+    expect(left.map((row) => row.id)).toEqual([webhookRuleId]);
+  });
+
+  it('API de consulta: a chave lê os pedidos e produtos da própria empresa, com limite e revogação', async () => {
+    (throttle as unknown as { useMemoryLimiters(): void }).useMemoryLimiters();
+    const created = await request(http)
+      .post('/checkout/api-keys')
+      .set(auth(tokens.seller))
+      .send({ name: 'ERP' })
+      .expect(201);
+    const { key, id: keyId } = created.body as { key: string; id: string };
+    expect(key).toMatch(/^ckapi_/);
+    const listed = await request(http)
+      .get('/checkout/api-keys')
+      .set(auth(tokens.seller))
+      .expect(200);
+    expect(JSON.stringify(listed.body)).not.toContain(key);
+
+    const one = await request(http)
+      .get(`/checkout/api/v1/orders/${refund.orderId}`)
+      .set(auth(key))
+      .expect(200);
+    expect(one.body).toMatchObject({
+      id: refund.orderId,
+      buyer: { document: '39053344705' },
+      items: [{ kind: 'MAIN' }, { kind: 'BUMP' }],
+    });
+    // The bump product finds the order too.
+    const byBump = await request(http)
+      .get('/checkout/api/v1/orders')
+      .query({ productId: part9.bumpProductId, status: 'PAID' })
+      .set(auth(key))
+      .expect(200);
+    expect(
+      (byBump.body as { items: { id: string }[] }).items.map((item) => item.id),
+    ).toContain(refund.orderId);
+    const products = await request(http)
+      .get('/checkout/api/v1/products')
+      .set(auth(key))
+      .expect(200);
+    expect(
+      (products.body as { items: { id: string }[] }).items.map(
+        (item) => item.id,
+      ),
+    ).toEqual(
+      expect.arrayContaining([part9.mainProductId, part9.bumpProductId]),
+    );
+
+    // Another company's key: 404 for this order, and its list is its own.
+    const other = await login(`olga-${suffix}@e2e.test`, 'Nova-senha-e2e-2');
+    const otherKey = (
+      (
+        await request(http)
+          .post('/checkout/api-keys')
+          .set(auth(other))
+          .send({ name: 'Outro' })
+          .expect(201)
+      ).body as { key: string }
+    ).key;
+    await request(http)
+      .get(`/checkout/api/v1/orders/${refund.orderId}`)
+      .set(auth(otherKey))
+      .expect(404);
+    await request(http)
+      .get(`/checkout/api/v1/products/${part9.mainProductId}`)
+      .set(auth(otherKey))
+      .expect(404);
+    const otherOrders = await request(http)
+      .get('/checkout/api/v1/orders')
+      .set(auth(otherKey))
+      .expect(200);
+    expect(JSON.stringify(otherOrders.body)).not.toContain(refund.orderId);
+    // A login token is not a key, and a key is not a login.
+    await request(http)
+      .get('/checkout/api/v1/orders')
+      .set(auth(tokens.seller))
+      .expect(401);
+    await request(http).get('/checkout/sales').set(auth(key)).expect(401);
+    await request(http).get('/checkout/api/v1/orders').expect(401);
+
+    // 60 a minute per key.
+    (throttle as unknown as { useMemoryLimiters(): void }).useMemoryLimiters();
+    for (let call = 0; call < 60; call++)
+      await request(http)
+        .get('/checkout/api/v1/products')
+        .set(auth(key))
+        .expect(200);
+    await request(http)
+      .get('/checkout/api/v1/products')
+      .set(auth(key))
+      .expect(429);
+
+    (throttle as unknown as { useMemoryLimiters(): void }).useMemoryLimiters();
+    await request(http)
+      .delete(`/checkout/api-keys/${keyId}`)
+      .set(auth(tokens.seller))
+      .expect(204);
+    await request(http)
+      .get('/checkout/api/v1/products')
+      .set(auth(key))
+      .expect(401);
+    const audit = await prisma.auditLog.findMany({
+      where: { entityType: 'CheckoutApiKey', entityId: keyId },
+    });
+    expect(audit.map((row) => row.action).sort()).toEqual([
+      'CHECKOUT_API_KEY_CREATED',
+      'CHECKOUT_API_KEY_REVOKED',
+    ]);
+    expect(JSON.stringify(audit)).not.toContain(key);
   });
 });
