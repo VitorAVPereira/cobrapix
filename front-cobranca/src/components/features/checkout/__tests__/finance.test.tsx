@@ -68,7 +68,7 @@ describe("Vendas do vendedor", () => {
     await user.type(screen.getByLabelText("Motivo do reembolso"), "Cliente desistiu");
     await user.click(screen.getByRole("button", { name: /enviar pedido/i }));
 
-    expect(mockApi.requestCheckoutRefund).toHaveBeenCalledWith("order-1", "Cliente desistiu");
+    expect(mockApi.requestCheckoutRefund).toHaveBeenCalledWith("order-1", "Cliente desistiu", []);
     expect(await screen.findByRole("status")).toHaveTextContent(/pedido de reembolso enviado/i);
     await waitFor(() => expect(mockApi.listCheckoutSales).toHaveBeenCalledTimes(2));
   });

@@ -70,7 +70,14 @@ export interface PublicCheckoutOrder {
     discountCents: number;
     accessUrl: string | null;
     accessInstructions: string | null;
+    // What this item returns if refunded alone (surcharge included).
+    refundCents?: number;
   }>;
+  // The refund request still open (the buyer may withdraw it) and items already refunded.
+  refund?: {
+    open: { itemIndexes: number[]; amountCents: number | null; holdUntil: string | null; createdAt: string } | null;
+    refundedItemIndexes: number[];
+  };
   subtotalCents: number;
   discountCents: number;
   surchargeCents: number;
@@ -340,9 +347,17 @@ export function openAccess(url: string): void {
 }
 
 /** The buyer's refund request from the e-mail link (7 days after payment). */
-export function requestCheckoutRefund(token: string, reason: string) {
+export function requestCheckoutRefund(token: string, reason: string, itemIndexes: number[] = []) {
   return request<{ id: string; status: string }>(`/checkout/public/orders/${encodeURIComponent(token)}/refund-request`, {
     method: "POST",
-    body: JSON.stringify({ reason }),
+    body: JSON.stringify({ reason, itemIndexes }),
   });
+}
+
+/** Only the buyer gives up a refund request, with the order token of the e-mail. */
+export function withdrawCheckoutRefund(token: string) {
+  return request<{ id: string; status: string }>(
+    `/checkout/public/orders/${encodeURIComponent(token)}/refund-request/withdraw`,
+    { method: "POST" },
+  );
 }

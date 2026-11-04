@@ -1489,6 +1489,9 @@ export interface CheckoutCouponInput {
 export type CheckoutSaleStatus = "PAID" | "REFUNDED" | "CHARGEBACK";
 export interface CheckoutBalance {
   releasedCents: number;
+  // Released minus refunds still open: what a payout should take.
+  suggestedPayoutCents?: number;
+  openRefundCents?: number;
   pendingCents: number;
   paidOutCents: number;
   nextReleaseAt: string | null;
@@ -1513,7 +1516,17 @@ export interface CheckoutSale {
   chargebackCents: number;
   netCents: number;
   availableAt: string | null;
-  openRefundRequest: { id: string; origin: "BUYER" | "SELLER"; createdAt: string } | null;
+  openRefundRequest: {
+    id: string;
+    origin: "BUYER" | "SELLER";
+    createdAt: string;
+    itemIndexes?: number[];
+    amountCents?: number | null;
+    holdUntil?: string | null;
+    buyerRemindedAt?: string | null;
+  } | null;
+  // Items already refunded cannot be asked for again.
+  refundedItemIndexes?: number[];
 }
 export type CheckoutRecoveryKind = "PIX" | "CARD" | "LEAD";
 export interface CheckoutRecoveryItem {
@@ -1555,10 +1568,22 @@ export interface CheckoutRefundRequestRow {
   id: string;
   origin: "BUYER" | "SELLER";
   reason: string;
-  status: "REQUESTED" | "DONE" | "REJECTED";
+  status: "REQUESTED" | "DONE" | "REJECTED" | "WITHDRAWN";
   resolutionNote: string | null;
   createdAt: string;
-  order: { id: string; buyerName: string; buyerEmail: string; totalCents: number; paidAt: string | null; status: string };
+  itemIndexes?: number[];
+  amountCents?: number | null;
+  // A buyer's request waits until here for the seller; then the admin executes.
+  holdUntil?: string | null;
+  order: {
+    id: string;
+    buyerName: string;
+    buyerEmail: string;
+    totalCents: number;
+    paidAt: string | null;
+    status: string;
+    items?: Array<{ name: string }>;
+  };
 }
 export interface CheckoutFinanceOverview {
   balance: CheckoutBalance;
@@ -2969,10 +2994,16 @@ class ApiClient {
     const response = await this.send(`/checkout/recovery.csv${this.buildQueryString({ ...query })}`, { cache: "no-store" });
     return response.blob();
   }
-  requestCheckoutRefund(orderId: string, reason: string): Promise<{ id: string }> {
+  requestCheckoutRefund(orderId: string, reason: string, itemIndexes: number[] = []): Promise<{ id: string }> {
     return this.fetch(`/checkout/sales/${encodeURIComponent(orderId)}/refund-request`, {
       method: "POST",
-      body: JSON.stringify({ reason }),
+      body: JSON.stringify({ reason, itemIndexes }),
+    });
+  }
+  // Cifra+ sends the buyer the refund e-mail again; the seller never gets the link.
+  remindCheckoutRefundBuyer(orderId: string): Promise<{ remindedAt: string }> {
+    return this.fetch(`/checkout/sales/${encodeURIComponent(orderId)}/refund-request/remind`, {
+      method: "POST",
     });
   }
 

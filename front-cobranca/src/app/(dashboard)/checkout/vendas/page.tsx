@@ -6,6 +6,7 @@ import { AlertTriangle, Loader2, Receipt } from "lucide-react";
 import type { CheckoutBalance, CheckoutSale, CheckoutSaleStatus, CheckoutSalesPage } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 import { formatCents, formatDateTime } from "@/lib/disbursements";
+import { refundWhatsAppLink } from "@/lib/checkout";
 import {
   buttonClass,
   inputClass,
@@ -46,6 +47,9 @@ function BalanceCard({ label, cents, detail }: { label: string; cents: number; d
 function RefundForm({ sale, onDone }: { sale: CheckoutSale; onDone: (notice: Notice) => void }) {
   const api = useApiClient();
   const [reason, setReason] = useState("");
+  const refunded = sale.refundedItemIndexes ?? [];
+  const available = sale.items.map((_, index) => index).filter((index) => !refunded.includes(index));
+  const [chosen, setChosen] = useState<number[]>(available);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -54,7 +58,8 @@ function RefundForm({ sale, onDone }: { sale: CheckoutSale; onDone: (notice: Not
     setError(null);
     setSaving(true);
     try {
-      await api.requestCheckoutRefund(sale.orderId, reason);
+      // All that is left is the whole sale: no item list.
+      await api.requestCheckoutRefund(sale.orderId, reason, chosen.length === available.length ? [] : chosen);
       onDone({ error: false, text: "Pedido de reembolso enviado. A Cifra+ faz a devolução e a venda sai do saldo." });
     } catch (caught) {
       setError(messageOf(caught, "Não foi possível pedir o reembolso."));
@@ -64,13 +69,39 @@ function RefundForm({ sale, onDone }: { sale: CheckoutSale; onDone: (notice: Not
 
   return (
     <form onSubmit={submit} className="mt-3 space-y-2 rounded-md bg-slate-50 p-3">
+      {sale.items.length > 1 && (
+        <fieldset className="space-y-1">
+          <legend className="text-sm font-medium text-slate-700">Itens a reembolsar</legend>
+          {sale.items.map((line, index) => (
+            <label key={`${line.kind}-${index}`} className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                disabled={refunded.includes(index)}
+                checked={chosen.includes(index)}
+                onChange={(event) =>
+                  setChosen((current) =>
+                    event.target.checked
+                      ? [...current, index].sort((a, b) => a - b)
+                      : current.filter((value) => value !== index),
+                  )
+                }
+              />
+              {line.name}
+              {refunded.includes(index) && " (já reembolsado)"}
+            </label>
+          ))}
+          <p className="text-xs text-slate-500">
+            Um item volta com a parte dele no que o comprador pagou, inclusive o acréscimo da tarifa.
+          </p>
+        </fieldset>
+      )}
       <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
         Motivo do reembolso
         <textarea className={`${inputClass} h-20 py-2`} value={reason} onChange={(event) => setReason(event.target.value)} minLength={5} required />
       </label>
       {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
       <div className="flex gap-2">
-        <button type="submit" className={buttonClass} disabled={saving || reason.trim().length < 5}>
+        <button type="submit" className={buttonClass} disabled={saving || reason.trim().length < 5 || chosen.length === 0}>
           {saving && <Loader2 size={16} className="animate-spin" />}
           Enviar pedido
         </button>
@@ -79,6 +110,64 @@ function RefundForm({ sale, onDone }: { sale: CheckoutSale; onDone: (notice: Not
         </button>
       </div>
     </form>
+  );
+}
+
+/** A refund still open: whether the seller may still win the buyer back, and how. */
+function OpenRefund({ sale, onNotice }: { sale: CheckoutSale; onNotice: (notice: Notice) => void }) {
+  const api = useApiClient();
+  const [sending, setSending] = useState(false);
+  const [now] = useState(() => Date.now());
+  const open = sale.openRefundRequest!;
+  const held = open.holdUntil && new Date(open.holdUntil).getTime() > now;
+  const names = (open.itemIndexes?.length ? open.itemIndexes : sale.items.map((_, index) => index))
+    .map((index) => sale.items[index]?.name)
+    .filter(Boolean)
+    .join(" + ");
+
+  async function remind() {
+    setSending(true);
+    try {
+      await api.remindCheckoutRefundBuyer(sale.orderId);
+      onNotice({ error: false, text: "A Cifra+ reenviou o e-mail ao comprador, com o botão para desistir do reembolso." });
+    } catch (caught) {
+      onNotice({ error: true, text: messageOf(caught, "Não foi possível reenviar o e-mail.") });
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 space-y-2 rounded-md bg-amber-50 p-3 text-sm text-amber-900">
+      <p>
+        {open.origin === "BUYER" ? "O comprador pediu reembolso" : "Você pediu reembolso"} de {names}
+        {typeof open.amountCents === "number" && ` (${formatCents(open.amountCents)})`}.{" "}
+        {held
+          ? `Você tem até ${formatDateTime(open.holdUntil!)} para conversar com ele; depois disso, a Cifra+ faz a devolução.`
+          : "A Cifra+ está cuidando da devolução."}
+      </p>
+      {open.origin === "BUYER" && (
+        <>
+          <p className="text-xs text-amber-800">
+            Só o comprador pode desistir, pelo e-mail que a Cifra+ mandou para ele.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <a
+              className={secondaryButtonClass}
+              href={refundWhatsAppLink(sale.buyer.phone, sale.buyer.name, sale.items[0]?.name ?? "o produto")}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Chamar no WhatsApp
+            </a>
+            <button type="button" className={secondaryButtonClass} disabled={sending} onClick={() => void remind()}>
+              {sending && <Loader2 size={16} className="animate-spin" />}
+              Reenviar e-mail ao comprador
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -200,6 +289,7 @@ export default function CheckoutSalesPage() {
                 </dl>
               </div>
               {sale.refundedCents > 0 && <p className="mt-1 text-xs text-slate-500">Reembolsado: {formatCents(sale.refundedCents)}</p>}
+              {sale.openRefundRequest && <OpenRefund sale={sale} onNotice={setNotice} />}
               {sale.status === "PAID" && !sale.openRefundRequest && refunding !== sale.orderId && (
                 <button type="button" className="mt-2 text-sm font-semibold text-slate-600 hover:underline" onClick={() => setRefunding(sale.orderId)}>
                   Pedir reembolso

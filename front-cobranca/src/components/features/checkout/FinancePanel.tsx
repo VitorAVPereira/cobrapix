@@ -12,7 +12,12 @@ import { buttonClass, Field, inputClass, messageOf, NoticeText, secondaryButtonC
 
 const ENTRY_LABELS: Record<string, string> = { PAYOUT: "Repasse", ADJUSTMENT: "Ajuste", CHARGEBACK: "Contestação" };
 const ORIGIN_LABELS = { BUYER: "comprador", SELLER: "vendedor" } as const;
-const STATUS_LABELS = { REQUESTED: "Aguardando", DONE: "Reembolsado", REJECTED: "Recusado" } as const;
+const STATUS_LABELS = {
+  REQUESTED: "Aguardando",
+  DONE: "Reembolsado",
+  REJECTED: "Recusado",
+  WITHDRAWN: "O comprador desistiu",
+} as const;
 
 function today(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
@@ -83,6 +88,8 @@ function RefundRequest({
   const [key] = useState(() => crypto.randomUUID());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Read once: the hold is judged at the time the list was opened.
+  const [now] = useState(() => Date.now());
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -108,17 +115,34 @@ function RefundRequest({
     }
   }
 
+  // The seller's 7 days: the refund is executed only after them.
+  const held = request.status === "REQUESTED" && request.holdUntil && new Date(request.holdUntil).getTime() > now;
+  const amount = request.amountCents ?? request.order.totalCents;
+  const items = request.itemIndexes?.length
+    ? request.itemIndexes.map((index) => request.order.items?.[index]?.name).filter(Boolean).join(" + ")
+    : null;
   return (
     <li className="rounded-md border border-slate-200 p-3 text-sm">
       <p className="font-medium text-slate-900">
-        {request.order.buyerName} · {formatCents(request.order.totalCents)} · pedido pelo {ORIGIN_LABELS[request.origin]} em{" "}
-        {formatDateTime(request.createdAt)} · {STATUS_LABELS[request.status]}
+        {request.order.buyerName} · {formatCents(amount)}
+        {items ? ` (itens: ${items})` : amount !== request.order.totalCents ? "" : " (compra inteira)"} · pedido pelo{" "}
+        {ORIGIN_LABELS[request.origin]} em {formatDateTime(request.createdAt)} · {STATUS_LABELS[request.status]}
       </p>
+      {request.status === "REQUESTED" && (
+        <p className={`mt-1 ${held ? "text-amber-700" : "text-emerald-700"}`}>
+          {held ? `Em retenção até ${formatDateTime(request.holdUntil!)}: o vendedor ainda pode reverter.` : "Pronto para executar."}
+        </p>
+      )}
       <p className="mt-1 whitespace-pre-line text-slate-600">{request.reason}</p>
       {request.resolutionNote && <p className="mt-1 text-slate-500">Resposta: {request.resolutionNote}</p>}
       {request.status === "REQUESTED" && !mode && (
         <div className="mt-2 flex flex-wrap gap-3">
-          <button type="button" className="font-semibold text-emerald-700 hover:underline" onClick={() => setMode("refund")}>
+          <button
+            type="button"
+            className="font-semibold text-emerald-700 hover:underline disabled:text-slate-400 disabled:no-underline"
+            disabled={Boolean(held)}
+            onClick={() => setMode("refund")}
+          >
             Registrar devolução feita por fora
           </button>
           <button type="button" className="font-semibold text-slate-600 hover:underline" onClick={() => setMode("reject")}>
@@ -131,7 +155,7 @@ function RefundRequest({
           {mode === "refund" ? (
             <>
               <Field label="Valor devolvido (R$)">
-                <input name="amount" className={inputClass} defaultValue={centsToInput(request.order.totalCents)} required />
+                <input name="amount" className={inputClass} defaultValue={centsToInput(amount)} required />
               </Field>
               <Field label="Referência do comprovante">
                 <input name="reference" className={inputClass} />
@@ -190,9 +214,13 @@ export function FinancePanel({ companyId }: { companyId: string }) {
       <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-800">
         <Wallet size={16} /> Financeiro
       </h3>
-      <dl className="grid gap-2 text-sm sm:grid-cols-4">
+      <dl className="grid gap-2 text-sm sm:grid-cols-5">
         <div className="rounded-md bg-slate-50 p-3"><dt className="text-slate-500">A liberar</dt><dd className="font-semibold">{formatCents(data.balance.pendingCents)}</dd></div>
         <div className="rounded-md bg-slate-50 p-3"><dt className="text-slate-500">Liberado</dt><dd className={`font-semibold ${data.balance.releasedCents < 0 ? "text-red-600" : ""}`}>{formatCents(data.balance.releasedCents)}</dd></div>
+        <div className="rounded-md bg-slate-50 p-3">
+          <dt className="text-slate-500">Repasse sugerido</dt>
+          <dd className="font-semibold">{formatCents(data.balance.suggestedPayoutCents ?? data.balance.releasedCents)}</dd>
+        </div>
         <div className="rounded-md bg-slate-50 p-3"><dt className="text-slate-500">Repassado</dt><dd className="font-semibold">{formatCents(data.balance.paidOutCents)}</dd></div>
         <div className="rounded-md bg-slate-50 p-3">
           <dt className="text-slate-500">Chargeback ({data.chargebackIndex.windowDays} dias)</dt>
@@ -238,7 +266,10 @@ export function FinancePanel({ companyId }: { companyId: string }) {
               : { error: false, text: "Repasse registrado." };
           }}
         >
-          <Field label="Valor (R$)" hint={`Liberado: ${formatCents(data.balance.releasedCents)}`}>
+          <Field
+            label="Valor (R$)"
+            hint={`Sugerido: ${formatCents(data.balance.suggestedPayoutCents ?? data.balance.releasedCents)} (liberado ${formatCents(data.balance.releasedCents)}, menos reembolsos em aberto)`}
+          >
             <input name="amount" className={inputClass} inputMode="decimal" required />
           </Field>
           <Field label="Data do Pix">

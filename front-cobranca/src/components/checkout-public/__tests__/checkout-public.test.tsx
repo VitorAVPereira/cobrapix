@@ -265,7 +265,7 @@ describe("RefundRequestPage", () => {
     await user.type(await screen.findByLabelText("Conte o motivo"), "Não era o que eu esperava");
     await user.click(screen.getByRole("button", { name: /enviar pedido de reembolso/i }));
 
-    expect(mockRequestRefund).toHaveBeenCalledWith("token", "Não era o que eu esperava");
+    expect(mockRequestRefund).toHaveBeenCalledWith("token", "Não era o que eu esperava", []);
     expect(await screen.findByRole("status")).toHaveTextContent(/pedido recebido/i);
   });
 
