@@ -387,3 +387,10 @@ As tarefas 1 a 10 foram executadas. Nada foi commitado nem publicado.
   schema.
 - **Frontend:** `npx jest --runInBand` (72 suítes, 454 testes), `npm run lint` (só o aviso
   conhecido do `useReactTable`) e `npm run build`.
+
+**Correção depois do merge (04/11/2026):**
+- **Problema:** o `middleware.ts` do frontend não conhecia as rotas novas. O admin era levado de
+  Admin → Checkout para Admin → Clientes, e o vendedor ia para Cobranças depois do primeiro acesso.
+- **Correção:** `/admin/checkout` entrou na lista do admin. A empresa de checkout fica sempre em
+  `/checkout/...` (a entrada é `/checkout/produtos`), e a de cobrança é levada para `/` se abrir
+  `/checkout/...`. Os testes de rota cobrem os dois casos.

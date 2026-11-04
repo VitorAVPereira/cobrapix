@@ -13,6 +13,7 @@ const PLATFORM_ADMIN_ALLOWED_PATHS = [
   // Old address of the central inbox; the page only redirects to the new one.
   "/admin/communications",
   "/admin/templates",
+  "/admin/checkout",
 ] as const;
 
 function isAllowedPlatformAdminPath(pathname: string): boolean {
@@ -27,6 +28,7 @@ function isAllowedPlatformAdminPath(pathname: string): boolean {
 // The internal route stays outside the matcher: Next runs this middleware again
 // on the rewrite target, and the page itself declares "/" as canonical.
 const LANDING_PATH = "/apresentacao";
+const CHECKOUT_HOME = "/checkout/produtos";
 
 // Auth.js rebuilds the request with the AUTH_URL origin, so the rewrite takes
 // the URL the visitor actually reached; otherwise a different port or domain
@@ -53,6 +55,9 @@ const routesFor = (requestUrl: string) => auth((req) => {
     return NextResponse.redirect(new URL("/login?sessionExpired=1", req.url));
   }
   const isPlatformAdmin = role === "PLATFORM_ADMIN";
+  // Sessions created before checkout existed are billing companies.
+  const isCheckout =
+    !isPlatformAdmin && req.auth.user?.companyProduct === "CHECKOUT";
   const mustChangePassword = req.auth.user?.mustChangePassword ?? false;
   const isFirstAccessPath = pathname === "/primeiro-acesso";
 
@@ -61,7 +66,11 @@ const routesFor = (requestUrl: string) => auth((req) => {
   }
 
   if (!mustChangePassword && isFirstAccessPath) {
-    const destination = isPlatformAdmin ? "/admin/clientes" : "/cobrancas";
+    const destination = isPlatformAdmin
+      ? "/admin/clientes"
+      : isCheckout
+        ? CHECKOUT_HOME
+        : "/cobrancas";
     return NextResponse.redirect(new URL(destination, req.url));
   }
 
@@ -72,6 +81,16 @@ const routesFor = (requestUrl: string) => auth((req) => {
     !isAllowedPlatformAdminPath(pathname)
   ) {
     return NextResponse.redirect(new URL("/admin/clientes", req.url));
+  }
+
+  // A checkout company has only the checkout screens, and a billing company
+  // has none of them (the API answers 404 to both anyway).
+  if (!isApiRoute && !isFirstAccessPath && !isPlatformAdmin) {
+    const onCheckoutPath = pathname === "/checkout" || pathname.startsWith("/checkout/");
+    if (isCheckout && !onCheckoutPath)
+      return NextResponse.redirect(new URL(CHECKOUT_HOME, req.url));
+    if (!isCheckout && onCheckoutPath)
+      return NextResponse.redirect(new URL("/", req.url));
   }
 
   if (pathname.startsWith("/admin") && !isPlatformAdmin) {
