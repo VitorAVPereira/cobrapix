@@ -377,6 +377,10 @@ cupons e a aparência, sem vender ainda.
 
 ### Parte 2: Venda por Pix
 
+> **Situação (04/11/2026):** implementada no branch `feat/cifra-checkout-parte-2`. Plano e registro:
+> [Parte 2](../plans/2026-11-04-cifra-checkout-parte-2-pix.md). Runbook:
+> [conta Cifra+](../../operations/checkout-conta-cifra.md).
+
 Depende da Parte 1. Ao fim, o primeiro cliente consegue vender por Pix.
 
 - [x] **CK-07** Página pública: banner, produto, cupom, dados obrigatórios (nome, e-mail, CPF,

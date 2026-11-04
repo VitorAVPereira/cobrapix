@@ -172,13 +172,23 @@ VPS e na Vercel antes de afirmar que algo está em produção.
   (visitante, orçamento e WhatsApp; pedidos de titular pelo WhatsApp comercial; pedidos
   guardados até 12 meses sem contratação). Mudou a coleta, mude a política.
   Contexto para o projeto de captação de leads: `docs/contexto-ciframais.md`.
-- **Cifra+ Checkout (03/11), Parte 1 de 9:** venda de produtos digitais pela conta Efí da
-  **Cifra+** (não a do cliente). A empresa ganha `product` (`BILLING` ou `CHECKOUT`); uma empresa
-  de checkout só vê as telas do checkout, e as rotas de um produto respondem 404 ao outro
-  (`@CompanyProducts` no `JwtAuthGuard`). Nesta parte: Admin → Checkout (cliente, % Cifra+ e dados
-  de repasse versionados), configurações da página, imagens, produtos, até 6 order bumps e
-  cupons. Ainda não há venda: a página pública e o Pix chegam na Parte 2. Spec com as 9 partes:
-  `docs/superpowers/specs/2026-10-30-cifra-checkout-design.md`.
+- **Cifra+ Checkout, Partes 1 (03/11) e 2 (04/11) de 9:** venda de produtos digitais pela conta
+  Efí da **Cifra+** (não a do cliente).
+  - **Separação:** a empresa ganha `product` (`BILLING` ou `CHECKOUT`). Uma empresa de checkout só
+    vê as telas do checkout, e as rotas de um produto respondem 404 ao outro (`@CompanyProducts`
+    no `JwtAuthGuard`; no frontend, o `middleware.ts`).
+  - **Parte 1:** Admin → Checkout (cliente, % Cifra+ e dados de repasse versionados),
+    configurações da página, imagens, produtos, até 6 order bumps e cupons.
+  - **Parte 2 (venda por Pix):**
+    - o admin cadastra a conta Efí da Cifra+ (identidade `PLATFORM`, uma por ambiente) e a
+      tarifa do Pix;
+    - o comprador paga em `/c/<slug>` um Pix imediato de 30 min, com `txid` `ckt…`;
+    - o webhook Pix separa os `ckt…` para o checkout no `WebhooksService`;
+    - o acesso chega por redirecionamento e por e-mail;
+    - um worker concilia Pix incertos e, antes de expirar um pedido, consulta a Efí.
+  - **Ainda não há:** saldo, repasse nem reembolso (Parte 3).
+  - **Docs:** a spec com as 9 partes é `docs/superpowers/specs/2026-10-30-cifra-checkout-design.md`,
+    e o runbook é `docs/operations/checkout-conta-cifra.md`.
 - **Em aberto:**
   - Planos de 29/09 (`docs/superpowers/plans/2026-09-29-0*.md`): código entregue; faltam as
     verificações depois da publicação e a conciliação das duas tentativas BOLIX reais pelo
@@ -205,7 +215,7 @@ VPS e na Vercel antes de afirmar que algo está em produção.
 | `financial-activation/` | Ativação manual: perfil versionado, credenciais cifradas, validação em fila, elegibilidade, certificados |
 | `settlements/` | Lançamentos imutáveis (`FinancialLedgerEntry`), conciliação e divergências |
 | `disbursements/` | Pagamentos a colaboradores: liberação pelo admin, colaboradores, lotes, aprovação no WhatsApp, envio Pix e resultado pelo webhook Pix |
-| `checkout/` | Cifra+ Checkout: clientes de checkout e termos (admin), configurações da página, imagens públicas, produtos, order bumps e cupons |
+| `checkout/` | Cifra+ Checkout: clientes de checkout e termos (admin), conta Efí da Cifra+ e tarifa, configurações da página, imagens públicas, produtos, order bumps, cupons, página pública, pedidos, Pix imediato e confirmação |
 | `efi-onboarding/` | Abertura de contas (desligada) e chaves de integração (`PlatformIntegrationState`) |
 | `communications/` | Conversas, mensagens, intenções de envio, atribuição por empresa, pendências e retomada de templates |
 | `whatsapp/` | Transporte Datafy e `OutboundDispatcherService` (ver `whatsapp/transport/README.md`) |
@@ -447,6 +457,7 @@ node test/e2e-disposable.cjs <arquivo>.e2e-spec.ts [...]   # ex.: npm run test:e
 npm run test:e2e:disbursements                             # pagamentos a colaboradores
 npm run test:e2e:invoice-import                             # importação de cobranças com revisão
 npm run test:e2e:checkout                                   # Cifra+ Checkout (clientes, produtos, cupons, isolamento)
+npm run test:e2e:checkout-pix                               # Cifra+ Checkout: cotação, pedido, Pix e confirmação
 ```
 
 - Testes que escrevem em banco ou Redis usam **somente** a infraestrutura descartável dos
@@ -480,7 +491,8 @@ Seed de desenvolvimento (`npx prisma db seed`): empresa "Empresa Teste MVP", log
 - Confira no container que o código novo está rodando antes de declarar concluído.
 - Runbooks: `infra/interserver/README.md`, `infra/interserver/DATAFY.md`,
   `docs/operations/financial-activation.md`, `docs/operations/whatsapp-template-catalog.md`,
-  `docs/operations/pagamentos-colaboradores.md`, `docs/operations/efi-credit-card.md`.
+  `docs/operations/pagamentos-colaboradores.md`, `docs/operations/efi-credit-card.md`,
+  `docs/operations/checkout-conta-cifra.md`.
 
 ---
 
@@ -544,13 +556,16 @@ Descontinuadas: `EFI_ONBOARDING_NOTICE_TEMPLATE`, `EFI_ONBOARDING_REMINDER_TEMPL
 | POST | `/payments/public/:token/card/quote` | Cotação das parcelas do cartão |
 | POST | `/payments/public/:token/card/pay` | Pagamento por cartão (chave idempotente) |
 | POST | `/contact/quote-request` | Pedido de orçamento da página de apresentação |
+| GET | `/checkout/public/products/:slug` | Página do produto do Cifra+ Checkout |
+| POST | `/checkout/public/products/:slug/quote` e `.../orders` | Cotação e pedido com Pix (chave idempotente) |
+| GET | `/checkout/public/orders/:token` | Estado do pedido; o acesso só depois de pago |
 
 ### Webhooks
 
 | Rota | Origem |
 | --- | --- |
 | `POST /webhooks/datafy` | Mensagens, status e templates do WhatsApp (assinatura Datafy) |
-| `POST /webhooks/efi/pix` | Pagamentos Pix (mTLS) |
+| `POST /webhooks/efi/pix` | Pagamentos Pix (mTLS); `txid` `ckt…` são do checkout |
 | `POST /webhooks/efi/cobrancas` | Boleto/BOLIX; `account=` identifica a conta emissora |
 | `POST /webhooks/resend` | Eventos de e-mail |
 
