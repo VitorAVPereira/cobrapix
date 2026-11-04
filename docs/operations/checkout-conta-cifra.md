@@ -98,6 +98,7 @@ O vendedor configura em **Configurações do checkout → Webhook**:
 | `refund.requested` | O comprador ou o vendedor pediu reembolso |
 | `order.refunded` | Uma devolução foi concluída (com valor e total devolvido) |
 | `order.chargeback` | Uma contestação foi registrada |
+| `order.card_declined` | Um pedido de cartão venceu depois de recusa(s) do banco |
 | `lead.abandoned` | Alguém preencheu os dados e ficou 30 min sem gerar o Pix (traz `data.lead`, sem pedido) |
 
 **O que o sistema do vendedor recebe e confere:**
@@ -127,3 +128,38 @@ O vendedor vê em **Recuperação** quem gerou o Pix e não pagou e quem preench
   12 meses perdem nome, e-mail, CPF/CNPJ, celular e UTMs, e os avisos de webhook deles perdem o
   corpo. Vendas pagas não mudam. Se um titular pedir exclusão antes disso, a correção é manual
   no banco, com registro na auditoria.
+
+## Cartão (Parte 6)
+
+O cartão do checkout usa a conta Efí da Cifra+ e fica **desligado** até a homologação de cartão
+nessa conta.
+
+**Antes de ligar:**
+1. Confirmar com a Efí a homologação de cartão (API Cobranças) na conta Cifra+, o prazo de crédito
+   com recebimento antecipado e o nome na fatura.
+2. Conferir que `EFI_CHARGES_WEBHOOK_BASE_URL` aponta para a API (https, sem caminho). Os avisos
+   chegam em `/webhooks/efi/cobrancas?account=<id da conta Cifra+>`.
+3. Conferir o código do recebedor (`payeeCode`) da conta Cifra+: o navegador usa ele para
+   tokenizar o cartão.
+
+**Ligar (Admin → Checkout → Conta Efí da Cifra+ → Cartão):**
+- informar a tarifa à vista, a antecipação por parcela e os dias até o crédito (padrão 30);
+- marcar "Cartão ligado" e salvar. Cada mudança cria uma nova versão; os pedidos antigos ficam
+  com a versão em que foram vendidos;
+- o vendedor liga o cartão em Configurações do checkout, com o máximo de parcelas e quem paga a
+  taxa.
+
+**Primeira venda em homologação:** um cartão de teste da Efí em 1x e outro em 3x. Conferir que o
+pedido fica pago só depois do aviso da Efí e que a venda aparece em Vendas liberando em 30 dias.
+
+**O que fazer quando:**
+- **Pagamento em análise que não termina:** o worker consulta a Efí pelo id da tentativa a cada
+  minuto. Sem cobrança na Efí depois de 30 minutos, a tentativa é cancelada. Uma anomalia
+  `CHECKOUT_CARD_*` pede conferência manual no app Efí; nunca cobre de novo.
+- **Estorno ou contestação no cartão:** o aviso da Efí vira anomalia
+  (`CHECKOUT_CARD_REFUNDED_REVIEW`, `CHECKOUT_CARD_CONTESTED_REVIEW`). O admin faz o estorno no
+  app Efí e registra o reembolso ou a contestação em Admin → Checkout (Parte 3).
+- **Chargeback alto de um vendedor:** em Admin → Checkout → cliente, "Pausar cartão" com o
+  motivo. O Pix continua; "Retomar cartão" desfaz.
+- **Comprador barrado:** 3 tentativas por pedido, 5 por CPF/CNPJ em 24 h e 10 por IP por hora.
+  Depois disso, a página sugere o Pix.

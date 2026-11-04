@@ -456,6 +456,9 @@ Depende da Parte 2; a lista de cartões recusados, da Parte 6.
 
 ### Parte 6: Cartão
 
+> **Situação (08/11/2026):** implementada no branch `feat/cifra-checkout-parte-6`, desligada até a
+> homologação. Plano e registro: [Parte 6](../plans/2026-11-08-cifra-checkout-parte-6-cartao.md).
+
 Depende das Partes 2 e 3. O código fica pronto, mas o cartão só é ligado depois da homologação na
 conta Cifra+.
 
