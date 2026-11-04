@@ -18,6 +18,7 @@ import {
   MessageSquare,
   Package,
   Receipt,
+  RotateCcw,
   Settings,
   Settings2,
   SlidersHorizontal,
@@ -123,6 +124,7 @@ const checkoutItems = [
   { href: "/checkout/vendas", label: "Vendas", icon: Receipt },
   { href: "/checkout/produtos", label: "Produtos", icon: Package },
   { href: "/checkout/cupons", label: "Cupons", icon: TicketPercent },
+  { href: "/checkout/recuperacao", label: "Recuperação", icon: RotateCcw },
   {
     href: "/checkout/configuracoes",
     label: "Configurações do checkout",

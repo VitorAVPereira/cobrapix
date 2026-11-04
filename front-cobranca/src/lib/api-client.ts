@@ -1487,6 +1487,36 @@ export interface CheckoutSale {
   availableAt: string | null;
   openRefundRequest: { id: string; origin: "BUYER" | "SELLER"; createdAt: string } | null;
 }
+export type CheckoutRecoveryKind = "PIX" | "LEAD";
+export interface CheckoutRecoveryItem {
+  id: string;
+  kind: CheckoutRecoveryKind;
+  reason: string;
+  productId: string;
+  productName: string;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  document: string | null;
+  totalCents: number | null;
+  createdAt: string;
+  recovered: boolean;
+}
+export interface CheckoutRecoveryQuery {
+  kind?: CheckoutRecoveryKind;
+  productId?: string;
+  from?: string;
+  to?: string;
+  state?: "OPEN" | "RECOVERED";
+  page?: number;
+  pageSize?: number;
+}
+export interface CheckoutRecoveryPage {
+  total: number;
+  page: number;
+  pageSize: number;
+  items: CheckoutRecoveryItem[];
+}
 export interface CheckoutSalesPage {
   total: number;
   page: number;
@@ -2883,6 +2913,13 @@ class ApiClient {
     signal?: AbortSignal,
   ): Promise<CheckoutSalesPage> {
     return this.fetch(`/checkout/sales${this.buildQueryString(query)}`, { signal });
+  }
+  listCheckoutRecovery(query: CheckoutRecoveryQuery, signal?: AbortSignal): Promise<CheckoutRecoveryPage> {
+    return this.fetch(`/checkout/recovery${this.buildQueryString({ ...query })}`, { signal });
+  }
+  async fetchCheckoutRecoveryCsv(query: Omit<CheckoutRecoveryQuery, "page" | "pageSize">): Promise<Blob> {
+    const response = await this.send(`/checkout/recovery.csv${this.buildQueryString({ ...query })}`, { cache: "no-store" });
+    return response.blob();
   }
   requestCheckoutRefund(orderId: string, reason: string): Promise<{ id: string }> {
     return this.fetch(`/checkout/sales/${encodeURIComponent(orderId)}/refund-request`, {

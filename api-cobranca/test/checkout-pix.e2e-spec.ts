@@ -23,6 +23,8 @@ import {
 } from '../src/checkout/checkout-payments.service';
 import { EfiCheckoutPixClient } from '../src/checkout/efi-checkout-pix.client';
 import { CheckoutWebhookSender } from '../src/checkout/checkout-webhook.sender';
+import { CheckoutOrdersService } from '../src/checkout/checkout-orders.service';
+import { CheckoutRecoveryService } from '../src/checkout/checkout-recovery.service';
 import { CheckoutWebhooksService } from '../src/checkout/checkout-webhooks.service';
 import { GlobalExceptionFilter } from '../src/common/filters/http-exception.filter';
 import { validateEnv } from '../src/config/env.validation';
@@ -610,5 +612,267 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
       where: { company: { email: { not: `porquim-${suffix}@e2e.test` } } },
     });
     expect(other).toBe(0);
+  });
+
+  // Part 5: recovery of people who did not buy.
+  const ana = {
+    name: 'Ana Lima',
+    email: 'ana@e2e.test',
+    document: '11144477735',
+    phone: '11988887777',
+  };
+  const leadSession = randomUUID();
+  let expiredToken = '';
+
+  it('lead abandonado entra na Recuperação e avisa o sistema do vendedor uma vez', async () => {
+    const without = await request(http)
+      .post(`/checkout/public/products/${slug}/lead`)
+      .send({ sessionKey: randomUUID(), name: 'Sem Contato' })
+      .expect(200);
+    expect(without.body).toEqual({ saved: false });
+    await request(http)
+      .post('/checkout/public/products/nao-existe/lead')
+      .send({ sessionKey: randomUUID(), email: ana.email })
+      .expect(404);
+
+    await request(http)
+      .post(`/checkout/public/products/${slug}/lead`)
+      .send({ sessionKey: leadSession, email: ana.email })
+      .expect(200);
+    await request(http)
+      .post(`/checkout/public/products/${slug}/lead`)
+      .send({
+        sessionKey: leadSession,
+        name: ana.name,
+        email: ana.email,
+        phone: ana.phone,
+        utm: { utm_source: 'INSTAGRAM' },
+      })
+      .expect(200);
+    expect(
+      await prisma.checkoutLead.count({ where: { sessionKey: leadSession } }),
+    ).toBe(1);
+
+    // 31 minutes without activity (the worker runs every minute).
+    await prisma.checkoutLead.updateMany({
+      where: { sessionKey: leadSession },
+      data: { lastSeenAt: new Date(Date.now() - 31 * 60_000) },
+    });
+    const recovery = app.get(CheckoutRecoveryService);
+    await recovery.notifyAbandoned();
+    await recovery.notifyAbandoned();
+    const notices = await prisma.checkoutWebhookDelivery.findMany({
+      where: { eventType: 'lead.abandoned' },
+    });
+    expect(notices).toHaveLength(1);
+    expect(JSON.stringify(notices[0]?.payload)).toContain(ana.email);
+
+    const list = await request(http)
+      .get('/checkout/recovery?kind=LEAD')
+      .set(auth(tokens.seller))
+      .expect(200);
+    expect(
+      (list.body as { items: { name: string; reason: string }[] }).items,
+    ).toEqual([
+      expect.objectContaining({
+        name: ana.name,
+        reason: 'Saiu antes de gerar o Pix',
+      }),
+    ]);
+  });
+
+  it('Pix expirado aparece na lista e a compra depois marca os dois como recuperados', async () => {
+    const order = (sessionKey?: string) =>
+      request(http)
+        .post(`/checkout/public/products/${slug}/orders`)
+        .send({
+          bumpIds: [],
+          method: 'PIX',
+          buyer: ana,
+          idempotencyKey: randomUUID(),
+          ...(sessionKey ? { sessionKey } : {}),
+        })
+        .expect(201);
+    expiredToken = ((await order()).body as { token: string }).token;
+    await app
+      .get(CheckoutOrdersService)
+      .expireOverdue(new Date(Date.now() + 45 * 60_000));
+
+    const open = await request(http)
+      .get('/checkout/recovery')
+      .set(auth(tokens.seller))
+      .expect(200);
+    const openItems = (
+      open.body as { items: { kind: string; name: string; reason: string }[] }
+    ).items.filter((item) => item.name === ana.name);
+    expect(openItems.map((item) => [item.kind, item.reason]).sort()).toEqual([
+      ['LEAD', 'Saiu antes de gerar o Pix'],
+      ['PIX', 'Pix não pago'],
+    ]);
+
+    // Ana comes back days later, in a new visit, and pays.
+    const visit = randomUUID();
+    await request(http)
+      .post(`/checkout/public/products/${slug}/lead`)
+      .send({ sessionKey: visit, email: ana.email })
+      .expect(200);
+    const paidToken = ((await order(visit)).body as { token: string }).token;
+    const attempt = await prisma.checkoutPaymentAttempt.findFirstOrThrow({
+      where: { order: { publicToken: paidToken } },
+    });
+    await app.get(CheckoutPaymentsService).handlePixEvent({
+      txid: attempt.efiTxid,
+      chave: PIX_KEY,
+      valor: (attempt.amountCents / 100).toFixed(2),
+      endToEndId: 'E2E-RECOVERY',
+    });
+    const paid = await prisma.checkoutOrder.findUniqueOrThrow({
+      where: { publicToken: paidToken },
+    });
+    expect(paid.status).toBe('PAID');
+    // The visit that bought is converted, not "recovered".
+    expect(
+      await prisma.checkoutLead.findFirstOrThrow({
+        where: { sessionKey: visit },
+      }),
+    ).toMatchObject({ convertedOrderId: paid.id, recoveredByOrderId: null });
+
+    const stillOpen = await request(http)
+      .get('/checkout/recovery')
+      .set(auth(tokens.seller))
+      .expect(200);
+    expect(JSON.stringify(stillOpen.body)).not.toContain(ana.email);
+    const recovered = await request(http)
+      .get('/checkout/recovery?state=RECOVERED')
+      .set(auth(tokens.seller))
+      .expect(200);
+    const recoveredItems = (
+      recovered.body as { items: { kind: string; recovered: boolean }[] }
+    ).items;
+    expect(recoveredItems.map((item) => item.kind).sort()).toEqual([
+      'LEAD',
+      'PIX',
+    ]);
+    expect(recoveredItems.every((item) => item.recovered)).toBe(true);
+  });
+
+  it('CSV segue os filtros e fica na auditoria, sem os dados pessoais', async () => {
+    const csv = await request(http)
+      .get('/checkout/recovery.csv?state=RECOVERED&kind=PIX')
+      .set(auth(tokens.seller))
+      .expect(200);
+    expect(csv.headers['content-type']).toContain('text/csv');
+    const lines = csv.text.trim().split('\r\n');
+    expect(lines[0]).toContain('tipo;motivo;produto;nome;email');
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toContain(ana.name);
+
+    const audit = await prisma.auditLog.findFirstOrThrow({
+      where: { action: 'CHECKOUT_RECOVERY_EXPORTED' },
+    });
+    expect(audit.changes).toMatchObject({
+      rows: 1,
+      kind: 'PIX',
+      state: 'RECOVERED',
+    });
+    expect(JSON.stringify(audit.changes)).not.toContain(ana.email);
+  });
+
+  it('outra empresa de checkout não vê a recuperação deste vendedor', async () => {
+    const created = await request(http)
+      .post('/admin/checkout/clients')
+      .set(auth(tokens.admin))
+      .send({
+        company: {
+          corporateName: 'Outra Loja',
+          document: '45723174000110',
+          email: `outra-${suffix}@e2e.test`,
+          phoneNumber: '11988880000',
+        },
+        firstUser: { name: 'Olga', email: `olga-${suffix}@e2e.test` },
+        terms: {
+          platformFeeBasisPoints: 250,
+          payoutDocument: '45723174000110',
+          payoutPixKey: '11144477735',
+        },
+      })
+      .expect(201);
+    const temporary = (created.body as { temporaryPassword: string })
+      .temporaryPassword;
+    const first = await login(`olga-${suffix}@e2e.test`, temporary);
+    await request(http)
+      .post('/auth/change-password')
+      .set(auth(first))
+      .send({
+        currentPassword: temporary,
+        password: 'Nova-senha-e2e-2',
+        passwordConfirmation: 'Nova-senha-e2e-2',
+      })
+      .expect(200);
+    const other = await login(`olga-${suffix}@e2e.test`, 'Nova-senha-e2e-2');
+
+    for (const state of ['OPEN', 'RECOVERED']) {
+      const list = await request(http)
+        .get(`/checkout/recovery?state=${state}&from=2000-01-01T00:00:00.000Z`)
+        .set(auth(other))
+        .expect(200);
+      expect(list.body).toMatchObject({ total: 0, items: [] });
+    }
+  });
+
+  it('depois de 12 meses, quem não comprou perde os dados pessoais; vendas pagas ficam', async () => {
+    const old = new Date(Date.now() - 400 * 86_400_000);
+    const expired = await prisma.checkoutOrder.update({
+      where: { publicToken: expiredToken },
+      data: { createdAt: old },
+    });
+    await prisma.checkoutLead.updateMany({
+      where: { sessionKey: leadSession },
+      data: { createdAt: old },
+    });
+    const paidBefore = await prisma.checkoutOrder.findUniqueOrThrow({
+      where: { publicToken: token },
+    });
+    await prisma.checkoutOrder.update({
+      where: { id: paidBefore.id },
+      data: { createdAt: old },
+    });
+
+    await app.get(CheckoutRecoveryService).anonymize();
+
+    const forgotten = await prisma.checkoutOrder.findUniqueOrThrow({
+      where: { id: expired.id },
+    });
+    expect(forgotten).toMatchObject({
+      buyerName: 'Anonimizado',
+      buyerEmail: '',
+      buyerDocument: '',
+      buyerPhone: '',
+      utm: null,
+      totalCents: expired.totalCents,
+    });
+    expect(forgotten.anonymizedAt).toBeInstanceOf(Date);
+    const lead = await prisma.checkoutLead.findFirstOrThrow({
+      where: { sessionKey: leadSession },
+    });
+    expect(lead).toMatchObject({ name: null, email: null, phone: null });
+    const bodies = await prisma.checkoutWebhookDelivery.findMany({
+      where: {
+        OR: [{ orderId: expired.id }, { eventType: 'lead.abandoned' }],
+      },
+    });
+    expect(bodies.length).toBeGreaterThan(0);
+    expect(JSON.stringify(bodies.map((row) => row.payload))).not.toContain(
+      ana.email,
+    );
+
+    const paidAfter = await prisma.checkoutOrder.findUniqueOrThrow({
+      where: { id: paidBefore.id },
+    });
+    expect(paidAfter).toMatchObject({
+      buyerEmail: paidBefore.buyerEmail,
+      buyerDocument: paidBefore.buyerDocument,
+      anonymizedAt: null,
+    });
   });
 });

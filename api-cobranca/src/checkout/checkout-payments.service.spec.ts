@@ -40,7 +40,8 @@ describe('splitCheckoutPixEvents', () => {
 describe('CheckoutPaymentsService', () => {
   const tx = {
     checkoutPaymentAttempt: { findUnique: jest.fn(), updateMany: jest.fn() },
-    checkoutOrder: { update: jest.fn() },
+    checkoutOrder: { update: jest.fn(), updateMany: jest.fn() },
+    checkoutLead: { updateMany: jest.fn() },
     checkoutCoupon: { update: jest.fn() },
   };
   const prisma = {
@@ -83,6 +84,9 @@ describe('CheckoutPaymentsService', () => {
     tx.checkoutOrder.update.mockResolvedValue({
       id: 'order-1',
       companyId: 'company-a',
+      productId: 'product-1',
+      buyerDocument: '52998224725',
+      buyerEmail: 'maria@exemplo.test',
       couponId: 'coupon-1',
       totalCents: 8289,
       efiFeeCents: 99,
@@ -108,6 +112,19 @@ describe('CheckoutPaymentsService', () => {
       data: { usedCount: { increment: 1 } },
     });
     expect(mail.accessEmail).toHaveBeenCalledWith('order-1');
+    // Same buyer, same product, unpaid in the 30 days before: recovered.
+    expect(tx.checkoutOrder.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          companyId: 'company-a',
+          productId: 'product-1',
+          buyerDocument: '52998224725',
+          id: { not: 'order-1' },
+        }) as unknown,
+        data: { recoveredByOrderId: 'order-1' },
+      }),
+    );
+    expect(tx.checkoutLead.updateMany).toHaveBeenCalled();
     expect(ledger.recordSale).toHaveBeenCalledWith(
       tx,
       expect.objectContaining({ id: 'order-1', totalCents: 8289 }),

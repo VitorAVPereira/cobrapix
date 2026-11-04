@@ -14,6 +14,7 @@ const mockCreate = jest.fn();
 const mockGetOrder = jest.fn();
 const mockOpenAccess = jest.fn();
 const mockRequestRefund = jest.fn();
+const mockSaveLead = jest.fn();
 jest.mock("@/lib/checkout-public", () => {
   const actual = jest.requireActual<typeof import("@/lib/checkout-public")>("@/lib/checkout-public");
   return {
@@ -23,6 +24,7 @@ jest.mock("@/lib/checkout-public", () => {
     getCheckoutOrder: (...args: unknown[]) => mockGetOrder(...args),
     openAccess: (url: string) => mockOpenAccess(url),
     requestCheckoutRefund: (...args: unknown[]) => mockRequestRefund(...args),
+    saveCheckoutLead: (...args: unknown[]) => mockSaveLead(...args),
   };
 });
 
@@ -102,6 +104,7 @@ function order(change: Partial<PublicCheckoutOrder> = {}): PublicCheckoutOrder {
 describe("CheckoutForm", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockSaveLead.mockResolvedValue({ saved: true });
     window.sessionStorage.clear();
     window.history.replaceState(null, "", "/c/porquim-anual-ab12?utm_source=LINK_PADRAO&outro=x");
   });
@@ -163,6 +166,36 @@ describe("CheckoutForm", () => {
         utm: { utm_source: "LINK_PADRAO" },
       }),
     );
+    // The order closes the lead of the same visit.
+    const leadKey = (mockSaveLead.mock.calls.at(-1) as [string, { sessionKey: string }])[1].sessionKey;
+    expect(mockCreate.mock.calls[0]?.[1]).toMatchObject({ sessionKey: leadKey });
+  });
+
+  it("ao sair de um campo grava o que já foi digitado, só com e-mail ou celular", async () => {
+    const user = userEvent.setup();
+    mockQuote.mockResolvedValue(quote(6700));
+    render(<CheckoutForm data={product} />);
+    await screen.findByTestId("checkout-total");
+
+    await user.type(screen.getByLabelText("Nome completo"), "Maria Souza");
+    await user.click(screen.getByLabelText("E-mail"));
+    expect(mockSaveLead).not.toHaveBeenCalled();
+
+    await user.type(screen.getByLabelText("E-mail"), "maria@exemplo.test");
+    await user.click(screen.getByLabelText("CPF ou CNPJ"));
+    expect(mockSaveLead).toHaveBeenCalledTimes(1);
+    expect(mockSaveLead).toHaveBeenCalledWith("porquim-anual-ab12", {
+      name: "Maria Souza",
+      email: "maria@exemplo.test",
+      document: "",
+      phone: "",
+      sessionKey: expect.any(String),
+      utm: { utm_source: "LINK_PADRAO" },
+    });
+    // Nothing changed: no new call.
+    await user.click(screen.getByLabelText("Celular com DDD"));
+    expect(mockSaveLead).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("link", { name: /aviso de privacidade/i })).toHaveAttribute("href", "/privacidade-checkout");
   });
 });
 

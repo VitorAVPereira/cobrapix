@@ -50,4 +50,19 @@ export class CreateCheckoutOrderDto extends CheckoutQuoteDto {
   utm?: CheckoutUtmDto;
   // Sent again by a double click or a retried request: same order back.
   @IsUUID('4') idempotencyKey!: string;
+  // The visit that typed the data, so its lead counts as converted.
+  @IsOptional() @IsUUID('4') sessionKey?: string;
+}
+
+/** Partial data typed on the page; every field is optional until the order. */
+export class CheckoutLeadDto {
+  @IsUUID('4') sessionKey!: string;
+  @IsOptional() @IsString() @MaxLength(120) name?: string;
+  @IsOptional() @IsString() @MaxLength(160) email?: string;
+  @IsOptional() @IsString() @MaxLength(18) document?: string;
+  @IsOptional() @IsString() @MaxLength(20) phone?: string;
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CheckoutUtmDto)
+  utm?: CheckoutUtmDto;
 }

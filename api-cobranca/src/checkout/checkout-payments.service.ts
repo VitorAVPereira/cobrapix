@@ -4,6 +4,7 @@ import { CheckoutMailJobs } from './checkout-mail.service';
 import { CheckoutLedgerService } from './checkout-ledger.service';
 import { CheckoutRefundsService } from './checkout-refunds.service';
 import { CheckoutWebhooksService } from './checkout-webhooks.service';
+import { markRecovered } from './checkout-recovery.service';
 
 export const CHECKOUT_TXID_PREFIX = 'ckt';
 // The anomaly table accepts PIX, CHARGES or CARD; checkout reasons carry a prefix.
@@ -127,12 +128,16 @@ export class CheckoutPaymentsService {
         select: {
           id: true,
           companyId: true,
+          productId: true,
+          buyerDocument: true,
+          buyerEmail: true,
           couponId: true,
           totalCents: true,
           efiFeeCents: true,
           platformFeeCents: true,
         },
       });
+      await markRecovered(tx, { ...order, paidAt: now });
       await this.ledger.recordSale(
         tx,
         { ...order, paidAt: now },

@@ -25,3 +25,11 @@ export function checkoutLink(slug: string): string {
   const origin = typeof window === "undefined" ? "" : window.location.origin;
   return `${origin}/c/${slug}`;
 }
+
+/** WhatsApp on the seller's phone, with an editable opening message. */
+export function recoveryWhatsAppLink(phone: string, name: string | null, productName: string): string {
+  const first = name?.trim().split(/\s+/)[0];
+  const greeting = first ? `Olá, ${first}!` : "Olá!";
+  const text = `${greeting} Vi que você começou a compra de ${productName} e não concluiu. Posso ajudar?`;
+  return `https://wa.me/55${phone}?text=${encodeURIComponent(text)}`;
+}

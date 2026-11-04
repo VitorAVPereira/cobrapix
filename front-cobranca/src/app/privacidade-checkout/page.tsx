@@ -55,7 +55,9 @@ export default function CheckoutPrivacyPage() {
         <Section title="Compra não concluída">
           <p>
             Se você gerar o Pix e não pagar, o vendedor pode entrar em contato pelo e-mail ou celular
-            informados para ajudar a concluir a compra. Os dados pessoais de compras não concluídas
+            informados para ajudar a concluir a compra. O mesmo vale se você preencher seus dados e
+            sair da página antes de gerar o Pix: o que já foi digitado (nome, e-mail, CPF ou CNPJ,
+            celular e a origem do link) fica registrado e o vendedor é avisado. Os dados pessoais de compras não concluídas
             ficam guardados por até 12 meses e depois são apagados; os números da tentativa podem ser
             mantidos sem identificar você.
           </p>

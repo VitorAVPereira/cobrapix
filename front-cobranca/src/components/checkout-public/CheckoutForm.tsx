@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2, QrCode, Tag, X } from "lucide-react";
 import {
@@ -10,6 +11,7 @@ import {
   createCheckoutOrder,
   formatBRL,
   quoteCheckout,
+  saveCheckoutLead,
   utmFrom,
   type CheckoutBuyer,
   type PublicCheckoutProduct,
@@ -62,6 +64,8 @@ export function CheckoutForm({ data }: { data: PublicCheckoutProduct }) {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const requestId = useRef(0);
+  const sessionKey = useRef<string | null>(null);
+  const leadSent = useRef("");
 
   useEffect(() => {
     // The total always comes from the server; an older answer is discarded.
@@ -119,6 +123,7 @@ export function CheckoutForm({ data }: { data: PublicCheckoutProduct }) {
         buyer: cleaned,
         utm: utmFrom(window.location.search),
         idempotencyKey: crypto.randomUUID(),
+        sessionKey: sessionKey.current ?? undefined,
       });
       router.push(`/c/pedido/${order.token}`);
     } catch (caught) {
@@ -128,6 +133,27 @@ export function CheckoutForm({ data }: { data: PublicCheckoutProduct }) {
   }
 
   const set = (change: Partial<CheckoutBuyer>) => setBuyer((current) => ({ ...current, ...change }));
+
+  // Leaving a field sends what was typed, once it has an e-mail or a mobile.
+  // A failure here never blocks the purchase.
+  function saveLead() {
+    const lead = {
+      name: buyer.name.trim(),
+      email: buyer.email.trim(),
+      document: buyer.document.replace(/\D/g, ""),
+      phone: buyer.phone.replace(/\D/g, ""),
+    };
+    const usable = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lead.email) || /^\d{10,11}$/.test(lead.phone);
+    const snapshot = JSON.stringify(lead);
+    if (!usable || snapshot === leadSent.current) return;
+    leadSent.current = snapshot;
+    sessionKey.current ??= crypto.randomUUID();
+    saveCheckoutLead(data.product.slug, {
+      ...lead,
+      sessionKey: sessionKey.current,
+      utm: utmFrom(window.location.search),
+    }).catch(() => undefined);
+  }
   const period = accessPeriodLabel(data.product.accessPeriodMonths);
   const image = checkoutImageUrl(data.product.imageUrl);
 
@@ -150,8 +176,14 @@ export function CheckoutForm({ data }: { data: PublicCheckoutProduct }) {
         </div>
       </section>
 
-      <section className="space-y-3 rounded-lg bg-white p-4 shadow-sm">
+      <section className="space-y-3 rounded-lg bg-white p-4 shadow-sm" onBlur={saveLead}>
         <h2 className="text-sm font-semibold text-slate-800">Seus dados</h2>
+        <p className="text-xs text-slate-500">
+          O vendedor pode usar estes dados para falar com você sobre esta compra, mesmo que você não a conclua.{" "}
+          <Link href="/privacidade-checkout" className="underline" target="_blank">
+            Aviso de privacidade
+          </Link>
+        </p>
         <input className={inputClass} aria-label="Nome completo" placeholder="Nome completo" autoComplete="name" value={buyer.name} onChange={(event) => set({ name: event.target.value })} />
         <input className={inputClass} aria-label="E-mail" placeholder="E-mail (o acesso chega aqui)" type="email" autoComplete="email" value={buyer.email} onChange={(event) => set({ email: event.target.value })} />
         <input className={inputClass} aria-label="CPF ou CNPJ" placeholder="CPF ou CNPJ" inputMode="numeric" value={buyer.document} onChange={(event) => set({ document: event.target.value })} />

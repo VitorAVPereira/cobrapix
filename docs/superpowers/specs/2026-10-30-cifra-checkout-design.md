@@ -437,6 +437,10 @@ Depende da Parte 2; os eventos de reembolso e chargeback, da Parte 3.
 
 ### Parte 5: Recuperação
 
+> **Situação (07/11/2026):** implementada no branch `feat/cifra-checkout-parte-5`, sem os cartões
+> recusados (entram com a Parte 6). Plano e registro:
+> [Parte 5](../plans/2026-11-07-cifra-checkout-parte-5-recuperacao.md).
+
 Depende da Parte 2; a lista de cartões recusados, da Parte 6.
 
 - [x] **CK-24** Tela Recuperação: Pix expirado e cartão recusado, filtros por produto, período e
