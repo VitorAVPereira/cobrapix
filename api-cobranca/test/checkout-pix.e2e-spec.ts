@@ -27,6 +27,7 @@ import { CheckoutOrdersService } from '../src/checkout/checkout-orders.service';
 import { CheckoutRecoveryService } from '../src/checkout/checkout-recovery.service';
 import { CheckoutCardService } from '../src/checkout/checkout-card.service';
 import { EfiCheckoutCardClient } from '../src/checkout/efi-checkout-card.client';
+import { itemShares, type OrderItem } from '../src/checkout/checkout-pricing';
 import { CheckoutWebhooksService } from '../src/checkout/checkout-webhooks.service';
 import { GlobalExceptionFilter } from '../src/common/filters/http-exception.filter';
 import { ThrottleGuard } from '../src/common/guards/throttle.guard';
@@ -1621,5 +1622,205 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
       .set(auth(tokens.seller))
       .send({ paused: false, reason: 'Tentativa do vendedor' })
       .expect(404);
+  });
+
+  // Part 8: refund hold, buyer-only withdrawal, item refunds and buyer e-mails.
+  const refund = { orderToken: '', orderId: '', companyId: '', bumpShare: 0 };
+  const mailQueue = () => app.get<Queue>(getQueueToken(CHECKOUT_MAIL_QUEUE));
+
+  it('reembolso de um item pelo comprador fica 7 dias em retenção, com e-mail e aviso ao vendedor', async () => {
+    (throttle as unknown as { useMemoryLimiters(): void }).useMemoryLimiters();
+    const created = await request(http)
+      .post(`/checkout/public/products/${slug}/orders`)
+      .send({
+        bumpIds: [bumpId],
+        couponCode: null,
+        method: 'PIX',
+        buyer: holder('39053344705', 'Iara Lopes'),
+        idempotencyKey: randomUUID(),
+      })
+      .expect(201);
+    refund.orderToken = (created.body as { token: string }).token;
+    await payPix(refund.orderToken);
+    const order = await prisma.checkoutOrder.findUniqueOrThrow({
+      where: { publicToken: refund.orderToken },
+    });
+    refund.orderId = order.id;
+    refund.companyId = order.companyId;
+    refund.bumpShare = itemShares(
+      order.items as unknown as OrderItem[],
+      order.totalCents,
+    )[1]!;
+
+    const view = await request(http)
+      .get(`/checkout/public/orders/${refund.orderToken}`)
+      .expect(200);
+    expect(
+      (view.body as { items: { refundCents: number }[] }).items.map(
+        (line) => line.refundCents,
+      ),
+    ).toEqual(
+      itemShares(order.items as unknown as OrderItem[], order.totalCents),
+    );
+
+    const asked = await request(http)
+      .post(`/checkout/public/orders/${refund.orderToken}/refund-request`)
+      .send({ reason: 'Não usei o guia', itemIndexes: [1] })
+      .expect(201);
+    const requestId = (asked.body as { id: string }).id;
+    const saved = await prisma.checkoutRefundRequest.findUniqueOrThrow({
+      where: { id: requestId },
+    });
+    expect(saved).toMatchObject({
+      origin: 'BUYER',
+      itemIndexes: [1],
+      amountCents: refund.bumpShare,
+    });
+    expect(
+      Math.round(
+        (saved.holdUntil!.getTime() - saved.createdAt.getTime()) / 86_400_000,
+      ),
+    ).toBe(7);
+    expect(
+      await mailQueue().getJob(`refund-RECEIVED-${requestId}`),
+    ).toBeTruthy();
+    const event = await prisma.checkoutWebhookDelivery.findFirstOrThrow({
+      where: { orderId: order.id, eventType: 'refund.requested' },
+    });
+    expect(event.payload).toMatchObject({
+      data: {
+        refundRequest: {
+          items: ['Guia Renda Fixa'],
+          amountCents: refund.bumpShare,
+        },
+      },
+    });
+  });
+
+  it('na retenção o admin não executa e o repasse sugerido desconta o pedido aberto', async () => {
+    const blocked = await request(http)
+      .post(`/admin/checkout/clients/${refund.companyId}/refunds`)
+      .set(auth(tokens.admin))
+      .send({
+        idempotencyKey: randomUUID(),
+        orderId: refund.orderId,
+        amountCents: refund.bumpShare,
+      })
+      .expect(409);
+    expect(blocked.body).toMatchObject({ code: 'CHECKOUT_REFUND_ON_HOLD' });
+
+    const finance = await request(http)
+      .get(`/admin/checkout/clients/${refund.companyId}/finance`)
+      .set(auth(tokens.admin))
+      .expect(200);
+    const balance = (
+      finance.body as {
+        balance: { releasedCents: number; suggestedPayoutCents: number };
+      }
+    ).balance;
+    expect(balance.suggestedPayoutCents).toBe(
+      Math.max(0, balance.releasedCents - refund.bumpShare),
+    );
+  });
+
+  it('o vendedor só pede o reenvio do e-mail (uma vez por dia); a desistência é do comprador', async () => {
+    await request(http)
+      .post(`/checkout/sales/${refund.orderId}/refund-request/remind`)
+      .set(auth(tokens.seller))
+      .expect(201);
+    const again = await request(http)
+      .post(`/checkout/sales/${refund.orderId}/refund-request/remind`)
+      .set(auth(tokens.seller))
+      .expect(409);
+    expect(again.body).toMatchObject({ code: 'CHECKOUT_REFUND_REMIND_LIMIT' });
+    // Another seller does not even see the sale.
+    const other = await login(`olga-${suffix}@e2e.test`, 'Nova-senha-e2e-2');
+    await request(http)
+      .post(`/checkout/sales/${refund.orderId}/refund-request/remind`)
+      .set(auth(other))
+      .expect(404);
+
+    await request(http)
+      .post(
+        `/checkout/public/orders/${refund.orderToken}/refund-request/withdraw`,
+      )
+      .expect(200);
+    expect(
+      await prisma.checkoutRefundRequest.findFirstOrThrow({
+        where: { orderId: refund.orderId },
+      }),
+    ).toMatchObject({ status: 'WITHDRAWN' });
+    expect(
+      await prisma.checkoutWebhookDelivery.count({
+        where: { orderId: refund.orderId, eventType: 'refund.withdrawn' },
+      }),
+    ).toBe(1);
+    await request(http)
+      .post(
+        `/checkout/public/orders/${refund.orderToken}/refund-request/withdraw`,
+      )
+      .expect(409);
+  });
+
+  it('depois da retenção, o reembolso do item devolve só a parte dele e a % Cifra+ proporcional', async () => {
+    const asked = await request(http)
+      .post(`/checkout/sales/${refund.orderId}/refund-request`)
+      .set(auth(tokens.seller))
+      .send({ reason: 'O comprador pediu de novo', itemIndexes: [1] })
+      .expect(201);
+    // A seller's request has no hold: the admin executes at once.
+    expect((asked.body as { holdUntil: string | null }).holdUntil).toBeNull();
+    const before = await prisma.checkoutOrder.findUniqueOrThrow({
+      where: { id: refund.orderId },
+    });
+    await request(http)
+      .post(`/admin/checkout/clients/${refund.companyId}/refunds`)
+      .set(auth(tokens.admin))
+      .send({
+        idempotencyKey: randomUUID(),
+        orderId: refund.orderId,
+        amountCents: refund.bumpShare,
+      })
+      .expect(201);
+
+    const after = await prisma.checkoutOrder.findUniqueOrThrow({
+      where: { id: refund.orderId },
+      include: { ledgerEntries: true, refundRequests: true },
+    });
+    expect(after.status).toBe('PAID');
+    const kinds = (kind: string) =>
+      after.ledgerEntries
+        .filter((entry) => entry.kind === kind)
+        .reduce((sum, entry) => sum + entry.amountCents, 0);
+    expect(kinds('REFUND')).toBe(-refund.bumpShare);
+    expect(kinds('PLATFORM_FEE_REVERSAL')).toBe(
+      Math.round(
+        (before.platformFeeCents * refund.bumpShare) / before.totalCents,
+      ),
+    );
+    const paidEvent = await prisma.checkoutWebhookDelivery.findFirstOrThrow({
+      where: { orderId: refund.orderId, eventType: 'order.refunded' },
+    });
+    expect(paidEvent.payload).toMatchObject({
+      data: { refund: { items: ['Guia Renda Fixa'] } },
+    });
+    expect(
+      after.refundRequests.find((row) => row.status === 'DONE')?.itemIndexes,
+    ).toEqual([1]);
+
+    // The bump is gone: asking for it again is refused; the rest is the main item.
+    await request(http)
+      .post(`/checkout/public/orders/${refund.orderToken}/refund-request`)
+      .send({ reason: 'De novo o guia', itemIndexes: [1] })
+      .expect(409);
+    const jobs = await mailQueue().getJobs(['waiting', 'delayed', 'active']);
+    expect(
+      jobs.some(
+        (job) =>
+          job.name === 'refund' &&
+          (job.data as { step: string; orderId: string }).step === 'DONE' &&
+          (job.data as { orderId: string }).orderId === refund.orderId,
+      ),
+    ).toBe(true);
   });
 });
