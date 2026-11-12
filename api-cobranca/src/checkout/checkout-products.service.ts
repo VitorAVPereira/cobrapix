@@ -275,6 +275,18 @@ export class CheckoutProductsService {
       dto.imageAssetId,
       'PRODUCT_IMAGE',
     );
+    await this.assets.assertOwned(
+      this.prisma,
+      companyId,
+      dto.logoAssetId,
+      'LOGO',
+    );
+    await this.assets.assertOwned(
+      this.prisma,
+      companyId,
+      dto.bannerAssetId,
+      'BANNER',
+    );
     const afterPurchaseUrl = normalizeAccessUrl(dto.afterPurchaseUrl, 'página');
     if (dto.afterPurchase === 'EXTERNAL' && !afterPurchaseUrl)
       throw invalid('Informe o endereço da sua página de oferta.');
@@ -289,6 +301,15 @@ export class CheckoutProductsService {
       ...(dto.offerWindowMinutes === undefined
         ? {}
         : { offerWindowMinutes: dto.offerWindowMinutes }),
+      ...(dto.logoAssetId === undefined
+        ? {}
+        : { logoAssetId: dto.logoAssetId }),
+      ...(dto.bannerAssetId === undefined
+        ? {}
+        : { bannerAssetId: dto.bannerAssetId }),
+      ...(dto.primaryColor === undefined
+        ? {}
+        : { primaryColor: dto.primaryColor?.toUpperCase() ?? null }),
       name: dto.name.trim(),
       description: dto.description?.trim() || null,
       priceCents: dto.priceCents,
@@ -306,6 +327,7 @@ export class CheckoutProductsService {
       priceCents: dto.priceCents,
       compareAtPriceCents: dto.compareAtPriceCents ?? null,
       headline: dto.headline?.trim() || null,
+      callToAction: dto.callToAction?.trim() || null,
       description: dto.description?.trim() || null,
       active: dto.active,
     };

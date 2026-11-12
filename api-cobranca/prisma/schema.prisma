@@ -2390,7 +2390,9 @@ model CheckoutAsset {
   createdAt      DateTime           @default(now())
   settingsLogo   CheckoutSettings[] @relation("CheckoutSettingsLogo")
   settingsBanner CheckoutSettings[] @relation("CheckoutSettingsBanner")
-  products       CheckoutProduct[]
+  products       CheckoutProduct[]  @relation("CheckoutProductImage")
+  productLogos   CheckoutProduct[]  @relation("CheckoutProductLogo")
+  productBanners CheckoutProduct[]  @relation("CheckoutProductBanner")
 
   @@unique([id, companyId])
   @@index([companyId, createdAt])
@@ -2405,7 +2407,13 @@ model CheckoutProduct {
   priceCents          Int
   compareAtPriceCents Int?
   imageAssetId        String?
-  imageAsset          CheckoutAsset?          @relation(fields: [imageAssetId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  imageAsset          CheckoutAsset?          @relation("CheckoutProductImage", fields: [imageAssetId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  // Page look of this product; empty falls back to the checkout settings.
+  logoAssetId         String?
+  logoAsset           CheckoutAsset?          @relation("CheckoutProductLogo", fields: [logoAssetId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  bannerAssetId       String?
+  bannerAsset         CheckoutAsset?          @relation("CheckoutProductBanner", fields: [bannerAssetId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  primaryColor        String?
   accessPeriodMonths  Int?
   deliveryMode        CheckoutDeliveryMode    @default(ACCESS_LINK)
   accessUrl           String?                 @db.Text
@@ -2501,6 +2509,8 @@ model CheckoutOrderBump {
   priceCents          Int
   compareAtPriceCents Int?
   headline            String?
+  // Bold line beside the checkbox on the checkout page.
+  callToAction        String?
   description         String?         @db.Text
   position            Int
   active              Boolean         @default(true)

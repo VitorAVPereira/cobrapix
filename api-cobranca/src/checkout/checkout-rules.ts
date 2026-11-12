@@ -17,6 +17,30 @@ export function versionChanged(): never {
   );
 }
 
+interface PageBrand {
+  logoAssetId: string | null;
+  bannerAssetId: string | null;
+  primaryColor: string | null;
+}
+
+/** The page look of a product: its own logo, banner and color, else the settings'. */
+export function pageBrand(
+  settings: PageBrand & { primaryColor: string },
+  product: PageBrand | null | undefined,
+) {
+  return {
+    logoAssetId: product?.logoAssetId ?? settings.logoAssetId,
+    bannerAssetId: product?.bannerAssetId ?? settings.bannerAssetId,
+    primaryColor: product?.primaryColor ?? settings.primaryColor,
+  };
+}
+
+export const brandFields = {
+  logoAssetId: true,
+  bannerAssetId: true,
+  primaryColor: true,
+} as const;
+
 export function invalid(message: string): BadRequestException {
   return new BadRequestException({ code: 'CHECKOUT_INVALID', message });
 }

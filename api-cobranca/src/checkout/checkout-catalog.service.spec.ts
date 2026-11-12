@@ -45,6 +45,7 @@ describe('CheckoutCatalogService', () => {
           priceCents: 1490,
           compareAtPriceCents: 2990,
           headline: 'GUIA COM 50% OFF',
+          callToAction: 'Pare de deixar seu dinheiro parado',
           description: null,
           offeredProduct: offered,
         },
@@ -80,6 +81,7 @@ describe('CheckoutCatalogService', () => {
     expect(view.bumps[0]).toMatchObject({
       name: 'Guia Renda Fixa',
       headline: 'GUIA COM 50% OFF',
+      callToAction: 'Pare de deixar seu dinheiro parado',
       description: 'Um guia simples',
       imageUrl: '/checkout/public/assets/img-guia',
     });
@@ -91,6 +93,27 @@ describe('CheckoutCatalogService', () => {
       '250',
     ])
       expect(text).not.toContain(secret);
+  });
+
+  it('a página usa o logo, o banner e a cor do produto; vazios, os das configurações', async () => {
+    const main = (await prisma.checkoutProduct.findFirst()) as Record<
+      string,
+      unknown
+    >;
+    prisma.checkoutProduct.findFirst.mockResolvedValue({
+      ...main,
+      logoAssetId: 'logo-produto',
+      bannerAssetId: null,
+      primaryColor: '#E5484D',
+    });
+
+    const view = await service.view('porquim-anual-ab12');
+
+    expect(view.page).toMatchObject({
+      logoUrl: '/checkout/public/assets/logo-produto',
+      bannerUrl: '/checkout/public/assets/banner-1',
+      primaryColor: '#E5484D',
+    });
   });
 
   it('sem a conta da Cifra+ pronta a página avisa e não cota', async () => {
