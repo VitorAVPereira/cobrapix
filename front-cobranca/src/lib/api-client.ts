@@ -1427,6 +1427,10 @@ export interface CheckoutProductInput {
   priceCents: number;
   compareAtPriceCents: number | null;
   imageAssetId: string | null;
+  // Page look of this product; null uses the checkout settings.
+  logoAssetId?: string | null;
+  bannerAssetId?: string | null;
+  primaryColor?: string | null;
   accessPeriodMonths: number | null;
   deliveryMode: CheckoutDeliveryMode;
   accessUrl: string | null;
@@ -1456,6 +1460,7 @@ export interface CheckoutBumpInput {
   priceCents: number;
   compareAtPriceCents: number | null;
   headline: string | null;
+  callToAction: string | null;
   description: string | null;
   active: boolean;
 }

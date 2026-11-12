@@ -96,11 +96,11 @@ export function OrderStatus({ token }: { token: string }) {
     return (
       <CheckoutShell page={null}>
         {loaded.kind === "loading" ? (
-          <p className="flex items-center justify-center gap-2 py-20 text-slate-500">
+          <p className="flex items-center justify-center gap-2 py-20 text-neutral-500">
             <Loader2 size={18} className="animate-spin" /> Carregando seu pedido…
           </p>
         ) : (
-          <p role="alert" className="rounded-lg bg-white p-6 text-center text-slate-700 shadow-sm">
+          <p role="alert" className="rounded-lg bg-white p-6 text-center text-neutral-700 shadow-sm">
             {loaded.kind === "missing" ? "Pedido não encontrado." : "Não foi possível carregar o pedido. Tente de novo."}
           </p>
         )}
@@ -116,10 +116,10 @@ export function OrderStatus({ token }: { token: string }) {
         {current.status === "PAID" ? (
           <>
             <CheckCircle2 size={44} className="mx-auto text-emerald-600" />
-            <h1 className="text-xl font-semibold text-slate-900">Pagamento confirmado</h1>
-            <p className="text-sm text-slate-600">O acesso também foi enviado para o seu e-mail.</p>
+            <h1 className="text-xl font-semibold text-neutral-900">Pagamento confirmado</h1>
+            <p className="text-sm text-neutral-600">O acesso também foi enviado para o seu e-mail.</p>
             {current.redirectUrl && (
-              <p className="text-sm text-slate-500">
+              <p className="text-sm text-neutral-500">
                 {current.redirectKind === "OFFER"
                   ? "Só um instante: separamos uma oferta para você."
                   : "Levando você ao seu acesso…"}
@@ -127,35 +127,35 @@ export function OrderStatus({ token }: { token: string }) {
             )}
             <ul className="space-y-2 text-left text-sm">
               {current.items.map((line) => (
-                <li key={`${line.kind}-${line.name}`} className="rounded-md bg-slate-50 p-3">
+                <li key={`${line.kind}-${line.name}`} className="rounded-md bg-neutral-50 p-3">
                   {line.accessUrl ? (
                     <a href={line.accessUrl} className="font-semibold underline" style={{ color }}>
                       Acessar {line.name}
                     </a>
                   ) : (
-                    <span className="font-semibold text-slate-800">{line.name}</span>
+                    <span className="font-semibold text-neutral-800">{line.name}</span>
                   )}
-                  {line.accessInstructions && <p className="mt-1 whitespace-pre-line text-slate-600">{line.accessInstructions}</p>}
+                  {line.accessInstructions && <p className="mt-1 whitespace-pre-line text-neutral-600">{line.accessInstructions}</p>}
                 </li>
               ))}
             </ul>
           </>
         ) : current.status === "REFUNDED" || current.status === "CHARGEBACK" ? (
           <>
-            <h1 className="text-lg font-semibold text-slate-900">
+            <h1 className="text-lg font-semibold text-neutral-900">
               {current.status === "REFUNDED" ? "Compra reembolsada" : "Compra contestada no banco"}
             </h1>
-            <p className="text-sm text-slate-600">O acesso a esta compra foi encerrado.</p>
+            <p className="text-sm text-neutral-600">O acesso a esta compra foi encerrado.</p>
           </>
         ) : current.status === "PENDING" && current.processing ? (
-          <p className="flex items-center justify-center gap-2 py-8 text-slate-600">
+          <p className="flex items-center justify-center gap-2 py-8 text-neutral-600">
             <Loader2 size={18} className="animate-spin" />{" "}
             {current.paymentMethod === "CARD" ? "Confirmando o pagamento no cartão…" : "Gerando seu Pix…"}
           </p>
         ) : current.status === "PENDING" && current.pix ? (
           <>
-            <h1 className="text-lg font-semibold text-slate-900">Pague {formatBRL(current.totalCents)} com Pix</h1>
-            <p className="text-sm text-slate-600">
+            <h1 className="text-lg font-semibold text-neutral-900">Pague {formatBRL(current.totalCents)} com Pix</h1>
+            <p className="text-sm text-neutral-600">
               Expira em <span className="font-mono font-semibold" data-testid="countdown">{remaining(current.expiresAt, now)}</span>
             </p>
             {qr && (
@@ -164,7 +164,7 @@ export function OrderStatus({ token }: { token: string }) {
             )}
             {current.pix.copyPaste && (
               <div className="space-y-2">
-                <p className="break-all rounded-md bg-slate-50 p-3 text-left font-mono text-xs text-slate-700">{current.pix.copyPaste}</p>
+                <p className="break-all rounded-md bg-neutral-50 p-3 text-left font-mono text-xs text-neutral-700">{current.pix.copyPaste}</p>
                 <button
                   type="button"
                   className="flex h-12 w-full items-center justify-center gap-2 rounded-md font-semibold text-white"
@@ -175,14 +175,14 @@ export function OrderStatus({ token }: { token: string }) {
                 </button>
               </div>
             )}
-            <p className="text-xs text-slate-500">A confirmação aparece aqui sozinha depois do pagamento.</p>
+            <p className="text-xs text-neutral-500">A confirmação aparece aqui sozinha depois do pagamento.</p>
           </>
         ) : current.paymentMethod === "CARD" ? (
           <>
-            <h1 className="text-lg font-semibold text-slate-900">
+            <h1 className="text-lg font-semibold text-neutral-900">
               {current.status === "DECLINED" || current.card?.declined ? "Pagamento não autorizado" : "Pagamento não concluído"}
             </h1>
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-neutral-600">
               {current.offerPage
                 ? "Volte à oferta para pagar com Pix."
                 : "Volte à página do produto para pagar com Pix ou com outro cartão."}
@@ -197,10 +197,10 @@ export function OrderStatus({ token }: { token: string }) {
           </>
         ) : (
           <>
-            <h1 className="text-lg font-semibold text-slate-900">
+            <h1 className="text-lg font-semibold text-neutral-900">
               {current.status === "FAILED" ? "Não foi possível gerar o Pix" : "Este Pix expirou"}
             </h1>
-            <p className="text-sm text-slate-600">Gere um novo Pix para concluir a compra. Seus dados continuam preenchidos.</p>
+            <p className="text-sm text-neutral-600">Gere um novo Pix para concluir a compra. Seus dados continuam preenchidos.</p>
             <Link
               href={current.offerPage ?? `/c/${current.productSlug}`}
               className="flex h-12 w-full items-center justify-center rounded-md font-semibold text-white"

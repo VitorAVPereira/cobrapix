@@ -28,6 +28,7 @@ interface BumpForm {
   price: string;
   compareAt: string;
   headline: string;
+  callToAction: string;
   description: string;
   active: boolean;
 }
@@ -38,6 +39,7 @@ function formOf(bump?: CheckoutBump): BumpForm {
     price: centsToInput(bump?.priceCents),
     compareAt: centsToInput(bump?.compareAtPriceCents),
     headline: bump?.headline ?? "",
+    callToAction: bump?.callToAction ?? "",
     description: bump?.description ?? "",
     active: bump?.active ?? true,
   };
@@ -56,6 +58,7 @@ function toInput(form: BumpForm): CheckoutBumpInput {
     priceCents,
     compareAtPriceCents,
     headline: form.headline.trim() || null,
+    callToAction: form.callToAction.trim() || null,
     description: form.description.trim() || null,
     active: form.active,
   };
@@ -126,12 +129,23 @@ function BumpEditor({
           />
         </Field>
       </div>
-      <Field label="Título da oferta" hint="Opcional. Sem ele, a página usa o nome do produto.">
+      <Field label="Título da oferta" hint="Opcional. Vai na faixa colorida do topo; sem ele, a página usa o nome do produto.">
         <input
           className={inputClass}
           maxLength={80}
           value={form.headline}
           onChange={(event) => set({ headline: event.target.value })}
+        />
+      </Field>
+      <Field
+        label="Frase ao lado da caixa de marcar"
+        hint="Opcional. Em negrito, ao lado da caixa; sem ela, a página mostra “Sim, quero” e o nome do produto."
+      >
+        <input
+          className={inputClass}
+          maxLength={120}
+          value={form.callToAction}
+          onChange={(event) => set({ callToAction: event.target.value })}
         />
       </Field>
       <Field label="Texto da oferta" hint="Opcional. Sem ele, a página usa a descrição do produto.">

@@ -4,11 +4,12 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Loader2 } from "lucide-react";
-import type { CheckoutProduct } from "@/lib/api-client";
+import type { CheckoutProduct, CheckoutSettings } from "@/lib/api-client";
 import { useApiClient } from "@/lib/use-api-client";
 import { errorCode } from "@/lib/disbursements";
 import { checkoutLink } from "@/lib/checkout";
-import { ProductForm } from "@/components/features/checkout/ProductForm";
+import { ProductForm, type ProductDraft } from "@/components/features/checkout/ProductForm";
+import { CheckoutPreview } from "@/components/features/checkout/CheckoutPreview";
 import { BumpsPanel } from "@/components/features/checkout/BumpsPanel";
 import { OffersPanel } from "@/components/features/checkout/OffersPanel";
 import {
@@ -33,6 +34,18 @@ export default function CheckoutProductPage() {
   const [notice, setNotice] = useState<Notice>(null);
   const [reload, setReload] = useState(0);
   const [toggling, setToggling] = useState(false);
+  const [settings, setSettings] = useState<CheckoutSettings | null>(null);
+  const [draft, setDraft] = useState<ProductDraft | null>(null);
+
+  useEffect(() => {
+    // The preview works without the settings (default look); a failure here never blocks editing.
+    const controller = new AbortController();
+    api
+      .getCheckoutSettings(controller.signal)
+      .then(setSettings)
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [api]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -90,68 +103,77 @@ export default function CheckoutProductPage() {
     );
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6 p-6">
-      <Link
-        href="/checkout/produtos"
-        className="inline-flex items-center gap-1 text-sm font-semibold text-emerald-700 hover:underline"
-      >
-        <ArrowLeft size={16} /> Produtos
-      </Link>
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-slate-900">{product.name}</h1>
-          <p className="text-sm text-slate-500">
-            Link: {checkoutLink(product.slug)} {product.active ? "" : "· inativo"}
-          </p>
-        </div>
-        <button
-          type="button"
-          className={secondaryButtonClass}
-          disabled={toggling}
-          onClick={() => void toggleActive(product)}
+    <div className="mx-auto grid max-w-7xl gap-6 p-6 xl:grid-cols-[minmax(0,1fr)_420px] xl:items-start">
+      <div className="min-w-0 space-y-6">
+        <Link
+          href="/checkout/produtos"
+          className="inline-flex items-center gap-1 text-sm font-semibold text-emerald-700 hover:underline"
         >
-          {product.active ? "Desativar produto" : "Ativar produto"}
-        </button>
-      </header>
-      <NoticeText notice={notice} />
+          <ArrowLeft size={16} /> Produtos
+        </Link>
+        <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h1 className="text-xl font-semibold text-slate-900">{product.name}</h1>
+            <p className="text-sm text-slate-500">
+              Link: {checkoutLink(product.slug)} {product.active ? "" : "· inativo"}
+            </p>
+          </div>
+          <button
+            type="button"
+            className={secondaryButtonClass}
+            disabled={toggling}
+            onClick={() => void toggleActive(product)}
+          >
+            {product.active ? "Desativar produto" : "Ativar produto"}
+          </button>
+        </header>
+        <NoticeText notice={notice} />
 
-      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <ProductForm
-          // A new version (saved here or elsewhere) refills the form.
-          key={product.version}
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <ProductForm
+            // A new version (saved here or elsewhere) refills the form.
+            key={product.version}
+            product={product}
+            submitLabel="Salvar produto"
+            defaultColor={settings?.primaryColor}
+            onDraftChange={setDraft}
+            onSubmit={async (input) => {
+              setNotice(null);
+              try {
+                setProduct(
+                  await api.updateCheckoutProduct(product.id, {
+                    ...input,
+                    expectedVersion: product.version,
+                  }),
+                );
+                setNotice({ error: false, text: "Produto salvo." });
+              } catch (caught) {
+                if (errorCode(caught) !== "VERSION_CHANGED") throw caught;
+                reloadAfterConflict();
+              }
+            }}
+          />
+        </section>
+
+        <BumpsPanel
           product={product}
-          submitLabel="Salvar produto"
-          onSubmit={async (input) => {
-            setNotice(null);
-            try {
-              setProduct(
-                await api.updateCheckoutProduct(product.id, {
-                  ...input,
-                  expectedVersion: product.version,
-                }),
-              );
-              setNotice({ error: false, text: "Produto salvo." });
-            } catch (caught) {
-              if (errorCode(caught) !== "VERSION_CHANGED") throw caught;
-              reloadAfterConflict();
-            }
-          }}
+          catalog={catalog}
+          onChanged={setProduct}
+          onConflict={() => setReload((value) => value + 1)}
         />
-      </section>
 
-      <BumpsPanel
-        product={product}
-        catalog={catalog}
-        onChanged={setProduct}
-        onConflict={() => setReload((value) => value + 1)}
-      />
-
-      <OffersPanel
-        product={product}
-        catalog={catalog}
-        onChanged={setProduct}
-        onConflict={() => setReload((value) => value + 1)}
-      />
+        <OffersPanel
+          product={product}
+          catalog={catalog}
+          onChanged={setProduct}
+          onConflict={() => setReload((value) => value + 1)}
+        />
+      </div>
+      {draft && (
+        <div className="xl:sticky xl:top-6">
+          <CheckoutPreview draft={draft} bumps={product.bumps ?? []} catalog={catalog} settings={settings} />
+        </div>
+      )}
     </div>
   );
 }

@@ -19,6 +19,8 @@ export interface PublicCheckoutProduct {
     id: string;
     name: string;
     headline: string | null;
+    // Older APIs do not send it.
+    callToAction?: string | null;
     description: string | null;
     priceCents: number;
     compareAtPriceCents: number | null;
@@ -335,10 +337,24 @@ export function formatBRL(cents: number): string {
 }
 
 /** "12 meses de acesso", "1 ano"…, for the product period. */
-export function accessPeriodLabel(months: number | null): string | null {
+const PLANS: Record<number, { name: string; per: string }> = {
+  1: { name: "Mensal", per: "por mês" },
+  2: { name: "Bimestral", per: "por bimestre" },
+  3: { name: "Trimestral", per: "por trimestre" },
+  6: { name: "Semestral", per: "por semestre" },
+  12: { name: "Anual", per: "por ano" },
+};
+
+/** The plan of an access period, as the buyer reads it ("Trimestral"). */
+export function planName(months: number | null): string | null {
   if (!months) return null;
-  if (months % 12 === 0) return months === 12 ? "1 ano de acesso" : `${months / 12} anos de acesso`;
-  return months === 1 ? "1 mês de acesso" : `${months} meses de acesso`;
+  return PLANS[months]?.name ?? (months % 12 === 0 ? `${months / 12} anos` : `${months} meses`);
+}
+
+/** The period beside a price ("por trimestre"). */
+export function periodPriceLabel(months: number | null): string | null {
+  if (!months) return null;
+  return PLANS[months]?.per ?? (months % 12 === 0 ? `a cada ${months / 12} anos` : `a cada ${months} meses`);
 }
 
 /** Leaves the checkout for the seller's access page (kept apart so tests can stub it). */

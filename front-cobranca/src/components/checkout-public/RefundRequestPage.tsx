@@ -96,11 +96,11 @@ export function RefundRequestPage({ token }: { token: string }) {
     return (
       <CheckoutShell page={null}>
         {loaded.kind === "loading" ? (
-          <p className="flex items-center justify-center gap-2 py-20 text-slate-500">
+          <p className="flex items-center justify-center gap-2 py-20 text-neutral-500">
             <Loader2 size={18} className="animate-spin" /> Carregando…
           </p>
         ) : (
-          <p role="alert" className="rounded-lg bg-white p-6 text-center text-slate-700 shadow-sm">
+          <p role="alert" className="rounded-lg bg-white p-6 text-center text-neutral-700 shadow-sm">
             {loaded.kind === "missing" ? "Pedido não encontrado." : "Não foi possível carregar o pedido. Tente de novo."}
           </p>
         )}
@@ -118,8 +118,8 @@ export function RefundRequestPage({ token }: { token: string }) {
   return (
     <CheckoutShell page={order.page}>
       <section className="space-y-4 rounded-lg bg-white p-5 shadow-sm">
-        <h1 className="text-lg font-semibold text-slate-900">{open ? "Seu pedido de reembolso" : "Pedir reembolso"}</h1>
-        <p className="text-sm text-slate-600">
+        <h1 className="text-lg font-semibold text-neutral-900">{open ? "Seu pedido de reembolso" : "Pedir reembolso"}</h1>
+        <p className="text-sm text-neutral-600">
           {order.items.map((line) => line.name).join(" + ")} · {formatBRL(order.totalCents)}
         </p>
         {notice && (
@@ -135,18 +135,18 @@ export function RefundRequestPage({ token }: { token: string }) {
         )}
         {open ? (
           <div className="space-y-3">
-            <p className="text-sm text-slate-700">
+            <p className="text-sm text-neutral-700">
               Reembolso de {openNames}
               {open.amountCents !== null && <> · {formatBRL(open.amountCents)}</>}.
             </p>
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-neutral-600">
               {open.holdUntil
                 ? `O vendedor pode falar com você até ${formatDate(open.holdUntil)}. Depois disso, a Cifra+ faz a devolução.`
                 : "A Cifra+ está cuidando da devolução."}
             </p>
             {confirmWithdraw ? (
-              <div className="space-y-2 rounded-md bg-slate-50 p-3">
-                <p className="text-sm text-slate-700">Desistir do reembolso? Sua compra continua valendo.</p>
+              <div className="space-y-2 rounded-md bg-neutral-50 p-3">
+                <p className="text-sm text-neutral-700">Desistir do reembolso? Sua compra continua valendo.</p>
                 <div className="flex gap-2">
                   <button
                     type="button"
@@ -162,7 +162,7 @@ export function RefundRequestPage({ token }: { token: string }) {
                     type="button"
                     disabled={sending}
                     onClick={() => setConfirmWithdraw(false)}
-                    className="h-11 flex-1 rounded-md border border-slate-300 text-sm font-semibold text-slate-700"
+                    className="h-11 flex-1 rounded-md border border-neutral-300 text-sm font-semibold text-neutral-700"
                   >
                     Manter o pedido
                   </button>
@@ -172,14 +172,14 @@ export function RefundRequestPage({ token }: { token: string }) {
               <button
                 type="button"
                 onClick={() => setConfirmWithdraw(true)}
-                className="h-11 w-full rounded-md border border-slate-300 text-sm font-semibold text-slate-700"
+                className="h-11 w-full rounded-md border border-neutral-300 text-sm font-semibold text-neutral-700"
               >
                 Desistir do reembolso
               </button>
             )}
           </div>
         ) : order.status !== "PAID" ? (
-          <p role="alert" className="text-sm text-slate-700">
+          <p role="alert" className="text-sm text-neutral-700">
             {order.status === "REFUNDED"
               ? "Esta compra já foi reembolsada."
               : "Esta compra não está paga, então não há o que reembolsar."}
@@ -188,9 +188,9 @@ export function RefundRequestPage({ token }: { token: string }) {
           <form onSubmit={submit} className="space-y-3">
             {order.items.length > 1 && (
               <fieldset className="space-y-2">
-                <legend className="text-sm font-medium text-slate-700">O que você quer devolver?</legend>
+                <legend className="text-sm font-medium text-neutral-700">O que você quer devolver?</legend>
                 {order.items.map((line, index) => (
-                  <label key={`${line.kind}-${index}`} className="flex items-center gap-2 text-sm text-slate-700">
+                  <label key={`${line.kind}-${index}`} className="flex items-center gap-2 text-sm text-neutral-700">
                     <input
                       type="checkbox"
                       disabled={refunded.includes(index)}
@@ -209,11 +209,11 @@ export function RefundRequestPage({ token }: { token: string }) {
                 ))}
               </fieldset>
             )}
-            {amount > 0 && <p className="text-sm text-slate-700">Valor a devolver: {formatBRL(amount)}</p>}
-            <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+            {amount > 0 && <p className="text-sm text-neutral-700">Valor a devolver: {formatBRL(amount)}</p>}
+            <label className="flex flex-col gap-1 text-sm font-medium text-neutral-700">
               Conte o motivo
               <textarea
-                className="h-28 w-full rounded-md border border-slate-300 p-3 text-base text-slate-900 outline-none focus:border-slate-500"
+                className="h-28 w-full rounded-md border border-neutral-300 p-3 text-base text-neutral-900 outline-none focus:border-neutral-500"
                 value={reason}
                 onChange={(event) => setReason(event.target.value)}
                 minLength={5}
@@ -221,7 +221,7 @@ export function RefundRequestPage({ token }: { token: string }) {
                 required
               />
             </label>
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-neutral-500">
               Pelo Código de Defesa do Consumidor, você pode desistir em até 7 dias depois do pagamento.
             </p>
             <button

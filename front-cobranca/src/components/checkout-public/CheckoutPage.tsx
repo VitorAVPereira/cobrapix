@@ -35,7 +35,7 @@ export function CheckoutPage({ slug }: { slug: string }) {
   if (loaded.kind === "loading")
     return (
       <CheckoutShell page={null}>
-        <p className="flex items-center justify-center gap-2 py-20 text-slate-500">
+        <p className="flex items-center justify-center gap-2 py-20 text-neutral-500">
           <Loader2 size={18} className="animate-spin" /> Carregando…
         </p>
       </CheckoutShell>
@@ -43,7 +43,7 @@ export function CheckoutPage({ slug }: { slug: string }) {
   if (loaded.kind !== "ok")
     return (
       <CheckoutShell page={null}>
-        <p role="alert" className="rounded-lg bg-white p-6 text-center text-slate-700 shadow-sm">
+        <p role="alert" className="rounded-lg bg-white p-6 text-center text-neutral-700 shadow-sm">
           {loaded.kind === "missing"
             ? "Este produto não está disponível."
             : "Não foi possível carregar a página. Confira sua conexão e tente de novo."}
@@ -52,11 +52,11 @@ export function CheckoutPage({ slug }: { slug: string }) {
     );
   const { data } = loaded;
   return (
-    <CheckoutShell page={data.page}>
+    <CheckoutShell page={data.page} purchase={data.available}>
       {data.available ? (
         <CheckoutForm data={data} />
       ) : (
-        <p role="alert" className="rounded-lg bg-white p-6 text-center text-slate-700 shadow-sm">
+        <p role="alert" className="rounded-lg bg-white p-6 text-center text-neutral-700 shadow-sm">
           {data.unavailableMessage}
         </p>
       )}

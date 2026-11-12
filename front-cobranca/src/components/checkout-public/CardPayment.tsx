@@ -8,7 +8,7 @@ import { detectCardBrand, lookupCep, tokenizeCard } from "@/lib/checkout-card";
 import { validateDebtorDocument } from "@/lib/debtor-document";
 
 const inputClass =
-  "h-12 w-full rounded-md border border-slate-300 bg-white px-3 text-base text-slate-900 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200";
+  "h-11 w-full rounded-lg border border-neutral-200 bg-white px-3 text-base text-neutral-900 sm:text-sm outline-none placeholder:text-neutral-400 focus:border-neutral-400 focus:ring-2 focus:ring-neutral-100";
 const BRAND_LABELS: Record<CardBrand, string> = { visa: "Visa", mastercard: "Mastercard", amex: "Amex", elo: "Elo" };
 
 export type CardOption = CardQuote["options"][number];
@@ -167,7 +167,7 @@ export function CardPayment({
   return (
     <div className="space-y-3">
       <input className={inputClass} aria-label="Número do cartão" placeholder="Número do cartão" inputMode="numeric" autoComplete="cc-number" value={fields.number} onChange={(event) => set({ number: event.target.value })} onBlur={() => void checkBrand()} />
-      {brand && <p className="text-xs text-slate-500">Bandeira: {BRAND_LABELS[brand]}</p>}
+      {brand && <p className="text-xs text-neutral-500">Bandeira: {BRAND_LABELS[brand]}</p>}
       {brandError && <p role="alert" className="text-sm text-red-600">{brandError}</p>}
       <input className={inputClass} aria-label="Nome impresso no cartão" placeholder="Nome impresso no cartão" autoComplete="cc-name" value={fields.holderName} onChange={(event) => set({ holderName: event.target.value })} />
       <div className="grid grid-cols-2 gap-3">
@@ -176,7 +176,7 @@ export function CardPayment({
       </div>
       <input className={inputClass} aria-label="CPF do titular do cartão" placeholder="CPF do titular (se for outro)" inputMode="numeric" value={fields.holderDocument} onChange={(event) => set({ holderDocument: event.target.value })} />
 
-      <h3 className="pt-2 text-sm font-semibold text-slate-800">Endereço de cobrança</h3>
+      <h3 className="pt-2 text-sm font-semibold text-neutral-800">Endereço de cobrança</h3>
       <div className="grid grid-cols-2 gap-3">
         <input className={inputClass} aria-label="CEP" placeholder="CEP" inputMode="numeric" autoComplete="postal-code" value={fields.zipcode} onChange={(event) => set({ zipcode: event.target.value })} onBlur={() => void fillAddress()} />
         <input className={inputClass} aria-label="Número do endereço" placeholder="Número" value={fields.addressNumber} onChange={(event) => set({ addressNumber: event.target.value })} />
@@ -192,7 +192,7 @@ export function CardPayment({
       {quoteError ? (
         <p role="alert" className="text-sm text-red-600">{quoteError}</p>
       ) : brand && !quote ? (
-        <p className="flex items-center gap-2 text-sm text-slate-500"><Loader2 size={16} className="animate-spin" /> Calculando parcelas…</p>
+        <p className="flex items-center gap-2 text-sm text-neutral-500"><Loader2 size={16} className="animate-spin" /> Calculando parcelas…</p>
       ) : quote ? (
         <select aria-label="Parcelas" className={inputClass} value={installments} onChange={(event) => chooseInstallments(Number(event.target.value))}>
           {quote.options.map((option) => (
@@ -202,7 +202,7 @@ export function CardPayment({
           ))}
         </select>
       ) : (
-        <p className="text-xs text-slate-500">Digite o número do cartão para ver as parcelas.</p>
+        <p className="text-xs text-neutral-500">Digite o número do cartão para ver as parcelas.</p>
       )}
     </div>
   );

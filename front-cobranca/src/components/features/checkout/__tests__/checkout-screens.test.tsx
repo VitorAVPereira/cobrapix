@@ -45,6 +45,7 @@ function bump(index: number): CheckoutBump {
     priceCents: 1490,
     compareAtPriceCents: null,
     headline: null,
+    callToAction: null,
     description: null,
     active: true,
     position: index,
@@ -107,6 +108,32 @@ describe("BumpsPanel", () => {
 
     expect(screen.getByRole("button", { name: /adicionar order bump/i })).toBeDisabled();
     expect(screen.getByText(/limite de 6 order bumps ativos/i)).toBeInTheDocument();
+  });
+
+  it("envia a frase ao lado da caixa de marcar", async () => {
+    const user = userEvent.setup();
+    mockApi.createCheckoutBump.mockResolvedValue(product("main"));
+    render(
+      <BumpsPanel
+        product={product("main")}
+        catalog={[product("main"), product("other")]}
+        onChanged={jest.fn()}
+        onConflict={jest.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /adicionar order bump/i }));
+    await user.selectOptions(screen.getByLabelText("Produto oferecido"), "other");
+    await user.type(screen.getByLabelText("Preço promocional (R$)"), "14,90");
+    await user.type(screen.getByLabelText("Frase ao lado da caixa de marcar"), "  Pare de deixar seu dinheiro parado ");
+    await user.click(screen.getByRole("button", { name: /salvar order bump/i }));
+
+    await waitFor(() =>
+      expect(mockApi.createCheckoutBump).toHaveBeenCalledWith(
+        "main",
+        expect.objectContaining({ priceCents: 1490, callToAction: "Pare de deixar seu dinheiro parado" }),
+      ),
+    );
   });
 });
 
