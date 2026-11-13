@@ -17,7 +17,13 @@ import {
 } from './checkout-orders.service';
 import { CheckoutCardService } from './checkout-card.service';
 import type { OrderItem } from './checkout-pricing';
-import { addMonths, conflict, offerTokenHash } from './checkout-rules';
+import {
+  addMonths,
+  brandFields,
+  conflict,
+  offerTokenHash,
+  pageBrand,
+} from './checkout-rules';
 import type {
   CheckoutOfferAcceptDto,
   CheckoutOfferChoiceDto,
@@ -140,8 +146,8 @@ export class CheckoutOffersService {
       page: settings
         ? {
             displayName: settings.displayName,
-            primaryColor: settings.primaryColor,
-            logoUrl: assetUrl(settings.logoAssetId),
+            primaryColor: pageBrand(settings, origin.product).primaryColor,
+            logoUrl: assetUrl(pageBrand(settings, origin.product).logoAssetId),
             supportEmail: settings.supportEmail,
             supportWhatsapp: settings.supportWhatsapp,
           }
@@ -356,7 +362,7 @@ export class CheckoutOffersService {
         buyerPhone: true,
         buyerDocument: true,
         offerExpiresAt: true,
-        product: { select: { afterPurchase: true } },
+        product: { select: { afterPurchase: true, ...brandFields } },
         offerResponses: { select: { offerId: true, decision: true } },
       },
     });

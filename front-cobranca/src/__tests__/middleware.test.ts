@@ -304,6 +304,13 @@ describe("presentation page on /", () => {
     expect(matcher.test("/onboarding/privacidade")).toBe(true);
   });
 
+  it("keeps the checkout terms public for buyers without a session", () => {
+    const matcher = new RegExp(`^${config.matcher[0]}$`);
+
+    expect(matcher.test("/termos-checkout")).toBe(false);
+    expect(matcher.test("/privacidade-checkout")).toBe(false);
+  });
+
   it("rewrites to the address the visitor reached, not the Auth.js origin", () => {
     expect(
       runMiddleware({

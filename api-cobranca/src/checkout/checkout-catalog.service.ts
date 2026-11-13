@@ -20,6 +20,7 @@ import {
   type OrderQuote,
   type PricedCoupon,
 } from './checkout-pricing';
+import { brandFields, pageBrand } from './checkout-rules';
 import { CheckoutQuoteDto } from './dto/checkout-public.dto';
 
 const assetUrl = (id: string | null) =>
@@ -75,6 +76,7 @@ export class CheckoutCatalogService {
     const available = Boolean(
       platform && terms && (settings.pixEnabled || card),
     );
+    const brand = pageBrand(settings, product);
     return {
       available,
       unavailableMessage: available
@@ -93,6 +95,7 @@ export class CheckoutCatalogService {
         id: bump.id,
         name: bump.offeredProduct.name,
         headline: bump.headline,
+        callToAction: bump.callToAction,
         description: bump.description ?? bump.offeredProduct.description,
         priceCents: bump.priceCents,
         compareAtPriceCents: bump.compareAtPriceCents,
@@ -101,9 +104,9 @@ export class CheckoutCatalogService {
       })),
       page: {
         displayName: settings.displayName,
-        logoUrl: assetUrl(settings.logoAssetId),
-        bannerUrl: assetUrl(settings.bannerAssetId),
-        primaryColor: settings.primaryColor,
+        logoUrl: assetUrl(brand.logoAssetId),
+        bannerUrl: assetUrl(brand.bannerAssetId),
+        primaryColor: brand.primaryColor,
         supportEmail: settings.supportEmail,
         supportWhatsapp: settings.supportWhatsapp,
         whatsappButtonPhone: settings.whatsappButtonPhone,
@@ -294,6 +297,7 @@ export class CheckoutCatalogService {
         ...productFields,
         companyId: true,
         afterPurchase: true,
+        ...brandFields,
         bumps: {
           where: { active: true, offeredProduct: { active: true } },
           orderBy: { position: 'asc' },
@@ -302,6 +306,7 @@ export class CheckoutCatalogService {
             priceCents: true,
             compareAtPriceCents: true,
             headline: true,
+            callToAction: true,
             description: true,
             offeredProduct: { select: productFields },
           },

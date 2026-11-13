@@ -13,7 +13,13 @@ import {
 } from './checkout-catalog.service';
 import { CheckoutPlatformService } from './checkout-platform.service';
 import { itemShares, type OrderItem } from './checkout-pricing';
-import { conflict, normalizeDocument, offerTokenOf } from './checkout-rules';
+import {
+  brandFields,
+  conflict,
+  normalizeDocument,
+  offerTokenOf,
+  pageBrand,
+} from './checkout-rules';
 import { EfiCheckoutPixClient } from './efi-checkout-pix.client';
 import { CheckoutPaymentsService } from './checkout-payments.service';
 import { CheckoutWebhooksService } from './checkout-webhooks.service';
@@ -228,7 +234,12 @@ export class CheckoutOrdersService {
       include: {
         attempt: true,
         product: {
-          select: { slug: true, afterPurchase: true, afterPurchaseUrl: true },
+          select: {
+            slug: true,
+            afterPurchase: true,
+            afterPurchaseUrl: true,
+            ...brandFields,
+          },
         },
         cardAttempts: {
           orderBy: { createdAt: 'desc' },
@@ -252,6 +263,10 @@ export class CheckoutOrdersService {
     const settings = await this.prisma.checkoutSettings.findUnique({
       where: { companyId: order.companyId },
     });
+    const brand = settings && {
+      ...settings,
+      ...pageBrand(settings, order.product),
+    };
     const items = order.items as unknown as OrderItem[];
     const lastCard = order.cardAttempts[0]?.status;
     const cardBusy =
@@ -355,15 +370,15 @@ export class CheckoutOrdersService {
         parent?.offerExpiresAt && now <= parent.offerExpiresAt
           ? `/c/oferta/${offerTokenOf(parent.publicToken)}`
           : null,
-      page: settings
+      page: brand
         ? {
-            displayName: settings.displayName,
-            primaryColor: settings.primaryColor,
-            logoUrl: settings.logoAssetId
-              ? `/checkout/public/assets/${settings.logoAssetId}`
+            displayName: brand.displayName,
+            primaryColor: brand.primaryColor,
+            logoUrl: brand.logoAssetId
+              ? `/checkout/public/assets/${brand.logoAssetId}`
               : null,
-            supportEmail: settings.supportEmail,
-            supportWhatsapp: settings.supportWhatsapp,
+            supportEmail: brand.supportEmail,
+            supportWhatsapp: brand.supportWhatsapp,
           }
         : null,
     };

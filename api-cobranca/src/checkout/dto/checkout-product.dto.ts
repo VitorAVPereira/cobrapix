@@ -9,6 +9,7 @@ import {
   IsString,
   IsUUID,
   Length,
+  Matches,
   Max,
   MaxLength,
   Min,
@@ -32,6 +33,15 @@ export class CheckoutProductDto {
   @Max(MAX_PRICE_CENTS)
   compareAtPriceCents?: number | null;
   @IsOptional() @IsUUID() imageAssetId?: string | null;
+  // Page look of this product. Absent keeps what is saved (older screens);
+  // null falls back to the checkout settings.
+  @IsOptional() @IsUUID() logoAssetId?: string | null;
+  @IsOptional() @IsUUID() bannerAssetId?: string | null;
+  @IsOptional()
+  @Matches(/^#[0-9a-fA-F]{6}$/, {
+    message: 'Informe a cor no formato #RRGGBB.',
+  })
+  primaryColor?: string | null;
   @IsOptional() @IsInt() @Min(1) @Max(120) accessPeriodMonths?: number | null;
   @IsIn(DELIVERY_MODES) deliveryMode!: (typeof DELIVERY_MODES)[number];
   @IsOptional() @IsString() @MaxLength(2000) accessUrl?: string | null;
@@ -73,6 +83,7 @@ export class CheckoutBumpDto {
   @Max(MAX_PRICE_CENTS)
   compareAtPriceCents?: number | null;
   @IsOptional() @IsString() @MaxLength(80) headline?: string | null;
+  @IsOptional() @IsString() @MaxLength(120) callToAction?: string | null;
   @IsOptional() @IsString() @MaxLength(300) description?: string | null;
   @IsBoolean() active!: boolean;
 }

@@ -45,6 +45,7 @@ const product: PublicCheckoutProduct = {
       id: "bump-1",
       name: "Guia Renda Fixa",
       headline: "GUIA COM 50% OFF",
+      callToAction: "Pare de deixar seu dinheiro parado",
       description: "Um guia simples",
       priceCents: 1490,
       compareAtPriceCents: 2990,
@@ -125,6 +126,51 @@ describe("CheckoutForm", () => {
       { bumpIds: ["bump-1"], couponCode: null },
       expect.any(AbortSignal),
     );
+  });
+
+  it("o bump mostra a faixa, a frase do vendedor e o produto; sem frase, \"Sim, quero\"", async () => {
+    mockQuote.mockResolvedValue(quote(6700));
+    const { unmount } = render(<CheckoutForm data={product} />);
+    await screen.findByTestId("checkout-total");
+
+    expect(screen.getByText("GUIA COM 50% OFF")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /pare de deixar seu dinheiro parado/i })).toBeInTheDocument();
+    expect(screen.getByText("Guia Renda Fixa")).toBeInTheDocument();
+    // Selected, the offer turns into the cart notice.
+    await userEvent.setup().click(screen.getByRole("checkbox"));
+    expect(screen.getByText("Adicionado ao carrinho")).toBeInTheDocument();
+    expect(screen.queryByText("GUIA COM 50% OFF")).not.toBeInTheDocument();
+    unmount();
+
+    render(<CheckoutForm data={{ ...product, bumps: [{ ...product.bumps[0], callToAction: null }] }} />);
+    await screen.findByTestId("checkout-total");
+    expect(screen.getByRole("checkbox", { name: /sim, quero guia renda fixa/i })).toBeInTheDocument();
+  });
+
+  it("mostra o plano e o período do produto e do bump", async () => {
+    mockQuote.mockResolvedValue(quote(6700));
+    const quarterly = { ...product.bumps[0], accessPeriodMonths: 3 };
+    render(<CheckoutForm data={{ ...product, bumps: [quarterly] }} />);
+    await screen.findByTestId("checkout-total");
+
+    expect(screen.getByText("Plano de assinatura")).toBeInTheDocument();
+    expect(screen.getByText("Anual")).toBeInTheDocument();
+    expect(screen.getByText(/por ano/)).toBeInTheDocument();
+    expect(screen.getByText("por trimestre")).toBeInTheDocument();
+    expect(screen.getByText("Transação Segura e Criptografada")).toBeInTheDocument();
+  });
+
+  it("CPF inválido aparece no campo ao sair dele", async () => {
+    const user = userEvent.setup();
+    mockQuote.mockResolvedValue(quote(6700));
+    render(<CheckoutForm data={product} />);
+    await screen.findByTestId("checkout-total");
+
+    await user.type(screen.getByLabelText("CPF ou CNPJ"), "111.111.111-11");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await user.tab();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("CPF ou CNPJ inválido");
   });
 
   it("barra CPF inválido sem chamar o servidor", async () => {

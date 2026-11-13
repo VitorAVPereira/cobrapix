@@ -199,6 +199,53 @@ describe('CheckoutProductsService', () => {
       )[0]?.[0].data;
       expect(data).not.toHaveProperty('afterPurchase');
       expect(data).not.toHaveProperty('offerWindowMinutes');
+      expect(data).not.toHaveProperty('logoAssetId');
+      expect(data).not.toHaveProperty('bannerAssetId');
+      expect(data).not.toHaveProperty('primaryColor');
+    });
+  });
+
+  it('logo, banner e cor do produto: imagens da empresa, cor em maiúsculas, nulo volta ao padrão', async () => {
+    prisma.checkoutProduct.updateMany.mockResolvedValue({ count: 1 });
+    await service.update('company-a', 'product-1', {
+      ...product,
+      logoAssetId: 'logo-1',
+      bannerAssetId: 'banner-1',
+      primaryColor: '#e5484d',
+      expectedVersion: 3,
+    });
+    await service.update('company-a', 'product-1', {
+      ...product,
+      logoAssetId: null,
+      bannerAssetId: null,
+      primaryColor: null,
+      expectedVersion: 4,
+    });
+
+    expect(assets.assertOwned).toHaveBeenCalledWith(
+      prisma,
+      'company-a',
+      'logo-1',
+      'LOGO',
+    );
+    expect(assets.assertOwned).toHaveBeenCalledWith(
+      prisma,
+      'company-a',
+      'banner-1',
+      'BANNER',
+    );
+    const calls = prisma.checkoutProduct.updateMany.mock.calls as [
+      { data: Record<string, unknown> },
+    ][];
+    expect(calls[0][0].data).toMatchObject({
+      logoAssetId: 'logo-1',
+      bannerAssetId: 'banner-1',
+      primaryColor: '#E5484D',
+    });
+    expect(calls[1][0].data).toMatchObject({
+      logoAssetId: null,
+      bannerAssetId: null,
+      primaryColor: null,
     });
   });
 
@@ -281,6 +328,25 @@ describe('CheckoutProductsService', () => {
         position: 3,
       }) as unknown,
     });
+  });
+
+  it('guarda a frase do bump sem espaços nas pontas; vazia vira nula', async () => {
+    await service.createBump('company-a', 'product-1', {
+      ...bump,
+      callToAction: '  Pare de deixar seu dinheiro parado  ',
+    });
+    await service.createBump('company-a', 'product-1', {
+      ...bump,
+      callToAction: '   ',
+    });
+
+    const calls = prisma.checkoutOrderBump.create.mock.calls as Array<
+      [{ data: { callToAction: string | null } }]
+    >;
+    expect(calls[0][0].data.callToAction).toBe(
+      'Pare de deixar seu dinheiro parado',
+    );
+    expect(calls[1][0].data.callToAction).toBeNull();
   });
 
   it('recusa bump do próprio produto e de produto de outra empresa', async () => {

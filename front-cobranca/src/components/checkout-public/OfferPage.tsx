@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import {
   acceptCheckoutOffer,
-  accessPeriodLabel,
+  periodPriceLabel,
   checkoutImageUrl,
   CheckoutPublicError,
   declineCheckoutOffer,
@@ -142,11 +142,11 @@ export function OfferPage({ token, offerId }: { token: string; offerId: string |
     return (
       <CheckoutShell page={null}>
         {loaded.kind === "loading" ? (
-          <p className="flex items-center justify-center gap-2 py-20 text-slate-500">
+          <p className="flex items-center justify-center gap-2 py-20 text-neutral-500">
             <Loader2 size={18} className="animate-spin" /> Carregando…
           </p>
         ) : (
-          <p role="alert" className="rounded-lg bg-white p-6 text-center text-slate-700 shadow-sm">
+          <p role="alert" className="rounded-lg bg-white p-6 text-center text-neutral-700 shadow-sm">
             {loaded.kind === "missing"
               ? "Oferta não encontrada. O acesso à sua compra foi enviado para o seu e-mail."
               : "Não foi possível carregar a oferta. Tente de novo."}
@@ -163,10 +163,10 @@ export function OfferPage({ token, offerId }: { token: string; offerId: string |
       <CheckoutShell page={page}>
         <section className="space-y-4 rounded-lg bg-white p-5 text-center shadow-sm">
           <CheckCircle2 size={44} className="mx-auto text-emerald-600" />
-          <h1 className="text-xl font-semibold text-slate-900">
+          <h1 className="text-xl font-semibold text-neutral-900">
             {pendingOrder ? "Acompanhe o pagamento" : "Compra concluída"}
           </h1>
-          <p className="text-sm text-slate-600">
+          <p className="text-sm text-neutral-600">
             {pendingOrder
               ? "Levando você ao pagamento da oferta…"
               : loaded.data.state === "CLOSED"
@@ -187,18 +187,18 @@ export function OfferPage({ token, offerId }: { token: string; offerId: string |
     );
 
   const image = checkoutImageUrl(offer.imageUrl);
-  const period = accessPeriodLabel(offer.accessPeriodMonths);
+  const period = periodPriceLabel(offer.accessPeriodMonths);
   const option = quote?.options.find((item) => item.installments === installments) ?? null;
   const cardReady = chosen === "CARD" && option !== null;
   const canAccept = busy === null && (chosen === "PIX" ? pixEnabled : cardReady);
   return (
-    <CheckoutShell page={page}>
+    <CheckoutShell page={page} purchase>
       <section className="space-y-4 rounded-lg bg-white p-5 shadow-sm">
         <p className="text-center text-sm font-semibold uppercase tracking-wide" style={{ color }}>
           {offer.kind === "DOWNSELL" ? "Espere! Uma última oferta" : "Oferta especial para você"}
         </p>
         {data?.expiresAt && (
-          <p className="text-center text-xs text-slate-500">
+          <p className="text-center text-xs text-neutral-500">
             Válida por mais <span className="font-mono font-semibold">{remaining(data.expiresAt, now)}</span>
           </p>
         )}
@@ -206,16 +206,16 @@ export function OfferPage({ token, offerId }: { token: string; offerId: string |
           // eslint-disable-next-line @next/next/no-img-element -- served by the API
           <img src={image} alt="" className="mx-auto max-h-56 rounded-md object-cover" />
         )}
-        <h1 className="text-center text-xl font-semibold text-slate-900">{offer.headline || offer.name}</h1>
-        {offer.headline && <p className="text-center text-sm font-medium text-slate-700">{offer.name}</p>}
-        {offer.description && <p className="whitespace-pre-line text-sm text-slate-600">{offer.description}</p>}
+        <h1 className="text-center text-xl font-semibold text-neutral-900">{offer.headline || offer.name}</h1>
+        {offer.headline && <p className="text-center text-sm font-medium text-neutral-700">{offer.name}</p>}
+        {offer.description && <p className="whitespace-pre-line text-sm text-neutral-600">{offer.description}</p>}
         <p className="text-center">
           {offer.compareAtPriceCents && (
-            <span className="mr-2 text-sm text-slate-400 line-through">{formatBRL(offer.compareAtPriceCents)}</span>
+            <span className="mr-2 text-sm text-neutral-400 line-through">{formatBRL(offer.compareAtPriceCents)}</span>
           )}
-          <span className="text-2xl font-bold text-slate-900">{formatBRL(offer.priceCents)}</span>
+          <span className="text-2xl font-bold text-neutral-900">{formatBRL(offer.priceCents)}</span>
         </p>
-        {period && <p className="text-center text-xs text-slate-500">{period}</p>}
+        {period && <p className="text-center text-sm text-neutral-700">{period}</p>}
 
         {card && pixEnabled && (
           <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Forma de pagamento">
@@ -225,7 +225,7 @@ export function OfferPage({ token, offerId }: { token: string; offerId: string |
                 type="button"
                 role="radio"
                 aria-checked={chosen === value}
-                className={`h-11 rounded-md border text-sm font-semibold ${chosen === value ? "border-transparent text-white" : "border-slate-300 text-slate-700"}`}
+                className={`h-11 rounded-md border text-sm font-semibold ${chosen === value ? "border-transparent text-white" : "border-neutral-300 text-neutral-700"}`}
                 style={chosen === value ? { backgroundColor: color } : undefined}
                 onClick={() => setMethod(value)}
               >
@@ -236,14 +236,14 @@ export function OfferPage({ token, offerId }: { token: string; offerId: string |
         )}
         {chosen === "CARD" && card && (
           <div className="space-y-2">
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-neutral-600">
               No mesmo cartão {BRAND_LABELS[card.brand] ?? ""} da sua compra, sem digitar de novo.
             </p>
             {quote ? (
-              <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+              <label className="flex flex-col gap-1 text-sm font-medium text-neutral-700">
                 Parcelas
                 <select
-                  className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm"
+                  className="h-11 rounded-md border border-neutral-300 bg-white px-3 text-sm"
                   value={installments}
                   onChange={(event) => setInstallments(Number(event.target.value))}
                 >
@@ -256,14 +256,14 @@ export function OfferPage({ token, offerId }: { token: string; offerId: string |
                 </select>
               </label>
             ) : (
-              <p className="flex items-center gap-2 text-sm text-slate-500">
+              <p className="flex items-center gap-2 text-sm text-neutral-500">
                 <Loader2 size={16} className="animate-spin" /> Calculando as parcelas…
               </p>
             )}
           </div>
         )}
         {chosen === "PIX" && (
-          <p className="text-sm text-slate-600">
+          <p className="text-sm text-neutral-600">
             {pixEnabled ? "Geramos um Pix novo, com os seus dados já preenchidos." : "Pagamento indisponível no momento."}
           </p>
         )}
@@ -284,13 +284,13 @@ export function OfferPage({ token, offerId }: { token: string; offerId: string |
         </button>
         <button
           type="button"
-          className="w-full text-center text-sm text-slate-500 underline disabled:opacity-60"
+          className="w-full text-center text-sm text-neutral-500 underline disabled:opacity-60"
           disabled={busy !== null}
           onClick={() => void decline()}
         >
           Não, obrigado
         </button>
-        <p className="text-center text-xs text-slate-500">
+        <p className="text-center text-xs text-neutral-500">
           É uma compra separada, com reembolso em até 7 dias. O acesso à sua compra já está garantido.
         </p>
       </section>

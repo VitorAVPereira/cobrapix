@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { Loader2 } from "lucide-react";
 import type {
@@ -27,6 +27,10 @@ interface FormState {
   price: string;
   compareAt: string;
   imageAssetId: string | null;
+  logoAssetId: string | null;
+  bannerAssetId: string | null;
+  // Empty: the color of the checkout settings.
+  primaryColor: string;
   accessPeriodMonths: string;
   deliveryMode: CheckoutDeliveryMode;
   accessUrl: string;
@@ -43,6 +47,9 @@ function initialState(product?: CheckoutProduct): FormState {
     price: centsToInput(product?.priceCents),
     compareAt: centsToInput(product?.compareAtPriceCents),
     imageAssetId: product?.imageAssetId ?? null,
+    logoAssetId: product?.logoAssetId ?? null,
+    bannerAssetId: product?.bannerAssetId ?? null,
+    primaryColor: product?.primaryColor ?? "",
     accessPeriodMonths: product?.accessPeriodMonths ? String(product.accessPeriodMonths) : "",
     deliveryMode: product?.deliveryMode ?? "ACCESS_LINK",
     accessUrl: product?.accessUrl ?? "",
@@ -50,6 +57,34 @@ function initialState(product?: CheckoutProduct): FormState {
     afterPurchase: product?.afterPurchase ?? "ACCESS",
     afterPurchaseUrl: product?.afterPurchaseUrl ?? "",
     offerWindowMinutes: String(product?.offerWindowMinutes ?? 30),
+  };
+}
+
+/** What the page preview shows while the seller types, before anything is saved. */
+export interface ProductDraft {
+  name: string;
+  description: string | null;
+  priceCents: number | null;
+  compareAtPriceCents: number | null;
+  imageAssetId: string | null;
+  logoAssetId: string | null;
+  bannerAssetId: string | null;
+  primaryColor: string | null;
+  accessPeriodMonths: number | null;
+}
+
+function draftOf(form: FormState): ProductDraft {
+  const months = Number(form.accessPeriodMonths);
+  return {
+    name: form.name.trim(),
+    description: form.description.trim() || null,
+    priceCents: parseAmountToCents(form.price),
+    compareAtPriceCents: form.compareAt.trim() ? parseAmountToCents(form.compareAt) : null,
+    imageAssetId: form.imageAssetId,
+    logoAssetId: form.logoAssetId,
+    bannerAssetId: form.bannerAssetId,
+    primaryColor: /^#[0-9a-fA-F]{6}$/.test(form.primaryColor.trim()) ? form.primaryColor.trim() : null,
+    accessPeriodMonths: Number.isInteger(months) && months >= 1 && months <= 120 ? months : null,
   };
 }
 
@@ -68,6 +103,9 @@ export function toProductInput(form: FormState): CheckoutProductInput {
   if (!Number.isInteger(window) || window < 15 || window > 1440)
     throw new Error("A oferta vale de 15 minutos a 24 horas (1.440 minutos).");
   const afterPurchaseUrl = form.afterPurchaseUrl.trim();
+  const primaryColor = form.primaryColor.trim();
+  if (primaryColor && !/^#[0-9a-fA-F]{6}$/.test(primaryColor))
+    throw new Error("Informe a cor no formato #RRGGBB ou deixe em branco para usar a das Configurações.");
   if (form.afterPurchase === "EXTERNAL" && !afterPurchaseUrl.startsWith("https://"))
     throw new Error("O endereço da sua página de oferta precisa começar com https://.");
   return {
@@ -76,6 +114,9 @@ export function toProductInput(form: FormState): CheckoutProductInput {
     priceCents,
     compareAtPriceCents,
     imageAssetId: form.imageAssetId,
+    logoAssetId: form.logoAssetId,
+    bannerAssetId: form.bannerAssetId,
+    primaryColor: primaryColor ? primaryColor.toUpperCase() : null,
     accessPeriodMonths: months,
     deliveryMode: form.deliveryMode,
     accessUrl: form.deliveryMode === "WEBHOOK" ? null : form.accessUrl.trim() || null,
@@ -89,16 +130,25 @@ export function toProductInput(form: FormState): CheckoutProductInput {
 export function ProductForm({
   product,
   submitLabel,
+  defaultColor,
   onSubmit,
+  onDraftChange,
 }: {
   product?: CheckoutProduct;
   submitLabel: string;
+  /** The color of the checkout settings, used while the product has none. */
+  defaultColor?: string;
   onSubmit: (input: CheckoutProductInput) => Promise<void>;
+  onDraftChange?: (draft: ProductDraft) => void;
 }) {
   const [form, setForm] = useState<FormState>(() => initialState(product));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = (change: Partial<FormState>) => setForm((current) => ({ ...current, ...change }));
+
+  useEffect(() => {
+    onDraftChange?.(draftOf(form));
+  }, [form, onDraftChange]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -165,6 +215,47 @@ export function ProductForm({
         assetId={form.imageAssetId}
         onChange={(imageAssetId) => set({ imageAssetId })}
       />
+      <fieldset className="space-y-3 rounded-md border border-slate-200 p-4">
+        <legend className="px-1 text-sm font-semibold text-slate-800">Aparência da página</legend>
+        <p className="text-xs text-slate-500">
+          Só deste produto. Em branco, a página usa o logo, o banner e a cor das Configurações do checkout.
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <ImageUpload label="Logo" kind="LOGO" assetId={form.logoAssetId} onChange={(logoAssetId) => set({ logoAssetId })} />
+          <ImageUpload
+            label="Banner do topo"
+            kind="BANNER"
+            assetId={form.bannerAssetId}
+            onChange={(bannerAssetId) => set({ bannerAssetId })}
+          />
+        </div>
+        <Field label="Cor principal" hint="Usada na página de oferta depois da compra.">
+          <div className="flex items-center gap-2">
+            <input
+              type="color"
+              aria-label="Escolher cor"
+              className="h-11 w-14 shrink-0 rounded-md border border-slate-300"
+              value={/^#[0-9a-fA-F]{6}$/.test(form.primaryColor) ? form.primaryColor : (defaultColor ?? "#0F766E")}
+              onChange={(event) => set({ primaryColor: event.target.value.toUpperCase() })}
+            />
+            <input
+              className={inputClass}
+              placeholder={defaultColor ? `${defaultColor} (das Configurações)` : "Das Configurações"}
+              value={form.primaryColor}
+              onChange={(event) => set({ primaryColor: event.target.value })}
+            />
+            {form.primaryColor && (
+              <button
+                type="button"
+                className="shrink-0 text-sm font-semibold text-slate-500 hover:text-slate-800"
+                onClick={() => set({ primaryColor: "" })}
+              >
+                Usar a padrão
+              </button>
+            )}
+          </div>
+        </Field>
+      </fieldset>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Entrega do acesso">
           <select
