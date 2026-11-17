@@ -3,6 +3,7 @@ import type { CheckoutMailJobs } from './checkout-mail.service';
 import type { CheckoutLedgerService } from './checkout-ledger.service';
 import type { CheckoutRefundsService } from './checkout-refunds.service';
 import type { CheckoutWebhooksService } from './checkout-webhooks.service';
+import type { CheckoutSubscriptionsService } from './checkout-subscriptions.service';
 import {
   CheckoutPaymentsService,
   splitCheckoutPixEvents,
@@ -54,12 +55,14 @@ describe('CheckoutPaymentsService', () => {
   const ledger = { recordSale: jest.fn() };
   const refunds = { record: jest.fn() };
   const webhooks = { emit: jest.fn() };
+  const subscriptions = { activate: jest.fn() };
   const service = new CheckoutPaymentsService(
     prisma as unknown as PrismaService,
     mail as unknown as CheckoutMailJobs,
     ledger as unknown as CheckoutLedgerService,
     refunds as unknown as CheckoutRefundsService,
     webhooks as unknown as CheckoutWebhooksService,
+    subscriptions as unknown as CheckoutSubscriptionsService,
   );
   const event = {
     txid: TXID,
@@ -131,6 +134,46 @@ describe('CheckoutPaymentsService', () => {
     });
     expect(offerTokenOf('token-1')).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(offerTokenOf('token-1')).not.toContain('token-1');
+  });
+
+  it('primeiro ciclo pago ativa a assinatura antes do aviso e não abre oferta', async () => {
+    const calls: string[] = [];
+    tx.checkoutOrder.update.mockResolvedValueOnce({
+      id: 'order-1',
+      companyId: 'company-a',
+      productId: 'product-1',
+      buyerDocument: '52998224725',
+      buyerEmail: 'maria@exemplo.test',
+      couponId: null,
+      totalCents: 8289,
+      efiFeeCents: 99,
+      platformFeeCents: 205,
+      publicToken: 'token-1',
+      parentOrderId: null,
+      subscriptionId: 'sub-1',
+      product: { afterPurchase: 'OFFER', offerWindowMinutes: 45 },
+    });
+    subscriptions.activate.mockImplementation(() => calls.push('activate'));
+    webhooks.emit.mockImplementation((_tx, _c, type: string) =>
+      calls.push(type),
+    );
+    const paidAt = new Date('2026-11-09T12:00:00Z');
+
+    await service.confirm(
+      'attempt-1',
+      { paidAmountCents: 8289, endToEndId: 'E1', providerFeeCents: null },
+      paidAt,
+    );
+
+    expect(subscriptions.activate).toHaveBeenCalledWith(
+      tx,
+      { id: 'order-1', companyId: 'company-a', subscriptionId: 'sub-1' },
+      paidAt,
+    );
+    expect(calls).toEqual(['activate', 'order.paid']);
+    // One update only (the payment): no one-click offer window.
+    expect(tx.checkoutOrder.update).toHaveBeenCalledTimes(1);
+    webhooks.emit.mockReset();
   });
 
   it('dá baixa, conta o cupom e enfileira o e-mail', async () => {

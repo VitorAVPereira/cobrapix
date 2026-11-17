@@ -2548,6 +2548,10 @@ model CheckoutSubscription {
   issuerIdentityId       String
   issuerIdentity         EfiAccountIdentity                @relation(fields: [issuerIdentityId], references: [id], onDelete: Restrict)
   efiSubscriptionId      String?
+  // When the Efí confirmed it no longer charges this subscription. A
+  // subscription that ended here inside a money transaction (refund,
+  // chargeback) is stopped at the Efí afterwards, by the worker.
+  efiCanceledAt          DateTime?
   // Set once the Efí confirmed the items of the cycles after the first one.
   itemsAdjustedAt        DateTime?
   currentPeriodEnd       DateTime?

@@ -10,6 +10,8 @@ import { ConfigService } from '@nestjs/config';
 import {
   CheckoutOffer,
   CheckoutOrder,
+  CheckoutPlan,
+  CheckoutSubscription,
   CheckoutWebhookDelivery,
   CheckoutWebhookRule,
   Prisma,
@@ -37,6 +39,11 @@ export const WEBHOOK_EVENTS = [
   'refund.requested',
   'refund.withdrawn',
   'lead.abandoned',
+  'subscription.activated',
+  // Canceled with access left: carries the day the access ends.
+  'subscription.renewal_disabled',
+  // The access ended: sent on that day, or at once when it ends now.
+  'subscription.canceled',
 ] as const;
 
 export type CheckoutEventType =
@@ -68,13 +75,60 @@ export interface WebhookRuleInput {
 }
 
 /** The order as the seller system sees it, in notices and in the API. */
+/** The subscription as the seller system sees it, in notices. */
+export function subscriptionPayload(
+  subscription: Pick<
+    CheckoutSubscription,
+    | 'id'
+    | 'status'
+    | 'planId'
+    | 'intervalMonths'
+    | 'cycleCents'
+    | 'currentPeriodEnd'
+    | 'cancelRequestedAt'
+    | 'canceledAt'
+    | 'cancelReason'
+    | 'accessEndsAt'
+  >,
+) {
+  return {
+    id: subscription.id,
+    status: subscription.status,
+    planId: subscription.planId,
+    intervalMonths: subscription.intervalMonths,
+    cycleCents: subscription.cycleCents,
+    currentPeriodEnd: subscription.currentPeriodEnd?.toISOString() ?? null,
+    cancelRequestedAt: subscription.cancelRequestedAt?.toISOString() ?? null,
+    canceledAt: subscription.canceledAt?.toISOString() ?? null,
+    cancelReason: subscription.cancelReason,
+    // The day the seller system should take the access away.
+    accessEndsAt: subscription.accessEndsAt?.toISOString() ?? null,
+  };
+}
+
 export function orderPayload(
-  order: CheckoutOrder & { offer: Pick<CheckoutOffer, 'id' | 'kind'> | null },
+  order: CheckoutOrder & {
+    offer: Pick<CheckoutOffer, 'id' | 'kind'> | null;
+    plan?: Pick<
+      CheckoutPlan,
+      'id' | 'name' | 'intervalMonths' | 'billing'
+    > | null;
+    subscription?: CheckoutSubscription | null;
+  },
 ) {
   const items = order.items as unknown as OrderItem[];
   return {
     id: order.id,
     status: order.status,
+    // The plan the main product was bought through, when it has plans.
+    plan: order.plan ?? null,
+    // A cycle of a recurring plan: which one, and how the subscription stands.
+    subscription: order.subscription
+      ? {
+          ...subscriptionPayload(order.subscription),
+          cycle: order.subscriptionCycle,
+        }
+      : null,
     // An accepted upsell or downsell: its own order, tied to the purchase.
     parentOrderId: order.parentOrderId,
     offer: order.offer,
@@ -421,7 +475,13 @@ export class CheckoutWebhooksService {
   async orderData(client: Client, orderId: string) {
     const order = await client.checkoutOrder.findUnique({
       where: { id: orderId },
-      include: { offer: { select: { id: true, kind: true } } },
+      include: {
+        offer: { select: { id: true, kind: true } },
+        plan: {
+          select: { id: true, name: true, intervalMonths: true, billing: true },
+        },
+        subscription: true,
+      },
     });
     return order ? orderPayload(order) : null;
   }

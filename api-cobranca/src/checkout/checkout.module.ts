@@ -38,6 +38,7 @@ import { CheckoutCardService } from './checkout-card.service';
 import { CheckoutOffersService } from './checkout-offers.service';
 import { EfiCheckoutCardClient } from './efi-checkout-card.client';
 import { EfiCheckoutSubscriptionClient } from './efi-checkout-subscription.client';
+import { CheckoutSubscriptionsService } from './checkout-subscriptions.service';
 import { CheckoutApiKeysService } from './checkout-api-keys.service';
 import {
   CheckoutApiController,
@@ -85,6 +86,7 @@ import {
     CheckoutOffersService,
     EfiCheckoutCardClient,
     EfiCheckoutSubscriptionClient,
+    CheckoutSubscriptionsService,
     CheckoutApiKeysService,
     CheckoutApiKeyGuard,
     ResendMailerService,

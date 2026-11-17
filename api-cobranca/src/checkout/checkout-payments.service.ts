@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CheckoutMailJobs } from './checkout-mail.service';
 import { CheckoutLedgerService } from './checkout-ledger.service';
 import { CheckoutRefundsService } from './checkout-refunds.service';
+import { CheckoutSubscriptionsService } from './checkout-subscriptions.service';
 import { CheckoutWebhooksService } from './checkout-webhooks.service';
 import { markRecovered } from './checkout-recovery.service';
 import { offerTokenHash, offerTokenOf } from './checkout-rules';
@@ -61,6 +62,7 @@ export class CheckoutPaymentsService {
     private readonly ledger: CheckoutLedgerService,
     private readonly refunds: CheckoutRefundsService,
     private readonly webhooks: CheckoutWebhooksService,
+    private readonly subscriptions: CheckoutSubscriptionsService,
   ) {}
 
   /**
@@ -200,6 +202,7 @@ export class CheckoutPaymentsService {
         platformFeeCents: true,
         publicToken: true,
         parentOrderId: true,
+        subscriptionId: true,
         product: {
           select: { afterPurchase: true, offerWindowMinutes: true },
         },
@@ -207,8 +210,13 @@ export class CheckoutPaymentsService {
       },
     });
     // The one-click offer window opens with the payment. An offer order does
-    // not open another one: longer chains belong to the seller's page.
-    if (!order.parentOrderId && order.product.afterPurchase !== 'ACCESS')
+    // not open another one: longer chains belong to the seller's page. A
+    // subscription cycle opens none: its card is never kept.
+    if (
+      !order.parentOrderId &&
+      !order.subscriptionId &&
+      order.product.afterPurchase !== 'ACCESS'
+    )
       await tx.checkoutOrder.update({
         where: { id: order.id },
         data: {
@@ -225,6 +233,18 @@ export class CheckoutPaymentsService {
       providerFeeCents,
       releaseNotBefore,
     );
+    // The first paid cycle starts the subscription, so the notices below
+    // already show it active.
+    if (order.subscriptionId)
+      await this.subscriptions.activate(
+        tx,
+        {
+          id: order.id,
+          companyId: order.companyId,
+          subscriptionId: order.subscriptionId,
+        },
+        now,
+      );
     await this.webhooks.emit(tx, order.companyId, 'order.paid', order.id);
     // Coupon limits count paid orders only.
     if (order.couponId)
