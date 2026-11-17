@@ -345,6 +345,38 @@ Gaps encontrados:
    conta. Homologação e produção da Efí numeram separado: um id repetido em outra conta faz o
    aviso falhar e a venda não confirma. Proposta: único por conta emissora, numa migration.
 
-Pendência que trava a ativação de um vendedor: até a Tarefa 5, a venda pela conta do vendedor
-entra no razão como se o dinheiro estivesse com a Cifra+ (saldo a repassar). Com a Tarefa 3 o
-admin já consegue ativar um vendedor nesse modo: **não publicar nem ativar antes da Tarefa 5**.
+### 17/11/2026: Tarefa 5 (razão espelhado)
+
+Feito, sem commit:
+
+- **Venda:** no modo conta própria, `recordSale` grava `DIRECT_SETTLEMENT` com o que ficou na
+  conta do vendedor (a venda menos a tarifa da Efí). O saldo da venda fica igual a menos a %
+  Cifra+, devida desde o pagamento, sem prazo de liberação.
+- **Reembolso e contestação:** gravam o `DIRECT_SETTLEMENT` contrário. No reembolso a % Cifra+
+  volta na proporção; na contestação continua devida (D7).
+- **Saldo** (`balance`): devolve `accountMode` e `feeOwedCents`. No modo conta própria, liberado,
+  pendente, repassado e repasse sugerido vêm zerados.
+- **Líquido da venda** (`sales`): não conta `DIRECT_SETTLEMENT` nem `FEE_PAYMENT`, então mostra o
+  que a venda deixa para o vendedor nos dois modos.
+- **Repasse:** registrar repasse para um vendedor da conta própria responde
+  `CHECKOUT_ACCOUNT_MODE_NOT_SUPPORTED`.
+- **Telas:** Vendas mostra só "Taxa Cifra+ em aberto" e o texto de que as vendas caem na conta
+  Efí do vendedor; o financeiro do admin mostra a taxa em aberto e esconde o repasse.
+
+Testes:
+
+- Unitários novos, vistos falhar antes: venda, saldo, reembolso, contestação e repasse recusado
+  (4 no backend) e as duas telas (2 no frontend).
+- E2E ampliado depois da implementação: duas vendas de R$ 100,00 a 1,5% deixam R$ 3,00 de taxa
+  em aberto e líquido de R$ 97,50 cada; repasse recusado; a devolução avisada pela Efí, repetida,
+  baixa a taxa para R$ 1,50 e zera os lançamentos da venda.
+- 1.420 testes unitários do backend, `test:e2e:checkout-pix` (38), `test:e2e:checkout` (6) e 73
+  testes das telas do checkout passando; build e lint do backend, lint e tipos do frontend OK.
+- As telas não foram abertas no navegador: precisam de um vendedor na conta própria num banco
+  com a migration aplicada, e os testes só usam banco descartável.
+
+A confirmar com o responsável: o texto novo de Vendas, "As vendas caem direto na sua conta Efí.
+A taxa da Cifra+ é cobrada à parte, por boleto, todo dia 30."
+
+Com a Tarefa 5, um vendedor pode ser ativado na conta própria sem distorcer o razão. O
+recebimento da taxa (`FEE_PAYMENT`) e o extrato por fechamento são a Tarefa 16.
