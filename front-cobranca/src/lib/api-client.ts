@@ -1493,6 +1493,10 @@ export interface CheckoutCouponInput {
 }
 export type CheckoutSaleStatus = "PAID" | "REFUNDED" | "CHARGEBACK";
 export interface CheckoutBalance {
+  // SELLER_ACCOUNT: the sales are already in the seller's own Efí account, so
+  // nothing is released or paid out; only `feeOwedCents` matters.
+  accountMode?: "PLATFORM_ACCOUNT" | "SELLER_ACCOUNT";
+  feeOwedCents?: number;
   releasedCents: number;
   // Released minus refunds still open: what a payout should take.
   suggestedPayoutCents?: number;

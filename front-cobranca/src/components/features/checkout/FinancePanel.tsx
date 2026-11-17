@@ -209,19 +209,27 @@ export function FinancePanel({ companyId }: { companyId: string }) {
     );
   const pending = data.refundRequests.filter((request) => request.status === "REQUESTED");
   const sales = data.sales.items.filter((sale) => sale.status !== "CHARGEBACK");
+  const ownAccount = data.balance.accountMode === "SELLER_ACCOUNT";
   return (
     <section className="space-y-4">
       <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-800">
         <Wallet size={16} /> Financeiro
       </h3>
       <dl className="grid gap-2 text-sm sm:grid-cols-5">
-        <div className="rounded-md bg-slate-50 p-3"><dt className="text-slate-500">A liberar</dt><dd className="font-semibold">{formatCents(data.balance.pendingCents)}</dd></div>
-        <div className="rounded-md bg-slate-50 p-3"><dt className="text-slate-500">Liberado</dt><dd className={`font-semibold ${data.balance.releasedCents < 0 ? "text-red-600" : ""}`}>{formatCents(data.balance.releasedCents)}</dd></div>
-        <div className="rounded-md bg-slate-50 p-3">
-          <dt className="text-slate-500">Repasse sugerido</dt>
-          <dd className="font-semibold">{formatCents(data.balance.suggestedPayoutCents ?? data.balance.releasedCents)}</dd>
-        </div>
-        <div className="rounded-md bg-slate-50 p-3"><dt className="text-slate-500">Repassado</dt><dd className="font-semibold">{formatCents(data.balance.paidOutCents)}</dd></div>
+        {ownAccount ? (
+          // The sales are already in the seller's own Efí account: only the fee is owed.
+          <div className="rounded-md bg-slate-50 p-3"><dt className="text-slate-500">Taxa Cifra+ em aberto</dt><dd className="font-semibold">{formatCents(data.balance.feeOwedCents ?? 0)}</dd></div>
+        ) : (
+          <>
+            <div className="rounded-md bg-slate-50 p-3"><dt className="text-slate-500">A liberar</dt><dd className="font-semibold">{formatCents(data.balance.pendingCents)}</dd></div>
+            <div className="rounded-md bg-slate-50 p-3"><dt className="text-slate-500">Liberado</dt><dd className={`font-semibold ${data.balance.releasedCents < 0 ? "text-red-600" : ""}`}>{formatCents(data.balance.releasedCents)}</dd></div>
+            <div className="rounded-md bg-slate-50 p-3">
+              <dt className="text-slate-500">Repasse sugerido</dt>
+              <dd className="font-semibold">{formatCents(data.balance.suggestedPayoutCents ?? data.balance.releasedCents)}</dd>
+            </div>
+            <div className="rounded-md bg-slate-50 p-3"><dt className="text-slate-500">Repassado</dt><dd className="font-semibold">{formatCents(data.balance.paidOutCents)}</dd></div>
+          </>
+        )}
         <div className="rounded-md bg-slate-50 p-3">
           <dt className="text-slate-500">Chargeback ({data.chargebackIndex.windowDays} dias)</dt>
           <dd className={`font-semibold ${data.chargebackIndex.ratioBasisPoints >= 100 ? "text-red-600" : ""}`}>
@@ -249,6 +257,7 @@ export function FinancePanel({ companyId }: { companyId: string }) {
       </div>
 
       <div className="grid gap-3 lg:grid-cols-3">
+        {!ownAccount && (
         <MoneyForm
           title="Registrar repasse"
           submitLabel="Registrar repasse"
@@ -282,6 +291,7 @@ export function FinancePanel({ companyId }: { companyId: string }) {
             <input name="note" className={inputClass} />
           </Field>
         </MoneyForm>
+        )}
 
         <MoneyForm
           title="Registrar contestação (chargeback)"

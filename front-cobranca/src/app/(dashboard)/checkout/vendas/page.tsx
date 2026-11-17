@@ -210,6 +210,7 @@ export default function CheckoutSalesPage() {
   }, [api, period, status, page, reload]);
 
   const pages = sales ? Math.max(1, Math.ceil(sales.total / sales.pageSize)) : 1;
+  const ownAccount = balance?.accountMode === "SELLER_ACCOUNT";
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-6">
       <header className="flex items-center gap-3">
@@ -218,11 +219,24 @@ export default function CheckoutSalesPage() {
         </span>
         <div>
           <h1 className="text-xl font-semibold text-slate-900">Vendas</h1>
-          <p className="text-sm text-slate-500">Cada venda fica 7 dias a liberar antes de entrar no saldo para repasse.</p>
+          <p className="text-sm text-slate-500">
+            {ownAccount
+              ? "As vendas caem direto na sua conta Efí. A taxa da Cifra+ é cobrada à parte, por boleto, todo dia 30."
+              : "Cada venda fica 7 dias a liberar antes de entrar no saldo para repasse."}
+          </p>
         </div>
       </header>
 
-      {balance && (
+      {balance && ownAccount && (
+        <section className="grid gap-3 sm:grid-cols-3">
+          <BalanceCard
+            label="Taxa Cifra+ em aberto"
+            cents={balance.feeOwedCents ?? 0}
+            detail="Taxa das vendas pagas, menos a dos reembolsos e o que você já pagou."
+          />
+        </section>
+      )}
+      {balance && !ownAccount && (
         <section className="grid gap-3 sm:grid-cols-3">
           <BalanceCard
             label="A liberar"

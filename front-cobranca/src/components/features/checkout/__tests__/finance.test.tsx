@@ -37,6 +37,16 @@ const sale: CheckoutSale = {
   openRefundRequest: null,
 };
 const balance = { releasedCents: 5000, pendingCents: 6452, paidOutCents: 0, nextReleaseAt: "2026-11-11T15:00:00.000Z" };
+// A seller that sells through its own Efí account: only the Cifra+ fee is owed.
+const ownAccountBalance = {
+  accountMode: "SELLER_ACCOUNT" as const,
+  feeOwedCents: 300,
+  releasedCents: 0,
+  suggestedPayoutCents: 0,
+  pendingCents: 0,
+  paidOutCents: 0,
+  nextReleaseAt: null,
+};
 
 describe("Vendas do vendedor", () => {
   beforeEach(() => {
@@ -78,6 +88,17 @@ describe("Vendas do vendedor", () => {
     render(<CheckoutSalesPage />);
     expect(await screen.findByRole("alert")).toHaveTextContent("offline");
     expect(screen.queryByText(/nenhuma venda/i)).not.toBeInTheDocument();
+  });
+
+  it("vendedor na conta própria vê só a taxa Cifra+ em aberto, sem saldo a liberar nem repasse", async () => {
+    mockApi.getCheckoutBalance.mockResolvedValue({ ...ownAccountBalance });
+    render(<CheckoutSalesPage />);
+
+    expect(await screen.findByText("Taxa Cifra+ em aberto")).toBeInTheDocument();
+    expect(screen.getByText(/3,00/)).toBeInTheDocument();
+    expect(screen.getByText(/caem direto na sua conta Efí/)).toBeInTheDocument();
+    for (const label of ["A liberar", "Liberado para repasse", "Repassado"])
+      expect(screen.queryByText(label)).not.toBeInTheDocument();
   });
 });
 
@@ -131,6 +152,19 @@ describe("Financeiro do cliente no admin", () => {
       ),
     );
     expect(await screen.findByText(/saldo do vendedor ficou negativo/i)).toBeInTheDocument();
+  });
+
+  it("cliente na conta própria: mostra a taxa em aberto e não oferece repasse", async () => {
+    mockApi.getCheckoutFinance.mockResolvedValue({ ...overview, balance: ownAccountBalance });
+    render(<FinancePanel companyId="company-1" />);
+
+    expect(await screen.findByText("Taxa Cifra+ em aberto")).toBeInTheDocument();
+    expect(screen.getByText(/3,00/)).toBeInTheDocument();
+    for (const label of ["A liberar", "Liberado", "Repasse sugerido", "Repassado"])
+      expect(screen.queryByText(label)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /registrar repasse/i })).not.toBeInTheDocument();
+    // Chargebacks and adjustments are still recorded by the admin.
+    expect(screen.getByRole("button", { name: /registrar contestação/i })).toBeInTheDocument();
   });
 
   it("recusa um pedido de reembolso com motivo", async () => {
