@@ -16,6 +16,7 @@ import {
   type SaleContext,
 } from './checkout-catalog.service';
 import {
+  accountOwner,
   CheckoutPlatformService,
   type CheckoutCardAccount,
 } from './checkout-platform.service';
@@ -287,6 +288,7 @@ export class CheckoutCardService {
       include: {
         cardAttempts: { orderBy: { createdAt: 'desc' } },
         product: { select: { name: true, afterPurchase: true } },
+        terms: { select: { accountMode: true, companyId: true } },
       },
     });
     // An offer order is charged once with the kept card; no retries here.
@@ -324,7 +326,8 @@ export class CheckoutCardService {
       );
     const holderDocument = this.holderDocument(dto.holderDocument);
     await this.assertDocumentLimit(order.buyerDocument, now);
-    const card = await this.cardFor(order.companyId);
+    // The account of the terms the order was sold under, even if they changed.
+    const card = await this.cardFor(order.companyId, accountOwner(order.terms));
     const { quote, option } = await this.usableQuote(
       dto.quoteId,
       dto.installments,
@@ -405,15 +408,16 @@ export class CheckoutCardService {
   }
 
   /**
-   * A notice of the charges webhook for the CifraMais account. The event only
-   * says which charge changed; its state is read back from the Efí.
+   * A notice of the charges webhook for an account the checkout issues from.
+   * The event only says which charge changed; its state is read back from
+   * the Efí, with that same account.
    */
   async handleNotification(
     identityId: string,
     token: string,
   ): Promise<boolean> {
-    const account = await this.platform.ready();
-    if (!account || account.identity.id !== identityId) {
+    const account = await this.platform.accountOf(identityId);
+    if (!account) {
       await this.anomaly('CHECKOUT_CARD_UNKNOWN_ACCOUNT', identityId);
       return false;
     }
@@ -517,8 +521,9 @@ export class CheckoutCardService {
       where: { id: attemptId },
     });
     if (!attempt) return;
-    const account = await this.platform.ready();
-    if (!account || account.identity.id !== attempt.issuerIdentityId) return;
+    // Always the account that issued the charge, not the current one.
+    const account = await this.platform.accountOf(attempt.issuerIdentityId);
+    if (!account) return;
     let chargeId = attempt.efiChargeId ?? providerHint ?? null;
     if (!chargeId) {
       const found = await this.client.findByAttempt(
@@ -989,9 +994,12 @@ export class CheckoutCardService {
     return { quote, option };
   }
 
-  private async cardFor(companyId: string): Promise<CheckoutCardAccount> {
+  private async cardFor(
+    companyId: string,
+    owner: string | null,
+  ): Promise<CheckoutCardAccount> {
     const [card, settings] = await Promise.all([
-      this.platform.cardReady(),
+      this.platform.cardReady(owner),
       this.prisma.checkoutSettings.findUnique({ where: { companyId } }),
     ]);
     if (!card || !settings?.cardEnabled || settings.cardPausedAt)

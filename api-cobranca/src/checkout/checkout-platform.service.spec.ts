@@ -4,7 +4,10 @@ import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { EfiGatewayClient } from '../payment/efi-gateway.client';
 import { EfiAccountRegistryService } from '../financial-activation/efi-account-registry.service';
 import { inspectEfiCertificate } from '../payment/efi-certificate';
-import { CheckoutPlatformService } from './checkout-platform.service';
+import {
+  accountOwner,
+  CheckoutPlatformService,
+} from './checkout-platform.service';
 
 jest.mock('../payment/efi-certificate', () => ({
   inspectEfiCertificate: jest.fn(),
@@ -21,7 +24,7 @@ describe('CheckoutPlatformService', () => {
   };
   const prisma = {
     checkoutPlatformSettings: { findFirst: jest.fn(), findMany: jest.fn() },
-    efiAccountIdentity: { findFirst: jest.fn() },
+    efiAccountIdentity: { findFirst: jest.fn(), findUnique: jest.fn() },
     $transaction: jest.fn((run: (client: typeof tx) => unknown) => run(tx)),
   };
   const operations = {
@@ -222,6 +225,71 @@ describe('CheckoutPlatformService', () => {
       webhookConfiguredAt: new Date(),
     });
     await expect(service.ready()).resolves.toBeNull();
+  });
+
+  it('conta Cifra+ e conta do vendedor não se misturam', async () => {
+    prisma.checkoutPlatformSettings.findFirst.mockResolvedValue({
+      identityId: 'identity-1',
+      pixFeeBasisPoints: 119,
+      webhookConfiguredAt: new Date(),
+    });
+    prisma.efiAccountIdentity.findFirst.mockResolvedValue({
+      ...identity,
+      credentialVersions: [{ id: 'credential-1', status: 'ACTIVE' }],
+    });
+
+    await service.ready();
+    expect(prisma.checkoutPlatformSettings.findFirst).toHaveBeenLastCalledWith({
+      where: { companyId: null },
+      orderBy: { version: 'desc' },
+    });
+    expect(prisma.efiAccountIdentity.findFirst).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: { id: 'identity-1', ownership: 'PLATFORM' },
+      }),
+    );
+
+    await service.ready('company-a');
+    expect(prisma.checkoutPlatformSettings.findFirst).toHaveBeenLastCalledWith({
+      where: { companyId: 'company-a' },
+      orderBy: { version: 'desc' },
+    });
+    // The settings of a seller only work with an account of that seller.
+    expect(prisma.efiAccountIdentity.findFirst).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: {
+          id: 'identity-1',
+          ownership: 'COMPANY',
+          companyId: 'company-a',
+        },
+      }),
+    );
+  });
+
+  it('o modo dos termos diz de quem é a conta', () => {
+    expect(accountOwner(null)).toBeNull();
+    expect(
+      accountOwner({ accountMode: 'PLATFORM_ACCOUNT', companyId: 'company-a' }),
+    ).toBeNull();
+    expect(
+      accountOwner({ accountMode: 'SELLER_ACCOUNT', companyId: 'company-a' }),
+    ).toBe('company-a');
+  });
+
+  it('a conta emissora de uma cobrança precisa de credencial ativa', async () => {
+    prisma.efiAccountIdentity.findUnique.mockResolvedValue({
+      id: 'identity-9',
+      credentialVersions: [{ id: 'credential-9' }],
+    });
+    await expect(service.accountOf('identity-9')).resolves.toMatchObject({
+      identity: { id: 'identity-9' },
+      credential: { id: 'credential-9' },
+    });
+    prisma.efiAccountIdentity.findUnique.mockResolvedValue({
+      id: 'identity-9',
+      credentialVersions: [],
+    });
+    await expect(service.accountOf('identity-9')).resolves.toBeNull();
   });
 
   it('cartão: nova versão com tarifa e prazo, mantendo a tarifa do Pix', async () => {

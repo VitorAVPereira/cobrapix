@@ -2264,4 +2264,223 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
       .expect(409);
     expect(locked.body).toMatchObject({ code: 'CHECKOUT_PLAN_LOCKED' });
   });
+
+  it('vendedor na conta própria vende pela conta dele; o da conta Cifra+ não muda', async () => {
+    const SELLER_PIX_KEY = 'pix@outra-loja.e2e.test';
+    const crypto = app.get(PaymentCryptoService);
+    const payments = app.get(CheckoutPaymentsService);
+    const other = await login(`olga-${suffix}@e2e.test`, 'Nova-senha-e2e-2');
+    const company = await prisma.company.findFirstOrThrow({
+      where: { email: `outra-${suffix}@e2e.test` },
+    });
+    const own = (
+      await request(http)
+        .post('/checkout/products')
+        .set(auth(other))
+        .send({
+          name: 'Curso da Outra Loja',
+          priceCents: 10000,
+          accessPeriodMonths: 12,
+          deliveryMode: 'ACCESS_LINK',
+          accessUrl: 'https://acesso.e2e.test/outra',
+        })
+        .expect(201)
+    ).body as { slug: string };
+    const settings = (
+      await request(http).get('/checkout/settings').set(auth(other)).expect(200)
+    ).body as Record<string, unknown> & { version: number };
+    await request(http)
+      .put('/checkout/settings')
+      .set(auth(other))
+      .send({
+        expectedVersion: settings.version,
+        displayName: settings.displayName,
+        primaryColor: settings.primaryColor,
+        pixEnabled: true,
+        cardEnabled: true,
+        maxInstallments: 3,
+        pixFeePayer: 'SELLER',
+        cardFeePayer: 'BUYER',
+      })
+      .expect(200);
+    const order = () => ({
+      bumpIds: [],
+      method: 'PIX',
+      buyer: {
+        name: 'Bruna Lima',
+        email: 'bruna@e2e.test',
+        document: '52998224725',
+        phone: '11977776666',
+      },
+      idempotencyKey: randomUUID(),
+    });
+    const sell = (to: string, status: number) =>
+      request(http)
+        .post(`/checkout/public/products/${to}/orders`)
+        .send(order())
+        .expect(status);
+    const page = async (of: string) =>
+      (await request(http).get(`/checkout/public/products/${of}`).expect(200))
+        .body as { available: boolean; payment: { cardEnabled: boolean } };
+
+    // New terms: this seller sells through its own account (the admin route
+    // comes with the account activation).
+    await prisma.checkoutSellerTerms.create({
+      data: {
+        companyId: company.id,
+        version: 2,
+        accountMode: 'SELLER_ACCOUNT',
+        platformFeeBasisPoints: 150,
+        payoutDocument: '45723174000110',
+        payoutPixKey: '11144477735',
+        authorizationReference: 'termo-e2e',
+        changedByUserId: 'admin',
+      },
+    });
+
+    // No account of its own yet: nothing sells, even with the CifraMais account ready.
+    expect(await page(own.slug)).toMatchObject({ available: false });
+    expect((await sell(own.slug, 400)).body).toMatchObject({
+      code: 'CHECKOUT_UNAVAILABLE',
+    });
+
+    // The seller's account as the admin leaves it after validation.
+    const identity = await prisma.efiAccountIdentity.create({
+      data: {
+        ownership: 'COMPANY',
+        companyId: company.id,
+        environment: 'HOMOLOGATION',
+        holderDocument: '45723174000110',
+        efiAccountNumber: `8${Date.now()}`.slice(0, 12),
+        payeeCode: 'payee-outra',
+        pixKey: SELLER_PIX_KEY,
+      },
+    });
+    await prisma.efiCredentialVersion.create({
+      data: {
+        identityId: identity.id,
+        version: 1,
+        status: 'ACTIVE',
+        encryptedClientId: crypto.encrypt('client-outra'),
+        encryptedClientSecret: crypto.encrypt('secret-outra'),
+        encryptedCertificate: crypto.encrypt('cert-outra'),
+        credentialKeyVersion: crypto.activeKeyVersion,
+        certificateFingerprint: Array.from({ length: 32 }, () => 'CD').join(
+          ':',
+        ),
+        certificateExpiresAt: new Date(Date.now() + 365 * 86_400_000),
+        activatedAt: new Date(),
+      },
+    });
+    // A version above every CifraMais one: versions are counted per owner.
+    const ownSettings = await prisma.checkoutPlatformSettings.create({
+      data: {
+        companyId: company.id,
+        version: 999,
+        identityId: identity.id,
+        pixFeeBasisPoints: 100,
+        cardEnabled: true,
+        cardRates: {
+          receipt: 'ANTICIPATED',
+          cashBasisPoints: 349,
+          anticipationBasisPoints: 100,
+        },
+        cardCreditDays: 30,
+        webhookConfiguredAt: new Date(),
+        changedByUserId: 'admin',
+      },
+    });
+
+    expect(await page(own.slug)).toMatchObject({
+      available: true,
+      payment: { cardEnabled: true },
+    });
+    pix.create.mockClear();
+    const sold = (await sell(own.slug, 201)).body as { token: string };
+    const saved = await prisma.checkoutOrder.findUniqueOrThrow({
+      where: { publicToken: sold.token },
+      include: { attempt: true },
+    });
+    expect(saved).toMatchObject({
+      companyId: company.id,
+      platformSettingsId: ownSettings.id,
+      efiFeeBasisPoints: 100,
+      platformFeeBasisPoints: 150,
+      attempt: { issuerIdentityId: identity.id },
+    });
+    expect(pix.create).toHaveBeenCalledTimes(1);
+    expect(pix.create.mock.calls[0]).toMatchObject([
+      {
+        identity: { id: identity.id },
+        credential: { identityId: identity.id },
+      },
+      { pixKey: SELLER_PIX_KEY },
+    ]);
+
+    // The card is tokenized and charged with the seller's payee code.
+    const quote = await request(http)
+      .post(`/checkout/public/products/${own.slug}/card/quote`)
+      .send({ bumpIds: [], couponCode: null, brand: 'visa' })
+      .expect(200);
+    expect(quote.body).toMatchObject({ payeeCode: 'payee-outra' });
+
+    // A notice for the CifraMais key does not settle a sale of this account.
+    const notice = (chave: string) => ({
+      txid: saved.attempt!.efiTxid,
+      chave,
+      valor: '100.00',
+      endToEndId: 'E2EOUTRA',
+    });
+    expect(await payments.handlePixEvent(notice(PIX_KEY))).toBe(false);
+    expect(await payments.handlePixEvent(notice(SELLER_PIX_KEY))).toBe(true);
+    expect(
+      (
+        await prisma.checkoutOrder.findUniqueOrThrow({
+          where: { id: saved.id },
+        })
+      ).status,
+    ).toBe('PAID');
+
+    // A lost answer is checked at the account that issued the Pix.
+    const lost = (await sell(own.slug, 201)).body as { token: string };
+    const lostAttempt = await prisma.checkoutPaymentAttempt.findFirstOrThrow({
+      where: { order: { publicToken: lost.token } },
+    });
+    await prisma.checkoutPaymentAttempt.update({
+      where: { id: lostAttempt.id },
+      data: { status: 'UNCERTAIN' },
+    });
+    pix.status.mockClear();
+    pix.status.mockResolvedValue({
+      status: 'CONCLUIDA',
+      paidAmountCents: 10000,
+      endToEndId: 'E2EOUTRA2',
+    });
+    await app.get(CheckoutOrdersService).reconcileUncertain();
+    const asked = (
+      pix.status.mock.calls as [{ identity: { id: string } }, string][]
+    ).find(([, txid]) => txid === lostAttempt.efiTxid);
+    pix.status.mockReset();
+    expect(asked?.[0].identity.id).toBe(identity.id);
+    expect(
+      (
+        await prisma.checkoutOrder.findUniqueOrThrow({
+          where: { publicToken: lost.token },
+        })
+      ).status,
+    ).toBe('PAID');
+
+    // The seller of the CifraMais account keeps selling through it.
+    const platformAccount = await request(http)
+      .get('/admin/checkout/platform-account')
+      .set(auth(tokens.admin))
+      .expect(200);
+    expect(platformAccount.body).toMatchObject({ ready: true });
+    expect(
+      (platformAccount.body as { current: { version: number } }).current
+        .version,
+    ).toBeLessThan(999);
+    expect(JSON.stringify(platformAccount.body)).not.toContain(identity.id);
+    expect(await page(slug)).toMatchObject({ available: true });
+  });
 });

@@ -58,7 +58,11 @@ describe('CheckoutOffersService', () => {
     checkoutOfferResponse: { upsert: jest.fn() },
   };
   const catalog = { prepareOffer: jest.fn() };
-  const platform = { ready: jest.fn(), cardReady: jest.fn() };
+  const platform = {
+    ready: jest.fn(),
+    cardReady: jest.fn(),
+    ownerFor: jest.fn(),
+  };
   const orders = { createPix: jest.fn(), view: jest.fn() };
   const card = {
     keptCard: jest.fn(),
@@ -117,6 +121,7 @@ describe('CheckoutOffersService', () => {
     });
     platform.ready.mockResolvedValue({});
     platform.cardReady.mockResolvedValue({});
+    platform.ownerFor.mockResolvedValue(null);
     card.keptCard.mockResolvedValue(null);
     tx.checkoutOrder.findFirst.mockResolvedValue(null);
     tx.checkoutOfferResponse.findUnique.mockResolvedValue(null);

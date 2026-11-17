@@ -390,15 +390,16 @@ export class CheckoutOrdersService {
    * paid, or never existed (then the order fails; nothing was charged).
    */
   async reconcileUncertain(now = new Date()): Promise<void> {
-    const platform = await this.platform.ready();
-    if (!platform) return;
     const attempts = await this.prisma.checkoutPaymentAttempt.findMany({
       where: { status: 'UNCERTAIN' },
       orderBy: { createdAt: 'asc' },
       take: 50,
     });
     for (const attempt of attempts) {
-      const found = await this.pix.status(platform, attempt.efiTxid);
+      // Always the account that issued the Pix, not the current one.
+      const issuer = await this.platform.accountOf(attempt.issuerIdentityId);
+      if (!issuer) continue;
+      const found = await this.pix.status(issuer, attempt.efiTxid);
       await this.prisma.checkoutPaymentAttempt.update({
         where: { id: attempt.id },
         data: { lastCheckedAt: now },
@@ -424,8 +425,6 @@ export class CheckoutOrdersService {
    * payment whose webhook was lost is confirmed instead of expired.
    */
   async expireOverdue(now = new Date()): Promise<void> {
-    const platform = await this.platform.ready();
-    if (!platform) return;
     const overdue = await this.prisma.checkoutOrder.findMany({
       where: {
         status: 'PENDING',
@@ -439,7 +438,10 @@ export class CheckoutOrdersService {
     for (const order of overdue) {
       const attempt = order.attempt;
       if (!attempt) continue;
-      const found = await this.pix.status(platform, attempt.efiTxid);
+      const issuer = await this.platform.accountOf(attempt.issuerIdentityId);
+      // Without the issuing account nothing can be asked: the order stays open.
+      if (!issuer) continue;
+      const found = await this.pix.status(issuer, attempt.efiTxid);
       if (found?.status === 'CONCLUIDA') {
         await this.payments.confirm(attempt.id, {
           paidAmountCents: found.paidAmountCents,

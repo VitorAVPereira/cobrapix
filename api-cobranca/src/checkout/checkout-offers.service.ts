@@ -160,9 +160,10 @@ export class CheckoutOffersService {
       return { ...base, state: 'DONE' as const, offer: null, order: null };
     const { offer, order } = current;
     const state = orderState(order, now);
+    const owner = await this.platform.ownerFor(origin.companyId);
     const [platform, cardAccount, kept] = await Promise.all([
-      this.platform.ready(),
-      this.platform.cardReady(),
+      this.platform.ready(owner),
+      this.platform.cardReady(owner),
       this.card.keptCard(origin.id),
     ]);
     // The kept card is charged once per offer: after a decline, Pix only.

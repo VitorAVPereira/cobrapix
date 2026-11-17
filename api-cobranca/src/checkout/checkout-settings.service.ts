@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CheckoutAssetsService } from './checkout-assets.service';
+import { accountOwner } from './checkout-platform.service';
 import { conflict, versionChanged } from './checkout-rules';
 import { UpdateCheckoutSettingsDto } from './dto/checkout-settings.dto';
 
@@ -26,9 +27,16 @@ export class CheckoutSettingsService {
         'CHECKOUT_NO_PAYMENT_METHOD',
         'Deixe ao menos uma forma de pagamento ligada.',
       );
-    // Card waits for the Efí card approval on the CifraMais account.
+    // Card waits for the Efí card approval on the account the seller sells
+    // through: its own or the CifraMais one.
     if (dto.cardEnabled) {
+      const terms = await this.prisma.checkoutSellerTerms.findFirst({
+        where: { companyId },
+        orderBy: { version: 'desc' },
+        select: { accountMode: true, companyId: true },
+      });
       const platform = await this.prisma.checkoutPlatformSettings.findFirst({
+        where: { companyId: accountOwner(terms) },
         orderBy: { version: 'desc' },
         select: { cardEnabled: true },
       });

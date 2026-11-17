@@ -108,6 +108,7 @@ describe('CheckoutSettingsService', () => {
   const prisma = {
     checkoutSettings: { findUnique: jest.fn(), updateMany: jest.fn() },
     checkoutPlatformSettings: { findFirst: jest.fn() },
+    checkoutSellerTerms: { findFirst: jest.fn() },
   };
   const assets = { assertOwned: jest.fn() };
   const service = new CheckoutSettingsService(
@@ -134,6 +135,10 @@ describe('CheckoutSettingsService', () => {
     jest.clearAllMocks();
     prisma.checkoutSettings.findUnique.mockResolvedValue({ version: 3 });
     prisma.checkoutSettings.updateMany.mockResolvedValue({ count: 1 });
+    prisma.checkoutSellerTerms.findFirst.mockResolvedValue({
+      accountMode: 'PLATFORM_ACCOUNT',
+      companyId: 'company-a',
+    });
   });
 
   it('salva na versão esperada e confere as imagens da empresa', async () => {
@@ -191,6 +196,23 @@ describe('CheckoutSettingsService', () => {
       expect.objectContaining({
         data: expect.objectContaining({ cardEnabled: true }) as unknown,
       }),
+    );
+    expect(prisma.checkoutPlatformSettings.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { companyId: null } }),
+    );
+  });
+
+  it('vendedor na conta própria: o cartão depende da conta dele, não da Cifra+', async () => {
+    prisma.checkoutSellerTerms.findFirst.mockResolvedValue({
+      accountMode: 'SELLER_ACCOUNT',
+      companyId: 'company-a',
+    });
+    prisma.checkoutPlatformSettings.findFirst.mockResolvedValue(null);
+    await expect(
+      service.update('company-a', { ...dto, cardEnabled: true }),
+    ).rejects.toMatchObject({ response: { code: 'CARD_NOT_AVAILABLE' } });
+    expect(prisma.checkoutPlatformSettings.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { companyId: 'company-a' } }),
     );
   });
 });

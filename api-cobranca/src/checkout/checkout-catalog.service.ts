@@ -10,6 +10,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  accountOwner,
   CheckoutPlatformService,
   type CheckoutCardAccount,
   type CheckoutPlatformAccount,
@@ -89,8 +90,9 @@ export class CheckoutCatalogService {
   /** The payment page. Only what a buyer may see: no access link, terms or account. */
   async view(slug: string) {
     const { product, settings, terms } = await this.load(slug);
-    const platform = await this.platform.ready();
-    const card = cardOn(settings, await this.platform.cardReady());
+    const owner = accountOwner(terms);
+    const platform = await this.platform.ready(owner);
+    const card = cardOn(settings, await this.platform.cardReady(owner));
     const available = Boolean(
       platform && terms && (settings.pixEnabled || card),
     );
@@ -310,20 +312,24 @@ export class CheckoutCatalogService {
     };
   }
 
-  /** The Cifra+ account and terms a sale needs, and the method switched on. */
+  /**
+   * The issuing account (the seller's own or the Cifra+ one, by the terms)
+   * and terms a sale needs, and the method switched on.
+   */
   private async accounts(
     settings: CheckoutSettings,
     terms: CheckoutSellerTerms | null,
     method: 'PIX' | 'CARD',
   ) {
-    const platform = await this.platform.ready();
+    const owner = accountOwner(terms);
+    const platform = await this.platform.ready(owner);
     if (!platform || !terms)
       throw this.invalid(
         'CHECKOUT_UNAVAILABLE',
         'Pagamento indisponível no momento. Fale com o vendedor.',
       );
     const cardAccount =
-      method === 'CARD' ? await this.platform.cardReady() : null;
+      method === 'CARD' ? await this.platform.cardReady(owner) : null;
     if (
       method === 'PIX' ? !settings.pixEnabled : !cardOn(settings, cardAccount)
     )

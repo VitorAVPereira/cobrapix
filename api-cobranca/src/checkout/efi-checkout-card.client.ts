@@ -7,7 +7,7 @@ import {
   normalizeCardInstallments,
   normalizeCardSubmission,
 } from '../payment/efi-card.client';
-import type { CheckoutPlatformAccount } from './checkout-platform.service';
+import type { CheckoutIssuerAccount } from './checkout-platform.service';
 
 export type CheckoutCardBrand = 'visa' | 'mastercard' | 'amex' | 'elo';
 
@@ -97,7 +97,7 @@ function idOf(value: unknown): string {
     : '';
 }
 
-/** Card charges (API Cobranças) on the CifraMais account. Never card data. */
+/** Card charges (API Cobranças) on the account the checkout issues from. Never card data. */
 @Injectable()
 export class EfiCheckoutCardClient {
   constructor(
@@ -107,7 +107,7 @@ export class EfiCheckoutCardClient {
 
   /** Installment value the Efí charges for this total, brand and count. */
   async installmentValue(
-    account: CheckoutPlatformAccount,
+    account: CheckoutIssuerAccount,
     totalCents: number,
     brand: CheckoutCardBrand,
     installments: number,
@@ -121,7 +121,7 @@ export class EfiCheckoutCardClient {
   }
 
   async installmentCounts(
-    account: CheckoutPlatformAccount,
+    account: CheckoutIssuerAccount,
     totalCents: number,
     brand: CheckoutCardBrand,
   ): Promise<number[]> {
@@ -132,7 +132,7 @@ export class EfiCheckoutCardClient {
   }
 
   async submit(
-    account: CheckoutPlatformAccount,
+    account: CheckoutIssuerAccount,
     charge: CheckoutCardCharge,
   ): Promise<CardSubmission> {
     const notificationUrl = checkoutCardNotificationUrl(
@@ -144,7 +144,7 @@ export class EfiCheckoutCardClient {
         code: 'CARD_NOT_AVAILABLE',
         message: 'O cartão está indisponível no momento. Pague com Pix.',
       });
-    // No split: the whole sale belongs to the CifraMais account.
+    // No split: the whole sale stays in the issuing account.
     const body = {
       items: [
         {
@@ -172,7 +172,7 @@ export class EfiCheckoutCardClient {
   }
 
   async detail(
-    account: CheckoutPlatformAccount,
+    account: CheckoutIssuerAccount,
     chargeId: string,
   ): Promise<CheckoutCardDetail | null> {
     const data = record(
@@ -201,7 +201,7 @@ export class EfiCheckoutCardClient {
 
   /** Charge ids the Efí holds for this attempt (custom_id), around its date. */
   async findByAttempt(
-    account: CheckoutPlatformAccount,
+    account: CheckoutIssuerAccount,
     attemptId: string,
     createdAt: Date,
     now = new Date(),
@@ -226,7 +226,7 @@ export class EfiCheckoutCardClient {
 
   /** The last event of a notification: which charge it is about. */
   async notification(
-    account: CheckoutPlatformAccount,
+    account: CheckoutIssuerAccount,
     token: string,
   ): Promise<{ customId: string | null; chargeId: string | null } | null> {
     const body = record(await this.sdk(account).getNotification({ token }));
@@ -244,7 +244,7 @@ export class EfiCheckoutCardClient {
     };
   }
 
-  private sdk(account: CheckoutPlatformAccount): CardSdk {
+  private sdk(account: CheckoutIssuerAccount): CardSdk {
     return new EfiPay({
       sandbox: account.identity.environment !== 'PRODUCTION',
       client_id: this.crypto.decrypt(account.credential.encryptedClientId),

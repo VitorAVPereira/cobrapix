@@ -3,7 +3,10 @@ import { CheckoutFeePayer } from '@prisma/client';
 import { cardProcessingBasisPoints } from '../payment/efi-card.client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CheckoutCardService } from './checkout-card.service';
-import { CheckoutPlatformService } from './checkout-platform.service';
+import {
+  accountOwner,
+  CheckoutPlatformService,
+} from './checkout-platform.service';
 import { quoteOrder } from './checkout-pricing';
 import {
   assertPrices,
@@ -139,18 +142,21 @@ export class CheckoutPlansService {
   /**
    * What the seller keeps for a price, with and without passing the Efí
    * tariff on to the buyer. Same math as a real order; a method that is not
-   * ready on the Cifra+ account comes back null.
+   * ready on the account the seller sells through comes back null.
    */
   async preview(companyId: string, dto: CheckoutPlanPreviewDto) {
     assertPrices(dto.priceCents, null);
-    const [terms, settings, platform, cardAccount] = await Promise.all([
+    const [terms, settings] = await Promise.all([
       this.prisma.checkoutSellerTerms.findFirst({
         where: { companyId },
         orderBy: { version: 'desc' },
       }),
       this.prisma.checkoutSettings.findUnique({ where: { companyId } }),
-      this.platform.ready(),
-      this.platform.cardReady(),
+    ]);
+    const owner = accountOwner(terms);
+    const [platform, cardAccount] = await Promise.all([
+      this.platform.ready(owner),
+      this.platform.cardReady(owner),
     ]);
     if (!terms || !settings)
       throw new NotFoundException(

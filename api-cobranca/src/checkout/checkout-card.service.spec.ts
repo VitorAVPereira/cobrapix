@@ -112,7 +112,11 @@ describe('CheckoutCardService', () => {
     afterPurchase: 'ACCESS',
   };
   const catalog = { prepare: jest.fn() };
-  const platform = { ready: jest.fn(), cardReady: jest.fn() };
+  const platform = {
+    ready: jest.fn(),
+    cardReady: jest.fn(),
+    accountOf: jest.fn(),
+  };
   const orders = { orderData: jest.fn(), view: jest.fn() };
   const payments = { confirmCard: jest.fn() };
   const webhooks = { emit: jest.fn() };
@@ -156,6 +160,7 @@ describe('CheckoutCardService', () => {
     catalog.prepare.mockResolvedValue(sale);
     platform.ready.mockResolvedValue(card.account);
     platform.cardReady.mockResolvedValue(card);
+    platform.accountOf.mockResolvedValue(card.account);
     orders.orderData.mockReturnValue({ publicToken: 'token' });
     orders.view.mockResolvedValue({ token: 'token' });
     prisma.checkoutOrder.findUnique.mockResolvedValue(null);
@@ -577,6 +582,24 @@ describe('CheckoutCardService', () => {
     await service.reconcile('attempt-1', undefined, now);
 
     expect(payments.confirmCard).toHaveBeenCalledWith('attempt-1');
+    // Asked at the account that issued the charge, whatever the current one is.
+    expect(platform.accountOf).toHaveBeenCalledWith('identity-cifra');
+    expect(platform.ready).not.toHaveBeenCalled();
+    expect(client.detail).toHaveBeenCalledWith(card.account, '994');
+  });
+
+  it('conciliação: sem a conta que emitiu, nada é consultado nem alterado', async () => {
+    prisma.checkoutCardAttempt.findUnique.mockResolvedValue({
+      ...attempt,
+      status: 'UNCERTAIN',
+    });
+    platform.accountOf.mockResolvedValue(null);
+
+    await service.reconcile('attempt-1', undefined, now);
+
+    expect(client.findByAttempt).not.toHaveBeenCalled();
+    expect(client.detail).not.toHaveBeenCalled();
+    expect(prisma.checkoutCardAttempt.updateMany).not.toHaveBeenCalled();
   });
 
   it('valor diferente ou estorno na Efí viram alerta para o admin, sem mexer no saldo', async () => {
@@ -655,6 +678,7 @@ describe('CheckoutCardService', () => {
   });
 
   it('aviso de outra conta não é do checkout', async () => {
+    platform.accountOf.mockResolvedValue(null);
     await expect(
       service.handleNotification('outra-conta', 'tok'),
     ).resolves.toBe(false);

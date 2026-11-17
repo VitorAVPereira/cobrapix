@@ -92,7 +92,8 @@ describe('CheckoutOrdersService', () => {
   const catalog = {
     prepare: jest.fn(),
   };
-  const platform = { ready: jest.fn() };
+  const platform = { accountOf: jest.fn() };
+  const issuer = { identity: { id: 'identity-1' }, credential: { id: 'c-1' } };
   const pix = { create: jest.fn(), status: jest.fn() };
   const payments = { confirm: jest.fn() };
   const webhooks = { emit: jest.fn() };
@@ -162,7 +163,7 @@ describe('CheckoutOrdersService', () => {
       supportEmail: null,
       supportWhatsapp: null,
     });
-    platform.ready.mockResolvedValue(platformAccount);
+    platform.accountOf.mockResolvedValue(issuer);
     prisma.checkoutOrder.updateMany.mockResolvedValue({ count: 1 });
     prisma.checkoutPaymentAttempt.updateMany.mockResolvedValue({ count: 1 });
   });
@@ -382,5 +383,32 @@ describe('CheckoutOrdersService', () => {
       where: { id: 'attempt-1', status: 'UNCERTAIN' },
       data: { status: 'FAILED' },
     });
+  });
+
+  it('Pix incerto ou vencido é consultado na conta que o emitiu; sem ela, nada muda', async () => {
+    const uncertain = {
+      id: 'attempt-1',
+      orderId: 'order-1',
+      efiTxid: 'ckt1',
+      issuerIdentityId: 'identity-seller',
+      createdAt: new Date(now.getTime() - 11 * 60_000),
+    };
+    prisma.checkoutPaymentAttempt.findMany.mockResolvedValue([uncertain]);
+    pix.status.mockResolvedValue(null);
+    await service.reconcileUncertain(now);
+    expect(platform.accountOf).toHaveBeenCalledWith('identity-seller');
+    expect(pix.status).toHaveBeenCalledWith(issuer, 'ckt1');
+
+    jest.clearAllMocks();
+    platform.accountOf.mockResolvedValue(null);
+    prisma.checkoutPaymentAttempt.findMany.mockResolvedValue([uncertain]);
+    prisma.checkoutOrder.findMany.mockResolvedValue([
+      order({ expiresAt: new Date(now.getTime() - 20 * 60_000) }),
+    ]);
+    await service.reconcileUncertain(now);
+    await service.expireOverdue(now);
+    expect(pix.status).not.toHaveBeenCalled();
+    expect(prisma.checkoutPaymentAttempt.updateMany).not.toHaveBeenCalled();
+    expect(prisma.checkoutOrder.updateMany).not.toHaveBeenCalled();
   });
 });

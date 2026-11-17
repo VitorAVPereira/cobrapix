@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import EfiPay from 'sdk-node-apis-efi';
 import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { classifyEfiError } from '../financial-activation/financial-validation.types';
-import type { CheckoutPlatformAccount } from './checkout-platform.service';
+import type { CheckoutIssuerAccount } from './checkout-platform.service';
 
 export interface ImmediatePixInput {
   txid: string;
@@ -48,13 +48,13 @@ function isNotFound(error: unknown): boolean {
   );
 }
 
-/** Immediate Pix (cob) on the CifraMais account, with normalized answers. */
+/** Immediate Pix (cob) on the account the checkout issues from, with normalized answers. */
 @Injectable()
 export class EfiCheckoutPixClient {
   constructor(private readonly crypto: PaymentCryptoService) {}
 
   async create(
-    account: CheckoutPlatformAccount,
+    account: CheckoutIssuerAccount,
     input: ImmediatePixInput,
   ): Promise<PixCreation> {
     const sdk = this.sdk(account);
@@ -101,7 +101,7 @@ export class EfiCheckoutPixClient {
 
   /** null when the Efí has no Pix with this txid. */
   async status(
-    account: CheckoutPlatformAccount,
+    account: CheckoutIssuerAccount,
     txid: string,
   ): Promise<PixStatus | null> {
     let detail: {
@@ -124,7 +124,7 @@ export class EfiCheckoutPixClient {
     };
   }
 
-  private sdk(account: CheckoutPlatformAccount): PixSdk {
+  private sdk(account: CheckoutIssuerAccount): PixSdk {
     const sdk = new EfiPay({
       sandbox: account.identity.environment !== 'PRODUCTION',
       client_id: this.crypto.decrypt(account.credential.encryptedClientId),

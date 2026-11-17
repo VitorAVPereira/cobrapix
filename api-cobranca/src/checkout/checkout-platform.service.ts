@@ -9,6 +9,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import {
   CheckoutPlatformSettings,
+  CheckoutSellerTerms,
   EfiAccountIdentity,
   EfiCredentialVersion,
   Prisma,
@@ -62,11 +63,26 @@ export interface UploadedCertificate {
   size: number;
 }
 
+/** An issuing account as the Efí clients use it: who it is and how to sign in. */
+export interface CheckoutIssuerAccount {
+  identity: EfiAccountIdentity;
+  credential: EfiCredentialVersion;
+}
+
 /** What the checkout needs to issue a Pix: all present, or the checkout does not sell. */
-export interface CheckoutPlatformAccount {
+export interface CheckoutPlatformAccount extends CheckoutIssuerAccount {
   settings: CheckoutPlatformSettings & { pixFeeBasisPoints: number };
   identity: EfiAccountIdentity & { pixKey: string };
-  credential: EfiCredentialVersion;
+}
+
+/**
+ * Whose account a sale under these terms is issued from: the seller's own
+ * company, or null for the CifraMais account.
+ */
+export function accountOwner(
+  terms: Pick<CheckoutSellerTerms, 'accountMode' | 'companyId'> | null,
+): string | null {
+  return terms?.accountMode === 'SELLER_ACCOUNT' ? terms.companyId : null;
 }
 
 const AUDIT_RETENTION_MS = 5 * 365.25 * 86_400_000;
@@ -88,15 +104,31 @@ export class CheckoutPlatformService {
     private readonly registry: EfiAccountRegistryService,
   ) {}
 
-  current(): Promise<CheckoutPlatformSettings | null> {
+  /** The current settings of the CifraMais account or, with an owner, of that seller's. */
+  current(
+    owner: string | null = null,
+  ): Promise<CheckoutPlatformSettings | null> {
     return this.prisma.checkoutPlatformSettings.findFirst({
+      where: { companyId: owner },
       orderBy: { version: 'desc' },
     });
+  }
+
+  /** Whose account the seller sells through now, by its current terms. */
+  async ownerFor(companyId: string): Promise<string | null> {
+    return accountOwner(
+      await this.prisma.checkoutSellerTerms.findFirst({
+        where: { companyId },
+        orderBy: { version: 'desc' },
+        select: { accountMode: true, companyId: true },
+      }),
+    );
   }
 
   /** Never returns client id, secret or certificate. */
   async view() {
     const history = await this.prisma.checkoutPlatformSettings.findMany({
+      where: { companyId: null },
       orderBy: { version: 'desc' },
       take: 20,
       select: {
@@ -311,6 +343,7 @@ export class CheckoutPlatformService {
         });
       }
       const previous = await tx.checkoutPlatformSettings.findFirst({
+        where: { companyId: null },
         orderBy: { version: 'desc' },
       });
       await tx.checkoutPlatformSettings.create({
@@ -342,6 +375,7 @@ export class CheckoutPlatformService {
     try {
       await this.prisma.$transaction(async (tx) => {
         const current = await tx.checkoutPlatformSettings.findFirst({
+          where: { companyId: null },
           orderBy: { version: 'desc' },
         });
         if (!current)
@@ -402,6 +436,7 @@ export class CheckoutPlatformService {
     try {
       await this.prisma.$transaction(async (tx) => {
         const current = await tx.checkoutPlatformSettings.findFirst({
+          where: { companyId: null },
           orderBy: { version: 'desc' },
         });
         if (!current)
@@ -437,8 +472,10 @@ export class CheckoutPlatformService {
   }
 
   /** The card side of the current account, or null while it does not sell. */
-  async cardReady(): Promise<CheckoutCardAccount | null> {
-    const account = await this.ready();
+  async cardReady(
+    owner: string | null = null,
+  ): Promise<CheckoutCardAccount | null> {
+    const account = await this.ready(owner);
     const settings = account?.settings;
     const rates = settings?.cardRates as CheckoutCardRates | null | undefined;
     if (
@@ -458,13 +495,24 @@ export class CheckoutPlatformService {
     };
   }
 
-  /** The current account, or null while anything the Pix needs is missing. */
-  async ready(): Promise<CheckoutPlatformAccount | null> {
-    const settings = await this.current();
+  /**
+   * The current account of the CifraMais or, with an owner, of that seller;
+   * null while anything the Pix needs is missing.
+   */
+  async ready(
+    owner: string | null = null,
+  ): Promise<CheckoutPlatformAccount | null> {
+    const settings = await this.current(owner);
     if (!settings?.webhookConfiguredAt || settings.pixFeeBasisPoints == null)
       return null;
     const identity = await this.prisma.efiAccountIdentity.findFirst({
-      where: { id: settings.identityId, ownership: 'PLATFORM' },
+      where: {
+        id: settings.identityId,
+        // A seller never issues from an account that is not its own.
+        ...(owner
+          ? { ownership: 'COMPANY', companyId: owner }
+          : { ownership: 'PLATFORM' }),
+      },
       include: {
         credentialVersions: { where: { status: 'ACTIVE' }, take: 1 },
       },
@@ -476,6 +524,21 @@ export class CheckoutPlatformService {
       identity: { ...identity, pixKey: identity.pixKey },
       credential,
     };
+  }
+
+  /**
+   * The account that issued a charge, for everything after the issue (query,
+   * reconciliation, refund): never the current one, which may have changed.
+   */
+  async accountOf(identityId: string): Promise<CheckoutIssuerAccount | null> {
+    const identity = await this.prisma.efiAccountIdentity.findUnique({
+      where: { id: identityId },
+      include: {
+        credentialVersions: { where: { status: 'ACTIVE' }, take: 1 },
+      },
+    });
+    const credential = identity?.credentialVersions[0];
+    return identity && credential ? { identity, credential } : null;
   }
 
   private async efi<T>(call: () => Promise<T>): Promise<T> {
