@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CheckoutLedgerService } from './checkout-ledger.service';
 import { CheckoutRefundsService } from './checkout-refunds.service';
+import { conflict } from './checkout-rules';
 import { CheckoutWebhooksService } from './checkout-webhooks.service';
 import {
   AdjustmentDto,
@@ -116,7 +117,17 @@ export class CheckoutFinanceService {
     now = new Date(),
   ) {
     await this.assertCheckout(companyId);
-    const { releasedCents } = await this.ledger.balance(companyId, now);
+    const { releasedCents, accountMode } = await this.ledger.balance(
+      companyId,
+      now,
+    );
+    // Own account: the sales are already with the seller; a payout entry
+    // would only distort what it owes.
+    if (accountMode === 'SELLER_ACCOUNT')
+      conflict(
+        'CHECKOUT_ACCOUNT_MODE_NOT_SUPPORTED',
+        'Este cliente recebe as vendas na própria conta Efí: não há repasse a registrar.',
+      );
     await this.write(companyId, adminUserId, 'CHECKOUT_PAYOUT_RECORDED', {
       kind: 'PAYOUT',
       amountCents: -dto.amountCents,
@@ -154,6 +165,20 @@ export class CheckoutFinanceService {
         },
         tx,
       );
+      // Own account: the Efí took the amount from the seller's account. The
+      // Cifra+ % of the sale stays owed.
+      if (await this.ledger.soldDirectly(tx, dto.orderId))
+        await this.ledger.record(tx, [
+          {
+            companyId,
+            orderId: dto.orderId,
+            kind: 'DIRECT_SETTLEMENT',
+            amountCents: dto.amountCents,
+            availableAt: new Date(),
+            idempotencyKey: `direct-chargeback:${dto.idempotencyKey}`,
+            createdByUserId: adminUserId,
+          },
+        ]);
       await tx.checkoutOrder.updateMany({
         where: {
           id: dto.orderId,

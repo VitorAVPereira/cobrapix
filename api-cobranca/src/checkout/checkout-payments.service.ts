@@ -203,6 +203,7 @@ export class CheckoutPaymentsService {
         product: {
           select: { afterPurchase: true, offerWindowMinutes: true },
         },
+        terms: { select: { accountMode: true } },
       },
     });
     // The one-click offer window opens with the payment. An offer order does

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import {
+  CheckoutAccountMode,
   CheckoutLedgerKind,
   CheckoutOrderStatus,
   Prisma,
@@ -11,6 +12,12 @@ type Client = Prisma.TransactionClient | PrismaService;
 
 export const RELEASE_DELAY_MS = 7 * 86_400_000;
 const SOLD: CheckoutOrderStatus[] = ['PAID', 'REFUNDED', 'CHARGEBACK'];
+// Movements of money, not results of the sale.
+const NOT_IN_NET: CheckoutLedgerKind[] = [
+  'PAYOUT',
+  'DIRECT_SETTLEMENT',
+  'FEE_PAYMENT',
+];
 
 /** The refund request still open on a sale, without its status. */
 function openRequest<T extends { status: string }>(
@@ -56,9 +63,22 @@ export class CheckoutLedgerService {
       });
   }
 
+  /** Sold through the seller's own account, by the terms of the order. */
+  async soldDirectly(client: Client, orderId: string): Promise<boolean> {
+    const order = await client.checkoutOrder.findUnique({
+      where: { id: orderId },
+      select: { terms: { select: { accountMode: true } } },
+    });
+    return order?.terms.accountMode === 'SELLER_ACCOUNT';
+  }
+
   /**
    * A paid order: what was received, the Efí tariff (real when the notice
    * brought it) and the Cifra+ %, all released 7 days after the payment.
+   *
+   * Sold through the seller's own account, the money is already there: a
+   * DIRECT_SETTLEMENT takes it out of the balance, which is left with what
+   * the seller owes CifraMais, due from the payment on.
    */
   async recordSale(
     client: Client,
@@ -69,16 +89,19 @@ export class CheckoutLedgerService {
       efiFeeCents: number;
       platformFeeCents: number;
       paidAt: Date;
+      terms: { accountMode: CheckoutAccountMode };
     },
     providerFeeCents: number | null,
     // Card: not before the Efí credits the CifraMais account.
     releaseNotBefore?: Date,
   ): Promise<void> {
+    const direct = order.terms.accountMode === 'SELLER_ACCOUNT';
     const sevenDays = order.paidAt.getTime() + RELEASE_DELAY_MS;
-    const availableAt = new Date(
-      Math.max(sevenDays, releaseNotBefore?.getTime() ?? 0),
-    );
+    const availableAt = direct
+      ? order.paidAt
+      : new Date(Math.max(sevenDays, releaseNotBefore?.getTime() ?? 0));
     const base = { companyId: order.companyId, orderId: order.id, availableAt };
+    const efiFeeCents = providerFeeCents ?? order.efiFeeCents;
     await this.record(client, [
       {
         ...base,
@@ -89,7 +112,7 @@ export class CheckoutLedgerService {
       {
         ...base,
         kind: 'EFI_FEE',
-        amountCents: -(providerFeeCents ?? order.efiFeeCents),
+        amountCents: -efiFeeCents,
         idempotencyKey: `efi-fee:${order.id}`,
       },
       {
@@ -98,6 +121,16 @@ export class CheckoutLedgerService {
         amountCents: -order.platformFeeCents,
         idempotencyKey: `platform-fee:${order.id}`,
       },
+      ...(direct
+        ? [
+            {
+              ...base,
+              kind: 'DIRECT_SETTLEMENT' as const,
+              amountCents: -(order.totalCents - efiFeeCents),
+              idempotencyKey: `direct:${order.id}`,
+            },
+          ]
+        : []),
     ]);
   }
 
@@ -106,26 +139,54 @@ export class CheckoutLedgerService {
    * what can still be paid out; "pending" is released later, by date.
    */
   async balance(companyId: string, now = new Date()) {
-    const [released, pending, paidOut, next, openRefunds] = await Promise.all([
-      this.sum({ companyId, availableAt: { lte: now } }),
-      this.sum({ companyId, availableAt: { gt: now } }),
-      this.sum({ companyId, kind: 'PAYOUT' }),
-      this.prisma.checkoutLedgerEntry.findFirst({
-        where: { companyId, availableAt: { gt: now }, amountCents: { gt: 0 } },
-        orderBy: { availableAt: 'asc' },
-        select: { availableAt: true },
-      }),
-      this.prisma.checkoutRefundRequest.findMany({
-        where: { companyId, status: 'REQUESTED' },
-        select: { amountCents: true, order: { select: { totalCents: true } } },
-      }),
-    ]);
+    const [released, pending, paidOut, next, openRefunds, terms] =
+      await Promise.all([
+        this.sum({ companyId, availableAt: { lte: now } }),
+        this.sum({ companyId, availableAt: { gt: now } }),
+        this.sum({ companyId, kind: 'PAYOUT' }),
+        this.prisma.checkoutLedgerEntry.findFirst({
+          where: {
+            companyId,
+            availableAt: { gt: now },
+            amountCents: { gt: 0 },
+          },
+          orderBy: { availableAt: 'asc' },
+          select: { availableAt: true },
+        }),
+        this.prisma.checkoutRefundRequest.findMany({
+          where: { companyId, status: 'REQUESTED' },
+          select: {
+            amountCents: true,
+            order: { select: { totalCents: true } },
+          },
+        }),
+        this.prisma.checkoutSellerTerms.findFirst({
+          where: { companyId },
+          orderBy: { version: 'desc' },
+          select: { accountMode: true },
+        }),
+      ]);
     // A sale with a refund still open may leave the balance: not for payout.
     const onHold = openRefunds.reduce(
       (sum, open) => sum + (open.amountCents ?? open.order.totalCents),
       0,
     );
+    // Own account: the sales are already with the seller. Nothing is released
+    // or paid out; the balance is what it owes CifraMais.
+    if (terms?.accountMode === 'SELLER_ACCOUNT')
+      return {
+        accountMode: terms.accountMode,
+        feeOwedCents: Math.max(0, -(released + pending)),
+        releasedCents: 0,
+        suggestedPayoutCents: 0,
+        openRefundCents: onHold,
+        pendingCents: 0,
+        paidOutCents: 0,
+        nextReleaseAt: null,
+      };
     return {
+      accountMode: 'PLATFORM_ACCOUNT' as const,
+      feeOwedCents: 0,
       releasedCents: released,
       suggestedPayoutCents: Math.max(0, released - onHold),
       openRefundCents: onHold,
@@ -212,8 +273,9 @@ export class CheckoutLedgerService {
           platformFeeCents: -(by('PLATFORM_FEE') + by('PLATFORM_FEE_REVERSAL')),
           refundedCents: -by('REFUND'),
           chargebackCents: -by('CHARGEBACK'),
+          // What the sale leaves the seller, wherever the money is held.
           netCents: order.ledgerEntries
-            .filter((entry) => entry.kind !== 'PAYOUT')
+            .filter((entry) => !NOT_IN_NET.includes(entry.kind))
             .reduce((sum, entry) => sum + entry.amountCents, 0),
           availableAt: sale?.availableAt ?? null,
           openRefundRequest: openRequest(order.refundRequests),

@@ -36,6 +36,7 @@ describe('CheckoutLedgerService.recordSale', () => {
         efiFeeCents: 80,
         platformFeeCents: 168,
         paidAt,
+        terms: { accountMode: 'PLATFORM_ACCOUNT' },
       },
       79,
     );
@@ -58,6 +59,88 @@ describe('CheckoutLedgerService.recordSale', () => {
     expect(arg?.data[0]?.availableAt).toEqual(
       new Date(paidAt.getTime() + RELEASE_DELAY_MS),
     );
+  });
+
+  it('venda na conta do vendedor: o dinheiro já está com ele e sobra só a % Cifra+ a pagar', async () => {
+    const createMany = jest.fn();
+    const ledger = new CheckoutLedgerService({} as PrismaService);
+    const paidAt = new Date('2026-11-01T12:00:00Z');
+
+    await ledger.recordSale(
+      { checkoutLedgerEntry: { createMany } } as unknown as PrismaService,
+      {
+        id: 'o1',
+        companyId: 'c1',
+        totalCents: 6700,
+        efiFeeCents: 80,
+        platformFeeCents: 168,
+        paidAt,
+        terms: { accountMode: 'SELLER_ACCOUNT' },
+      },
+      79,
+      // A card credit date means nothing here: nothing is released by Cifra+.
+      new Date('2026-12-01T12:00:00Z'),
+    );
+
+    const data = (createMany.mock.calls as [EntryArg][])[0]?.[0].data ?? [];
+    expect(
+      data.map((entry) => [
+        entry.kind,
+        entry.amountCents,
+        entry.idempotencyKey,
+      ]),
+    ).toEqual([
+      ['SALE', 6700, 'sale:o1'],
+      ['EFI_FEE', -79, 'efi-fee:o1'],
+      ['PLATFORM_FEE', -168, 'platform-fee:o1'],
+      // What stayed in the seller's account: the sale less the real Efí tariff.
+      ['DIRECT_SETTLEMENT', -6621, 'direct:o1'],
+    ]);
+    expect(data.reduce((sum, entry) => sum + entry.amountCents, 0)).toBe(-168);
+    expect(data.every((entry) => entry.availableAt === paidAt)).toBe(true);
+  });
+
+  it('saldo: na conta própria mostra a taxa devida; na conta Cifra+, o que há a repassar', async () => {
+    const sums = [-318, 0, 0];
+    const prisma = {
+      checkoutLedgerEntry: {
+        aggregate: jest.fn(() =>
+          Promise.resolve({ _sum: { amountCents: sums.shift() ?? 0 } }),
+        ),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      checkoutRefundRequest: { findMany: jest.fn().mockResolvedValue([]) },
+      checkoutSellerTerms: { findFirst: jest.fn() },
+    };
+    const ledger = new CheckoutLedgerService(
+      prisma as unknown as PrismaService,
+    );
+
+    prisma.checkoutSellerTerms.findFirst.mockResolvedValue({
+      accountMode: 'SELLER_ACCOUNT',
+    });
+    await expect(ledger.balance('c1', now)).resolves.toEqual({
+      accountMode: 'SELLER_ACCOUNT',
+      feeOwedCents: 318,
+      releasedCents: 0,
+      suggestedPayoutCents: 0,
+      openRefundCents: 0,
+      pendingCents: 0,
+      paidOutCents: 0,
+      nextReleaseAt: null,
+    });
+
+    sums.push(5000, 1200, -2000);
+    prisma.checkoutSellerTerms.findFirst.mockResolvedValue({
+      accountMode: 'PLATFORM_ACCOUNT',
+    });
+    await expect(ledger.balance('c1', now)).resolves.toMatchObject({
+      accountMode: 'PLATFORM_ACCOUNT',
+      feeOwedCents: 0,
+      releasedCents: 5000,
+      pendingCents: 1200,
+      paidOutCents: 2000,
+    });
   });
 });
 
@@ -130,6 +213,7 @@ describe('CheckoutRefundsService', () => {
     platformFeeCents: 168,
     ledgerEntries: entries,
     refundRequests,
+    terms: { accountMode: 'PLATFORM_ACCOUNT' },
   });
   // What request() reads: the paid order, its refunds and past requests.
   const sold = (change: object = {}) => ({
@@ -190,6 +274,37 @@ describe('CheckoutRefundsService', () => {
     expect(mail.refundEmail).toHaveBeenCalledWith('DONE', 'o1', 'pix:E1:D1', {
       amountCents: 6700,
     });
+  });
+
+  it('devolução na conta do vendedor: o dinheiro saiu da conta dele e a % Cifra+ deixa de ser devida', async () => {
+    tx.checkoutOrder.findUnique.mockResolvedValue({
+      ...order(),
+      terms: { accountMode: 'SELLER_ACCOUNT' },
+    });
+    await service.record(
+      {
+        orderId: 'o1',
+        amountCents: 6700,
+        idempotencyKey: 'pix:E1:D1',
+        fromProvider: true,
+      },
+      now,
+    );
+
+    const entries = (
+      ledger.record.mock.calls as [unknown, EntryArg['data']][]
+    )[0]?.[1];
+    expect(
+      entries?.map((entry) => [
+        entry.kind,
+        entry.amountCents,
+        entry.idempotencyKey,
+      ]),
+    ).toEqual([
+      ['REFUND', -6700, 'refund:pix:E1:D1'],
+      ['PLATFORM_FEE_REVERSAL', 168, 'fee-reversal:pix:E1:D1'],
+      ['DIRECT_SETTLEMENT', 6700, 'direct-refund:pix:E1:D1'],
+    ]);
   });
 
   it('devoluções parciais devolvem a % aos poucos, sem passar do total', async () => {

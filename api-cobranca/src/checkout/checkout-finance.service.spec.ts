@@ -29,6 +29,7 @@ describe('CheckoutFinanceService', () => {
   const ledger = {
     record: jest.fn(),
     balance: jest.fn(),
+    soldDirectly: jest.fn(),
   };
   const refunds = { record: jest.fn() };
   const webhooks = { emit: jest.fn() };
@@ -43,6 +44,7 @@ describe('CheckoutFinanceService', () => {
     jest.clearAllMocks();
     prisma.company.count.mockResolvedValue(1);
     prisma.checkoutOrder.count.mockResolvedValue(1);
+    ledger.soldDirectly.mockResolvedValue(false);
     ledger.balance.mockResolvedValue({
       releasedCents: 5000,
       pendingCents: 0,
@@ -99,6 +101,44 @@ describe('CheckoutFinanceService', () => {
       },
       data: { status: 'CHARGEBACK' },
     });
+  });
+
+  it('conta do vendedor: a contestação sai da conta dele, a % Cifra+ continua devida e não há repasse', async () => {
+    ledger.soldDirectly.mockResolvedValue(true);
+    await service.chargeback('c1', 'admin', {
+      idempotencyKey: KEY,
+      orderId: 'o1',
+      amountCents: 6700,
+    });
+    const entries = (
+      ledger.record.mock.calls as [unknown, RecordCall[]][]
+    ).flatMap((call) => call[1]);
+    expect(
+      entries.map((entry) => [
+        entry.kind,
+        entry.amountCents,
+        entry.idempotencyKey,
+      ]),
+    ).toEqual([
+      ['CHARGEBACK', -6700, `chargeback:${KEY}`],
+      ['DIRECT_SETTLEMENT', 6700, `direct-chargeback:${KEY}`],
+    ]);
+
+    jest.clearAllMocks();
+    ledger.balance.mockResolvedValue({
+      accountMode: 'SELLER_ACCOUNT',
+      releasedCents: 0,
+    });
+    await expect(
+      service.payout('c1', 'admin', {
+        idempotencyKey: KEY,
+        amountCents: 100,
+        paidOn: '2026-11-05',
+      }),
+    ).rejects.toMatchObject({
+      response: { code: 'CHECKOUT_ACCOUNT_MODE_NOT_SUPPORTED' },
+    });
+    expect(ledger.record).not.toHaveBeenCalled();
   });
 
   it('ajuste aceita valor negativo ou positivo', async () => {

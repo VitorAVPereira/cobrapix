@@ -2580,6 +2580,69 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
       ).status,
     ).toBe('PAID');
 
+    // The money of both sales is already in the seller's account: its balance
+    // is only the Cifra+ % it owes (1,5% of 100,00 each), with nothing to pay out.
+    const balance = async () =>
+      (
+        await request(http)
+          .get('/checkout/balance')
+          .set(auth(other))
+          .expect(200)
+      ).body as Record<string, unknown>;
+    expect(await balance()).toMatchObject({
+      accountMode: 'SELLER_ACCOUNT',
+      feeOwedCents: 300,
+      releasedCents: 0,
+      pendingCents: 0,
+      suggestedPayoutCents: 0,
+    });
+    const ownSales = await request(http)
+      .get('/checkout/sales')
+      .set(auth(other))
+      .expect(200);
+    // What each sale leaves the seller: 100,00 less 1,00 of Efí and 1,50 of Cifra+.
+    expect(
+      (ownSales.body as { items: { netCents: number }[] }).items.map(
+        (sale) => sale.netCents,
+      ),
+    ).toEqual([9750, 9750]);
+    const payout = await request(http)
+      .post(`/admin/checkout/clients/${company.id}/payouts`)
+      .set(auth(tokens.admin))
+      .send({
+        idempotencyKey: randomUUID(),
+        amountCents: 100,
+        paidOn: '2026-11-17',
+      })
+      .expect(409);
+    expect(payout.body).toMatchObject({
+      code: 'CHECKOUT_ACCOUNT_MODE_NOT_SUPPORTED',
+    });
+
+    // A refund leaves the seller's account, and its Cifra+ % is no longer owed.
+    const refund = {
+      ...notice(SELLER_PIX_KEY),
+      devolucoes: [{ id: 'DOUTRA', valor: '100.00', status: 'DEVOLVIDO' }],
+    };
+    await payments.handlePixEvent(refund);
+    await payments.handlePixEvent(refund);
+    expect(await balance()).toMatchObject({ feeOwedCents: 150 });
+    const entries = await prisma.checkoutLedgerEntry.findMany({
+      where: { orderId: saved.id },
+      select: { kind: true, amountCents: true },
+    });
+    expect(Object.fromEntries(entries.map((entry) => [entry.kind, 0]))).toEqual(
+      {
+        SALE: 0,
+        EFI_FEE: 0,
+        PLATFORM_FEE: 0,
+        REFUND: 0,
+        PLATFORM_FEE_REVERSAL: 0,
+        DIRECT_SETTLEMENT: 0,
+      },
+    );
+    expect(entries.reduce((sum, entry) => sum + entry.amountCents, 0)).toBe(0);
+
     // The seller of the CifraMais account keeps selling through it.
     const platformAccount = await request(http)
       .get('/admin/checkout/platform-account')

@@ -67,6 +67,7 @@ export class CheckoutRefundsService {
             select: { kind: true, amountCents: true, idempotencyKey: true },
           },
           refundRequests: { where: { status: 'REQUESTED' } },
+          terms: { select: { accountMode: true } },
         },
       });
       if (!order) throw new NotFoundException('Venda não encontrada.');
@@ -132,6 +133,17 @@ export class CheckoutRefundsService {
                 kind: 'PLATFORM_FEE_REVERSAL' as const,
                 amountCents: reversal,
                 idempotencyKey: `fee-reversal:${input.idempotencyKey}`,
+              },
+            ]
+          : []),
+        // Own account: the refund left the seller's account, not CifraMais'.
+        ...(order.terms.accountMode === 'SELLER_ACCOUNT'
+          ? [
+              {
+                ...common,
+                kind: 'DIRECT_SETTLEMENT' as const,
+                amountCents: input.amountCents,
+                idempotencyKey: `direct-refund:${input.idempotencyKey}`,
               },
             ]
           : []),
