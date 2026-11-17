@@ -5,6 +5,39 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PaymentCryptoService } from './payment-crypto.service';
 import { CardInstallmentQuote, grossUpCard } from './card-amounts';
 
+/**
+ * Where the Efí sends the notices of a card charge: the charges webhook, with
+ * the issuing account and the webhook token, like the boleto URL. Without the
+ * token the route refuses the notice. Null when the base URL or the token is
+ * not usable.
+ */
+export function cardNotificationUrl(
+  config: ConfigService,
+  identityId: string,
+): string | null {
+  const token = config.get<string>('EFI_WEBHOOK_SECRET');
+  let url: URL;
+  try {
+    url = new URL(config.get<string>('EFI_CHARGES_WEBHOOK_BASE_URL') ?? '');
+  } catch {
+    return null;
+  }
+  if (
+    !token ||
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    url.pathname !== '/'
+  )
+    return null;
+  const target = new URL('/webhooks/efi/cobrancas', url.origin);
+  target.searchParams.set('token', token);
+  target.searchParams.set('account', identityId);
+  return target.toString();
+}
+
 export type CardBrand = 'visa' | 'mastercard' | 'amex' | 'elo';
 export type CardReceipt = 'ANTICIPATED' | 'INSTALLMENTS';
 // Efí tariff negotiated for the company's account. The opaque card token cannot
@@ -286,19 +319,9 @@ export class EfiCardClient {
     return payee;
   }
   notificationUrl(identityId: string): string {
-    const url = new URL(
-      this.config.get<string>('EFI_CHARGES_WEBHOOK_BASE_URL') ?? '',
-    );
-    if (
-      url.protocol !== 'https:' ||
-      url.username ||
-      url.password ||
-      url.search ||
-      url.hash ||
-      url.pathname !== '/'
-    )
-      throw new ConflictException('URL de notificação indisponível.');
-    return `${url.origin}/webhooks/efi/cobrancas?account=${encodeURIComponent(identityId)}`;
+    const url = cardNotificationUrl(this.config, identityId);
+    if (!url) throw new ConflictException('URL de notificação indisponível.');
+    return url;
   }
   async submit(
     identityId: string,

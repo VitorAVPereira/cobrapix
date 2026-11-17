@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import EfiPay from 'sdk-node-apis-efi';
 import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import {
+  cardNotificationUrl,
   CardSubmission,
   normalizeCardInstallments,
   normalizeCardSubmission,
@@ -59,30 +60,11 @@ interface CardSdk {
 }
 
 /**
- * Card notices of the CifraMais account arrive on the charges webhook with
- * the platform identity as account; null when the base URL is not usable.
+ * Card notices of an account the checkout issues from arrive on the charges
+ * webhook with that account's identity, by the same URL as the billing card;
+ * null when the base URL or the webhook token is not usable.
  */
-export function checkoutCardNotificationUrl(
-  config: ConfigService,
-  identityId: string,
-): string | null {
-  let url: URL;
-  try {
-    url = new URL(config.get<string>('EFI_CHARGES_WEBHOOK_BASE_URL') ?? '');
-  } catch {
-    return null;
-  }
-  if (
-    url.protocol !== 'https:' ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash ||
-    url.pathname !== '/'
-  )
-    return null;
-  return `${url.origin}/webhooks/efi/cobrancas?account=${encodeURIComponent(identityId)}`;
-}
+export const checkoutCardNotificationUrl = cardNotificationUrl;
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)

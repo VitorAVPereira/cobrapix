@@ -182,8 +182,11 @@ nessa conta.
 **Antes de ligar:**
 1. Confirmar com a Efí a homologação de cartão (API Cobranças) na conta Cifra+, o prazo de crédito
    com recebimento antecipado e o nome na fatura.
-2. Conferir que `EFI_CHARGES_WEBHOOK_BASE_URL` aponta para a API (https, sem caminho). Os avisos
-   chegam em `/webhooks/efi/cobrancas?account=<id da conta Cifra+>`.
+2. Conferir que `EFI_CHARGES_WEBHOOK_BASE_URL` aponta para a API (https, sem caminho) e que
+   `EFI_WEBHOOK_SECRET` está definido: sem os dois o cartão não liga. Os avisos chegam em
+   `/webhooks/efi/cobrancas?token=<segredo>&account=<id da conta>`. Cobranças de cartão criadas
+   antes de 17/11/2026 guardaram a URL sem o token: os avisos delas são recusados e a
+   confirmação vem pela conciliação do worker.
 3. Conferir o código do recebedor (`payeeCode`) da conta Cifra+: o navegador usa ele para
    tokenizar o cartão.
 
