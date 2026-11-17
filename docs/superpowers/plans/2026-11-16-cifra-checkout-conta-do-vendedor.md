@@ -302,6 +302,49 @@ Para o runbook (Tarefa 17): a chave Pix do vendedor passa a avisar a API da Cifr
 a mesma chave para outros recebimentos, cada um vira um aviso desconhecido aqui. Pedir uma chave
 aleatória só para o checkout.
 
+### 17/11/2026: Tarefa 4 (avisos na conta certa)
+
+Feito, sem commit:
+
+- **Entrega ao checkout:** `WebhooksService.handleEfiChargesWebhook` manda ao checkout o aviso de
+  uma conta `PLATFORM` ou de uma conta de empresa com produto `CHECKOUT`. Conta de empresa de
+  cobrança segue no fluxo da cobrança.
+- **Conta do aviso:** `handleNotification` e `reconcile` já usavam a conta emissora desde a
+  Tarefa 2. O aviso que cita outra conta não acha a tentativa e vira anomalia
+  (`CHECKOUT_CARD_UNKNOWN_CHARGE`).
+
+Testes:
+
+- Unitários novos do roteamento, vistos falhar antes (2).
+- E2E novo: venda de cartão na conta do vendedor sai com a credencial dele; aviso com a conta
+  Cifra+ não dá baixa e vira anomalia; o aviso da conta dele confirma, lido na conta dele;
+  repetido, não lança de novo no razão. O aviso entra direto no `CheckoutCardService`; a rota
+  HTTP `/webhooks/efi/cobrancas` não faz parte do módulo deste e2e.
+- 1.413 testes unitários do backend, `test:e2e:checkout-pix` (38) e `test:e2e:checkout` (6)
+  passando; build e lint OK.
+
+Gaps encontrados:
+
+1. **Aviso de cartão sem o token (corrigido em 17/11, a pedido do responsável).** O
+   `EfiWebhookGuard` exige `x-api-key` ou `token` na URL, e a URL de aviso do cartão levava só
+   `account=`, no checkout e no cartão da cobrança. Pelo código, todo aviso de cartão era
+   recusado com 401; não foi conferido em produção. A venda confirmava pelo worker, mas o que só
+   chega por aviso se perdia: estorno e contestação de uma cobrança já paga e a renovação da
+   assinatura.
+   - **Correção:** uma função só, `cardNotificationUrl` (`payment/efi-card.client.ts`), monta a
+     URL com o token e a conta, como o boleto. Sem `EFI_WEBHOOK_SECRET` ou sem endereço válido o
+     cartão não fica disponível.
+   - **Teste novo, visto falhar antes:** a URL que cada cliente de cartão gera passa pelo guard
+     da rota (`webhooks/card-notification-url.spec.ts`).
+   - **Também rodados:** `test:e2e:checkout-pix` (38) e `card-checkout.e2e-spec.ts` (13).
+   - **Cobranças antigas:** as de cartão já emitidas guardaram a URL sem o token; os avisos
+     delas continuam recusados.
+   - **A observar:** o token do webhook fica na URL gravada em cada cobrança da conta Efí do
+     vendedor, como já acontece com o boleto nas contas dos clientes da cobrança.
+2. **Id da cobrança único no sistema inteiro (não alterado, aguarda o responsável).** `CheckoutCardAttempt.efiChargeId` é único sem a
+   conta. Homologação e produção da Efí numeram separado: um id repetido em outra conta faz o
+   aviso falhar e a venda não confirma. Proposta: único por conta emissora, numa migration.
+
 Pendência que trava a ativação de um vendedor: até a Tarefa 5, a venda pela conta do vendedor
 entra no razão como se o dinheiro estivesse com a Cifra+ (saldo a repassar). Com a Tarefa 3 o
 admin já consegue ativar um vendedor nesse modo: **não publicar nem ativar antes da Tarefa 5**.
