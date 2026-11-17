@@ -27,6 +27,8 @@ export interface PublicCheckoutProduct {
     imageUrl: string | null;
     accessPeriodMonths: number | null;
   }>;
+  // Not empty: the page sells through one of these, not the product price.
+  plans?: PublicCheckoutPlan[];
   page: {
     displayName: string;
     logoUrl: string | null;
@@ -43,6 +45,17 @@ export interface PublicCheckoutProduct {
     // The product has an offer after the purchase: the card token is reusable.
     cardReuse?: boolean;
   };
+}
+
+export interface PublicCheckoutPlan {
+  id: string;
+  name: string;
+  intervalMonths: number;
+  // INSTALLMENT: paid once for the period. RECURRING: charged every cycle on the card.
+  billing: "INSTALLMENT" | "RECURRING";
+  priceCents: number;
+  compareAtPriceCents: number | null;
+  maxInstallments: number | null;
 }
 
 export interface PublicCheckoutQuote {
@@ -152,7 +165,7 @@ export function getCheckoutProduct(slug: string, signal?: AbortSignal) {
 
 export function quoteCheckout(
   slug: string,
-  body: { bumpIds: string[]; couponCode: string | null },
+  body: { bumpIds: string[]; couponCode: string | null; planId?: string | null },
   signal?: AbortSignal,
 ) {
   return request<PublicCheckoutQuote>(`/checkout/public/products/${encodeURIComponent(slug)}/quote`, {
@@ -167,6 +180,7 @@ export function createCheckoutOrder(
   body: {
     bumpIds: string[];
     couponCode: string | null;
+    planId?: string | null;
     buyer: CheckoutBuyer;
     utm: Utm;
     idempotencyKey: string;
@@ -220,7 +234,7 @@ export interface CardCharge {
 
 export function quoteCheckoutCard(
   slug: string,
-  body: { bumpIds: string[]; couponCode: string | null; brand: CardBrand },
+  body: { bumpIds: string[]; couponCode: string | null; planId?: string | null; brand: CardBrand },
   signal?: AbortSignal,
 ) {
   return request<CardQuote>(`/checkout/public/products/${encodeURIComponent(slug)}/card/quote`, {
@@ -235,6 +249,7 @@ export function createCheckoutCardOrder(
   body: CardCharge & {
     bumpIds: string[];
     couponCode: string | null;
+    planId?: string | null;
     buyer: CheckoutBuyer;
     utm: Utm;
     sessionKey?: string;
@@ -376,4 +391,30 @@ export function withdrawCheckoutRefund(token: string) {
     `/checkout/public/orders/${encodeURIComponent(token)}/refund-request/withdraw`,
     { method: "POST" },
   );
+}
+
+export type PublicSubscriptionStatus = "PENDING" | "ACTIVE" | "PAST_DUE" | "CANCELED";
+
+/** What the buyer sees on the page opened by the subscription e-mail link. */
+export interface PublicCheckoutSubscription {
+  status: PublicSubscriptionStatus;
+  productName: string;
+  planName: string;
+  intervalMonths: number;
+  cycleCents: number | null;
+  currentPeriodEnd: string | null;
+  canceledAt: string | null;
+  accessEndsAt: string | null;
+  seller: { displayName: string | null; supportEmail: string | null; supportWhatsapp: string | null };
+}
+
+export function getCheckoutSubscription(token: string, signal?: AbortSignal) {
+  return request<PublicCheckoutSubscription>(`/checkout/public/subscriptions/${encodeURIComponent(token)}`, { signal });
+}
+
+/** Stops the renewals; the access goes on until the end of the paid period. */
+export function cancelCheckoutSubscription(token: string) {
+  return request<PublicCheckoutSubscription>(`/checkout/public/subscriptions/${encodeURIComponent(token)}/cancel`, {
+    method: "POST",
+  });
 }

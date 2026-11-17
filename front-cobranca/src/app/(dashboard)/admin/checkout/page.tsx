@@ -39,15 +39,21 @@ interface TermsForm {
   percent: string;
   payoutDocument: string;
   payoutPixKey: string;
+  authorizationReference: string;
 }
 
-/** The % and payout data, shared by the new-client and the terms forms. */
+/**
+ * The % and, by the way the seller receives, the signed authorization (own
+ * Efí account) or the payout data (Cifra+ account, kept for older clients).
+ */
 function TermsFields({
   value,
   onChange,
+  ownAccount,
 }: {
   value: TermsForm;
   onChange: (next: TermsForm) => void;
+  ownAccount: boolean;
 }) {
   return (
     <div className="grid gap-3 sm:grid-cols-3">
@@ -61,35 +67,60 @@ function TermsFields({
           required
         />
       </Field>
-      <Field label="CPF/CNPJ de repasse">
-        <input
-          className={inputClass}
-          value={value.payoutDocument}
-          onChange={(event) =>
-            onChange({ ...value, payoutDocument: event.target.value })
-          }
-          required
-        />
-      </Field>
-      <Field label="Chave Pix de repasse">
-        <input
-          className={inputClass}
-          placeholder="CPF, CNPJ, e-mail, +55 DDD celular ou aleatória"
-          value={value.payoutPixKey}
-          onChange={(event) =>
-            onChange({ ...value, payoutPixKey: event.target.value })
-          }
-          required
-        />
-      </Field>
+      {ownAccount ? (
+        <div className="sm:col-span-2">
+          <Field label="Referência do termo de autorização">
+            <input
+              className={inputClass}
+              placeholder="Ex.: termo assinado em 16/11, pasta do cliente"
+              value={value.authorizationReference}
+              onChange={(event) =>
+                onChange({ ...value, authorizationReference: event.target.value })
+              }
+            />
+          </Field>
+          <p className="mt-1 text-xs text-slate-500">
+            Onde está o termo em que o vendedor autoriza a Cifra+ a emitir, consultar e devolver cobranças na conta Efí
+            dele. Sem ela, a conta Efí não pode ser cadastrada.
+          </p>
+        </div>
+      ) : (
+        <>
+          <Field label="CPF/CNPJ de repasse">
+            <input
+              className={inputClass}
+              value={value.payoutDocument}
+              onChange={(event) =>
+                onChange({ ...value, payoutDocument: event.target.value })
+              }
+              required
+            />
+          </Field>
+          <Field label="Chave Pix de repasse">
+            <input
+              className={inputClass}
+              placeholder="CPF, CNPJ, e-mail, +55 DDD celular ou aleatória"
+              value={value.payoutPixKey}
+              onChange={(event) =>
+                onChange({ ...value, payoutPixKey: event.target.value })
+              }
+              required
+            />
+          </Field>
+        </>
+      )}
     </div>
   );
 }
 
-function termsInput(form: TermsForm) {
+function termsInput(form: TermsForm, ownAccount: boolean) {
   const platformFeeBasisPoints = parsePercentToBps(form.percent);
   if (platformFeeBasisPoints === null)
     throw new Error("Informe a % Cifra+ entre 0 e 100, como 2,5.");
+  if (ownAccount) {
+    const reference = form.authorizationReference.trim();
+    return { platformFeeBasisPoints, ...(reference ? { authorizationReference: reference } : {}) };
+  }
   return {
     platformFeeBasisPoints,
     payoutDocument: form.payoutDocument,
@@ -97,7 +128,7 @@ function termsInput(form: TermsForm) {
   };
 }
 
-const EMPTY_TERMS: TermsForm = { percent: "", payoutDocument: "", payoutPixKey: "" };
+const EMPTY_TERMS: TermsForm = { percent: "", payoutDocument: "", payoutPixKey: "", authorizationReference: "" };
 
 function NewClientForm({
   onCreated,
@@ -124,7 +155,8 @@ function NewClientForm({
       const result = await api.createCheckoutClient({
         company,
         firstUser: user,
-        terms: termsInput(terms),
+        // A new client always sells through its own Efí account.
+        terms: termsInput(terms, true),
       });
       onCreated(result.client, result.temporaryPassword);
     } catch (caught) {
@@ -202,7 +234,7 @@ function NewClientForm({
           />
         </Field>
       </div>
-      <TermsFields value={terms} onChange={setTerms} />
+      <TermsFields value={terms} onChange={setTerms} ownAccount />
       {error && (
         <p role="alert" className="text-sm text-red-600">
           {error}
@@ -229,6 +261,7 @@ function ClientDetail({
 }) {
   const api = useApiClient();
   const current = client.terms[0] ?? null;
+  const ownAccount = (current?.accountMode ?? "PLATFORM_ACCOUNT") === "SELLER_ACCOUNT";
   // The parent remounts this form (key) whenever a new version arrives.
   const [terms, setTerms] = useState<TermsForm>(() =>
     current
@@ -236,6 +269,7 @@ function ClientDetail({
           percent: String(current.platformFeeBasisPoints / 100).replace(".", ","),
           payoutDocument: current.payoutDocument,
           payoutPixKey: current.payoutPixKey,
+          authorizationReference: current.authorizationReference ?? "",
         }
       : EMPTY_TERMS,
   );
@@ -248,7 +282,7 @@ function ClientDetail({
     setSaving(true);
     try {
       const updated = await api.updateCheckoutTerms(client.id, {
-        ...termsInput(terms),
+        ...termsInput(terms, ownAccount),
         expectedVersion: current?.version ?? 0,
       });
       onChanged(updated, { error: false, text: "Termos salvos em uma nova versão." });
@@ -293,7 +327,7 @@ function ClientDetail({
         <h3 className="text-sm font-semibold text-slate-800">
           Termos atuais {current ? `(versão ${current.version})` : ""}
         </h3>
-        <TermsFields value={terms} onChange={setTerms} />
+        <TermsFields value={terms} onChange={setTerms} ownAccount={ownAccount} />
         {message && (
           <p
             role={message.error ? "alert" : "status"}
@@ -312,13 +346,16 @@ function ClientDetail({
         <ul className="mt-2 divide-y divide-slate-100 text-sm text-slate-600">
           {client.terms.map((version) => (
             <li key={version.id} className="py-2">
-              Versão {version.version} · {formatPercentageBps(version.platformFeeBasisPoints)}{" "}
-              · repasse {formatDebtorDocument(version.payoutDocument)} ·{" "}
-              {formatDateTime(version.createdAt)}
+              Versão {version.version} · {formatPercentageBps(version.platformFeeBasisPoints)} ·{" "}
+              {version.accountMode === "SELLER_ACCOUNT"
+                ? `conta Efí do vendedor${version.authorizationReference ? ` · termo: ${version.authorizationReference}` : " · sem termo"}`
+                : `repasse ${formatDebtorDocument(version.payoutDocument)}`}{" "}
+              · {formatDateTime(version.createdAt)}
             </li>
           ))}
         </ul>
       </div>
+      {ownAccount && <PlatformAccountPanel companyId={client.id} />}
       <CardPausePanel client={client} onChanged={(updated) => onChanged(updated, null)} />
       <FinancePanel companyId={client.id} />
     </section>

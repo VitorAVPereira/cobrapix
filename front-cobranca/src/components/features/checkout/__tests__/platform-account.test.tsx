@@ -67,10 +67,10 @@ describe("PlatformAccountPanel", () => {
 
     await user.click(await screen.findByRole("button", { name: /validar e ligar webhook/i }));
     expect(await screen.findByText("https://outro.test/pix")).toBeInTheDocument();
-    expect(mockApi.validateCheckoutPlatformAccount).toHaveBeenLastCalledWith(false);
+    expect(mockApi.validateCheckoutPlatformAccount).toHaveBeenLastCalledWith(false, undefined);
 
     await user.click(screen.getByRole("button", { name: /trocar pelo endereço da cifra\+/i }));
-    await waitFor(() => expect(mockApi.validateCheckoutPlatformAccount).toHaveBeenLastCalledWith(true));
+    await waitFor(() => expect(mockApi.validateCheckoutPlatformAccount).toHaveBeenLastCalledWith(true, undefined));
     expect(await screen.findByText("Pronta para vender")).toBeInTheDocument();
   });
 
@@ -83,7 +83,7 @@ describe("PlatformAccountPanel", () => {
     await user.type(await screen.findByLabelText("Nova tarifa do Pix (%)"), "1,19");
     await user.click(screen.getByRole("button", { name: /salvar tarifa/i }));
 
-    expect(mockApi.setCheckoutPlatformPixFee).toHaveBeenCalledWith({ expectedVersion: 2, pixFeeBasisPoints: 119 });
+    expect(mockApi.setCheckoutPlatformPixFee).toHaveBeenCalledWith({ expectedVersion: 2, pixFeeBasisPoints: 119 }, undefined);
   });
 
   it("não mostra client id, secret nem certificado", async () => {

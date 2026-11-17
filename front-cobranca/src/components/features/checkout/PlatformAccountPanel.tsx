@@ -18,7 +18,7 @@ const CREDENTIAL_STATUS: Record<string, string> = {
   REJECTED: "recusada",
 };
 
-function CredentialsForm({ onSaved }: { onSaved: () => void }) {
+function CredentialsForm({ companyId, onSaved }: { companyId?: string; onSaved: () => void }) {
   const api = useApiClient();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -29,7 +29,7 @@ function CredentialsForm({ onSaved }: { onSaved: () => void }) {
     setError(null);
     setSaving(true);
     try {
-      await api.uploadCheckoutPlatformCredentials(new FormData(form));
+      await api.uploadCheckoutPlatformCredentials(new FormData(form), companyId);
       // Secrets never stay on screen after being sent.
       form.reset();
       onSaved();
@@ -49,7 +49,7 @@ function CredentialsForm({ onSaved }: { onSaved: () => void }) {
             <option value="HOMOLOGATION">Homologação</option>
           </select>
         </Field>
-        <Field label="CNPJ da Cifra+">
+        <Field label={companyId ? "CNPJ titular da conta" : "CNPJ da Cifra+"}>
           <input name="holderDocument" className={inputClass} inputMode="numeric" pattern="\d{14}" required />
         </Field>
         <Field label="Número da conta Efí">
@@ -83,8 +83,11 @@ function CredentialsForm({ onSaved }: { onSaved: () => void }) {
   );
 }
 
-/** The CifraMais Efí account the checkout receives in, and its Pix tariff. */
-export function PlatformAccountPanel() {
+/**
+ * The Efí account the checkout receives in, and its tariffs: the CifraMais
+ * account, or with `companyId` the seller's own account.
+ */
+export function PlatformAccountPanel({ companyId }: { companyId?: string } = {}) {
   const api = useApiClient();
   const [view, setView] = useState<CheckoutPlatformView | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -97,13 +100,13 @@ export function PlatformAccountPanel() {
   useEffect(() => {
     const controller = new AbortController();
     api
-      .getCheckoutPlatformAccount(controller.signal)
+      .getCheckoutPlatformAccount(controller.signal, companyId)
       .then((result) => setView(result))
       .catch((caught: unknown) => {
         if (loadFailed(controller.signal, caught)) setLoadError(messageOf(caught, "Não foi possível carregar a conta."));
       });
     return () => controller.abort();
-  }, [api, reload]);
+  }, [api, reload, companyId]);
 
   function refresh(next: Notice) {
     setNotice(next);
@@ -115,7 +118,7 @@ export function PlatformAccountPanel() {
     setBusy(true);
     setNotice(null);
     try {
-      setView(await api.validateCheckoutPlatformAccount(confirmOverwrite));
+      setView(await api.validateCheckoutPlatformAccount(confirmOverwrite, companyId));
       setWebhookInUse(null);
       setNotice({ error: false, text: "Conta validada e webhook Pix ligado." });
     } catch (caught) {
@@ -137,7 +140,9 @@ export function PlatformAccountPanel() {
     }
     setBusy(true);
     try {
-      setView(await api.setCheckoutPlatformPixFee({ expectedVersion: view.current.version, pixFeeBasisPoints: bps }));
+      setView(
+        await api.setCheckoutPlatformPixFee({ expectedVersion: view.current.version, pixFeeBasisPoints: bps }, companyId),
+      );
       setFee("");
       setNotice({ error: false, text: "Tarifa salva em uma nova versão." });
     } catch (caught) {
@@ -158,8 +163,12 @@ export function PlatformAccountPanel() {
           <Landmark size={18} />
         </span>
         <div>
-          <h2 className="text-base font-semibold text-slate-900">Conta Efí da Cifra+</h2>
-          <p className="text-sm text-slate-500">Onde o checkout recebe os Pix. Sem ela validada e com tarifa, o checkout não vende.</p>
+          <h2 className="text-base font-semibold text-slate-900">{companyId ? "Conta Efí do vendedor" : "Conta Efí da Cifra+"}</h2>
+          <p className="text-sm text-slate-500">
+            {companyId
+              ? "As vendas deste cliente caem nesta conta, que é dele. Use uma chave Pix só do checkout: ela passa a avisar a Cifra+. Sem a conta validada e com tarifa, ele não vende."
+              : "Onde o checkout recebe os Pix. Sem ela validada e com tarifa, o checkout não vende."}
+          </p>
         </div>
       </header>
 
@@ -194,7 +203,10 @@ export function PlatformAccountPanel() {
               {identity ? "Trocar credenciais" : "Cadastrar credenciais"}
             </summary>
             <div className="mt-4">
-              <CredentialsForm onSaved={() => refresh({ error: false, text: "Credenciais salvas. Valide para começar a usar." })} />
+              <CredentialsForm
+                companyId={companyId}
+                onSaved={() => refresh({ error: false, text: "Credenciais salvas. Valide para começar a usar." })}
+              />
             </div>
           </details>
 
@@ -220,7 +232,7 @@ export function PlatformAccountPanel() {
 
           {view.current && (
             <form onSubmit={saveFee} className="flex flex-wrap items-end gap-2">
-              <Field label="Nova tarifa do Pix (%)" hint="Tarifa da Efí sobre cada Pix recebido na conta Cifra+.">
+              <Field label="Nova tarifa do Pix (%)" hint={companyId ? "Tarifa do contrato do vendedor com a Efí, sobre cada Pix." : "Tarifa da Efí sobre cada Pix recebido na conta Cifra+."}>
                 <input className={inputClass} inputMode="decimal" placeholder="1,19" value={fee} onChange={(event) => setFee(event.target.value)} />
               </Field>
               <button type="submit" className={buttonClass} disabled={busy || !fee.trim()}>
@@ -233,6 +245,7 @@ export function PlatformAccountPanel() {
             <PlatformCardForm
               key={view.current.version}
               current={view.current}
+              companyId={companyId}
               onSaved={(next) => {
                 setView(next);
                 setNotice({ error: false, text: "Cartão salvo em uma nova versão." });

@@ -98,8 +98,8 @@ describe("AdminCheckoutPage", () => {
     await user.type(screen.getByLabelText("Nome do usuário"), "Pedro");
     await user.type(screen.getByLabelText("E-mail de acesso"), "pedro@treze.test");
     await user.type(screen.getByLabelText("% Cifra+ por venda"), "2,5");
-    await user.type(screen.getByLabelText("CPF/CNPJ de repasse"), "11222333000181");
-    await user.type(screen.getByLabelText("Chave Pix de repasse"), "52998224725");
+    expect(screen.queryByLabelText("CPF/CNPJ de repasse")).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("Referência do termo de autorização"), "Termo de 16/11");
     await user.click(screen.getByRole("button", { name: /criar cliente/i }));
 
     await waitFor(() =>
@@ -107,13 +107,44 @@ describe("AdminCheckoutPage", () => {
         expect.objectContaining({
           terms: {
             platformFeeBasisPoints: 250,
-            payoutDocument: "11222333000181",
-            payoutPixKey: "52998224725",
+            authorizationReference: "Termo de 16/11",
           },
         }),
       ),
     );
     expect(await screen.findByText("senha-temp")).toBeInTheDocument();
+  });
+
+  it("cliente na conta própria: termo de autorização nos termos e a conta Efí dele no detalhe", async () => {
+    const user = userEvent.setup();
+    const own = detail(1, 150);
+    own.terms[0] = {
+      ...own.terms[0]!,
+      payoutDocument: "",
+      payoutPixKey: "",
+      accountMode: "SELLER_ACCOUNT",
+      authorizationReference: null,
+    };
+    mockApi.getCheckoutClient.mockResolvedValue(own);
+    mockApi.updateCheckoutTerms.mockResolvedValue(own);
+    render(<AdminCheckoutPage />);
+
+    await user.click(await screen.findByRole("button", { name: /ver termos/i }));
+    expect(await screen.findByText("Conta Efí do vendedor")).toBeInTheDocument();
+    // The account screen reads this seller's account, not the Cifra+ one.
+    await waitFor(() =>
+      expect(mockApi.getCheckoutPlatformAccount).toHaveBeenCalledWith(expect.any(AbortSignal), "company-1"),
+    );
+    expect(screen.queryByLabelText("Chave Pix de repasse")).not.toBeInTheDocument();
+    expect(screen.getByText(/sem termo/)).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Referência do termo de autorização"), "Termo de 16/11");
+    await user.click(screen.getByRole("button", { name: /salvar nova versão/i }));
+    expect(mockApi.updateCheckoutTerms).toHaveBeenCalledWith("company-1", {
+      platformFeeBasisPoints: 150,
+      authorizationReference: "Termo de 16/11",
+      expectedVersion: 1,
+    });
   });
 
   it("termos alterados por outra pessoa são recarregados, sem sobrescrever", async () => {

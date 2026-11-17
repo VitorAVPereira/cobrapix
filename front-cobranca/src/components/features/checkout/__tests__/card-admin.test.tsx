@@ -46,13 +46,16 @@ describe("Cartão no admin", () => {
     await user.click(screen.getByRole("checkbox"));
     await user.click(screen.getByRole("button", { name: /salvar cartão/i }));
 
-    expect(mockApi.setCheckoutPlatformCard).toHaveBeenCalledWith({
-      expectedVersion: 3,
-      cardEnabled: true,
-      cashBasisPoints: 349,
-      anticipationBasisPoints: 159,
-      cardCreditDays: 30,
-    });
+    expect(mockApi.setCheckoutPlatformCard).toHaveBeenCalledWith(
+      {
+        expectedVersion: 3,
+        cardEnabled: true,
+        cashBasisPoints: 349,
+        anticipationBasisPoints: 159,
+        cardCreditDays: 30,
+      },
+      undefined,
+    );
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
   });
 

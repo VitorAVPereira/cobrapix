@@ -1354,14 +1354,24 @@ export type CheckoutFeePayer = "BUYER" | "SELLER";
 export type CheckoutDeliveryMode = "ACCESS_LINK" | "WEBHOOK" | "BOTH";
 export type CheckoutAssetKind = "LOGO" | "BANNER" | "PRODUCT_IMAGE";
 export type CheckoutCouponType = "PERCENT" | "FIXED";
+export type CheckoutAccountMode = "SELLER_ACCOUNT" | "PLATFORM_ACCOUNT";
 export interface CheckoutTermsInput {
+  platformFeeBasisPoints: number;
+  // Only for a seller that still sells through the Cifra+ account.
+  payoutDocument?: string;
+  payoutPixKey?: string;
+  // Where the seller's signed authorization is kept (own account).
+  authorizationReference?: string;
+}
+export interface CheckoutTermsVersion {
+  id: string;
+  version: number;
   platformFeeBasisPoints: number;
   payoutDocument: string;
   payoutPixKey: string;
-}
-export interface CheckoutTermsVersion extends CheckoutTermsInput {
-  id: string;
-  version: number;
+  // Older APIs do not send them: those terms are the Cifra+ account.
+  accountMode?: CheckoutAccountMode;
+  authorizationReference?: string | null;
   changedByUserId: string;
   createdAt: string;
 }
@@ -1652,6 +1662,12 @@ export interface CheckoutWebhookDelivery {
   deliveredAt: string | null;
   createdAt: string;
 }
+function checkoutAccountPath(companyId?: string): string {
+  return companyId
+    ? `/admin/checkout/clients/${encodeURIComponent(companyId)}/account`
+    : "/admin/checkout/platform-account";
+}
+
 export interface CheckoutPlatformView {
   current: {
     id: string;
@@ -2975,31 +2991,38 @@ class ApiClient {
       body: JSON.stringify(input),
     });
   }
-  setCheckoutPlatformCard(input: {
-    expectedVersion: number;
-    cardEnabled: boolean;
-    cashBasisPoints: number;
-    anticipationBasisPoints: number;
-    cardCreditDays: number;
-  }): Promise<CheckoutPlatformView> {
-    return this.fetch("/admin/checkout/platform-account/card", { method: "PUT", body: JSON.stringify(input) });
+  setCheckoutPlatformCard(
+    input: {
+      expectedVersion: number;
+      cardEnabled: boolean;
+      cashBasisPoints: number;
+      anticipationBasisPoints: number;
+      cardCreditDays: number;
+    },
+    companyId?: string,
+  ): Promise<CheckoutPlatformView> {
+    return this.fetch(`${checkoutAccountPath(companyId)}/card`, { method: "PUT", body: JSON.stringify(input) });
   }
 
-  getCheckoutPlatformAccount(signal?: AbortSignal): Promise<CheckoutPlatformView> {
-    return this.fetch("/admin/checkout/platform-account", { signal });
+  /** Without a company: the CifraMais account. With one: that seller's own Efí account. */
+  getCheckoutPlatformAccount(signal?: AbortSignal, companyId?: string): Promise<CheckoutPlatformView> {
+    return this.fetch(checkoutAccountPath(companyId), { signal });
   }
   /** Multipart with the .p12; the browser sets the boundary. */
-  uploadCheckoutPlatformCredentials(form: FormData): Promise<{ credentialId: string; version: number }> {
-    return this.fetch("/admin/checkout/platform-account/credentials", { method: "POST", body: form });
+  uploadCheckoutPlatformCredentials(form: FormData, companyId?: string): Promise<{ credentialId: string; version: number }> {
+    return this.fetch(`${checkoutAccountPath(companyId)}/credentials`, { method: "POST", body: form });
   }
-  validateCheckoutPlatformAccount(confirmOverwrite: boolean): Promise<CheckoutPlatformView> {
-    return this.fetch("/admin/checkout/platform-account/validate", {
+  validateCheckoutPlatformAccount(confirmOverwrite: boolean, companyId?: string): Promise<CheckoutPlatformView> {
+    return this.fetch(`${checkoutAccountPath(companyId)}/validate`, {
       method: "POST",
       body: JSON.stringify({ confirmOverwrite }),
     });
   }
-  setCheckoutPlatformPixFee(input: { expectedVersion: number; pixFeeBasisPoints: number }): Promise<CheckoutPlatformView> {
-    return this.fetch("/admin/checkout/platform-account/pix-fee", { method: "PUT", body: JSON.stringify(input) });
+  setCheckoutPlatformPixFee(
+    input: { expectedVersion: number; pixFeeBasisPoints: number },
+    companyId?: string,
+  ): Promise<CheckoutPlatformView> {
+    return this.fetch(`${checkoutAccountPath(companyId)}/pix-fee`, { method: "PUT", body: JSON.stringify(input) });
   }
 
   // Cifra+ Checkout: the seller's money

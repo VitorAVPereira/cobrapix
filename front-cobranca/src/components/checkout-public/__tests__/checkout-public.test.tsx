@@ -123,7 +123,7 @@ describe("CheckoutForm", () => {
     await waitFor(() => expect(screen.getByTestId("checkout-total")).toHaveTextContent("81,90"));
     expect(mockQuote).toHaveBeenLastCalledWith(
       "porquim-anual-ab12",
-      { bumpIds: ["bump-1"], couponCode: null },
+      { bumpIds: ["bump-1"], couponCode: null, planId: null },
       expect.any(AbortSignal),
     );
   });

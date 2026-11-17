@@ -17,10 +17,13 @@ const percent = (bps: number | undefined) => (bps === undefined ? "" : String(bp
  */
 export function PlatformCardForm({
   current,
+  companyId,
   onSaved,
   onConflict,
 }: {
   current: NonNullable<CheckoutPlatformView["current"]>;
+  // A seller's own account; none for the CifraMais account.
+  companyId?: string;
   onSaved: (view: CheckoutPlatformView) => void;
   onConflict: () => void;
 }) {
@@ -49,13 +52,16 @@ export function PlatformCardForm({
     setBusy(true);
     try {
       onSaved(
-        await api.setCheckoutPlatformCard({
-          expectedVersion: current.version,
-          cardEnabled: enabled,
-          cashBasisPoints: cashBps,
-          anticipationBasisPoints: anticipationBps,
-          cardCreditDays: creditDays,
-        }),
+        await api.setCheckoutPlatformCard(
+          {
+            expectedVersion: current.version,
+            cardEnabled: enabled,
+            cashBasisPoints: cashBps,
+            anticipationBasisPoints: anticipationBps,
+            cardCreditDays: creditDays,
+          },
+          companyId,
+        ),
       );
     } catch (caught) {
       if (errorCode(caught) === "VERSION_CHANGED") onConflict();

@@ -53,14 +53,17 @@ export function CardPayment({
   cart,
   buyerDocument,
   reuse = false,
+  recurring = false,
   onOption,
   ref,
 }: {
   slug: string;
-  cart: { bumpIds: string[]; couponCode: string | null };
+  cart: { bumpIds: string[]; couponCode: string | null; planId?: string | null };
   buyerDocument: string;
   // The product offers something after the purchase, charged on this card.
   reuse?: boolean;
+  // A recurring plan is charged in full every cycle: no installments to choose.
+  recurring?: boolean;
   onOption: (option: CardOption | null, subtotalCents: number | null) => void;
   ref: Ref<CardPaymentHandle>;
 }) {
@@ -193,7 +196,7 @@ export function CardPayment({
         <p role="alert" className="text-sm text-red-600">{quoteError}</p>
       ) : brand && !quote ? (
         <p className="flex items-center gap-2 text-sm text-neutral-500"><Loader2 size={16} className="animate-spin" /> Calculando parcelas…</p>
-      ) : quote ? (
+      ) : quote && recurring ? null : quote ? (
         <select aria-label="Parcelas" className={inputClass} value={installments} onChange={(event) => chooseInstallments(Number(event.target.value))}>
           {quote.options.map((option) => (
             <option key={option.installments} value={option.installments}>

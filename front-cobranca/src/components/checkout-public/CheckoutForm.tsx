@@ -17,6 +17,7 @@ import {
   saveCheckoutLead,
   utmFrom,
   type CheckoutBuyer,
+  type PublicCheckoutPlan,
   type PublicCheckoutProduct,
   type PublicCheckoutQuote,
 } from "@/lib/checkout-public";
@@ -66,9 +67,18 @@ function FieldError({ message }: { message: string | undefined }) {
 }
 
 // The seller's preview has no server quote: the sum of what is on the page.
-function previewQuote(data: PublicCheckoutProduct, selected: string[]): PublicCheckoutQuote {
+function previewQuote(
+  data: PublicCheckoutProduct,
+  selected: string[],
+  plan: PublicCheckoutPlan | null,
+): PublicCheckoutQuote {
   const items = [
-    { kind: "MAIN" as const, name: data.product.name, unitPriceCents: data.product.priceCents, discountCents: 0 },
+    {
+      kind: "MAIN" as const,
+      name: data.product.name,
+      unitPriceCents: plan?.priceCents ?? data.product.priceCents,
+      discountCents: 0,
+    },
     ...data.bumps
       .filter((bump) => selected.includes(bump.id))
       .map((bump) => ({ kind: "BUMP" as const, name: bump.name, unitPriceCents: bump.priceCents, discountCents: 0 })),
@@ -77,12 +87,29 @@ function previewQuote(data: PublicCheckoutProduct, selected: string[]): PublicCh
   return { items, couponCode: null, discountCents: 0, subtotalCents: total, surchargeCents: 0, totalCents: total };
 }
 
+/** The plan asked for in the link (?plano=<id>), or the first one. */
+function initialPlan(plans: PublicCheckoutPlan[]): string | null {
+  if (!plans.length) return null;
+  let asked: string | null = null;
+  try {
+    asked = new URLSearchParams(window.location.search).get("plano");
+  } catch {
+    asked = null;
+  }
+  return plans.some((plan) => plan.id === asked) ? asked : plans[0]!.id;
+}
+
 /**
  * The payment page. With `preview`, the seller's live preview: nothing is
  * quoted, saved or paid, and the card fields are only a placeholder.
  */
 export function CheckoutForm({ data, preview = false }: { data: PublicCheckoutProduct; preview?: boolean }) {
   const router = useRouter();
+  const plans = data.plans ?? [];
+  const [planId, setPlanId] = useState<string | null>(() => initialPlan(plans));
+  const plan = plans.find((candidate) => candidate.id === planId) ?? null;
+  // Charged every cycle on the card: no Pix, no bump and no coupon.
+  const recurring = plan?.billing === "RECURRING";
   const [selected, setSelected] = useState<string[]>([]);
   const [couponOpen, setCouponOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -99,7 +126,9 @@ export function CheckoutForm({ data, preview = false }: { data: PublicCheckoutPr
   );
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [method, setMethod] = useState<"PIX" | "CARD">(data.payment.pixEnabled ? "PIX" : "CARD");
+  const [method, setMethod] = useState<"PIX" | "CARD">(
+    data.payment.pixEnabled && !recurring ? "PIX" : "CARD",
+  );
   const [cardOption, setCardOption] = useState<{ option: CardOption | null; subtotalCents: number | null }>({
     option: null,
     subtotalCents: null,
@@ -112,11 +141,12 @@ export function CheckoutForm({ data, preview = false }: { data: PublicCheckoutPr
   const leadSent = useRef("");
 
   useEffect(() => {
-    if (preview) return;
+    // A recurring plan is quoted by the card quote, which gives the total.
+    if (preview || recurring) return;
     // The total always comes from the server; an older answer is discarded.
     const controller = new AbortController();
     const current = ++requestId.current;
-    quoteCheckout(data.product.slug, { bumpIds: selected, couponCode: coupon }, controller.signal)
+    quoteCheckout(data.product.slug, { bumpIds: selected, couponCode: coupon, planId }, controller.signal)
       .then((result) => {
         if (current !== requestId.current) return;
         setQuote(result);
@@ -127,15 +157,28 @@ export function CheckoutForm({ data, preview = false }: { data: PublicCheckoutPr
         setQuoteError(caught instanceof Error ? caught.message : "Não foi possível calcular o total.");
       });
     return () => controller.abort();
-  }, [preview, data.product.slug, selected, coupon]);
-  const shown = preview ? previewQuote(data, selected) : quote;
+  }, [preview, recurring, data.product.slug, selected, coupon, planId]);
+  const shown = preview || recurring ? previewQuote(data, recurring ? [] : selected, plan) : quote;
+
+  function choosePlan(next: PublicCheckoutPlan) {
+    setPlanId(next.id);
+    setQuote(null);
+    setCardOrder(null);
+    setSubmitError(null);
+    if (next.billing === "RECURRING") {
+      setSelected([]);
+      setCoupon(null);
+      setCouponOpen(false);
+      setMethod("CARD");
+    }
+  }
 
   async function applyCoupon() {
     const code = couponInput.trim();
     if (!code || preview) return;
     setCouponError(null);
     try {
-      await quoteCheckout(data.product.slug, { bumpIds: selected, couponCode: code });
+      await quoteCheckout(data.product.slug, { bumpIds: selected, couponCode: code, planId });
       setCoupon(code.toUpperCase());
       setCouponOpen(false);
     } catch (caught) {
@@ -172,6 +215,7 @@ export function CheckoutForm({ data, preview = false }: { data: PublicCheckoutPr
       const order = await createCheckoutOrder(data.product.slug, {
         bumpIds: selected,
         couponCode: coupon,
+        planId,
         buyer: cleaned,
         utm: utmFrom(window.location.search),
         idempotencyKey: crypto.randomUUID(),
@@ -185,7 +229,7 @@ export function CheckoutForm({ data, preview = false }: { data: PublicCheckoutPr
   }
 
   async function payByCard(cleaned: CheckoutBuyer) {
-    const cartKey = JSON.stringify({ selected, coupon });
+    const cartKey = JSON.stringify({ selected, coupon, planId });
     try {
       const charge = { ...(await cardRef.current!.prepare()), idempotencyKey: crypto.randomUUID() };
       const order =
@@ -195,6 +239,7 @@ export function CheckoutForm({ data, preview = false }: { data: PublicCheckoutPr
               ...charge,
               bumpIds: selected,
               couponCode: coupon,
+              planId,
               buyer: cleaned,
               utm: utmFrom(window.location.search),
               sessionKey: sessionKey.current ?? undefined,
@@ -240,15 +285,18 @@ export function CheckoutForm({ data, preview = false }: { data: PublicCheckoutPr
       utm: utmFrom(window.location.search),
     }).catch(() => undefined);
   }
-  const plan = planName(data.product.accessPeriodMonths);
-  const per = periodPriceLabel(data.product.accessPeriodMonths);
+  const months = plan?.intervalMonths ?? data.product.accessPeriodMonths;
+  const periodName = planName(data.product.accessPeriodMonths);
+  const per = periodPriceLabel(months);
+  const priceCents = plan?.priceCents ?? data.product.priceCents;
+  const compareAt = plan ? plan.compareAtPriceCents : data.product.compareAtPriceCents;
   const image = checkoutImageUrl(data.product.imageUrl);
   const errors = buyerErrors(buyer);
   const errorOf = (field: BuyerField) =>
     attempted || (touched[field] && buyer[field].trim()) ? errors[field] : undefined;
   const leave = (field: BuyerField) => setTouched((current) => ({ ...current, [field]: true }));
   const methods = [
-    ...(data.payment.pixEnabled ? (["PIX"] as const) : []),
+    ...(data.payment.pixEnabled && !recurring ? (["PIX"] as const) : []),
     ...(data.payment.cardEnabled ? (["CARD"] as const) : []),
   ];
 
@@ -262,15 +310,15 @@ export function CheckoutForm({ data, preview = false }: { data: PublicCheckoutPr
           )}
           <div className="min-w-0 flex-1">
             <h1 className="text-[15px] font-semibold leading-snug text-neutral-900">{data.product.name}</h1>
-            {data.product.compareAtPriceCents && (
-              <p className="text-[13px] text-neutral-400 line-through">De: {formatBRL(data.product.compareAtPriceCents)}</p>
+            {compareAt && (
+              <p className="text-[13px] text-neutral-400 line-through">De: {formatBRL(compareAt)}</p>
             )}
             <p className="text-sm text-neutral-900">
-              {data.product.compareAtPriceCents ? "Por: " : ""}
-              {formatBRL(data.product.priceCents)}
+              {compareAt ? "Por: " : ""}
+              {formatBRL(priceCents)}
               {per && <span className="text-neutral-500"> {per}</span>}
             </p>
-            {coupon ? (
+            {recurring ? null : coupon ? (
               <p className="mt-2 inline-flex items-center gap-2 rounded-md bg-green-50 px-3 py-1.5 text-[13px] font-medium text-green-700">
                 <Tag size={14} /> Cupom {coupon} aplicado
                 <button type="button" aria-label="Remover cupom" className="text-green-700" onClick={() => setCoupon(null)}>
@@ -343,13 +391,49 @@ export function CheckoutForm({ data, preview = false }: { data: PublicCheckoutPr
         </p>
       </section>
 
-      {plan && (
+      {plans.length > 0 ? (
         <section className="space-y-2">
-          <h2 className={sectionTitleClass}>Plano de assinatura</h2>
-          <p className="flex h-11 items-center rounded-lg border border-neutral-200 bg-white px-3 text-sm text-neutral-900">
-            {plan}
-          </p>
+          <h2 className={sectionTitleClass}>Plano</h2>
+          <div className="space-y-2" role="radiogroup" aria-label="Plano">
+            {plans.map((option) => (
+              <label
+                key={option.id}
+                className={`flex cursor-pointer items-center justify-between gap-3 rounded-lg border bg-white px-3 py-2.5 text-sm ${
+                  option.id === planId ? "border-neutral-900 ring-1 ring-neutral-900" : "border-neutral-200 hover:border-neutral-300"
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="plan"
+                    className="accent-neutral-900"
+                    checked={option.id === planId}
+                    onChange={() => choosePlan(option)}
+                  />
+                  <span>
+                    <span className="block font-medium text-neutral-900">{option.name}</span>
+                    <span className="block text-[13px] text-neutral-500">
+                      {option.billing === "RECURRING" ? "Renova sozinho no cartão" : "Pagamento único do período"}
+                    </span>
+                  </span>
+                </span>
+                <span className="text-right text-neutral-900">
+                  {formatBRL(option.priceCents)}
+                  <span className="block text-[13px] text-neutral-500">{periodPriceLabel(option.intervalMonths)}</span>
+                </span>
+              </label>
+            ))}
+          </div>
         </section>
+      ) : (
+        periodName && (
+          <section className="space-y-2">
+            <h2 className={sectionTitleClass}>Plano de assinatura</h2>
+            <p className="flex h-11 items-center rounded-lg border border-neutral-200 bg-white px-3 text-sm text-neutral-900">
+              {periodName}
+            </p>
+          </section>
+        )
       )}
 
       <section className="space-y-3">
@@ -377,6 +461,11 @@ export function CheckoutForm({ data, preview = false }: { data: PublicCheckoutPr
             </label>
           ))}
         </div>
+        {methods.length === 0 && (
+          <p role="alert" className="text-sm text-red-600">
+            Este plano é pago só no cartão, que está indisponível no momento. Escolha outro plano.
+          </p>
+        )}
         {method === "CARD" && preview && (
           <p className="rounded-lg border border-dashed border-neutral-300 p-4 text-center text-[13px] text-neutral-500">
             Aqui o comprador preenche os dados do cartão.
@@ -386,9 +475,10 @@ export function CheckoutForm({ data, preview = false }: { data: PublicCheckoutPr
           <CardPayment
             ref={cardRef}
             slug={data.product.slug}
-            cart={{ bumpIds: selected, couponCode: coupon }}
+            cart={{ bumpIds: selected, couponCode: coupon, planId }}
             buyerDocument={buyer.document}
-            reuse={Boolean(data.payment.cardReuse)}
+            reuse={Boolean(data.payment.cardReuse) && !recurring}
+            recurring={recurring}
             onOption={(option, subtotalCents) => setCardOption({ option, subtotalCents })}
           />
         )}
@@ -400,7 +490,7 @@ export function CheckoutForm({ data, preview = false }: { data: PublicCheckoutPr
         <FieldError message={errorOf("document")} />
       </section>
 
-      {data.bumps.length > 0 && (
+      {data.bumps.length > 0 && !recurring && (
         <section className="space-y-4">
           {data.bumps.map((bump) => {
             const checked = selected.includes(bump.id);
@@ -493,14 +583,21 @@ export function CheckoutForm({ data, preview = false }: { data: PublicCheckoutPr
         )}
       </section>
 
+      {recurring && plan && (
+        <p className="rounded-lg bg-neutral-50 p-3 text-[13px] text-neutral-600">
+          Ao pagar, você autoriza a cobrança de{" "}
+          {formatBRL(cardOption.option?.totalCents ?? plan.priceCents)} {periodPriceLabel(plan.intervalMonths)} neste cartão, até
+          cancelar. O link para cancelar chega no seu e-mail, e o acesso segue até o fim do período pago.
+        </p>
+      )}
       {submitError && <p role="alert" className="text-sm text-red-600">{submitError}</p>}
       <button
         type="submit"
-        disabled={submitting || !shown || (method === "CARD" && !cardOption.option)}
+        disabled={submitting || !shown || methods.length === 0 || (method === "CARD" && !cardOption.option)}
         className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-neutral-950 text-[15px] font-semibold text-white hover:bg-neutral-800 disabled:opacity-60"
       >
         {submitting && <Loader2 size={20} className="animate-spin" />}
-        {method === "CARD" ? "Pagar com cartão" : "Gerar Pix"}
+        {recurring ? "Assinar" : method === "CARD" ? "Pagar com cartão" : "Gerar Pix"}
       </button>
       <p className="flex items-center justify-center gap-2 text-[13px] text-neutral-500">
         <Lock size={15} className="text-green-500" /> Transação Segura e Criptografada

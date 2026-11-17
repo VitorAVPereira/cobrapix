@@ -146,6 +146,90 @@ describe("Cartão na página de pagamento", () => {
     expect(JSON.stringify(body)).not.toContain("4111111111111111");
   });
 
+  it("plano recorrente: só cartão, sem bump nem cupom, com o texto de autorização e o plano no pedido", async () => {
+    const user = userEvent.setup();
+    mockCardOrder.mockResolvedValue(order({ processing: true }));
+    mockCardQuote.mockResolvedValue({
+      quoteId: "quote-sub",
+      validUntil: new Date(Date.now() + 10 * 60_000).toISOString(),
+      payeeCode: "payee-vendedor",
+      environment: "sandbox",
+      subtotalCents: 2990,
+      options: [{ installments: 1, installmentValueCents: 3095, totalCents: 3095 }],
+    });
+    // The link chooses the quarterly plan.
+    window.history.pushState({}, "", "/c/porquim-anual-ab12?plano=plano-trimestral");
+    const withPlans: PublicCheckoutProduct = {
+      ...product,
+      bumps: [
+        {
+          id: "bump-1",
+          name: "Guia Renda Fixa",
+          headline: "Leve junto",
+          description: null,
+          priceCents: 1490,
+          compareAtPriceCents: null,
+          imageUrl: null,
+          accessPeriodMonths: null,
+        },
+      ],
+      plans: [
+        {
+          id: "plano-anual",
+          name: "Anual",
+          intervalMonths: 12,
+          billing: "INSTALLMENT",
+          priceCents: 9900,
+          compareAtPriceCents: null,
+          maxInstallments: 3,
+        },
+        {
+          id: "plano-trimestral",
+          name: "Trimestral",
+          intervalMonths: 3,
+          billing: "RECURRING",
+          priceCents: 2990,
+          compareAtPriceCents: null,
+          maxInstallments: 1,
+        },
+      ],
+    };
+    render(<CheckoutForm data={withPlans} />);
+
+    expect(await screen.findByLabelText(/trimestral/i)).toBeChecked();
+    expect(screen.queryByLabelText("Pix")).not.toBeInTheDocument();
+    expect(screen.queryByText("Guia Renda Fixa")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /adicionar cupom/i })).not.toBeInTheDocument();
+    expect(mockQuote).not.toHaveBeenCalled();
+
+    await fillCard(user);
+    await waitFor(() => expect(screen.getByTestId("checkout-total")).toHaveTextContent("30,95"));
+    // Charged in full every cycle: no installments to choose.
+    expect(screen.queryByLabelText("Parcelas")).not.toBeInTheDocument();
+    expect(screen.getByText(/você autoriza a cobrança de R\$\s?30,95 por trimestre neste cartão/)).toBeInTheDocument();
+    expect(mockCardQuote).toHaveBeenCalledWith(
+      "porquim-anual-ab12",
+      expect.objectContaining({ planId: "plano-trimestral", bumpIds: [], couponCode: null }),
+      expect.any(AbortSignal),
+    );
+
+    await user.click(screen.getByRole("button", { name: /^assinar$/i }));
+    await waitFor(() => expect(mockCardOrder).toHaveBeenCalled());
+    expect(mockCardOrder.mock.calls[0]?.[1]).toMatchObject({
+      planId: "plano-trimestral",
+      installments: 1,
+      bumpIds: [],
+      couponCode: null,
+    });
+    // A subscription never keeps the card for an offer.
+    expect(mockTokenize.mock.calls[0]?.[2]).toBe(false);
+
+    // The one-time plan brings Pix back.
+    await user.click(screen.getByLabelText(/anual/i));
+    expect(screen.getByLabelText("Pix")).toBeInTheDocument();
+    window.history.pushState({}, "", "/");
+  });
+
   it("produto com oferta depois da compra pede à Efí um token reutilizável", async () => {
     const user = userEvent.setup();
     mockCardOrder.mockResolvedValue(order({ processing: true }));
