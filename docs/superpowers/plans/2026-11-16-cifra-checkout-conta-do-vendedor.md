@@ -252,6 +252,56 @@ Testes:
 - 1.404 testes unitários do backend, `test:e2e:checkout-pix` (37) e `test:e2e:checkout` (6)
   passando; build e lint do checkout OK.
 
+### 17/11/2026: Tarefa 3 (ativação pelo admin, backend)
+
+Feito, sem commit:
+
+- **Rotas** em `/admin/checkout/clients/:companyId/account`: ver, enviar credenciais, validar,
+  tarifa do Pix e cartão. São os mesmos passos e DTOs da conta Cifra+
+  (`CheckoutPlatformService`, agora com o dono como parâmetro), com versão esperada e auditoria
+  na empresa do vendedor (`CHECKOUT_SELLER_*`).
+- **Guarda do vendedor**, dentro do serviço: só cliente de checkout (404), só no modo conta
+  própria (`CHECKOUT_ACCOUNT_MODE_NOT_SUPPORTED`) e só com a referência da autorização nos termos
+  (`CHECKOUT_AUTHORIZATION_REQUIRED`). Vale antes de guardar credencial, de chamar a Efí e de
+  gravar tarifa.
+- **Termos:** cliente novo nasce `SELLER_ACCOUNT`, sem dados de repasse (gravados vazios, mesmo
+  que a tela antiga os envie). Uma nova versão dos termos mantém o modo do vendedor e a
+  referência da autorização, se não vier outra.
+
+Desvios do plano:
+
+- **Sem escolha de modo:** o DTO não tem campo de modo, então não há o que recusar na criação. O
+  código `CHECKOUT_ACCOUNT_MODE_NOT_SUPPORTED` passou a responder quando se tenta cadastrar conta
+  própria para um vendedor da conta Cifra+. Também não há rota para mudar um vendedor de modo.
+- **Referência da autorização nos termos**, e não na tela da conta: fica versionada com o resto
+  do combinado, e a tela antiga do admin continua criando clientes.
+
+Decisão do responsável (17/11): o sistema **não exige** que a conta Efí esteja no mesmo CNPJ do
+cadastro do cliente. O que liga a conta ao vendedor é o termo de autorização (D9). O campo do
+titular continua aceitando só CNPJ, como na conta Cifra+.
+
+Além do plano:
+
+- **Troca de conta desliga o cartão:** ao validar uma conta diferente da anterior (homologação
+  para produção, por exemplo), a nova versão nasce com o cartão desligado. Vale também para a
+  conta Cifra+, que antes carregava o cartão ligado para a conta nova.
+- **Textos do admin** da conta Cifra+ ficaram sem "Cifra+" ("Valide a conta antes da tarifa").
+
+Testes:
+
+- Unitários novos, vistos falhar antes: termos por modo (4) e conta do vendedor (5).
+- E2E ampliado depois da implementação: cliente novo sem dados de repasse; sem conta não vende
+  nem liga o cartão; sem a referência o admin não grava tarifa; tarifa e cartão por versão do
+  vendedor, com 409 na versão antiga; nenhuma credencial na resposta; auditoria na empresa do
+  vendedor; vendedor comum recebe 404; vendedor da conta Cifra+ recebe 409.
+- Envio de credenciais e validação: só em teste unitário, com o certificado e a Efí simulados.
+- 1.411 testes unitários do backend, `test:e2e:checkout-pix` (37) e `test:e2e:checkout` (6)
+  passando; build e lint do checkout OK.
+
+Para o runbook (Tarefa 17): a chave Pix do vendedor passa a avisar a API da Cifra+. Se ele usar
+a mesma chave para outros recebimentos, cada um vira um aviso desconhecido aqui. Pedir uma chave
+aleatória só para o checkout.
+
 Pendência que trava a ativação de um vendedor: até a Tarefa 5, a venda pela conta do vendedor
-entra no razão como se o dinheiro estivesse com a Cifra+ (saldo a repassar). Não há rota que
-crie termos nesse modo antes da Tarefa 3, então nenhum vendedor chega a esse estado.
+entra no razão como se o dinheiro estivesse com a Cifra+ (saldo a repassar). Com a Tarefa 3 o
+admin já consegue ativar um vendedor nesse modo: **não publicar nem ativar antes da Tarefa 5**.
