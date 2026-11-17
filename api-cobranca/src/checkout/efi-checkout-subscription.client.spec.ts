@@ -134,11 +134,18 @@ describe('EfiCheckoutSubscriptionClient', () => {
       },
     );
 
-    // An answer that says nothing about the charge is not taken as paid.
-    sdk.defineSubscriptionPayMethod.mockResolvedValue({ code: 200, data: {} });
-    await expect(
-      client.pay(account, '11976', { paymentToken: 'tok', customer, address }),
-    ).rejects.toThrow();
+    // An answer that says nothing about the charge, or not its amount, is
+    // not taken as paid.
+    for (const data of [{}, { charge: { id: 2396478, status: 'paid' } }]) {
+      sdk.defineSubscriptionPayMethod.mockResolvedValue({ code: 200, data });
+      await expect(
+        client.pay(account, '11976', {
+          paymentToken: 'tok',
+          customer,
+          address,
+        }),
+      ).rejects.toThrow();
+    }
   });
 
   it('consulta: situação, id da tentativa e as cobranças do histórico', async () => {

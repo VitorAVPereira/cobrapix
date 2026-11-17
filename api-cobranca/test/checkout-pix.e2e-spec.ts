@@ -27,6 +27,9 @@ import { CheckoutOrdersService } from '../src/checkout/checkout-orders.service';
 import { CheckoutRecoveryService } from '../src/checkout/checkout-recovery.service';
 import { CheckoutCardService } from '../src/checkout/checkout-card.service';
 import { EfiCheckoutCardClient } from '../src/checkout/efi-checkout-card.client';
+import { EfiCheckoutSubscriptionClient } from '../src/checkout/efi-checkout-subscription.client';
+import { CheckoutSubscriptionsService } from '../src/checkout/checkout-subscriptions.service';
+import { subscriptionTokenOf } from '../src/checkout/checkout-rules';
 import { itemShares, type OrderItem } from '../src/checkout/checkout-pricing';
 import { CheckoutWebhooksService } from '../src/checkout/checkout-webhooks.service';
 import { GlobalExceptionFilter } from '../src/common/filters/http-exception.filter';
@@ -77,6 +80,14 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
     detail: jest.fn(),
     findByAttempt: jest.fn().mockResolvedValue([]),
     notification: jest.fn(),
+  };
+  // The Efí subscription API (two steps: create, then pay).
+  const subscriptionClient = {
+    createPlan: jest.fn().mockResolvedValue('7700'),
+    create: jest.fn(),
+    pay: jest.fn(),
+    detail: jest.fn(),
+    cancel: jest.fn().mockResolvedValue(undefined),
   };
   const tokens = { admin: '', seller: '' };
   // The real limits, with a handle to start a scenario fresh (one IP here).
@@ -139,6 +150,8 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
       .useValue(webhookSender)
       .overrideProvider(EfiCheckoutCardClient)
       .useValue(cardClient)
+      .overrideProvider(EfiCheckoutSubscriptionClient)
+      .useValue(subscriptionClient)
       .overrideGuard(ThrottleGuard)
       .useValue(throttle)
       .compile();
@@ -2774,5 +2787,340 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
         where: { order: { publicToken: token }, kind: 'SALE' },
       }),
     ).toBe(1);
+  });
+
+  describe('assinatura no cartão na conta do vendedor (etapa A)', () => {
+    let other = '';
+    let companyId = '';
+    let ownSlug = '';
+    let planId = '';
+    let orderToken = '';
+
+    const subscriptionHooks = async () =>
+      (
+        await prisma.checkoutWebhookDelivery.findMany({
+          where: { companyId, eventType: { startsWith: 'subscription.' } },
+          orderBy: { createdAt: 'asc' },
+          select: { eventType: true, payload: true },
+        })
+      ).map((row) => row.eventType);
+    const subscribe = async (document: string, name: string) => {
+      const quote = (
+        await request(http)
+          .post(`/checkout/public/products/${ownSlug}/card/quote`)
+          .send({ bumpIds: [], couponCode: null, planId, brand: 'visa' })
+          .expect(200)
+      ).body as {
+        quoteId: string;
+        options: { installments: number; totalCents: number }[];
+      };
+      return {
+        quote,
+        response: await request(http)
+          .post(`/checkout/public/products/${ownSlug}/card/orders`)
+          .send({
+            bumpIds: [],
+            couponCode: null,
+            planId,
+            buyer: holder(document, name),
+            ...charge(quote.quoteId, document),
+          }),
+      };
+    };
+
+    beforeAll(async () => {
+      (
+        throttle as unknown as { useMemoryLimiters(): void }
+      ).useMemoryLimiters();
+      other = await login(`olga-${suffix}@e2e.test`, 'Nova-senha-e2e-2');
+      const company = await prisma.company.findFirstOrThrow({
+        where: { email: `outra-${suffix}@e2e.test` },
+      });
+      companyId = company.id;
+      const product = await prisma.checkoutProduct.findFirstOrThrow({
+        where: { companyId },
+        select: { id: true, slug: true },
+      });
+      ownSlug = product.slug;
+      // The seller system that receives the subscription events.
+      await request(http)
+        .post('/checkout/webhooks')
+        .set(auth(other))
+        .send({
+          name: 'Área de membros',
+          url: 'https://hooks.outra.e2e.test/cifra',
+        })
+        .expect(201);
+      planId = (
+        (
+          await request(http)
+            .post('/checkout/plans')
+            .set(auth(other))
+            .send({
+              productId: product.id,
+              name: 'Trimestral',
+              intervalMonths: 3,
+              billing: 'RECURRING',
+              priceCents: 2990,
+              active: true,
+            })
+            .expect(201)
+        ).body as { id: string }
+      ).id;
+    });
+
+    it('a página oferece o plano trimestral só no cartão, à vista', async () => {
+      const page = (
+        await request(http)
+          .get(`/checkout/public/products/${ownSlug}`)
+          .expect(200)
+      ).body as {
+        plans: { id: string; billing: string; maxInstallments: number }[];
+      };
+      expect(page.plans).toEqual([
+        expect.objectContaining({
+          id: planId,
+          billing: 'RECURRING',
+          maxInstallments: 1,
+        }),
+      ]);
+      const quote = (
+        await request(http)
+          .post(`/checkout/public/products/${ownSlug}/card/quote`)
+          .send({ bumpIds: [], couponCode: null, planId, brand: 'visa' })
+          .expect(200)
+      ).body as { options: { installments: number }[] };
+      expect(quote.options.map((option) => option.installments)).toEqual([1]);
+    });
+
+    it('adesão: assinatura criada na conta do vendedor sem cobrar, depois cobrada; o pagamento ativa e avisa', async () => {
+      const sellerIdentity = await prisma.efiAccountIdentity.findFirstOrThrow({
+        where: { companyId },
+      });
+      const calls: string[] = [];
+      let charged = 0;
+      subscriptionClient.create.mockImplementationOnce(
+        (
+          account: { identity: { id: string } },
+          _plan: string,
+          input: { valueCents: number },
+        ) => {
+          calls.push(`create:${account.identity.id}`);
+          charged = input.valueCents;
+          return Promise.resolve({
+            subscriptionId: '55001',
+            chargeId: '88001',
+          });
+        },
+      );
+      // In full, at once: what the Efí charges is the amount of the subscription.
+      subscriptionClient.pay.mockImplementationOnce(() => {
+        calls.push('pay');
+        return Promise.resolve({
+          chargeId: '88001',
+          status: 'paid',
+          totalCents: charged,
+        });
+      });
+
+      const { quote, response } = await subscribe('12345678909', 'Rui Lima');
+      expect(response.status).toBe(201);
+      orderToken = (response.body as { token: string }).token;
+
+      // The Efí plan is created once, in the seller's account.
+      expect(subscriptionClient.createPlan).toHaveBeenCalledTimes(1);
+      expect(
+        (
+          subscriptionClient.createPlan.mock.calls[0] as [
+            { identity: { id: string } },
+            string,
+            number,
+          ]
+        )[0].identity.id,
+      ).toBe(sellerIdentity.id);
+      expect(calls).toEqual([`create:${sellerIdentity.id}`, 'pay']);
+      expect(cardClient.submit).not.toHaveBeenCalledWith(
+        expect.objectContaining({ identity: { id: sellerIdentity.id } }),
+        expect.anything(),
+      );
+
+      const order = await prisma.checkoutOrder.findUniqueOrThrow({
+        where: { publicToken: orderToken },
+        include: { subscription: true, ledgerEntries: true },
+      });
+      expect(order).toMatchObject({
+        status: 'PAID',
+        subscriptionCycle: 1,
+        totalCents: quote.options[0]!.totalCents,
+        subscription: {
+          status: 'ACTIVE',
+          efiSubscriptionId: '55001',
+          intervalMonths: 3,
+          cycleCents: 2990,
+          issuerIdentityId: sellerIdentity.id,
+        },
+      });
+      // Three months of access from the payment.
+      const months =
+        (order.subscription!.currentPeriodEnd!.getUTCFullYear() -
+          order.paidAt!.getUTCFullYear()) *
+          12 +
+        order.subscription!.currentPeriodEnd!.getUTCMonth() -
+        order.paidAt!.getUTCMonth();
+      expect(months).toBe(3);
+      // Own account: the ledger is left with only the Cifra+ fee owed.
+      expect(order.ledgerEntries.map((entry) => entry.kind).sort()).toEqual([
+        'DIRECT_SETTLEMENT',
+        'EFI_FEE',
+        'PLATFORM_FEE',
+        'SALE',
+      ]);
+      expect(await subscriptionHooks()).toEqual(['subscription.activated']);
+      const paid = await prisma.checkoutWebhookDelivery.findFirstOrThrow({
+        where: { companyId, eventType: 'order.paid', orderId: order.id },
+      });
+      expect(paid.payload).toMatchObject({
+        data: {
+          order: {
+            plan: { id: planId, billing: 'RECURRING', intervalMonths: 3 },
+            subscription: { status: 'ACTIVE', cycle: 1 },
+          },
+        },
+      });
+      const queue = app.get<Queue>(getQueueToken(CHECKOUT_MAIL_QUEUE));
+      expect(await queue.getJob(`access-${order.id}`)).toBeTruthy();
+    });
+
+    it('resposta perdida no segundo passo: fica em análise e a consulta confirma, sem segunda cobrança', async () => {
+      subscriptionClient.create.mockResolvedValueOnce({
+        subscriptionId: '55002',
+        chargeId: '88002',
+      });
+      subscriptionClient.pay.mockRejectedValueOnce(new Error('socket hang up'));
+      const { response } = await subscribe('98765432100', 'Davi Rocha');
+      expect(response.status).toBe(201);
+      const token = (response.body as { token: string }).token;
+      const attempt = await prisma.checkoutCardAttempt.findFirstOrThrow({
+        where: { order: { publicToken: token } },
+      });
+      expect(attempt.status).toBe('UNCERTAIN');
+
+      subscriptionClient.detail.mockResolvedValueOnce({
+        subscriptionId: '55002',
+        status: 'active',
+        customId: attempt.id,
+        valueCents: attempt.totalCents,
+        charges: [{ chargeId: '88002', status: 'paid' }],
+      });
+      const payCalls = subscriptionClient.pay.mock.calls.length;
+      const createCalls = subscriptionClient.create.mock.calls.length;
+      await app.get(CheckoutCardService).reconcileDue();
+
+      expect(subscriptionClient.pay.mock.calls).toHaveLength(payCalls);
+      expect(subscriptionClient.create.mock.calls).toHaveLength(createCalls);
+      expect(
+        await prisma.checkoutOrder.findUniqueOrThrow({
+          where: { publicToken: token },
+          include: { subscription: true },
+        }),
+      ).toMatchObject({ status: 'PAID', subscription: { status: 'ACTIVE' } });
+    });
+
+    it('comprador cancela pelo link: para na Efí, o acesso segue até o fim do período e os dois avisos saem', async () => {
+      const subscriptionToken = subscriptionTokenOf(orderToken);
+      const view = await request(http)
+        .get(`/checkout/public/subscriptions/${subscriptionToken}`)
+        .expect(200);
+      expect(view.body).toMatchObject({
+        status: 'ACTIVE',
+        planName: 'Trimestral',
+        intervalMonths: 3,
+      });
+      // The order token is not a subscription key.
+      await request(http)
+        .get(`/checkout/public/subscriptions/${orderToken}`)
+        .expect(404);
+
+      subscriptionClient.cancel.mockClear();
+      const canceled = await request(http)
+        .post(`/checkout/public/subscriptions/${subscriptionToken}/cancel`)
+        .expect(200);
+      await request(http)
+        .post(`/checkout/public/subscriptions/${subscriptionToken}/cancel`)
+        .expect(200);
+      expect(subscriptionClient.cancel).toHaveBeenCalledTimes(1);
+      expect(canceled.body).toMatchObject({ status: 'CANCELED' });
+
+      const subscription = await prisma.checkoutSubscription.findFirstOrThrow({
+        where: { efiSubscriptionId: '55001' },
+      });
+      expect(subscription).toMatchObject({
+        status: 'CANCELED',
+        cancelReason: 'BUYER',
+      });
+      expect(subscription.accessEndsAt).toEqual(subscription.currentPeriodEnd);
+      expect(await subscriptionHooks()).toEqual([
+        'subscription.activated',
+        'subscription.activated',
+        'subscription.renewal_disabled',
+      ]);
+
+      // The access ends: subscription.canceled goes out once, on that day.
+      const service = app.get(CheckoutSubscriptionsService);
+      await service.notifyEnded(new Date(Date.now() + 60_000));
+      expect(
+        (await subscriptionHooks()).filter(
+          (type) => type === 'subscription.canceled',
+        ),
+      ).toEqual([]);
+      const after = new Date(subscription.accessEndsAt!.getTime() + 60_000);
+      await service.notifyEnded(after);
+      await service.notifyEnded(after);
+      expect(
+        (await subscriptionHooks()).filter(
+          (type) => type === 'subscription.canceled',
+        ),
+      ).toEqual(['subscription.canceled']);
+    });
+
+    it('o vendedor lista e cancela as dele; outra empresa não alcança', async () => {
+      const list = await request(http)
+        .get('/checkout/subscriptions')
+        .set(auth(other))
+        .expect(200);
+      const items = (list.body as { items: { id: string; status: string }[] })
+        .items;
+      expect(items.map((item) => item.status).sort()).toEqual([
+        'ACTIVE',
+        'CANCELED',
+      ]);
+      const active = items.find((item) => item.status === 'ACTIVE')!;
+
+      await request(http)
+        .post(`/checkout/subscriptions/${active.id}/cancel`)
+        .set(auth(tokens.seller))
+        .expect(404);
+      await request(http)
+        .get('/checkout/subscriptions')
+        .set(auth(tokens.seller))
+        .expect(200)
+        .expect(({ body }) =>
+          expect((body as { total: number }).total).toBe(0),
+        );
+
+      await request(http)
+        .post(`/checkout/subscriptions/${active.id}/cancel`)
+        .set(auth(other))
+        .expect(204);
+      expect(
+        await prisma.auditLog.count({
+          where: {
+            companyId,
+            action: 'CHECKOUT_SUBSCRIPTION_CANCELED',
+            entityId: active.id,
+          },
+        }),
+      ).toBe(1);
+    });
   });
 });

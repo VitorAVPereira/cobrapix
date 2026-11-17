@@ -157,13 +157,11 @@ export class EfiCheckoutSubscriptionClient {
     );
     const charge = record(data?.charge);
     const chargeId = idOf(charge?.id);
-    if (!chargeId || typeof charge?.status !== 'string')
+    const totalCents = cents(charge?.total) ?? cents(data?.total);
+    // Without the amount the answer proves nothing: it is read back later.
+    if (!chargeId || typeof charge?.status !== 'string' || totalCents === null)
       throw new Error('EFI_SUBSCRIPTION_PAYMENT_UNREADABLE');
-    return {
-      chargeId,
-      status: charge.status,
-      totalCents: cents(charge.total) ?? cents(data?.total),
-    };
+    return { chargeId, status: charge.status, totalCents };
   }
 
   async detail(
