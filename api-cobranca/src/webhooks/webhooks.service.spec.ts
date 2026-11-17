@@ -37,9 +37,48 @@ describe('WebhooksService (charges)', () => {
     expect(efi.handleChargesWebhook).not.toHaveBeenCalled();
   });
 
+  it('aviso de cartão da conta de um vendedor do checkout vai para o checkout', async () => {
+    prisma.efiAccountIdentity.findUnique.mockResolvedValue({
+      ownership: 'COMPANY',
+      company: { product: 'CHECKOUT' },
+    });
+    card.handleNotification.mockResolvedValue(true);
+
+    await expect(
+      service.handleEfiChargesWebhook(
+        { notification: 'tok-3' },
+        undefined,
+        'identity-vendedor',
+      ),
+    ).resolves.toEqual({ processed: true });
+    expect(card.handleNotification).toHaveBeenCalledWith(
+      'identity-vendedor',
+      'tok-3',
+    );
+    expect(efi.handleChargesWebhook).not.toHaveBeenCalled();
+  });
+
+  it('aviso do checkout sem token válido não é lido na Efí', async () => {
+    prisma.efiAccountIdentity.findUnique.mockResolvedValue({
+      ownership: 'COMPANY',
+      company: { product: 'CHECKOUT' },
+    });
+    for (const payload of [{}, { notification: '' }, { notification: 7 }])
+      await expect(
+        service.handleEfiChargesWebhook(
+          payload,
+          undefined,
+          'identity-vendedor',
+        ),
+      ).resolves.toEqual({ processed: false });
+    expect(card.handleNotification).not.toHaveBeenCalled();
+    expect(efi.handleChargesWebhook).not.toHaveBeenCalled();
+  });
+
   it('conta de empresa continua no fluxo da cobrança', async () => {
     prisma.efiAccountIdentity.findUnique.mockResolvedValue({
       ownership: 'COMPANY',
+      company: { product: 'BILLING' },
     });
     efi.handleChargesWebhook.mockResolvedValue({ processed: true });
 

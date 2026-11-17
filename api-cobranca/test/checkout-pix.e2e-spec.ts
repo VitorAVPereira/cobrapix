@@ -2593,4 +2593,110 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
     expect(JSON.stringify(platformAccount.body)).not.toContain(identity.id);
     expect(await page(slug)).toMatchObject({ available: true });
   });
+
+  it('cartão na conta do vendedor: só o aviso da conta dele confirma, uma vez', async () => {
+    const company = await prisma.company.findFirstOrThrow({
+      where: { email: `outra-${suffix}@e2e.test` },
+    });
+    const product = await prisma.checkoutProduct.findFirstOrThrow({
+      where: { companyId: company.id },
+      select: { slug: true },
+    });
+    const sellerIdentity = await prisma.efiAccountIdentity.findFirstOrThrow({
+      where: { companyId: company.id },
+    });
+    const platformIdentity = await prisma.efiAccountIdentity.findFirstOrThrow({
+      where: { ownership: 'PLATFORM' },
+    });
+    const cards = app.get(CheckoutCardService);
+    const accountOf = (mock: jest.Mock) =>
+      (
+        (mock.mock.calls as unknown[][]).at(-1)?.[0] as {
+          identity: { id: string };
+        }
+      ).identity.id;
+
+    const quote = (
+      await request(http)
+        .post(`/checkout/public/products/${product.slug}/card/quote`)
+        .send({ bumpIds: [], couponCode: null, brand: 'visa' })
+        .expect(200)
+    ).body as { quoteId: string; options: { totalCents: number }[] };
+    const one = quote.options[0]!;
+    cardClient.submit.mockResolvedValueOnce({
+      chargeId: '9901',
+      status: 'waiting',
+      totalCents: one.totalCents,
+      installments: 1,
+    });
+    const created = await request(http)
+      .post(`/checkout/public/products/${product.slug}/card/orders`)
+      .send({
+        bumpIds: [],
+        couponCode: null,
+        buyer: holder('86288366757', 'Lia Prado'),
+        ...charge(quote.quoteId, '86288366757'),
+      })
+      .expect(201);
+    const token = (created.body as { token: string }).token;
+    // The charge left with the seller's credentials, not the CifraMais ones.
+    expect(accountOf(cardClient.submit)).toBe(sellerIdentity.id);
+    const sent = (cardClient.submit.mock.calls as unknown[][]).at(-1)?.[1] as {
+      attemptId: string;
+    };
+    const status = async () =>
+      (
+        await prisma.checkoutOrder.findUniqueOrThrow({
+          where: { publicToken: token },
+        })
+      ).status;
+
+    // A notice that names another account never reaches this sale.
+    cardClient.notification.mockResolvedValueOnce({
+      customId: sent.attemptId,
+      chargeId: '9901',
+    });
+    await expect(
+      cards.handleNotification(platformIdentity.id, 'notif-outra-conta'),
+    ).resolves.toBe(false);
+    expect(await status()).toBe('PENDING');
+    expect(
+      await prisma.paymentWebhookAnomaly.count({
+        where: {
+          reasonCode: 'CHECKOUT_CARD_UNKNOWN_CHARGE',
+          externalReference: sent.attemptId,
+        },
+      }),
+    ).toBe(1);
+
+    // The notice of its own account confirms it, read back at that account.
+    cardClient.notification.mockResolvedValue({
+      customId: sent.attemptId,
+      chargeId: '9901',
+    });
+    cardClient.detail.mockResolvedValue({
+      chargeId: '9901',
+      customId: sent.attemptId,
+      status: 'paid',
+      method: 'credit_card',
+      installments: 1,
+      totalCents: one.totalCents,
+    });
+    for (const again of [1, 2])
+      await expect(
+        cards.handleNotification(sellerIdentity.id, `notif-9901-${again}`),
+      ).resolves.toBe(true);
+    expect(accountOf(cardClient.notification)).toBe(sellerIdentity.id);
+    expect(accountOf(cardClient.detail)).toBe(sellerIdentity.id);
+    cardClient.notification.mockReset();
+    cardClient.detail.mockReset();
+
+    expect(await status()).toBe('PAID');
+    // Paid once: the repeated notice added nothing to the seller's ledger.
+    expect(
+      await prisma.checkoutLedgerEntry.count({
+        where: { order: { publicToken: token }, kind: 'SALE' },
+      }),
+    ).toBe(1);
+  });
 });

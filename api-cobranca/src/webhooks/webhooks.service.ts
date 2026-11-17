@@ -22,7 +22,7 @@ export class WebhooksService {
     invoiceId?: string;
     status?: string;
   }> {
-    // Checkout Pix (txid "ckt…", CifraMais account) never reach billing charges.
+    // Checkout Pix (txid "ckt…", any issuing account) never reach billing charges.
     const { checkout, rest } = splitCheckoutPixEvents(payload);
     let processed = false;
     for (const event of checkout)
@@ -41,18 +41,25 @@ export class WebhooksService {
     invoiceId?: string;
     status?: string;
   }> {
-    // Card notices of the CifraMais account belong to the checkout.
+    // Card notices of an account the checkout issues from belong to it: the
+    // CifraMais account, or the own account of a checkout seller.
     if (accountId) {
       const identity = await this.prisma.efiAccountIdentity.findUnique({
         where: { id: accountId },
-        select: { ownership: true },
+        select: {
+          ownership: true,
+          company: { select: { product: true } },
+        },
       });
       const token =
         typeof payload === 'object' && payload !== null
           ? ((payload as Record<string, unknown>).notification ??
             (payload as Record<string, unknown>).token)
           : undefined;
-      if (identity?.ownership === 'PLATFORM')
+      if (
+        identity?.ownership === 'PLATFORM' ||
+        identity?.company?.product === 'CHECKOUT'
+      )
         return {
           processed:
             typeof token === 'string' && token.length > 0 && token.length <= 200
