@@ -380,3 +380,68 @@ A taxa da Cifra+ é cobrada à parte, por boleto, todo dia 30."
 
 Com a Tarefa 5, um vendedor pode ser ativado na conta própria sem distorcer o razão. O
 recebimento da taxa (`FEE_PAYMENT`) e o extrato por fechamento são a Tarefa 16.
+
+### 17 e 18/11/2026: Tarefas 6 a 13 (etapa A completa e o reembolso da etapa B)
+
+Feito e commitado, de `892193b` a `69c9e8f`:
+
+- **Tarefa 6:** `EfiCheckoutSubscriptionClient`: plano, assinatura em dois passos, consulta e
+  cancelamento. Os formatos foram conferidos na documentação da Efí em 17/11.
+- **Tarefa 7 (adesão):**
+  - Plano recorrente de 3 meses ou mais só no cartão, sem bump, cupom nem parcelas.
+  - O pedido do ciclo 1 cria a assinatura. Na Efí, ela é criada sem cobrar, o id é gravado e só
+    então o cartão é cobrado.
+  - Resposta perdida é conciliada pela assinatura, e a assinatura de uma tentativa anterior é
+    cancelada na Efí antes de criar outra.
+- **Tarefa 8 (ciclo de vida):**
+  - O primeiro pagamento ativa a assinatura.
+  - O comprador (link do e-mail), o vendedor e o admin cancelam: a Efí primeiro, e o acesso vai
+    até o fim do período.
+  - Avisos: `subscription.renewal_disabled` na hora e `subscription.canceled` no dia em que o
+    acesso acaba (worker). Reembolso total do ciclo 1 e contestação encerram a assinatura na hora.
+  - O e-mail de acesso traz "Gerenciar assinatura".
+  - Migration aditiva `20261117120000_checkout_subscription_efi_canceled`.
+- **Tarefa 9 (telas):**
+  - Seletor de plano na página (`?plano=`), com o texto de autorização no recorrente.
+  - Página `/c/assinatura/<token>`.
+  - No admin, a referência do termo nos termos e a conta Efí do vendedor no mesmo painel da conta
+    Cifra+.
+- **Tarefa 10:** e2e da etapa A.
+- **Tarefa 11:**
+  - Migration aditiva `20261118120000_checkout_refund_execution`, com uma execução aberta por
+    pedido (índice parcial).
+  - `EfiCheckoutRefundClient`: devolução Pix por `e2eId` com `id` nosso, consulta, e estorno de
+    cartão.
+- **Tarefa 12 (execução do reembolso):**
+  - "Reembolsar" em Vendas e execução pelo admin com a referência do ok.
+  - O Pix usa a mesma chave do aviso de devolução, então conta uma vez.
+  - Recusa certa avisa o vendedor por e-mail e deixa o pedido aberto. Resposta perdida é
+    conciliada pelo worker.
+  - O comprador não desiste com a devolução em andamento (`CHECKOUT_REFUND_IN_PROGRESS`).
+- **Tarefa 13:** no fim dos 7 dias, o worker devolve o pedido do comprador uma única vez. Os textos
+  ao comprador deixaram de dizer que a Cifra+ faz a devolução.
+
+Desvios e decisões técnicas:
+
+- **Cotação do plano recorrente:** é a do cartão, porque a cotação Pix só aceita Pix.
+- **Estorno de cartão:**
+  - O total espera a cobrança ficar `refunded` (consulta do worker).
+  - O parcial é concluído no aceite da Efí, porque a cobrança continua `paid`. A confirmar na
+    homologação.
+- **Resposta de pagamento da assinatura sem o valor:** vai para a conciliação pela consulta, em
+  vez de virar divergência.
+- **Auditoria de uma execução do sistema:** grava sem usuário. A primeira versão gravava `'system'`,
+  que viola a chave estrangeira.
+
+Testes, todos em infraestrutura descartável e com a Efí simulada:
+
+- 1.457 unitários do backend.
+- `test:e2e:checkout-pix` (48), `test:e2e:checkout` (6) e `card-checkout.e2e-spec.ts` (13).
+- 90 testes de tela.
+- Build do backend e do frontend, lint e tipos OK.
+- Migrations aplicadas em PostgreSQL descartável, sem diferença com o schema.
+- Os testes de tela das Tarefas 9 e 12 e os e2e das Tarefas 10, 12 e 13 foram escritos depois do
+  código.
+
+Não testado: nada disso passou pela Efí de verdade (homologação ou produção), e as telas não foram
+abertas no navegador.
