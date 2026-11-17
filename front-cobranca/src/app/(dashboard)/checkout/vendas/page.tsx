@@ -114,9 +114,29 @@ function RefundForm({ sale, onDone }: { sale: CheckoutSale; onDone: (notice: Not
 }
 
 /** A refund still open: whether the seller may still win the buyer back, and how. */
-function OpenRefund({ sale, onNotice }: { sale: CheckoutSale; onNotice: (notice: Notice) => void }) {
+const EXECUTION_TEXT: Record<string, string> = {
+  SUBMITTING: "A devolução está em processamento na Efí.",
+  PROCESSING: "A devolução está em processamento na Efí.",
+  UNCERTAIN: "A devolução está em processamento na Efí.",
+  FAILED: "A Efí não fez a devolução. Confira o saldo da sua conta Efí e tente de novo.",
+};
+
+function OpenRefund({
+  sale,
+  ownAccount,
+  onNotice,
+  onChanged,
+}: {
+  sale: CheckoutSale;
+  // The money is in the seller's own Efí account: the system returns it from there.
+  ownAccount: boolean;
+  onNotice: (notice: Notice) => void;
+  onChanged: () => void;
+}) {
   const api = useApiClient();
   const [sending, setSending] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [refunding, setRefunding] = useState(false);
   const [now] = useState(() => Date.now());
   const open = sale.openRefundRequest!;
   const held = open.holdUntil && new Date(open.holdUntil).getTime() > now;
@@ -124,6 +144,23 @@ function OpenRefund({ sale, onNotice }: { sale: CheckoutSale; onNotice: (notice:
     .map((index) => sale.items[index]?.name)
     .filter(Boolean)
     .join(" + ");
+
+  const execution = open.executions?.[0] ?? null;
+  const inProgress = execution && execution.status !== "FAILED" && execution.status !== "DONE";
+
+  async function refundNow() {
+    setRefunding(true);
+    try {
+      const result = await api.executeCheckoutRefund(sale.orderId);
+      onNotice({ error: result?.status === "FAILED", text: result?.message ?? "Reembolso enviado à Efí." });
+      onChanged();
+    } catch (caught) {
+      onNotice({ error: true, text: messageOf(caught, "Não foi possível fazer o reembolso.") });
+    } finally {
+      setRefunding(false);
+      setConfirming(false);
+    }
+  }
 
   async function remind() {
     setSending(true);
@@ -142,10 +179,39 @@ function OpenRefund({ sale, onNotice }: { sale: CheckoutSale; onNotice: (notice:
       <p>
         {open.origin === "BUYER" ? "O comprador pediu reembolso" : "Você pediu reembolso"} de {names}
         {typeof open.amountCents === "number" && ` (${formatCents(open.amountCents)})`}.{" "}
-        {held
-          ? `Você tem até ${formatDateTime(open.holdUntil!)} para conversar com ele; depois disso, a Cifra+ faz a devolução.`
-          : "A Cifra+ está cuidando da devolução."}
+        {ownAccount
+          ? held
+            ? `Você tem até ${formatDateTime(open.holdUntil!)} para conversar com ele; depois disso, a devolução sai sozinha da sua conta Efí.`
+            : ""
+          : held
+            ? `Você tem até ${formatDateTime(open.holdUntil!)} para conversar com ele; depois disso, a Cifra+ faz a devolução.`
+            : "A Cifra+ está cuidando da devolução."}
       </p>
+      {ownAccount && execution && EXECUTION_TEXT[execution.status] && (
+        <p role={execution.status === "FAILED" ? "alert" : undefined}>{EXECUTION_TEXT[execution.status]}</p>
+      )}
+      {ownAccount && !inProgress && !confirming && (
+        <button type="button" className={buttonClass} onClick={() => setConfirming(true)}>
+          Reembolsar
+        </button>
+      )}
+      {ownAccount && confirming && (
+        <div className="space-y-2">
+          <p>
+            O valor{typeof open.amountCents === "number" ? ` de ${formatCents(open.amountCents)}` : ""} sai da sua conta Efí e
+            volta para o comprador. Isso não pode ser desfeito.
+          </p>
+          <div className="flex gap-2">
+            <button type="button" className={buttonClass} disabled={refunding} onClick={() => void refundNow()}>
+              {refunding && <Loader2 size={16} className="animate-spin" />}
+              Confirmar reembolso
+            </button>
+            <button type="button" className={secondaryButtonClass} disabled={refunding} onClick={() => setConfirming(false)}>
+              Voltar
+            </button>
+          </div>
+        </div>
+      )}
       {open.origin === "BUYER" && (
         <>
           <p className="text-xs text-amber-800">
@@ -303,7 +369,14 @@ export default function CheckoutSalesPage() {
                 </dl>
               </div>
               {sale.refundedCents > 0 && <p className="mt-1 text-xs text-slate-500">Reembolsado: {formatCents(sale.refundedCents)}</p>}
-              {sale.openRefundRequest && <OpenRefund sale={sale} onNotice={setNotice} />}
+              {sale.openRefundRequest && (
+                <OpenRefund
+                  sale={sale}
+                  ownAccount={ownAccount}
+                  onNotice={setNotice}
+                  onChanged={() => setReload((value) => value + 1)}
+                />
+              )}
               {sale.status === "PAID" && !sale.openRefundRequest && refunding !== sale.orderId && (
                 <button type="button" className="mt-2 text-sm font-semibold text-slate-600 hover:underline" onClick={() => setRefunding(sale.orderId)}>
                   Pedir reembolso

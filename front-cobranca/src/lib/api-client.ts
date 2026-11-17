@@ -1543,11 +1543,20 @@ export interface CheckoutSale {
     amountCents?: number | null;
     holdUntil?: string | null;
     buyerRemindedAt?: string | null;
+    // Own Efí account: the system's refund of this request, latest first.
+    executions?: Array<{ status: CheckoutRefundExecutionStatus; failureCode: string | null; origin: string }>;
   } | null;
   // Items already refunded cannot be asked for again.
   refundedItemIndexes?: number[];
 }
 export type CheckoutRecoveryKind = "PIX" | "CARD" | "LEAD";
+export type CheckoutRefundExecutionStatus = "SUBMITTING" | "PROCESSING" | "DONE" | "FAILED" | "UNCERTAIN";
+export interface CheckoutRefundExecutionView {
+  id: string;
+  status: CheckoutRefundExecutionStatus;
+  failureCode: string | null;
+  message: string;
+}
 export interface CheckoutRecoveryItem {
   id: string;
   kind: CheckoutRecoveryKind;
@@ -3049,6 +3058,19 @@ class ApiClient {
     });
   }
   // Cifra+ sends the buyer the refund e-mail again; the seller never gets the link.
+  /** The Efí returns the money from the seller's own account. */
+  executeCheckoutRefund(orderId: string): Promise<CheckoutRefundExecutionView | null> {
+    return this.fetch(`/checkout/sales/${encodeURIComponent(orderId)}/refund-execution`, { method: "POST" });
+  }
+  executeCheckoutRefundAsAdmin(
+    companyId: string,
+    input: { orderId: string; approvalReference: string },
+  ): Promise<CheckoutRefundExecutionView | null> {
+    return this.fetch(`/admin/checkout/clients/${encodeURIComponent(companyId)}/refund-executions`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
   remindCheckoutRefundBuyer(orderId: string): Promise<{ remindedAt: string }> {
     return this.fetch(`/checkout/sales/${encodeURIComponent(orderId)}/refund-request/remind`, {
       method: "POST",

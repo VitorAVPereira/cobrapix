@@ -14,6 +14,9 @@ const mockApi = {
   recordCheckoutOrderMoney: jest.fn(),
   recordCheckoutAdjustment: jest.fn(),
   rejectCheckoutRefundRequest: jest.fn(),
+  executeCheckoutRefund: jest.fn(),
+  executeCheckoutRefundAsAdmin: jest.fn(),
+  remindCheckoutRefundBuyer: jest.fn(),
 };
 jest.mock("@/lib/use-api-client", () => ({ useApiClient: () => mockApi }));
 
@@ -90,6 +93,45 @@ describe("Vendas do vendedor", () => {
     expect(screen.queryByText(/nenhuma venda/i)).not.toBeInTheDocument();
   });
 
+  it("vendedor na conta própria reembolsa pelo botão, com confirmação, e vê a recusa da Efí", async () => {
+    const user = userEvent.setup();
+    mockApi.getCheckoutBalance.mockResolvedValue({ ...ownAccountBalance });
+    mockApi.listCheckoutSales.mockResolvedValue({
+      total: 1,
+      page: 1,
+      pageSize: 20,
+      items: [
+        {
+          ...sale,
+          openRefundRequest: {
+            id: "r1",
+            origin: "BUYER",
+            createdAt: "2026-11-05T10:00:00.000Z",
+            amountCents: 6700,
+            holdUntil: "2099-01-01T10:00:00.000Z",
+          },
+        },
+      ],
+    });
+    mockApi.executeCheckoutRefund.mockResolvedValue({
+      id: "e1",
+      status: "FAILED",
+      failureCode: "EFI_REJECTED_SALDO_INSUFICIENTE",
+      message: "Reembolso não realizado: sem saldo na conta. Tente de novo.",
+    });
+    render(<CheckoutSalesPage />);
+
+    // During the buyer's 7 days the seller may still return it early.
+    expect(await screen.findByText(/a devolução sai sozinha da sua conta Efí/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^reembolsar$/i }));
+    expect(mockApi.executeCheckoutRefund).not.toHaveBeenCalled();
+    expect(screen.getByText(/sai da sua conta Efí e volta para o comprador/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /confirmar reembolso/i }));
+
+    await waitFor(() => expect(mockApi.executeCheckoutRefund).toHaveBeenCalledWith("order-1"));
+    expect(await screen.findByText(/sem saldo na conta/)).toBeInTheDocument();
+  });
+
   it("vendedor na conta própria vê só a taxa Cifra+ em aberto, sem saldo a liberar nem repasse", async () => {
     mockApi.getCheckoutBalance.mockResolvedValue({ ...ownAccountBalance });
     render(<CheckoutSalesPage />);
@@ -152,6 +194,32 @@ describe("Financeiro do cliente no admin", () => {
       ),
     );
     expect(await screen.findByText(/saldo do vendedor ficou negativo/i)).toBeInTheDocument();
+  });
+
+  it("admin reembolsa pela conta do vendedor só com a referência do ok dele", async () => {
+    const user = userEvent.setup();
+    mockApi.getCheckoutFinance.mockResolvedValue({ ...overview, balance: ownAccountBalance });
+    mockApi.executeCheckoutRefundAsAdmin.mockResolvedValue({
+      id: "e1",
+      status: "PROCESSING",
+      failureCode: null,
+      message: "Reembolso em processamento na Efí.",
+    });
+    render(<FinancePanel companyId="company-1" />);
+
+    await user.click(await screen.findByRole("button", { name: /reembolsar pela conta do vendedor/i }));
+    const reference = screen.getByLabelText(/referência do ok do vendedor/i);
+    expect(reference).toBeRequired();
+    await user.type(reference, "WhatsApp do vendedor, 21/11 14h10");
+    await user.click(screen.getByRole("button", { name: /confirmar/i }));
+
+    await waitFor(() =>
+      expect(mockApi.executeCheckoutRefundAsAdmin).toHaveBeenCalledWith("company-1", {
+        orderId: "order-1",
+        approvalReference: "WhatsApp do vendedor, 21/11 14h10",
+      }),
+    );
+    expect(await screen.findByText(/em processamento na Efí/)).toBeInTheDocument();
   });
 
   it("cliente na conta própria: mostra a taxa em aberto e não oferece repasse", async () => {

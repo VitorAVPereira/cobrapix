@@ -77,14 +77,17 @@ function amountOf(form: FormData, name = "amount"): number {
 function RefundRequest({
   request,
   companyId,
+  ownAccount,
   onChanged,
 }: {
   request: CheckoutRefundRequestRow;
   companyId: string;
+  // The money is in the seller's own Efí account: the system returns it, with its ok.
+  ownAccount: boolean;
   onChanged: (notice: Notice) => void;
 }) {
   const api = useApiClient();
-  const [mode, setMode] = useState<"refund" | "reject" | null>(null);
+  const [mode, setMode] = useState<"refund" | "reject" | "execute" | null>(null);
   const [key] = useState(() => crypto.randomUUID());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -97,7 +100,13 @@ function RefundRequest({
     setBusy(true);
     setError(null);
     try {
-      if (mode === "refund") {
+      if (mode === "execute") {
+        const result = await api.executeCheckoutRefundAsAdmin(companyId, {
+          orderId: request.order.id,
+          approvalReference: String(form.get("approvalReference") ?? ""),
+        });
+        onChanged({ error: result?.status === "FAILED", text: result?.message ?? "Reembolso enviado à Efí." });
+      } else if (mode === "refund") {
         await api.recordCheckoutOrderMoney(companyId, "refunds", {
           idempotencyKey: key,
           orderId: request.order.id,
@@ -137,6 +146,11 @@ function RefundRequest({
       {request.resolutionNote && <p className="mt-1 text-slate-500">Resposta: {request.resolutionNote}</p>}
       {request.status === "REQUESTED" && !mode && (
         <div className="mt-2 flex flex-wrap gap-3">
+          {ownAccount && (
+            <button type="button" className="font-semibold text-emerald-700 hover:underline" onClick={() => setMode("execute")}>
+              Reembolsar pela conta do vendedor
+            </button>
+          )}
           <button
             type="button"
             className="font-semibold text-emerald-700 hover:underline disabled:text-slate-400 disabled:no-underline"
@@ -152,7 +166,11 @@ function RefundRequest({
       )}
       {mode && (
         <form onSubmit={submit} className="mt-3 flex flex-wrap items-end gap-2">
-          {mode === "refund" ? (
+          {mode === "execute" ? (
+            <Field label="Referência do ok do vendedor" hint="Ex.: WhatsApp do vendedor, 21/11 às 14h10. Fica na auditoria.">
+              <input name="approvalReference" className={inputClass} minLength={5} maxLength={200} required />
+            </Field>
+          ) : mode === "refund" ? (
             <>
               <Field label="Valor devolvido (R$)">
                 <input name="amount" className={inputClass} defaultValue={centsToInput(amount)} required />
@@ -250,7 +268,13 @@ export function FinancePanel({ companyId }: { companyId: string }) {
         ) : (
           <ul className="space-y-2">
             {data.refundRequests.map((request) => (
-              <RefundRequest key={request.id} request={request} companyId={companyId} onChanged={refresh} />
+              <RefundRequest
+                key={request.id}
+                request={request}
+                companyId={companyId}
+                ownAccount={ownAccount}
+                onChanged={refresh}
+              />
             ))}
           </ul>
         )}
