@@ -41,6 +41,7 @@ export class CheckoutWorker {
       this.subscriptions.notifyEnded(),
     );
     await this.step('subscription-efi', () => this.subscriptions.stopAtEfi());
+    await this.step('refund-auto', () => this.executions.executeDue());
     await this.step('refund-executions', () => this.executions.reconcileDue());
   }
 

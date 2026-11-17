@@ -214,7 +214,7 @@ export class CheckoutMailProcessor extends WorkerHost {
             ? `<p>Valor a devolver: ${formatBRL(request.amountCents)}.</p>`
             : '',
           request?.holdUntil
-            ? `<p>O vendedor pode falar com você até ${formatDate(request.holdUntil)}. Depois disso, a Cifra+ faz a devolução.</p>`
+            ? `<p>O vendedor pode falar com você até ${formatDate(request.holdUntil)}. Depois disso, a devolução é feita.</p>`
             : '',
           `<p>Se mudar de ideia, você pode desistir do reembolso, ou acompanhar o pedido, por <a href="${link}">esta página</a>. Só você tem acesso a ela.</p>`,
         ],

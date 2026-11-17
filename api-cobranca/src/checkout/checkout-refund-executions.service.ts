@@ -146,7 +146,8 @@ export class CheckoutRefundExecutionsService {
         await tx.auditLog.create({
           data: {
             companyId,
-            userId: by.userId ?? 'system',
+            // SYSTEM has no user: the audit says so by the origin.
+            userId: by.userId,
             entityType: 'CheckoutRefundExecution',
             entityId: created.id,
             action: 'CHECKOUT_REFUND_EXECUTION_STARTED',
@@ -180,6 +181,39 @@ export class CheckoutRefundExecutionsService {
         : await this.client.card(account, card!.efiChargeId!, amountCents);
     await this.apply(execution, outcome, now);
     return this.current(request.id);
+  }
+
+  /**
+   * Worker (D5): a buyer's request whose 7 days ended is returned from the
+   * seller's own account, once. After a refusal (no balance) the seller is
+   * told and tries again by hand.
+   */
+  async executeDue(now = new Date()): Promise<void> {
+    const due = await this.prisma.checkoutRefundRequest.findMany({
+      where: {
+        status: 'REQUESTED',
+        origin: 'BUYER',
+        holdUntil: { lte: now },
+        executions: { none: {} },
+        order: { terms: { accountMode: 'SELLER_ACCOUNT' }, status: 'PAID' },
+      },
+      orderBy: { holdUntil: 'asc' },
+      take: 20,
+      select: { orderId: true, companyId: true },
+    });
+    for (const request of due) {
+      try {
+        await this.execute(
+          request.companyId,
+          request.orderId,
+          { origin: 'SYSTEM', userId: null },
+          now,
+        );
+      } catch {
+        // One sale that cannot be returned now does not stop the others.
+        this.logger.warn('CHECKOUT_REFUND_AUTO_EXECUTION_FAILED');
+      }
+    }
   }
 
   /**

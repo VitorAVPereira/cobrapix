@@ -24,6 +24,7 @@ describe('CheckoutRefundExecutionsService', () => {
     },
     checkoutPaymentAttempt: { findUnique: jest.fn() },
     checkoutCardAttempt: { findFirst: jest.fn() },
+    checkoutRefundRequest: { findMany: jest.fn() },
     company: { findUnique: jest.fn() },
     $transaction: jest.fn((run: (client: typeof tx) => unknown) => run(tx)),
   };
@@ -334,6 +335,51 @@ describe('CheckoutRefundExecutionsService', () => {
       expect.objectContaining({ amountCents: 3000 }),
       now,
     );
+  });
+
+  it('fim da espera: o pedido do comprador é devolvido sozinho, uma vez, sem usuário na auditoria', async () => {
+    prisma.checkoutRefundRequest.findMany.mockResolvedValue([
+      { orderId: 'order-1', companyId: 'company-a' },
+    ]);
+    client.pix.mockResolvedValue({ outcome: 'DONE' });
+
+    await service.executeDue(now);
+
+    expect(prisma.checkoutRefundRequest.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          status: 'REQUESTED',
+          origin: 'BUYER',
+          holdUntil: { lte: now },
+          // Once: after a refusal the seller tries again by hand.
+          executions: { none: {} },
+          order: { terms: { accountMode: 'SELLER_ACCOUNT' }, status: 'PAID' },
+        },
+      }),
+    );
+    expect(tx.checkoutRefundExecution.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        origin: 'SYSTEM',
+        requestedByUserId: null,
+      }) as unknown,
+    });
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ userId: null }) as unknown,
+    });
+    expect(refunds.record).toHaveBeenCalledTimes(1);
+  });
+
+  it('fim da espera: uma venda que falha não impede as outras', async () => {
+    prisma.checkoutRefundRequest.findMany.mockResolvedValue([
+      { orderId: 'order-x', companyId: 'company-a' },
+      { orderId: 'order-1', companyId: 'company-a' },
+    ]);
+    prisma.checkoutOrder.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(sale());
+    client.pix.mockResolvedValue({ outcome: 'DONE' });
+    await service.executeDue(now);
+    expect(client.pix).toHaveBeenCalledTimes(1);
   });
 
   it('venda de outra empresa, da conta Cifra+, sem pedido aberto ou acima do pago não executa', async () => {

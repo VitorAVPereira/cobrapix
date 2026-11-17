@@ -141,7 +141,7 @@ export function RefundRequestPage({ token }: { token: string }) {
             </p>
             <p className="text-sm text-neutral-600">
               {open.holdUntil
-                ? `O vendedor pode falar com você até ${formatDate(open.holdUntil)}. Depois disso, a Cifra+ faz a devolução.`
+                ? `O vendedor pode falar com você até ${formatDate(open.holdUntil)}. Depois disso, a devolução é feita.`
                 : "A Cifra+ está cuidando da devolução."}
             </p>
             {confirmWithdraw ? (

@@ -3342,5 +3342,74 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
         ).status,
       ).toBe('REFUNDED');
     });
+
+    it('fim dos 7 dias: o pedido do comprador é devolvido sozinho, uma vez, com auditoria sem usuário', async () => {
+      const product = await prisma.checkoutProduct.findFirstOrThrow({
+        where: { companyId, name: 'Ebook da Outra Loja' },
+        select: { slug: true },
+      });
+      const sold = (
+        await request(http)
+          .post(`/checkout/public/products/${product.slug}/orders`)
+          .send({
+            bumpIds: [],
+            method: 'PIX',
+            buyer: holder('52998224725', 'Bia Reis'),
+            idempotencyKey: randomUUID(),
+          })
+          .expect(201)
+      ).body as { token: string };
+      const attempt = await prisma.checkoutPaymentAttempt.findFirstOrThrow({
+        where: { order: { publicToken: sold.token } },
+      });
+      await app.get(CheckoutPaymentsService).handlePixEvent({
+        txid: attempt.efiTxid,
+        chave: 'pix@outra-loja.e2e.test',
+        valor: '100.00',
+        endToEndId: 'E2EBIA',
+      });
+      await request(http)
+        .post(`/checkout/public/orders/${sold.token}/refund-request`)
+        .send({ reason: 'Não era o que eu esperava' })
+        .expect(201);
+      const held = await prisma.checkoutRefundRequest.findFirstOrThrow({
+        where: { orderId: attempt.orderId },
+      });
+
+      const executions = app.get(CheckoutRefundExecutionsService);
+      const calls = refundClient.pix.mock.calls.length;
+      // Still within the seller's days: nothing goes.
+      await executions.executeDue(new Date(held.holdUntil!.getTime() - 60_000));
+      expect(refundClient.pix.mock.calls).toHaveLength(calls);
+
+      refundClient.pix.mockResolvedValueOnce({ outcome: 'DONE' });
+      const after = new Date(held.holdUntil!.getTime() + 60_000);
+      await executions.executeDue(after);
+      await executions.executeDue(after);
+      expect(refundClient.pix.mock.calls).toHaveLength(calls + 1);
+      expect(
+        (
+          await prisma.checkoutOrder.findUniqueOrThrow({
+            where: { id: attempt.orderId },
+          })
+        ).status,
+      ).toBe('REFUNDED');
+      const execution = await prisma.checkoutRefundExecution.findFirstOrThrow({
+        where: { orderId: attempt.orderId },
+      });
+      expect(execution).toMatchObject({
+        origin: 'SYSTEM',
+        requestedByUserId: null,
+        status: 'DONE',
+      });
+      expect(
+        await prisma.auditLog.findFirstOrThrow({
+          where: {
+            entityId: execution.id,
+            action: 'CHECKOUT_REFUND_EXECUTION_STARTED',
+          },
+        }),
+      ).toMatchObject({ userId: null, companyId });
+    });
   });
 });
