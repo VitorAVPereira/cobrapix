@@ -25,6 +25,7 @@ describe('CheckoutPlatformService', () => {
   const prisma = {
     checkoutPlatformSettings: { findFirst: jest.fn(), findMany: jest.fn() },
     efiAccountIdentity: { findFirst: jest.fn(), findUnique: jest.fn() },
+    company: { findFirst: jest.fn() },
     $transaction: jest.fn((run: (client: typeof tx) => unknown) => run(tx)),
   };
   const operations = {
@@ -36,7 +37,22 @@ describe('CheckoutPlatformService', () => {
     operations: jest.fn(() => operations),
     pixWebhookTarget: () => TARGET,
   };
-  const registry = { registerPlatformCredential: jest.fn() };
+  const registry = {
+    registerPlatformCredential: jest.fn(),
+    registerCompanyCredential: jest.fn(),
+  };
+  // A checkout client that sells through its own account, with the signed term.
+  const seller = (terms: object | null = {}) => ({
+    checkoutSellerTerms: terms
+      ? [
+          {
+            accountMode: 'SELLER_ACCOUNT',
+            authorizationReference: 'Termo de 16/11',
+            ...terms,
+          },
+        ]
+      : [],
+  });
   const env: Record<string, string> = {
     EFI_PLATFORM_ACCOUNT_NUMBER: '123456',
     EFI_PLATFORM_CNPJ: '11.222.333/0001-81',
@@ -60,6 +76,11 @@ describe('CheckoutPlatformService', () => {
     pixKey: 'pix@ciframais.test',
   };
   const file = () => ({ buffer: Buffer.from('p12'), size: 3 });
+  const sellerUpload = () => ({
+    ...upload,
+    holderDocument: '45723174000110',
+    efiAccountNumber: '777',
+  });
   const identity = {
     id: 'identity-1',
     environment: 'PRODUCTION',
@@ -87,6 +108,11 @@ describe('CheckoutPlatformService', () => {
       identity: { id: 'identity-1' },
       credential: { id: 'credential-2', version: 2 },
     });
+    registry.registerCompanyCredential.mockResolvedValue({
+      identity: { id: 'identity-seller' },
+      credential: { id: 'credential-1', version: 1 },
+    });
+    prisma.company.findFirst.mockResolvedValue(seller());
     prisma.efiAccountIdentity.findFirst.mockResolvedValue(identity);
     prisma.checkoutPlatformSettings.findMany.mockResolvedValue([]);
     prisma.checkoutPlatformSettings.findFirst.mockResolvedValue(null);
@@ -206,6 +232,178 @@ describe('CheckoutPlatformService', () => {
       response: { code: 'EFI_REJECTED_INVALID_CLIENT' },
     });
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('conta do vendedor: grava a credencial na empresa dele, com auditoria e sem segredo', async () => {
+    // The holder's CNPJ is not compared with the client's registration.
+    const result = await service.uploadCredentials(
+      'admin',
+      'company-a',
+      { ...sellerUpload(), holderDocument: '11222333000181' },
+      file(),
+      'company-a',
+    );
+
+    expect(result).toEqual({ credentialId: 'credential-1', version: 1 });
+    expect(registry.registerCompanyCredential).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        companyId: 'company-a',
+        efiAccountNumber: '777',
+        holderDocument: '11222333000181',
+      }),
+    );
+    expect(registry.registerPlatformCredential).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        companyId: 'company-a',
+        action: 'CHECKOUT_SELLER_CREDENTIAL_UPLOADED',
+      }) as unknown,
+    });
+    expect(JSON.stringify(tx.auditLog.create.mock.calls)).not.toContain(
+      'secret',
+    );
+    expect(prisma.company.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'company-a', product: 'CHECKOUT' },
+      }),
+    );
+  });
+
+  it('conta do vendedor: só para cliente de checkout, na conta própria e com o termo assinado', async () => {
+    const send = (dto = sellerUpload()) =>
+      service.uploadCredentials('admin', 'company-a', dto, file(), 'company-a');
+
+    prisma.company.findFirst.mockResolvedValue(null);
+    await expect(send()).rejects.toMatchObject({ status: 404 });
+
+    prisma.company.findFirst.mockResolvedValue(
+      seller({ accountMode: 'PLATFORM_ACCOUNT' }),
+    );
+    await expect(send()).rejects.toMatchObject({
+      response: { code: 'CHECKOUT_ACCOUNT_MODE_NOT_SUPPORTED' },
+    });
+
+    prisma.company.findFirst.mockResolvedValue(
+      seller({ authorizationReference: null }),
+    );
+    await expect(send()).rejects.toMatchObject({
+      response: { code: 'CHECKOUT_AUTHORIZATION_REQUIRED' },
+    });
+
+    expect(registry.registerCompanyCredential).not.toHaveBeenCalled();
+
+    // The same guard stands before the Efí is called or a tariff is saved.
+    prisma.company.findFirst.mockResolvedValue(
+      seller({ authorizationReference: null }),
+    );
+    await expect(
+      service.validate('admin', 'company-a', {}, 'company-a'),
+    ).rejects.toMatchObject({
+      response: { code: 'CHECKOUT_AUTHORIZATION_REQUIRED' },
+    });
+    await expect(
+      service.setPixFee(
+        'admin',
+        'company-a',
+        { expectedVersion: 1, pixFeeBasisPoints: 119 },
+        'company-a',
+      ),
+    ).rejects.toMatchObject({
+      response: { code: 'CHECKOUT_AUTHORIZATION_REQUIRED' },
+    });
+    expect(gateway.operations).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('conta do vendedor: a validação grava a configuração dele, com versão própria', async () => {
+    operations.pixWebhookUrl.mockResolvedValue(TARGET);
+    tx.checkoutPlatformSettings.findFirst.mockResolvedValue(null);
+
+    await service.validate('admin', 'company-a', {}, 'company-a');
+
+    expect(prisma.efiAccountIdentity.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { ownership: 'COMPANY', companyId: 'company-a' },
+      }),
+    );
+    expect(tx.checkoutPlatformSettings.findFirst).toHaveBeenCalledWith({
+      where: { companyId: 'company-a' },
+      orderBy: { version: 'desc' },
+    });
+    expect(tx.checkoutPlatformSettings.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        companyId: 'company-a',
+        version: 1,
+        identityId: 'identity-1',
+        cardEnabled: false,
+      }) as unknown,
+    });
+  });
+
+  it('trocar de conta desliga o cartão: a liberação da Efí é por conta', async () => {
+    operations.pixWebhookUrl.mockResolvedValue(TARGET);
+    const rates = {
+      receipt: 'ANTICIPATED',
+      cashBasisPoints: 349,
+      anticipationBasisPoints: 159,
+    };
+    const previous = {
+      version: 3,
+      pixFeeBasisPoints: 119,
+      cardEnabled: true,
+      cardRates: rates,
+      cardCreditDays: 30,
+    };
+    tx.checkoutPlatformSettings.findFirst.mockResolvedValue({
+      ...previous,
+      identityId: 'identity-homologacao',
+    });
+    await service.validate('admin', 'company-a', {}, 'company-a');
+    expect(tx.checkoutPlatformSettings.create).toHaveBeenLastCalledWith({
+      data: expect.objectContaining({
+        version: 4,
+        cardEnabled: false,
+        cardRates: rates,
+        cardCreditDays: 30,
+      }) as unknown,
+    });
+
+    // Same account (a credential rotation): the card stays as it was.
+    tx.checkoutPlatformSettings.findFirst.mockResolvedValue({
+      ...previous,
+      identityId: 'identity-1',
+    });
+    await service.validate('admin', 'company-a', {}, 'company-a');
+    expect(tx.checkoutPlatformSettings.create).toHaveBeenLastCalledWith({
+      data: expect.objectContaining({ cardEnabled: true }) as unknown,
+    });
+  });
+
+  it('conta do vendedor: tarifa do Pix na versão dele', async () => {
+    tx.checkoutPlatformSettings.findFirst.mockResolvedValue({
+      version: 1,
+      identityId: 'identity-1',
+      pixFeeBasisPoints: null,
+      webhookConfiguredAt: new Date(),
+    });
+    await service.setPixFee(
+      'admin',
+      'company-a',
+      { expectedVersion: 1, pixFeeBasisPoints: 119 },
+      'company-a',
+    );
+    expect(tx.checkoutPlatformSettings.findFirst).toHaveBeenCalledWith({
+      where: { companyId: 'company-a' },
+      orderBy: { version: 'desc' },
+    });
+    expect(tx.checkoutPlatformSettings.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        companyId: 'company-a',
+        version: 2,
+        pixFeeBasisPoints: 119,
+      }) as unknown,
+    });
   });
 
   it('tarifa com versão antiga responde VERSION_CHANGED', async () => {

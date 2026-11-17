@@ -16,6 +16,7 @@ import { CheckoutCouponsService } from './checkout-coupons.service';
 import { CheckoutSettingsService } from './checkout-settings.service';
 import { CheckoutPlatformController } from './checkout-platform.controller';
 import { CheckoutPlatformService } from './checkout-platform.service';
+import { CheckoutSellerAccountController } from './checkout-seller-account.controller';
 import { CheckoutCatalogService } from './checkout-catalog.service';
 import { CheckoutOrdersService } from './checkout-orders.service';
 import { CheckoutPaymentsService } from './checkout-payments.service';
@@ -54,6 +55,7 @@ import {
     CheckoutController,
     CheckoutPublicController,
     CheckoutPlatformController,
+    CheckoutSellerAccountController,
     CheckoutFinanceController,
     CheckoutApiController,
   ],

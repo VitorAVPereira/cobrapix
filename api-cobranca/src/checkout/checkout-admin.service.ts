@@ -4,7 +4,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { CheckoutSellerTerms, Prisma, UserRole } from '@prisma/client';
+import {
+  CheckoutAccountMode,
+  CheckoutSellerTerms,
+  Prisma,
+  UserRole,
+} from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -21,6 +26,15 @@ import {
 } from './dto/checkout-admin.dto';
 
 type Tx = Prisma.TransactionClient;
+
+type TermsInput = Pick<
+  CheckoutSellerTerms,
+  | 'accountMode'
+  | 'platformFeeBasisPoints'
+  | 'payoutDocument'
+  | 'payoutPixKey'
+  | 'authorizationReference'
+>;
 
 // Audit and support need years of history of what the seller agreed to pay.
 const AUDIT_RETENTION_MS = 5 * 365.25 * 86_400_000;
@@ -50,7 +64,11 @@ export class CheckoutAdminService {
         checkoutSellerTerms: {
           orderBy: { version: 'desc' },
           take: 1,
-          select: { version: true, platformFeeBasisPoints: true },
+          select: {
+            version: true,
+            platformFeeBasisPoints: true,
+            accountMode: true,
+          },
         },
         _count: {
           select: {
@@ -146,7 +164,8 @@ export class CheckoutAdminService {
   async create(dto: CreateCheckoutClientDto, adminUserId: string) {
     const document = normalizeDocument(dto.company.document);
     if (!document) throw this.invalid('CPF ou CNPJ da empresa inválido.');
-    const terms = this.normalizeTerms(dto.terms);
+    // A new client always sells through its own Efí account.
+    const terms = this.normalizeTerms(dto.terms, 'SELLER_ACCOUNT', null);
     const userEmail = dto.firstUser.email.trim().toLowerCase();
     const existingUser = await this.prisma.user.findFirst({
       where: { email: { equals: userEmail, mode: 'insensitive' } },
@@ -204,7 +223,6 @@ export class CheckoutAdminService {
     dto: UpdateCheckoutTermsDto,
     adminUserId: string,
   ) {
-    const terms = this.normalizeTerms(dto);
     try {
       await this.prisma.$transaction(async (tx) => {
         const company = await tx.company.findFirst({
@@ -213,14 +231,25 @@ export class CheckoutAdminService {
             checkoutSellerTerms: {
               orderBy: { version: 'desc' },
               take: 1,
-              select: { version: true },
+              select: {
+                version: true,
+                accountMode: true,
+                authorizationReference: true,
+              },
             },
           },
         });
         if (!company)
           throw new NotFoundException('Cliente de checkout não encontrado.');
-        const current = company.checkoutSellerTerms[0]?.version ?? 0;
+        const previous = company.checkoutSellerTerms[0];
+        const current = previous?.version ?? 0;
         if (current !== dto.expectedVersion) versionChanged();
+        // The account a seller sells through never changes with its terms.
+        const terms = this.normalizeTerms(
+          dto,
+          previous?.accountMode ?? 'SELLER_ACCOUNT',
+          previous?.authorizationReference ?? null,
+        );
         await this.writeTerms(tx, companyId, current + 1, terms, adminUserId);
       });
     } catch (error) {
@@ -231,18 +260,35 @@ export class CheckoutAdminService {
     return this.detail(companyId);
   }
 
-  private normalizeTerms(dto: CheckoutTermsDto) {
-    const payoutDocument = normalizeDocument(dto.payoutDocument);
+  private normalizeTerms(
+    dto: CheckoutTermsDto,
+    accountMode: CheckoutAccountMode,
+    previousReference: string | null,
+  ): TermsInput {
+    if (accountMode === 'SELLER_ACCOUNT')
+      return {
+        accountMode,
+        platformFeeBasisPoints: dto.platformFeeBasisPoints,
+        // No payout: the buyer's money is already in the seller's account.
+        payoutDocument: '',
+        payoutPixKey: '',
+        // Once given, the authorization stays until another one replaces it.
+        authorizationReference:
+          dto.authorizationReference?.trim() || previousReference,
+      };
+    const payoutDocument = normalizeDocument(dto.payoutDocument ?? '');
     if (!payoutDocument) throw this.invalid('CPF ou CNPJ de repasse inválido.');
-    const payoutPixKey = normalizePayoutPixKey(dto.payoutPixKey);
+    const payoutPixKey = normalizePayoutPixKey(dto.payoutPixKey ?? '');
     if (!payoutPixKey)
       throw this.invalid(
         'Chave Pix de repasse inválida. Telefone precisa de +55 e DDD.',
       );
     return {
+      accountMode,
       platformFeeBasisPoints: dto.platformFeeBasisPoints,
       payoutDocument,
       payoutPixKey,
+      authorizationReference: null,
     };
   }
 
@@ -250,10 +296,7 @@ export class CheckoutAdminService {
     tx: Tx,
     companyId: string,
     version: number,
-    terms: Pick<
-      CheckoutSellerTerms,
-      'platformFeeBasisPoints' | 'payoutDocument' | 'payoutPixKey'
-    >,
+    terms: TermsInput,
     adminUserId: string,
   ): Promise<void> {
     const row = await tx.checkoutSellerTerms.create({
@@ -270,8 +313,11 @@ export class CheckoutAdminService {
         // The Pix key may be a phone or e-mail: only its presence is recorded.
         changes: {
           version,
+          accountMode: terms.accountMode,
           platformFeeBasisPoints: terms.platformFeeBasisPoints,
-          payoutDocument: maskDocument(terms.payoutDocument),
+          ...(terms.accountMode === 'SELLER_ACCOUNT'
+            ? { authorizationReference: terms.authorizationReference }
+            : { payoutDocument: maskDocument(terms.payoutDocument) }),
         },
         retentionExpiresAt: new Date(Date.now() + AUDIT_RETENTION_MS),
       },

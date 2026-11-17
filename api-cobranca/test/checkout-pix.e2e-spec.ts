@@ -223,6 +223,19 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
         },
       })
       .expect(201);
+    // This seller sells through the CifraMais account, like the ones that
+    // started before the seller's own account existed. The admin can no
+    // longer create one this way, so the terms are written directly.
+    await prisma.checkoutSellerTerms.updateMany({
+      where: {
+        companyId: (created.body as { client: { id: string } }).client.id,
+      },
+      data: {
+        accountMode: 'PLATFORM_ACCOUNT',
+        payoutDocument: '11222333000181',
+        payoutPixKey: '52998224725',
+      },
+    });
     const temporary = (created.body as { temporaryPassword: string })
       .temporaryPassword;
     const first = await login(`pedro-${suffix}@e2e.test`, temporary);
@@ -2289,20 +2302,22 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
     const settings = (
       await request(http).get('/checkout/settings').set(auth(other)).expect(200)
     ).body as Record<string, unknown> & { version: number };
-    await request(http)
-      .put('/checkout/settings')
-      .set(auth(other))
-      .send({
-        expectedVersion: settings.version,
-        displayName: settings.displayName,
-        primaryColor: settings.primaryColor,
-        pixEnabled: true,
-        cardEnabled: true,
-        maxInstallments: 3,
-        pixFeePayer: 'SELLER',
-        cardFeePayer: 'BUYER',
-      })
-      .expect(200);
+    const turnCardOn = (status: number) =>
+      request(http)
+        .put('/checkout/settings')
+        .set(auth(other))
+        .send({
+          expectedVersion: settings.version,
+          displayName: settings.displayName,
+          primaryColor: settings.primaryColor,
+          pixEnabled: true,
+          cardEnabled: true,
+          maxInstallments: 3,
+          pixFeePayer: 'SELLER',
+          cardFeePayer: 'BUYER',
+        })
+        .expect(status);
+    const account = `/admin/checkout/clients/${company.id}/account`;
     const order = () => ({
       bumpIds: [],
       method: 'PIX',
@@ -2323,26 +2338,58 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
       (await request(http).get(`/checkout/public/products/${of}`).expect(200))
         .body as { available: boolean; payment: { cardEnabled: boolean } };
 
-    // New terms: this seller sells through its own account (the admin route
-    // comes with the account activation).
-    await prisma.checkoutSellerTerms.create({
-      data: {
-        companyId: company.id,
-        version: 2,
-        accountMode: 'SELLER_ACCOUNT',
-        platformFeeBasisPoints: 150,
-        payoutDocument: '45723174000110',
-        payoutPixKey: '11144477735',
-        authorizationReference: 'termo-e2e',
-        changedByUserId: 'admin',
-      },
+    // A client created by the admin sells through its own account, and no
+    // payout data is kept even though the request still sent it.
+    expect(
+      await prisma.checkoutSellerTerms.findFirstOrThrow({
+        where: { companyId: company.id },
+      }),
+    ).toMatchObject({
+      version: 1,
+      accountMode: 'SELLER_ACCOUNT',
+      payoutDocument: '',
+      payoutPixKey: '',
+      authorizationReference: null,
     });
 
-    // No account of its own yet: nothing sells, even with the CifraMais account ready.
+    // No account of its own yet: nothing sells, even with the CifraMais
+    // account ready, and its card cannot be turned on.
     expect(await page(own.slug)).toMatchObject({ available: false });
     expect((await sell(own.slug, 400)).body).toMatchObject({
       code: 'CHECKOUT_UNAVAILABLE',
     });
+    expect((await turnCardOn(409)).body).toMatchObject({
+      code: 'CARD_NOT_AVAILABLE',
+    });
+
+    // The admin sees the empty account, but saves nothing before the seller's
+    // signed authorization is on the terms.
+    const empty = await request(http)
+      .get(account)
+      .set(auth(tokens.admin))
+      .expect(200);
+    expect(empty.body).toMatchObject({
+      current: null,
+      identity: null,
+      ready: false,
+    });
+    const unauthorized = await request(http)
+      .put(`${account}/pix-fee`)
+      .set(auth(tokens.admin))
+      .send({ expectedVersion: 1, pixFeeBasisPoints: 100 })
+      .expect(409);
+    expect(unauthorized.body).toMatchObject({
+      code: 'CHECKOUT_AUTHORIZATION_REQUIRED',
+    });
+    await request(http)
+      .put(`/admin/checkout/clients/${company.id}/terms`)
+      .set(auth(tokens.admin))
+      .send({
+        platformFeeBasisPoints: 150,
+        authorizationReference: 'Termo e2e de 16/11',
+        expectedVersion: 1,
+      })
+      .expect(200);
 
     // The seller's account as the admin leaves it after validation.
     const identity = await prisma.efiAccountIdentity.create({
@@ -2372,23 +2419,86 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
         activatedAt: new Date(),
       },
     });
-    // A version above every CifraMais one: versions are counted per owner.
-    const ownSettings = await prisma.checkoutPlatformSettings.create({
+    // (The validation calls the Efí and is covered by unit tests.) A version
+    // above every CifraMais one: versions are counted per owner.
+    await prisma.checkoutPlatformSettings.create({
       data: {
         companyId: company.id,
         version: 999,
         identityId: identity.id,
-        pixFeeBasisPoints: 100,
-        cardEnabled: true,
-        cardRates: {
-          receipt: 'ANTICIPATED',
-          cashBasisPoints: 349,
-          anticipationBasisPoints: 100,
-        },
-        cardCreditDays: 30,
         webhookConfiguredAt: new Date(),
         changedByUserId: 'admin',
       },
+    });
+
+    // The admin sets this seller's tariffs and turns its card on.
+    await request(http)
+      .put(`${account}/pix-fee`)
+      .set(auth(tokens.admin))
+      .send({ expectedVersion: 999, pixFeeBasisPoints: 100 })
+      .expect(200);
+    await request(http)
+      .put(`${account}/pix-fee`)
+      .set(auth(tokens.admin))
+      .send({ expectedVersion: 999, pixFeeBasisPoints: 100 })
+      .expect(409);
+    const withCard = await request(http)
+      .put(`${account}/card`)
+      .set(auth(tokens.admin))
+      .send({
+        expectedVersion: 1000,
+        cardEnabled: true,
+        cashBasisPoints: 349,
+        anticipationBasisPoints: 100,
+        cardCreditDays: 30,
+      })
+      .expect(200);
+    expect(withCard.body).toMatchObject({
+      current: { version: 1001, pixFeeBasisPoints: 100, cardEnabled: true },
+      identity: { id: identity.id, payeeCode: 'payee-outra' },
+      ready: true,
+    });
+    // No credential leaves the API, in any form.
+    const shown = JSON.stringify(withCard.body);
+    for (const secret of ['client-outra', 'secret-outra', 'cert-outra'])
+      expect(shown).not.toContain(secret);
+    expect(shown).not.toMatch(/encrypted/i);
+    expect(
+      await prisma.auditLog.count({
+        where: {
+          companyId: company.id,
+          action: {
+            in: [
+              'CHECKOUT_SELLER_PIX_FEE_CHANGED',
+              'CHECKOUT_SELLER_CARD_CHANGED',
+            ],
+          },
+        },
+      }),
+    ).toBe(2);
+    const ownSettings = await prisma.checkoutPlatformSettings.findFirstOrThrow({
+      where: { companyId: company.id },
+      orderBy: { version: 'desc' },
+    });
+    await turnCardOn(200);
+
+    // Only the admin, only for a checkout client that sells through its own
+    // account: the seller of the CifraMais account has none.
+    await request(http).get(account).set(auth(other)).expect(404);
+    await request(http)
+      .get(`/admin/checkout/clients/${randomUUID()}/account`)
+      .set(auth(tokens.admin))
+      .expect(404);
+    const main = await prisma.checkoutProduct.findUniqueOrThrow({
+      where: { slug },
+      select: { companyId: true },
+    });
+    const refused = await request(http)
+      .get(`/admin/checkout/clients/${main.companyId}/account`)
+      .set(auth(tokens.admin))
+      .expect(409);
+    expect(refused.body).toMatchObject({
+      code: 'CHECKOUT_ACCOUNT_MODE_NOT_SUPPORTED',
     });
 
     expect(await page(own.slug)).toMatchObject({

@@ -26,7 +26,7 @@ import {
 } from './dto/checkout-platform.dto';
 
 // Without `dest`/`storage`, multer keeps the certificate in memory only.
-const certificateUpload = FileInterceptor('certificate', {
+export const certificateUpload = FileInterceptor('certificate', {
   limits: {
     fileSize: CERTIFICATE_MAX_BYTES,
     files: 1,

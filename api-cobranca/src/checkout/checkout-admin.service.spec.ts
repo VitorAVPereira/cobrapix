@@ -81,44 +81,132 @@ describe('CheckoutAdminService', () => {
       email: 'pedro@treze.test',
       mustChangePassword: true,
     });
+    // A new client always sells through its own account: no payout data kept,
+    // even when an older screen still sends it.
     expect(tx.checkoutSellerTerms.create).toHaveBeenCalledWith({
       data: {
         companyId: 'company-1',
         version: 1,
+        accountMode: 'SELLER_ACCOUNT',
         platformFeeBasisPoints: 250,
-        payoutDocument: '11222333000181',
-        payoutPixKey: '52998224725',
+        payoutDocument: '',
+        payoutPixKey: '',
+        authorizationReference: null,
         changedByUserId: 'admin-1',
       },
     });
   });
 
-  it('a auditoria não guarda documento completo nem chave Pix', async () => {
-    await service.create(dto, 'admin-1');
+  it('cliente novo guarda a referência do termo de autorização, também na auditoria', async () => {
+    await service.create(
+      {
+        ...dto,
+        terms: {
+          platformFeeBasisPoints: 150,
+          authorizationReference: ' Termo assinado em 16/11 ',
+        },
+      },
+      'admin-1',
+    );
 
-    const { changes } = firstArg(tx.auditLog.create).data;
-    expect(changes).toEqual({
-      version: 1,
-      platformFeeBasisPoints: 250,
-      payoutDocument: '•••0181',
+    expect(firstArg(tx.checkoutSellerTerms.create).data).toMatchObject({
+      accountMode: 'SELLER_ACCOUNT',
+      authorizationReference: 'Termo assinado em 16/11',
     });
-    expect(JSON.stringify(changes)).not.toContain('52998224725');
+    expect(firstArg(tx.auditLog.create).data.changes).toEqual({
+      version: 1,
+      accountMode: 'SELLER_ACCOUNT',
+      platformFeeBasisPoints: 150,
+      authorizationReference: 'Termo assinado em 16/11',
+    });
   });
 
-  it('recusa CPF/CNPJ e chave Pix inválidos', async () => {
+  it('recusa CPF/CNPJ inválido da empresa', async () => {
     await expect(
       service.create(
         { ...dto, company: { ...dto.company, document: '11.111.111/1111-11' } },
         'admin-1',
       ),
     ).rejects.toBeInstanceOf(BadRequestException);
-    await expect(
-      service.create(
-        { ...dto, terms: { ...dto.terms, payoutPixKey: '11999999999' } },
-        'admin-1',
-      ),
-    ).rejects.toBeInstanceOf(BadRequestException);
     expect(tx.company.create).not.toHaveBeenCalled();
+  });
+
+  it('vendedor da conta Cifra+ continua nesse modo, com os dados de repasse conferidos', async () => {
+    tx.company.findFirst.mockResolvedValue({
+      checkoutSellerTerms: [{ version: 2, accountMode: 'PLATFORM_ACCOUNT' }],
+    });
+
+    await service.updateTerms(
+      'company-1',
+      { ...dto.terms, expectedVersion: 2 },
+      'admin-1',
+    );
+    expect(firstArg(tx.checkoutSellerTerms.create).data).toMatchObject({
+      version: 3,
+      accountMode: 'PLATFORM_ACCOUNT',
+      payoutDocument: '11222333000181',
+      payoutPixKey: '52998224725',
+      authorizationReference: null,
+    });
+    // The audit keeps neither the full document nor the Pix key.
+    const { changes } = firstArg(tx.auditLog.create).data;
+    expect(changes).toEqual({
+      version: 3,
+      accountMode: 'PLATFORM_ACCOUNT',
+      platformFeeBasisPoints: 250,
+      payoutDocument: '•••0181',
+    });
+    expect(JSON.stringify(changes)).not.toContain('52998224725');
+
+    for (const terms of [
+      { ...dto.terms, payoutPixKey: '11999999999' },
+      { platformFeeBasisPoints: 250 },
+    ])
+      await expect(
+        service.updateTerms(
+          'company-1',
+          { ...terms, expectedVersion: 2 },
+          'admin-1',
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    expect(tx.checkoutSellerTerms.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('vendedor na conta própria: a referência do termo fica se a nova versão não trouxer outra', async () => {
+    tx.company.findFirst.mockResolvedValue({
+      checkoutSellerTerms: [
+        {
+          version: 1,
+          accountMode: 'SELLER_ACCOUNT',
+          authorizationReference: 'Termo de 16/11',
+        },
+      ],
+    });
+
+    await service.updateTerms(
+      'company-1',
+      { platformFeeBasisPoints: 200, expectedVersion: 1 },
+      'admin-1',
+    );
+    expect(firstArg(tx.checkoutSellerTerms.create).data).toMatchObject({
+      version: 2,
+      accountMode: 'SELLER_ACCOUNT',
+      platformFeeBasisPoints: 200,
+      authorizationReference: 'Termo de 16/11',
+    });
+
+    await service.updateTerms(
+      'company-1',
+      {
+        platformFeeBasisPoints: 200,
+        authorizationReference: 'Aditivo de 01/12',
+        expectedVersion: 1,
+      },
+      'admin-1',
+    );
+    expect(
+      (tx.checkoutSellerTerms.create.mock.calls as [WriteArg][])[1]?.[0].data,
+    ).toMatchObject({ authorizationReference: 'Aditivo de 01/12' });
   });
 
   it('e-mail de usuário em uso responde 409 sem criar nada', async () => {

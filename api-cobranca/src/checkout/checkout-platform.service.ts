@@ -94,6 +94,19 @@ function isUniqueViolation(error: unknown): boolean {
   );
 }
 
+/**
+ * The accounts of an owner: a seller never reads or issues from an account
+ * that is not its own, and the CifraMais side never from a seller's.
+ */
+function owned(owner: string | null) {
+  return owner
+    ? ({ ownership: 'COMPANY', companyId: owner } as const)
+    : ({ ownership: 'PLATFORM' } as const);
+}
+
+// Audit actions say whose account changed.
+const scope = (owner: string | null) => (owner ? 'SELLER' : 'PLATFORM');
+
 @Injectable()
 export class CheckoutPlatformService {
   constructor(
@@ -125,10 +138,14 @@ export class CheckoutPlatformService {
     );
   }
 
-  /** Never returns client id, secret or certificate. */
-  async view() {
+  /**
+   * The account screen of the CifraMais or, with an owner, of that seller.
+   * Never returns client id, secret or certificate.
+   */
+  async view(owner: string | null = null) {
+    if (owner) await this.seller(owner, false);
     const history = await this.prisma.checkoutPlatformSettings.findMany({
-      where: { companyId: null },
+      where: { companyId: owner },
       orderBy: { version: 'desc' },
       take: 20,
       select: {
@@ -144,7 +161,7 @@ export class CheckoutPlatformService {
       },
     });
     const identity = await this.prisma.efiAccountIdentity.findFirst({
-      where: { ownership: 'PLATFORM' },
+      where: owned(owner),
       orderBy: { updatedAt: 'desc' },
       select: {
         id: true,
@@ -173,7 +190,7 @@ export class CheckoutPlatformService {
       history,
       identity,
       webhookTarget: this.gateway.pixWebhookTarget(),
-      ready: Boolean(await this.ready()),
+      ready: Boolean(await this.ready(owner)),
     };
   }
 
@@ -182,6 +199,7 @@ export class CheckoutPlatformService {
     auditCompanyId: string,
     dto: UploadPlatformCredentialsDto,
     file: UploadedCertificate | undefined,
+    owner: string | null = null,
   ) {
     if (!file || file.size === 0)
       throw this.unprocessable(
@@ -203,8 +221,11 @@ export class CheckoutPlatformService {
     } finally {
       file.buffer.fill(0);
     }
+    // The holder of a seller's account is not compared with its registration
+    // (decided on 17/11/2026): the signed authorization is what ties them.
+    if (owner) await this.seller(owner);
     // In production the checkout must receive in the CifraMais account itself.
-    if (dto.environment === 'PRODUCTION') {
+    else if (dto.environment === 'PRODUCTION') {
       const account = this.config.get<string>('EFI_PLATFORM_ACCOUNT_NUMBER');
       const cnpj = this.config.get<string>('EFI_PLATFORM_CNPJ');
       if (
@@ -223,7 +244,7 @@ export class CheckoutPlatformService {
     >;
     try {
       registered = await this.prisma.$transaction(async (tx) => {
-        const created = await this.registry.registerPlatformCredential(tx, {
+        const input = {
           environment: dto.environment,
           holderDocument: dto.holderDocument,
           efiAccountNumber: dto.efiAccountNumber,
@@ -234,9 +255,15 @@ export class CheckoutPlatformService {
           clientSecret: dto.clientSecret,
           certificate,
           userId,
-        });
+        };
+        const created = owner
+          ? await this.registry.registerCompanyCredential(tx, {
+              ...input,
+              companyId: owner,
+            })
+          : await this.registry.registerPlatformCredential(tx, input);
         await this.audit(tx, auditCompanyId, userId, created.identity.id, {
-          action: 'CHECKOUT_PLATFORM_CREDENTIAL_UPLOADED',
+          action: `CHECKOUT_${scope(owner)}_CREDENTIAL_UPLOADED`,
           changes: {
             environment: dto.environment,
             credentialVersion: created.credential.version,
@@ -252,7 +279,7 @@ export class CheckoutPlatformService {
       });
     } catch (error) {
       // One CifraMais account per environment (database rule).
-      if (isUniqueViolation(error))
+      if (!owner && isUniqueViolation(error))
         conflict(
           'PLATFORM_ACCOUNT_EXISTS',
           'Já existe outra conta Cifra+ neste ambiente. Use a mesma conta.',
@@ -271,9 +298,12 @@ export class CheckoutPlatformService {
     userId: string,
     auditCompanyId: string,
     dto: ValidatePlatformAccountDto,
+    owner: string | null = null,
   ) {
+    // Before any call with the seller's credentials.
+    if (owner) await this.seller(owner);
     const identity = await this.prisma.efiAccountIdentity.findFirst({
-      where: { ownership: 'PLATFORM' },
+      where: owned(owner),
       orderBy: { updatedAt: 'desc' },
       include: {
         credentialVersions: {
@@ -285,7 +315,7 @@ export class CheckoutPlatformService {
     });
     const credential = identity?.credentialVersions[0];
     if (!identity || !credential)
-      throw new NotFoundException('Cadastre as credenciais da conta Cifra+.');
+      throw new NotFoundException('Cadastre as credenciais da conta.');
     if (!identity.pixKey)
       throw this.unprocessable(
         'PIX_KEY_MISSING',
@@ -343,46 +373,54 @@ export class CheckoutPlatformService {
         });
       }
       const previous = await tx.checkoutPlatformSettings.findFirst({
-        where: { companyId: null },
+        where: { companyId: owner },
         orderBy: { version: 'desc' },
       });
       await tx.checkoutPlatformSettings.create({
         data: {
+          companyId: owner,
           version: (previous?.version ?? 0) + 1,
           identityId: identity.id,
           pixFeeBasisPoints: previous?.pixFeeBasisPoints ?? null,
           ...carriedCard(previous),
+          // The Efí card approval is per account: another account starts off.
+          ...(previous && previous.identityId !== identity.id
+            ? { cardEnabled: false }
+            : {}),
           webhookConfiguredAt: now,
           changedByUserId: userId,
         },
       });
       await this.audit(tx, auditCompanyId, userId, identity.id, {
-        action: 'CHECKOUT_PLATFORM_ACCOUNT_VALIDATED',
+        action: `CHECKOUT_${scope(owner)}_ACCOUNT_VALIDATED`,
         changes: {
           credentialVersion: credential.version,
           webhookReplaced: Boolean(currentUrl && currentUrl !== target),
         },
       });
     });
-    return this.view();
+    return this.view(owner);
   }
 
   async setPixFee(
     userId: string,
     auditCompanyId: string,
     dto: SetPlatformPixFeeDto,
+    owner: string | null = null,
   ) {
+    if (owner) await this.seller(owner);
     try {
       await this.prisma.$transaction(async (tx) => {
         const current = await tx.checkoutPlatformSettings.findFirst({
-          where: { companyId: null },
+          where: { companyId: owner },
           orderBy: { version: 'desc' },
         });
         if (!current)
-          throw new NotFoundException('Valide a conta Cifra+ antes da tarifa.');
+          throw new NotFoundException('Valide a conta antes da tarifa.');
         if (current.version !== dto.expectedVersion) versionChanged();
         await tx.checkoutPlatformSettings.create({
           data: {
+            companyId: owner,
             version: current.version + 1,
             identityId: current.identityId,
             pixFeeBasisPoints: dto.pixFeeBasisPoints,
@@ -392,7 +430,7 @@ export class CheckoutPlatformService {
           },
         });
         await this.audit(tx, auditCompanyId, userId, current.identityId, {
-          action: 'CHECKOUT_PLATFORM_PIX_FEE_CHANGED',
+          action: `CHECKOUT_${scope(owner)}_PIX_FEE_CHANGED`,
           changes: { pixFeeBasisPoints: dto.pixFeeBasisPoints },
         });
       });
@@ -400,7 +438,7 @@ export class CheckoutPlatformService {
       if (isUniqueViolation(error)) versionChanged();
       throw error;
     }
-    return this.view();
+    return this.view(owner);
   }
 
   /**
@@ -411,7 +449,9 @@ export class CheckoutPlatformService {
     userId: string,
     auditCompanyId: string,
     dto: SetPlatformCardDto,
+    owner: string | null = null,
   ) {
+    if (owner) await this.seller(owner);
     const rates: CheckoutCardRates = {
       receipt: 'ANTICIPATED',
       cashBasisPoints: dto.cashBasisPoints,
@@ -423,27 +463,28 @@ export class CheckoutPlatformService {
         message: 'Tarifa de cartão inválida: em 12x ela passaria de 100%.',
       });
     if (dto.cardEnabled) {
-      const ready = await this.ready();
+      const ready = await this.ready(owner);
       if (
         !ready?.identity.payeeCode ||
         !checkoutCardNotificationUrl(this.config, ready.identity.id)
       )
         throw this.unprocessable(
           'CARD_ACCOUNT_NOT_READY',
-          'Valide a conta Cifra+, defina a tarifa do Pix e confira o código do recebedor e a URL de notificações antes de ligar o cartão.',
+          'Valide a conta, defina a tarifa do Pix e confira o código do recebedor e a URL de notificações antes de ligar o cartão.',
         );
     }
     try {
       await this.prisma.$transaction(async (tx) => {
         const current = await tx.checkoutPlatformSettings.findFirst({
-          where: { companyId: null },
+          where: { companyId: owner },
           orderBy: { version: 'desc' },
         });
         if (!current)
-          throw new NotFoundException('Valide a conta Cifra+ antes do cartão.');
+          throw new NotFoundException('Valide a conta antes do cartão.');
         if (current.version !== dto.expectedVersion) versionChanged();
         await tx.checkoutPlatformSettings.create({
           data: {
+            companyId: owner,
             version: current.version + 1,
             identityId: current.identityId,
             pixFeeBasisPoints: current.pixFeeBasisPoints,
@@ -455,7 +496,7 @@ export class CheckoutPlatformService {
           },
         });
         await this.audit(tx, auditCompanyId, userId, current.identityId, {
-          action: 'CHECKOUT_PLATFORM_CARD_CHANGED',
+          action: `CHECKOUT_${scope(owner)}_CARD_CHANGED`,
           changes: {
             cardEnabled: dto.cardEnabled,
             cashBasisPoints: dto.cashBasisPoints,
@@ -468,7 +509,7 @@ export class CheckoutPlatformService {
       if (isUniqueViolation(error)) versionChanged();
       throw error;
     }
-    return this.view();
+    return this.view(owner);
   }
 
   /** The card side of the current account, or null while it does not sell. */
@@ -506,13 +547,7 @@ export class CheckoutPlatformService {
     if (!settings?.webhookConfiguredAt || settings.pixFeeBasisPoints == null)
       return null;
     const identity = await this.prisma.efiAccountIdentity.findFirst({
-      where: {
-        id: settings.identityId,
-        // A seller never issues from an account that is not its own.
-        ...(owner
-          ? { ownership: 'COMPANY', companyId: owner }
-          : { ownership: 'PLATFORM' }),
-      },
+      where: { id: settings.identityId, ...owned(owner) },
       include: {
         credentialVersions: { where: { status: 'ACTIVE' }, take: 1 },
       },
@@ -539,6 +574,36 @@ export class CheckoutPlatformService {
     });
     const credential = identity?.credentialVersions[0];
     return identity && credential ? { identity, credential } : null;
+  }
+
+  /**
+   * The checkout client an own account is managed for. Its credentials are
+   * only stored or used with the seller's signed authorization on file.
+   */
+  private async seller(owner: string, authorized = true) {
+    const company = await this.prisma.company.findFirst({
+      where: { id: owner, product: 'CHECKOUT' },
+      select: {
+        checkoutSellerTerms: {
+          orderBy: { version: 'desc' },
+          take: 1,
+          select: { accountMode: true, authorizationReference: true },
+        },
+      },
+    });
+    if (!company)
+      throw new NotFoundException('Cliente de checkout não encontrado.');
+    const terms = company.checkoutSellerTerms[0];
+    if (terms?.accountMode !== 'SELLER_ACCOUNT')
+      conflict(
+        'CHECKOUT_ACCOUNT_MODE_NOT_SUPPORTED',
+        'Este cliente vende pela conta Cifra+ e não tem conta Efí própria.',
+      );
+    if (authorized && !terms.authorizationReference)
+      conflict(
+        'CHECKOUT_AUTHORIZATION_REQUIRED',
+        'Informe nos termos do cliente a referência da autorização assinada por ele antes de cadastrar a conta Efí.',
+      );
   }
 
   private async efi<T>(call: () => Promise<T>): Promise<T> {

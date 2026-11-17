@@ -3,6 +3,7 @@ import {
   IsBoolean,
   IsEmail,
   IsInt,
+  IsOptional,
   IsString,
   Length,
   Max,
@@ -25,8 +26,11 @@ export class CheckoutFirstUserDto {
 export class CheckoutTermsDto {
   // 0 to 100% of each paid sale, in basis points.
   @IsInt() @Min(0) @Max(10_000) platformFeeBasisPoints!: number;
-  @IsString() @Length(11, 18) payoutDocument!: string;
-  @IsString() @Length(3, 77) payoutPixKey!: string;
+  // Payout data: only for a seller that still sells through the Cifra+ account.
+  @IsOptional() @IsString() @Length(11, 18) payoutDocument?: string;
+  @IsOptional() @IsString() @Length(3, 77) payoutPixKey?: string;
+  // Where the seller's signed authorization is kept (own account only).
+  @IsOptional() @IsString() @Length(3, 200) authorizationReference?: string;
 }
 
 export class CreateCheckoutClientDto {
