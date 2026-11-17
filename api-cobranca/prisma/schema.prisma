@@ -435,6 +435,8 @@ model Company {
   checkoutWebhookRules     CheckoutWebhookRule[]
   checkoutApiKeys          CheckoutApiKey[]
   checkoutPlans            CheckoutPlan[]
+  checkoutPlatformSettings CheckoutPlatformSettings[]
+  checkoutSubscriptions    CheckoutSubscription[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -791,9 +793,12 @@ model EfiAccountIdentity {
   updatedAt           DateTime                @updatedAt
 
   credentialVersions EfiCredentialVersion[]
-  checkoutPlatformSettings CheckoutPlatformSettings[]
+  checkoutPlatformSettings CheckoutPlatformSettings[] @relation("CheckoutAccountIdentity")
+  checkoutSellerSettings   CheckoutPlatformSettings[] @relation("CheckoutSellerAccountIdentity")
   checkoutPaymentAttempts  CheckoutPaymentAttempt[]
   checkoutCardAttempts     CheckoutCardAttempt[]
+  checkoutSubscriptions    CheckoutSubscription[]
+  checkoutEfiPlans         CheckoutEfiPlan[]
   financialProfiles  FinancialProfileVersion[]
   paymentCharges     PaymentCharge[]
   gatewayAccount     GatewayAccount?
@@ -2330,6 +2335,15 @@ enum CheckoutAssetKind {
   PRODUCT_IMAGE
 }
 
+enum CheckoutAccountMode {
+  // Sold through the CifraMais account and paid out by hand. Kept for sellers
+  // that started this way; not offered to new ones.
+  PLATFORM_ACCOUNT
+  // Sold through the seller's own Efí account: the buyer's money never enters
+  // the CifraMais account, and the CifraMais fee is billed apart.
+  SELLER_ACCOUNT
+}
+
 // What the seller owes CifraMais and where payouts go. A change is a new
 // version; versions are never edited, so each sale can point to its terms.
 model CheckoutSellerTerms {
@@ -2337,12 +2351,17 @@ model CheckoutSellerTerms {
   companyId              String
   company                Company  @relation(fields: [companyId], references: [id], onDelete: Restrict)
   version                Int
+  accountMode            CheckoutAccountMode @default(PLATFORM_ACCOUNT)
   platformFeeBasisPoints Int
   payoutDocument         String
   payoutPixKey           String
+  // SELLER_ACCOUNT: where the signed authorization to issue, query and refund
+  // with the seller's credentials is kept.
+  authorizationReference String?
   changedByUserId        String
   createdAt              DateTime @default(now())
   orders                 CheckoutOrder[]
+  subscriptions          CheckoutSubscription[]
 
   @@unique([companyId, version])
 }
@@ -2438,6 +2457,7 @@ model CheckoutProduct {
   leads               CheckoutLead[]
   cardQuotes          CheckoutCardQuote[]
   plans               CheckoutPlan[]
+  subscriptions       CheckoutSubscription[]
 
   @@unique([id, companyId])
   @@index([companyId, active, createdAt])
@@ -2475,9 +2495,95 @@ model CheckoutPlan {
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
   orders              CheckoutOrder[]
+  subscriptions       CheckoutSubscription[]
 
   @@unique([id, companyId])
   @@index([productId, active, position])
+}
+
+enum CheckoutSubscriptionStatus {
+  // The first payment is still open.
+  PENDING
+  ACTIVE
+  // A renewal failed; access is kept during the tolerance.
+  PAST_DUE
+  CANCELED
+}
+
+enum CheckoutSubscriptionCancelReason {
+  BUYER
+  SELLER
+  ADMIN
+  PAYMENT_FAILED
+  REFUND
+  CHARGEBACK
+}
+
+// A recurring plan bought by one buyer. Plan, items, cycle amount, fees and
+// terms are copied at signup; each charged cycle is a CheckoutOrder.
+model CheckoutSubscription {
+  id                     String                            @id @default(uuid())
+  companyId              String
+  company                Company                           @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  productId              String
+  product                CheckoutProduct                   @relation(fields: [productId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  planId                 String
+  plan                   CheckoutPlan                      @relation(fields: [planId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  buyerName              String
+  buyerEmail             String
+  buyerDocument          String
+  buyerPhone             String
+  paymentMethod          CheckoutPaymentMethod
+  status                 CheckoutSubscriptionStatus        @default(PENDING)
+  intervalMonths         Int
+  // The recurring items and what every cycle after the first one costs.
+  items                  Json
+  cycleCents             Int
+  efiFeeBasisPoints      Int
+  platformFeeBasisPoints Int
+  feePayer               CheckoutFeePayer
+  termsId                String
+  terms                  CheckoutSellerTerms               @relation(fields: [termsId], references: [id], onDelete: Restrict)
+  // The account the subscription was created in; every cycle is charged there.
+  issuerIdentityId       String
+  issuerIdentity         EfiAccountIdentity                @relation(fields: [issuerIdentityId], references: [id], onDelete: Restrict)
+  efiSubscriptionId      String?
+  // Set once the Efí confirmed the items of the cycles after the first one.
+  itemsAdjustedAt        DateTime?
+  currentPeriodEnd       DateTime?
+  // The cycle the "renews soon" e-mail was already sent for.
+  renewalNoticeCycle     Int?
+  pastDueSince           DateTime?
+  cancelRequestedAt      DateTime?
+  canceledAt             DateTime?
+  cancelReason           CheckoutSubscriptionCancelReason?
+  accessEndsAt           DateTime?
+  // subscription.canceled goes out once, when the access ends.
+  accessEndedNotifiedAt  DateTime?
+  // SHA-256 of the buyer's token; the token itself goes only by e-mail.
+  tokenHash              String                            @unique
+  anonymizedAt           DateTime?
+  createdAt              DateTime                          @default(now())
+  updatedAt              DateTime                          @updatedAt
+  orders                 CheckoutOrder[]
+
+  @@unique([id, companyId])
+  @@unique([issuerIdentityId, efiSubscriptionId])
+  @@index([companyId, status, createdAt])
+  @@index([status, currentPeriodEnd])
+  @@index([accessEndsAt, accessEndedNotifiedAt])
+}
+
+// The Efí plan of one period in one account, created on the first sale.
+model CheckoutEfiPlan {
+  id             String             @id @default(uuid())
+  identityId     String
+  identity       EfiAccountIdentity @relation(fields: [identityId], references: [id], onDelete: Restrict)
+  intervalMonths Int
+  efiPlanId      String
+  createdAt      DateTime           @default(now())
+
+  @@unique([identityId, intervalMonths])
 }
 
 enum CheckoutAfterPurchase {
@@ -2652,8 +2758,9 @@ model CheckoutCardAttempt {
   company          Company                   @relation(fields: [companyId], references: [id], onDelete: Restrict)
   issuerIdentityId String
   issuerIdentity   EfiAccountIdentity        @relation(fields: [issuerIdentityId], references: [id], onDelete: Restrict)
-  quoteId          String
-  quote            CheckoutCardQuote         @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  // Empty on subscription cycles: charged in full, with no installment quote.
+  quoteId          String?
+  quote            CheckoutCardQuote?        @relation(fields: [quoteId], references: [id], onDelete: Restrict)
   idempotencyKey   String
   requestHash      String
   brand            String
@@ -2685,13 +2792,19 @@ enum CheckoutAttemptStatus {
   FAILED
 }
 
-// The CifraMais Efí account the checkout issues from, and its Pix tariff.
-// Versioned: the highest version is current; each order points to its own.
+// The Efí account the checkout issues from, and its tariffs. Without a company
+// it is the CifraMais account; with one, that seller's own account.
+// Versioned per owner: the highest version is current; each order points to its own.
 model CheckoutPlatformSettings {
   id                  String             @id @default(uuid())
-  version             Int                @unique
+  companyId           String?
+  company             Company?           @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  // Unique per company; for the CifraMais rows, by a partial index in the migration.
+  version             Int
   identityId          String
-  identity            EfiAccountIdentity @relation(fields: [identityId], references: [id], onDelete: Restrict)
+  identity            EfiAccountIdentity @relation("CheckoutAccountIdentity", fields: [identityId], references: [id], onDelete: Restrict)
+  // Database rule only: a seller's settings point to an account of that same seller.
+  sellerIdentity      EfiAccountIdentity? @relation("CheckoutSellerAccountIdentity", fields: [identityId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
   pixFeeBasisPoints   Int?
   webhookConfiguredAt DateTime?
   // Card on the CifraMais account: off until the Efí card approval.
@@ -2704,6 +2817,8 @@ model CheckoutPlatformSettings {
   createdAt           DateTime           @default(now())
   orders              CheckoutOrder[]
   cardQuotes          CheckoutCardQuote[]
+
+  @@unique([companyId, version])
 }
 
 // What was sold, to whom and for how much. Prices, fees and terms are copied
@@ -2759,6 +2874,10 @@ model CheckoutOrder {
   // Hash of the one-click offer token, and the end of the offer window.
   offerTokenHash         String?                  @unique
   offerExpiresAt         DateTime?
+  // A cycle of a subscription: the first one is the purchase itself.
+  subscriptionId         String?
+  subscription           CheckoutSubscription?    @relation(fields: [subscriptionId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  subscriptionCycle      Int?
   createdAt              DateTime                 @default(now())
   updatedAt              DateTime                 @updatedAt
   attempt                CheckoutPaymentAttempt?
@@ -2770,6 +2889,7 @@ model CheckoutOrder {
 
   @@unique([id, companyId])
   @@index([companyId, status, createdAt])
+  @@unique([subscriptionId, subscriptionCycle])
   @@index([status, expiresAt])
   @@index([parentOrderId, offerId])
 }
@@ -2808,6 +2928,11 @@ enum CheckoutLedgerKind {
   CHARGEBACK
   PAYOUT
   ADJUSTMENT
+  // SELLER_ACCOUNT: the net amount is already in the seller's account, so the
+  // balance left is what the seller owes CifraMais.
+  DIRECT_SETTLEMENT
+  // The seller paid the CifraMais fee of a closing.
+  FEE_PAYMENT
 }
 
 enum CheckoutRefundOrigin {
