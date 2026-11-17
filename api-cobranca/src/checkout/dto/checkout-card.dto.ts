@@ -55,6 +55,7 @@ export class CheckoutCardQuoteDto {
   @IsUUID('all', { each: true })
   bumpIds!: string[];
   @IsOptional() @IsString() @MaxLength(30) couponCode?: string | null;
+  @IsOptional() @IsUUID() planId?: string | null;
   @IsIn(BRANDS) brand!: (typeof BRANDS)[number];
 }
 
@@ -89,6 +90,7 @@ export class CheckoutCardOrderDto extends CheckoutCardChargeDto {
   @IsUUID('all', { each: true })
   bumpIds!: string[];
   @IsOptional() @IsString() @MaxLength(30) couponCode?: string | null;
+  @IsOptional() @IsUUID() planId?: string | null;
   @ValidateNested() @Type(() => CheckoutBuyerDto) buyer!: CheckoutBuyerDto;
   @IsOptional()
   @ValidateNested()

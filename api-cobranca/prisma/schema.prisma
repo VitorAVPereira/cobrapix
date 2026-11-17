@@ -434,6 +434,7 @@ model Company {
   checkoutOfferResponses   CheckoutOfferResponse[]
   checkoutWebhookRules     CheckoutWebhookRule[]
   checkoutApiKeys          CheckoutApiKey[]
+  checkoutPlans            CheckoutPlan[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2436,9 +2437,47 @@ model CheckoutProduct {
   orders              CheckoutOrder[]
   leads               CheckoutLead[]
   cardQuotes          CheckoutCardQuote[]
+  plans               CheckoutPlan[]
 
   @@unique([id, companyId])
   @@index([companyId, active, createdAt])
+}
+
+enum CheckoutPlanBilling {
+  // Paid once for the period, in installments on the card; no renewal.
+  INSTALLMENT
+  // Charged in full every cycle, renewed automatically.
+  RECURRING
+}
+
+// One way to buy a product: period, price and how it is charged. A product
+// with active plans sells only through them.
+model CheckoutPlan {
+  id                  String              @id @default(uuid())
+  companyId           String
+  company             Company             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  productId           String
+  product             CheckoutProduct     @relation(fields: [productId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  name                String
+  // Fixed once the plan has a sale, like billing: buyers were sold that period.
+  intervalMonths      Int
+  billing             CheckoutPlanBilling
+  priceCents          Int
+  compareAtPriceCents Int?
+  // INSTALLMENT only; empty follows the checkout settings.
+  maxInstallments     Int?
+  // Who pays the Efí tariff; empty follows the checkout settings.
+  pixFeePayer         CheckoutFeePayer?
+  cardFeePayer        CheckoutFeePayer?
+  position            Int
+  active              Boolean             @default(true)
+  version             Int                 @default(1)
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  orders              CheckoutOrder[]
+
+  @@unique([id, companyId])
+  @@index([productId, active, position])
 }
 
 enum CheckoutAfterPurchase {
@@ -2675,6 +2714,9 @@ model CheckoutOrder {
   company                Company                  @relation(fields: [companyId], references: [id], onDelete: Restrict)
   productId              String
   product                CheckoutProduct          @relation(fields: [productId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  // The plan the main product was bought through, when it has plans.
+  planId                 String?
+  plan                   CheckoutPlan?            @relation(fields: [planId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
   publicToken            String                   @unique
   idempotencyKey         String                   @unique
   status                 CheckoutOrderStatus      @default(PENDING)

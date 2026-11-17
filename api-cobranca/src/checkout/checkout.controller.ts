@@ -43,6 +43,7 @@ import {
   CheckoutRecoveryService,
   RECOVERY_WINDOW_MS,
 } from './checkout-recovery.service';
+import { CheckoutPlansService } from './checkout-plans.service';
 import { CheckoutProductsService } from './checkout-products.service';
 import { CheckoutSettingsService } from './checkout-settings.service';
 import {
@@ -56,6 +57,13 @@ import {
   UpdateCheckoutOfferDto,
   UpdateCheckoutProductDto,
 } from './dto/checkout-product.dto';
+import {
+  CheckoutPlanPreviewDto,
+  CreateCheckoutPlanDto,
+  ListCheckoutPlansQueryDto,
+  ReorderCheckoutPlansDto,
+  UpdateCheckoutPlanDto,
+} from './dto/checkout-plan.dto';
 import {
   CheckoutCouponDto,
   UpdateCheckoutCouponDto,
@@ -105,7 +113,54 @@ export class CheckoutController {
     private readonly webhooks: CheckoutWebhooksService,
     private readonly recovery: CheckoutRecoveryService,
     private readonly apiKeys: CheckoutApiKeysService,
+    private readonly plans: CheckoutPlansService,
   ) {}
+
+  @Get('plans') listPlans(
+    @GetUser() user: AuthenticatedUser,
+    @Query() query: ListCheckoutPlansQueryDto,
+  ) {
+    return this.plans.list(user.companyId, query.productId);
+  }
+
+  @Post('plans') createPlan(
+    @GetUser() user: AuthenticatedUser,
+    @Body() dto: CreateCheckoutPlanDto,
+  ) {
+    return this.plans.create(user.companyId, dto);
+  }
+
+  @Post('plans/preview')
+  @HttpCode(200)
+  previewPlan(
+    @GetUser() user: AuthenticatedUser,
+    @Body() dto: CheckoutPlanPreviewDto,
+  ) {
+    return this.plans.preview(user.companyId, dto);
+  }
+
+  @Put('plans/order') reorderPlans(
+    @GetUser() user: AuthenticatedUser,
+    @Body() dto: ReorderCheckoutPlansDto,
+  ) {
+    return this.plans.reorder(user.companyId, dto);
+  }
+
+  @Put('plans/:id') updatePlan(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCheckoutPlanDto,
+  ) {
+    return this.plans.update(user.companyId, id, dto);
+  }
+
+  @Patch('plans/:id/active') setPlanActive(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetCheckoutActiveDto,
+  ) {
+    return this.plans.setActive(user.companyId, id, dto);
+  }
 
   @Get('webhooks') webhookRules(@GetUser() user: AuthenticatedUser) {
     return this.webhooks.list(user.companyId);

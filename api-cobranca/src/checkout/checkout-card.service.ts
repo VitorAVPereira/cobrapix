@@ -6,7 +6,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { CheckoutCardAttempt, Prisma } from '@prisma/client';
+import { CheckoutCardAttempt, CheckoutFeePayer, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { grossUpCard } from '../payment/card-amounts';
@@ -66,6 +66,7 @@ export interface CardOption {
 /** Same cart, same price: what a quote and an order must agree on. */
 export function cartFingerprint(cart: {
   productId: string;
+  planId?: string | null;
   items: Pick<
     OrderItem,
     'kind' | 'productId' | 'bumpId' | 'unitPriceCents' | 'discountCents'
@@ -77,6 +78,8 @@ export function cartFingerprint(cart: {
     .update(
       JSON.stringify({
         productId: cart.productId,
+        // Plans of the same price may differ in installments and fee payer.
+        planId: cart.planId ?? undefined,
         items: cart.items.map((line) => [
           line.kind,
           line.productId,
@@ -150,6 +153,7 @@ export class CheckoutCardService {
         fingerprint: cartFingerprint({
           ...sale.quote,
           productId: sale.productId,
+          planId: sale.planId,
         }),
         brand,
         options: options as unknown as Prisma.InputJsonValue,
@@ -202,7 +206,11 @@ export class CheckoutCardService {
       dto.quoteId,
       dto.installments,
       sale.companyId,
-      cartFingerprint({ ...sale.quote, productId: sale.productId }),
+      cartFingerprint({
+        ...sale.quote,
+        productId: sale.productId,
+        planId: sale.planId,
+      }),
       card,
       now,
     );
@@ -323,6 +331,7 @@ export class CheckoutCardService {
       order.companyId,
       cartFingerprint({
         productId: order.productId,
+        planId: order.planId,
         items: order.items as unknown as OrderItem[],
         couponId: order.couponId,
         subtotalCents: order.subtotalCents,
@@ -879,15 +888,34 @@ export class CheckoutCardService {
    * pays: the buyer pays the Efí total, and the seller's cost is what it adds
    * to P plus the tariff on it.
    */
-  private async price(
+  private price(
     sale: SaleContext,
     card: CheckoutCardAccount,
     brand: CheckoutCardBrand,
   ): Promise<CardOption[]> {
-    const debt = sale.quote.subtotalCents;
+    return this.optionsFor(
+      sale.quote.subtotalCents,
+      sale.settings.maxInstallments,
+      sale.settings.cardFeePayer,
+      card,
+      brand,
+    );
+  }
+
+  /** Installments for an amount; `only` prices just those counts. */
+  async optionsFor(
+    debt: number,
+    maxInstallments: number,
+    feePayer: CheckoutFeePayer,
+    card: CheckoutCardAccount,
+    brand: CheckoutCardBrand,
+    only?: number[],
+  ): Promise<CardOption[]> {
     const counts = (
       await this.client.installmentCounts(card.account, debt, brand)
-    ).filter((count) => count <= sale.settings.maxInstallments);
+    ).filter(
+      (count) => count <= maxInstallments && (!only || only.includes(count)),
+    );
     const options: CardOption[] = [];
     for (const installments of counts) {
       const bp = cardProcessingBasisPoints(card.rates, installments);
@@ -905,7 +933,7 @@ export class CheckoutCardService {
           );
         return value;
       };
-      if (sale.settings.cardFeePayer === 'BUYER') {
+      if (feePayer === 'BUYER') {
         const quoted = await grossUpCard(debt, installments, bp, 0, valueFor);
         options.push(quoted);
       } else {

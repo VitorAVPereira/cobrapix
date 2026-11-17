@@ -2106,4 +2106,162 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
     ]);
     expect(JSON.stringify(audit)).not.toContain(key);
   });
+
+  it('planos: a página vende pelo plano, o líquido previsto é o do pedido e outra empresa não alcança', async () => {
+    (throttle as unknown as { useMemoryLimiters(): void }).useMemoryLimiters();
+    const product = await prisma.checkoutProduct.findUniqueOrThrow({
+      where: { slug },
+    });
+    const plan = {
+      productId: product.id,
+      name: 'Anual',
+      intervalMonths: 12,
+      billing: 'INSTALLMENT',
+      priceCents: 9900,
+      maxInstallments: 3,
+      pixFeePayer: 'BUYER',
+      active: true,
+    };
+    const created = await request(http)
+      .post('/checkout/plans')
+      .set(auth(tokens.seller))
+      .send(plan)
+      .expect(201);
+    const planId = (created.body as { id: string }).id;
+    // A recurring plan exists but only joins the page with the renewal flow.
+    await request(http)
+      .post('/checkout/plans')
+      .set(auth(tokens.seller))
+      .send({
+        productId: product.id,
+        name: 'Trimestral',
+        intervalMonths: 3,
+        billing: 'RECURRING',
+        priceCents: 2990,
+        active: true,
+      })
+      .expect(201);
+
+    const page = await request(http)
+      .get(`/checkout/public/products/${slug}`)
+      .expect(200);
+    expect((page.body as { plans: unknown[] }).plans).toEqual([
+      expect.objectContaining({ id: planId, priceCents: 9900 }),
+    ]);
+    const noPlan = await request(http)
+      .post(`/checkout/public/products/${slug}/quote`)
+      .send({ bumpIds: [], method: 'PIX' })
+      .expect(400);
+    expect(noPlan.body).toMatchObject({ code: 'CHECKOUT_PLAN_REQUIRED' });
+
+    const preview = await request(http)
+      .post('/checkout/plans/preview')
+      .set(auth(tokens.seller))
+      .send({ billing: 'INSTALLMENT', priceCents: 9900, maxInstallments: 3 })
+      .expect(200);
+    const ordered = await request(http)
+      .post(`/checkout/public/products/${slug}/orders`)
+      .send({
+        bumpIds: [],
+        planId,
+        method: 'PIX',
+        buyer: {
+          name: 'Paula Planos',
+          email: 'paula@e2e.test',
+          document: '39053344705',
+          phone: '11977776666',
+        },
+        idempotencyKey: randomUUID(),
+      })
+      .expect(201);
+    const saved = await prisma.checkoutOrder.findUniqueOrThrow({
+      where: { publicToken: (ordered.body as { token: string }).token },
+    });
+    expect(saved).toMatchObject({
+      planId,
+      subtotalCents: 9900,
+      feePayer: 'BUYER',
+    });
+    expect((saved.items as unknown as OrderItem[])[0]).toMatchObject({
+      unitPriceCents: 9900,
+      accessPeriodMonths: 12,
+    });
+    const line = (
+      preview.body as {
+        pix: { buyer: { buyerTotalCents: number; netCents: number }[] };
+      }
+    ).pix.buyer[0];
+    expect(line).toMatchObject({
+      buyerTotalCents: saved.totalCents,
+      netCents: saved.totalCents - saved.efiFeeCents - saved.platformFeeCents,
+    });
+
+    const other = await request(http)
+      .post('/admin/checkout/clients')
+      .set(auth(tokens.admin))
+      .send({
+        company: {
+          corporateName: 'Loja dos Planos',
+          document: '06990590000123',
+          email: `planos-${suffix}@e2e.test`,
+          phoneNumber: '11988881111',
+        },
+        firstUser: { name: 'Paulo', email: `paulo-${suffix}@e2e.test` },
+        terms: {
+          platformFeeBasisPoints: 250,
+          payoutDocument: '06990590000123',
+          payoutPixKey: '11144477735',
+        },
+      })
+      .expect(201);
+    const temporary = (other.body as { temporaryPassword: string })
+      .temporaryPassword;
+    const first = await login(`paulo-${suffix}@e2e.test`, temporary);
+    await request(http)
+      .post('/auth/change-password')
+      .set(auth(first))
+      .send({
+        currentPassword: temporary,
+        password: 'Nova-senha-e2e-3',
+        passwordConfirmation: 'Nova-senha-e2e-3',
+      })
+      .expect(200);
+    const stranger = await login(
+      `paulo-${suffix}@e2e.test`,
+      'Nova-senha-e2e-3',
+    );
+    const theirs = await request(http)
+      .get('/checkout/plans')
+      .set(auth(stranger))
+      .expect(200);
+    expect(theirs.body).toEqual([]);
+    await request(http)
+      .post('/checkout/plans')
+      .set(auth(stranger))
+      .send(plan)
+      .expect(404);
+    await request(http)
+      .put(`/checkout/plans/${planId}`)
+      .set(auth(stranger))
+      .send({ ...plan, productId: undefined, expectedVersion: 1 })
+      .expect(404);
+    await request(http)
+      .patch(`/checkout/plans/${planId}/active`)
+      .set(auth(stranger))
+      .send({ active: false, expectedVersion: 1 })
+      .expect(404);
+
+    // The plan sold: its period and way of charging no longer change.
+    const locked = await request(http)
+      .put(`/checkout/plans/${planId}`)
+      .set(auth(tokens.seller))
+      .send({
+        ...plan,
+        productId: undefined,
+        intervalMonths: 6,
+        expectedVersion: 1,
+      })
+      .expect(409);
+    expect(locked.body).toMatchObject({ code: 'CHECKOUT_PLAN_LOCKED' });
+  });
 });

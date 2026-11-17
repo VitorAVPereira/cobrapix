@@ -51,7 +51,25 @@ export interface SaleContext {
   card: CheckoutCardAccount | null;
   // Not ACCESS: the card is kept (reusable token) for the offer after payment.
   afterPurchase: CheckoutAfterPurchase;
+  // The plan the main product is bought through; its fee payers and
+  // installments are already applied to `settings`.
+  planId: string | null;
 }
+
+// Recurring plans join the page with the subscription (renewal) flow.
+const SELLABLE_BILLING = ['INSTALLMENT'] as const;
+
+const planFields = {
+  id: true,
+  name: true,
+  intervalMonths: true,
+  billing: true,
+  priceCents: true,
+  compareAtPriceCents: true,
+  maxInstallments: true,
+  pixFeePayer: true,
+  cardFeePayer: true,
+} as const;
 
 /** Card sells when the CifraMais account, the seller and the admin all allow it. */
 export function cardOn(
@@ -102,6 +120,18 @@ export class CheckoutCatalogService {
         imageUrl: assetUrl(bump.offeredProduct.imageAssetId),
         accessPeriodMonths: bump.offeredProduct.accessPeriodMonths,
       })),
+      // Not empty: the page sells through these and ignores the product price.
+      plans: product.plans.map((plan) => ({
+        id: plan.id,
+        name: plan.name,
+        intervalMonths: plan.intervalMonths,
+        billing: plan.billing,
+        priceCents: plan.priceCents,
+        compareAtPriceCents: plan.compareAtPriceCents,
+        maxInstallments: card
+          ? (plan.maxInstallments ?? settings.maxInstallments)
+          : null,
+      })),
       page: {
         displayName: settings.displayName,
         logoUrl: assetUrl(brand.logoAssetId),
@@ -142,11 +172,29 @@ export class CheckoutCatalogService {
   /** Validates the choice and prices it with the current account and terms. */
   async prepare(
     slug: string,
-    dto: Pick<CheckoutQuoteDto, 'bumpIds' | 'couponCode'>,
+    dto: Pick<CheckoutQuoteDto, 'bumpIds' | 'couponCode' | 'planId'>,
     now: Date,
     method: 'PIX' | 'CARD' = 'PIX',
   ): Promise<SaleContext & { productId: string; productName: string }> {
-    const { product, settings, terms, companyId } = await this.load(slug);
+    const loaded = await this.load(slug);
+    const { terms, companyId } = loaded;
+    const plan = this.planOf(loaded.product.plans, dto.planId);
+    const product = plan
+      ? {
+          ...loaded.product,
+          priceCents: plan.priceCents,
+          accessPeriodMonths: plan.intervalMonths,
+        }
+      : loaded.product;
+    const settings = plan
+      ? {
+          ...loaded.settings,
+          pixFeePayer: plan.pixFeePayer ?? loaded.settings.pixFeePayer,
+          cardFeePayer: plan.cardFeePayer ?? loaded.settings.cardFeePayer,
+          maxInstallments:
+            plan.maxInstallments ?? loaded.settings.maxInstallments,
+        }
+      : loaded.settings;
     const { platform, cardAccount, sellerTerms } = await this.accounts(
       settings,
       terms,
@@ -180,6 +228,7 @@ export class CheckoutCatalogService {
       productId: product.id,
       productName: product.name,
       afterPurchase: product.afterPurchase,
+      planId: plan?.id ?? null,
       settings,
       terms: sellerTerms,
       platform,
@@ -244,6 +293,7 @@ export class CheckoutCatalogService {
       productId: product.id,
       productName: product.name,
       afterPurchase: 'ACCESS',
+      planId: null,
       settings,
       terms: sellerTerms,
       platform,
@@ -286,6 +336,23 @@ export class CheckoutCatalogService {
     return { platform, cardAccount, sellerTerms: terms };
   }
 
+  /** The chosen plan; a product with plans is never sold at its own price. */
+  private planOf<T extends { id: string }>(
+    plans: T[],
+    planId: string | null | undefined,
+  ): T | null {
+    if (!plans.length && !planId) return null;
+    if (!planId)
+      throw this.invalid('CHECKOUT_PLAN_REQUIRED', 'Escolha um plano.');
+    const plan = plans.find((candidate) => candidate.id === planId);
+    if (!plan)
+      throw this.invalid(
+        'CHECKOUT_PLAN_UNAVAILABLE',
+        'Este plano não está mais disponível. Recarregue a página.',
+      );
+    return plan;
+  }
+
   private async load(slug: string) {
     const product = await this.prisma.checkoutProduct.findFirst({
       where: {
@@ -310,6 +377,11 @@ export class CheckoutCatalogService {
             description: true,
             offeredProduct: { select: productFields },
           },
+        },
+        plans: {
+          where: { active: true, billing: { in: [...SELLABLE_BILLING] } },
+          orderBy: { position: 'asc' },
+          select: planFields,
         },
       },
     });

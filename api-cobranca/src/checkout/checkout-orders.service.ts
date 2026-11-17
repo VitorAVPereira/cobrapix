@@ -200,6 +200,7 @@ export class CheckoutOrdersService {
     return {
       companyId: sale.companyId,
       productId: sale.productId,
+      planId: sale.planId,
       publicToken: randomBytes(32).toString('base64url'),
       idempotencyKey: dto.idempotencyKey,
       buyerName: dto.buyer.name.trim(),

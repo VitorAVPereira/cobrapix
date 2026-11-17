@@ -10,6 +10,7 @@ import { CheckoutAdminService } from './checkout-admin.service';
 import { CheckoutAssetsService } from './checkout-assets.service';
 import { CheckoutController } from './checkout.controller';
 import { CheckoutPublicController } from './checkout-public.controller';
+import { CheckoutPlansService } from './checkout-plans.service';
 import { CheckoutProductsService } from './checkout-products.service';
 import { CheckoutCouponsService } from './checkout-coupons.service';
 import { CheckoutSettingsService } from './checkout-settings.service';
@@ -61,6 +62,7 @@ import {
     CheckoutAssetsService,
     CheckoutSettingsService,
     CheckoutProductsService,
+    CheckoutPlansService,
     CheckoutCouponsService,
     CheckoutPlatformService,
     CheckoutCatalogService,

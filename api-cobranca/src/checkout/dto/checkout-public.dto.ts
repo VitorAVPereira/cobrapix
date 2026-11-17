@@ -21,6 +21,8 @@ export class CheckoutQuoteDto {
   @IsUUID('all', { each: true })
   bumpIds!: string[];
   @IsOptional() @IsString() @MaxLength(30) couponCode?: string | null;
+  // Required when the product sells through plans.
+  @IsOptional() @IsUUID() planId?: string | null;
   @IsIn(['PIX']) method!: 'PIX';
 }
 

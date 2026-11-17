@@ -50,6 +50,7 @@ describe('CheckoutCatalogService', () => {
           offeredProduct: offered,
         },
       ],
+      plans: [],
     });
     prisma.checkoutSettings.findUnique.mockResolvedValue({
       displayName: 'Porquim',
@@ -200,5 +201,109 @@ describe('CheckoutCatalogService', () => {
         },
       }),
     );
+  });
+
+  describe('planos', () => {
+    const anual = {
+      id: 'plano-anual',
+      name: 'Anual',
+      intervalMonths: 12,
+      billing: 'INSTALLMENT',
+      priceCents: 7500,
+      compareAtPriceCents: 9700,
+      maxInstallments: 3,
+      pixFeePayer: 'BUYER',
+      cardFeePayer: null,
+    };
+
+    beforeEach(async () => {
+      const main = (await prisma.checkoutProduct.findFirst()) as Record<
+        string,
+        unknown
+      >;
+      prisma.checkoutProduct.findFirst.mockResolvedValue({
+        ...main,
+        plans: [anual],
+      });
+    });
+
+    it('a página lista só planos ativos que já podem ser vendidos', async () => {
+      const view = await service.view('porquim-anual-ab12');
+
+      expect(view.plans).toEqual([
+        expect.objectContaining({ id: 'plano-anual', priceCents: 7500 }),
+      ]);
+      expect(JSON.stringify(view.plans)).not.toContain('FeePayer');
+      const [query] = prisma.checkoutProduct.findFirst.mock.calls.at(-1) as [
+        { select: { plans: { where: unknown } } },
+      ];
+      expect(query.select.plans.where).toEqual({
+        active: true,
+        billing: { in: ['INSTALLMENT'] },
+      });
+    });
+
+    it('produto com plano não é vendido pelo preço do produto', async () => {
+      await expect(
+        service.quote('porquim-anual-ab12', { bumpIds: [], method: 'PIX' }),
+      ).rejects.toMatchObject({ response: { code: 'CHECKOUT_PLAN_REQUIRED' } });
+    });
+
+    it('plano de outro produto, inativo ou inexistente é recusado', async () => {
+      await expect(
+        service.quote('porquim-anual-ab12', {
+          bumpIds: [],
+          method: 'PIX',
+          planId: 'plano-de-outro',
+        }),
+      ).rejects.toMatchObject({
+        response: { code: 'CHECKOUT_PLAN_UNAVAILABLE' },
+      });
+    });
+
+    it('produto sem plano recusa um plano enviado', async () => {
+      const main = (await prisma.checkoutProduct.findFirst()) as Record<
+        string,
+        unknown
+      >;
+      prisma.checkoutProduct.findFirst.mockResolvedValue({
+        ...main,
+        plans: [],
+      });
+
+      await expect(
+        service.quote('porquim-anual-ab12', {
+          bumpIds: [],
+          method: 'PIX',
+          planId: 'plano-anual',
+        }),
+      ).rejects.toMatchObject({
+        response: { code: 'CHECKOUT_PLAN_UNAVAILABLE' },
+      });
+    });
+
+    it('cota pelo preço, pelo período e pelo repasse da taxa do plano', async () => {
+      const sale = await service.prepare(
+        'porquim-anual-ab12',
+        { bumpIds: [], planId: 'plano-anual' },
+        new Date(),
+      );
+
+      expect(sale.planId).toBe('plano-anual');
+      expect(sale.quote.items[0]).toMatchObject({
+        unitPriceCents: 7500,
+        accessPeriodMonths: 12,
+      });
+      // The plan passes the Pix tariff on: 7500 / (1 - 1.19%).
+      expect(sale.quote).toMatchObject({
+        feePayer: 'BUYER',
+        subtotalCents: 7500,
+        totalCents: 7591,
+      });
+      expect(sale.settings).toMatchObject({
+        maxInstallments: 3,
+        pixFeePayer: 'BUYER',
+      });
+    });
   });
 });
