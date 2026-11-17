@@ -10,6 +10,7 @@ import { CheckoutRefundOrigin } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ResendMailerService } from '../common/resend-mailer.service';
 import { CheckoutLedgerService } from './checkout-ledger.service';
+import { CheckoutSubscriptionsService } from './checkout-subscriptions.service';
 import { CheckoutWebhooksService } from './checkout-webhooks.service';
 import { CheckoutMailJobs } from './checkout-mail.service';
 import { itemShares, type OrderItem } from './checkout-pricing';
@@ -48,6 +49,7 @@ export class CheckoutRefundsService {
     private readonly mailer: ResendMailerService,
     private readonly webhooks: CheckoutWebhooksService,
     private readonly mail: CheckoutMailJobs,
+    private readonly subscriptions: CheckoutSubscriptionsService,
   ) {}
 
   /**
@@ -148,11 +150,24 @@ export class CheckoutRefundsService {
             ]
           : []),
       ]);
-      if (refundedAfter >= order.totalCents && order.status === 'PAID')
+      if (refundedAfter >= order.totalCents && order.status === 'PAID') {
         await tx.checkoutOrder.update({
           where: { id: order.id },
           data: { status: 'REFUNDED' },
         });
+        // The first cycle returned in full: the subscription ends with it.
+        if (order.subscriptionId && order.subscriptionCycle === 1)
+          await this.subscriptions.endNow(
+            tx,
+            {
+              id: order.id,
+              companyId: order.companyId,
+              subscriptionId: order.subscriptionId,
+            },
+            'REFUND',
+            now,
+          );
+      }
       await tx.checkoutRefundRequest.updateMany({
         where: { orderId: order.id, status: 'REQUESTED' },
         data: {

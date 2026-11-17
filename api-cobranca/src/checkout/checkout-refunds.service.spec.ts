@@ -9,6 +9,7 @@ import {
 import { CheckoutRefundsService } from './checkout-refunds.service';
 import type { CheckoutWebhooksService } from './checkout-webhooks.service';
 import type { CheckoutMailJobs } from './checkout-mail.service';
+import type { CheckoutSubscriptionsService } from './checkout-subscriptions.service';
 
 interface EntryArg {
   data: Array<{
@@ -169,6 +170,7 @@ describe('CheckoutRefundsService', () => {
   const mailer = { sendEmail: jest.fn() };
   const webhooks = { emit: jest.fn() };
   const mail = { refundEmail: jest.fn() };
+  const subscriptions = { endNow: jest.fn() };
   const env: Record<string, string> = {
     PLATFORM_ALERT_EMAIL: 'alertas@ciframais.test',
     RESEND_API_KEY: 're_test',
@@ -181,6 +183,7 @@ describe('CheckoutRefundsService', () => {
     mailer as unknown as ResendMailerService,
     webhooks as unknown as CheckoutWebhooksService,
     mail as unknown as CheckoutMailJobs,
+    subscriptions as unknown as CheckoutSubscriptionsService,
   );
   // Main 67,00 with 6,70 off and a 14,90 bump; the buyer paid 76,11 (Pix fee).
   const items = [
@@ -240,6 +243,54 @@ describe('CheckoutRefundsService', () => {
         ...data,
       }),
     );
+  });
+
+  it('reembolso total do primeiro ciclo encerra a assinatura na hora; parcial ou de renovação, não', async () => {
+    const cycle = (subscriptionCycle: number) => ({
+      ...order(),
+      subscriptionId: 'sub-1',
+      subscriptionCycle,
+    });
+    tx.checkoutOrder.findUnique.mockResolvedValue(cycle(1));
+    await service.record(
+      {
+        orderId: 'o1',
+        amountCents: 3000,
+        idempotencyKey: 'p1',
+        fromProvider: true,
+      },
+      now,
+    );
+    expect(subscriptions.endNow).not.toHaveBeenCalled();
+
+    await service.record(
+      {
+        orderId: 'o1',
+        amountCents: 6700,
+        idempotencyKey: 'p2',
+        fromProvider: true,
+      },
+      now,
+    );
+    expect(subscriptions.endNow).toHaveBeenCalledWith(
+      tx,
+      { id: 'o1', companyId: 'c1', subscriptionId: 'sub-1' },
+      'REFUND',
+      now,
+    );
+
+    jest.clearAllMocks();
+    tx.checkoutOrder.findUnique.mockResolvedValue(cycle(2));
+    await service.record(
+      {
+        orderId: 'o1',
+        amountCents: 6700,
+        idempotencyKey: 'p3',
+        fromProvider: true,
+      },
+      now,
+    );
+    expect(subscriptions.endNow).not.toHaveBeenCalled();
   });
 
   it('devolução total: sai do saldo, a % Cifra+ volta e o pedido fica reembolsado', async () => {

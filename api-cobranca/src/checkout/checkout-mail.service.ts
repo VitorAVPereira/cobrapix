@@ -5,6 +5,7 @@ import { Job, Queue } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
 import { ResendMailerService } from '../common/resend-mailer.service';
 import type { OrderItem } from './checkout-pricing';
+import { subscriptionTokenOf } from './checkout-rules';
 
 export const CHECKOUT_MAIL_QUEUE = 'checkout-mail';
 
@@ -102,9 +103,26 @@ export class CheckoutMailProcessor extends WorkerHost {
     if (job.name === 'refund') return this.refund(job.data as RefundMailJob);
     const order = await this.prisma.checkoutOrder.findUnique({
       where: { id: job.data.orderId },
-      include: { company: { select: { checkoutSettings: true } } },
+      include: {
+        company: { select: { checkoutSettings: true } },
+        subscription: {
+          select: { intervalMonths: true, currentPeriodEnd: true },
+        },
+      },
     });
     if (!order || order.status !== 'PAID' || order.accessEmailSentAt) return;
+    // The first cycle of a subscription: how it renews and where to cancel.
+    const subscription =
+      order.subscription && order.subscriptionCycle === 1
+        ? [
+            `<p>Esta é uma assinatura: ${escapeHtml(formatBRL(order.totalCents))} a cada ${order.subscription.intervalMonths} ${order.subscription.intervalMonths === 1 ? 'mês' : 'meses'}, cobrados no mesmo cartão.`,
+            order.subscription.currentPeriodEnd
+              ? ` A próxima cobrança é em ${formatDate(order.subscription.currentPeriodEnd)}.`
+              : '',
+            '</p>',
+            `<p><a href="${escapeHtml(this.subscriptionUrl(order.publicToken))}">Gerenciar assinatura</a> (ver a próxima cobrança ou cancelar).</p>`,
+          ].join('')
+        : '';
     const settings = order.company.checkoutSettings;
     const seller = settings?.displayName ?? 'o vendedor';
     const items = order.items as unknown as OrderItem[];
@@ -135,6 +153,7 @@ export class CheckoutMailProcessor extends WorkerHost {
           `<p>Seu pagamento para ${escapeHtml(seller)} foi confirmado. Veja como acessar:</p>`,
           `<ul>${lines.join('')}</ul>`,
           support ? `<p>Dúvidas sobre o produto: ${support}</p>` : '',
+          subscription,
           // Consumer law: 7 days to change one's mind; the link says so.
           `<p>Se mudar de ideia, você pode <a href="${escapeHtml(this.refundUrl(order.publicToken))}">pedir reembolso</a> em até 7 dias.</p>`,
           '<p>Pagamento processado pela Cifra+.</p>',
@@ -238,6 +257,11 @@ export class CheckoutMailProcessor extends WorkerHost {
       this.logger.warn('CHECKOUT_REFUND_EMAIL_FAILED');
       throw error;
     }
+  }
+
+  private subscriptionUrl(orderToken: string): string {
+    const base = this.required('FRONTEND_URL').replace(/\/+$/, '');
+    return `${base}/c/assinatura/${subscriptionTokenOf(orderToken)}`;
   }
 
   private refundUrl(token: string): string {

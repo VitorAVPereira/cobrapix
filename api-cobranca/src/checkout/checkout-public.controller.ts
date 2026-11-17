@@ -22,6 +22,7 @@ import { RefundRequestDto } from './dto/checkout-finance.dto';
 import { CheckoutRecoveryService } from './checkout-recovery.service';
 import { CheckoutCardService } from './checkout-card.service';
 import { CheckoutOffersService } from './checkout-offers.service';
+import { CheckoutSubscriptionsService } from './checkout-subscriptions.service';
 import {
   CheckoutOfferAcceptDto,
   CheckoutOfferChoiceDto,
@@ -49,6 +50,11 @@ function tokenOf(value: string): string {
     throw new NotFoundException('Pedido não encontrado.');
   return value;
 }
+function subscriptionTokenOf(value: string): string {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(value))
+    throw new NotFoundException('Assinatura não encontrada.');
+  return value;
+}
 function offerTokenOf(value: string): string {
   if (!/^[A-Za-z0-9_-]{43}$/.test(value))
     throw new NotFoundException('Oferta não encontrada.');
@@ -66,6 +72,7 @@ export class CheckoutPublicController {
     private readonly recovery: CheckoutRecoveryService,
     private readonly card: CheckoutCardService,
     private readonly offers: CheckoutOffersService,
+    private readonly subscriptions: CheckoutSubscriptionsService,
   ) {}
 
   // An asset never changes once uploaded (a new image is a new id).
@@ -179,6 +186,20 @@ export class CheckoutPublicController {
       dto.reason,
       dto.itemIndexes,
     );
+  }
+
+  // The buyer's subscription page: the token comes only by e-mail.
+  @Get('subscriptions/:token')
+  @Header('Cache-Control', 'no-store')
+  subscription(@Param('token') token: string) {
+    return this.subscriptions.viewByToken(subscriptionTokenOf(token));
+  }
+
+  @Post('subscriptions/:token/cancel')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  cancelSubscription(@Param('token') token: string) {
+    return this.subscriptions.cancelByToken(subscriptionTokenOf(token));
   }
 
   // Only the buyer's order token gives up a refund; the seller never has it.

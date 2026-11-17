@@ -4,6 +4,7 @@ import type { CheckoutLedgerService } from './checkout-ledger.service';
 import type { CheckoutRefundsService } from './checkout-refunds.service';
 import { CheckoutFinanceService } from './checkout-finance.service';
 import type { CheckoutWebhooksService } from './checkout-webhooks.service';
+import type { CheckoutSubscriptionsService } from './checkout-subscriptions.service';
 
 const KEY = '0b4f7c2e-8a6d-4f1b-9c3e-2d5a7b8c9e01';
 
@@ -16,7 +17,11 @@ interface RecordCall {
 describe('CheckoutFinanceService', () => {
   const tables = {
     company: { count: jest.fn() },
-    checkoutOrder: { count: jest.fn(), updateMany: jest.fn() },
+    checkoutOrder: {
+      count: jest.fn(),
+      updateMany: jest.fn(),
+      findUnique: jest.fn(),
+    },
     checkoutLedgerEntry: { aggregate: jest.fn() },
     auditLog: { create: jest.fn() },
   };
@@ -33,11 +38,13 @@ describe('CheckoutFinanceService', () => {
   };
   const refunds = { record: jest.fn() };
   const webhooks = { emit: jest.fn() };
+  const subscriptions = { endNow: jest.fn() };
   const service = new CheckoutFinanceService(
     prisma as unknown as PrismaService,
     ledger as unknown as CheckoutLedgerService,
     refunds as unknown as CheckoutRefundsService,
     webhooks as unknown as CheckoutWebhooksService,
+    subscriptions as unknown as CheckoutSubscriptionsService,
   );
 
   beforeEach(() => {
@@ -139,6 +146,23 @@ describe('CheckoutFinanceService', () => {
       response: { code: 'CHECKOUT_ACCOUNT_MODE_NOT_SUPPORTED' },
     });
     expect(ledger.record).not.toHaveBeenCalled();
+  });
+
+  it('contestação de qualquer ciclo encerra a assinatura na hora', async () => {
+    tables.checkoutOrder.findUnique.mockResolvedValue({
+      subscriptionId: 'sub-1',
+    });
+    await service.chargeback('c1', 'admin', {
+      idempotencyKey: KEY,
+      orderId: 'o1',
+      amountCents: 2990,
+    });
+    expect(subscriptions.endNow).toHaveBeenCalledWith(
+      tables,
+      { id: 'o1', companyId: 'c1', subscriptionId: 'sub-1' },
+      'CHARGEBACK',
+      expect.any(Date),
+    );
   });
 
   it('ajuste aceita valor negativo ou positivo', async () => {

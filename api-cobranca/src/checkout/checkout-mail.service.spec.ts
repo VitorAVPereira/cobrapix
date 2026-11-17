@@ -3,6 +3,7 @@ import type { Job } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
 import { ResendMailerService } from '../common/resend-mailer.service';
 import { CheckoutMailProcessor } from './checkout-mail.service';
+import { subscriptionTokenOf } from './checkout-rules';
 
 interface MailArg {
   to: string[];
@@ -146,6 +147,30 @@ describe('CheckoutMailProcessor', () => {
       where: { id: 'order-1', accessEmailSentAt: null },
       data: { accessEmailSentAt: expect.any(Date) as Date },
     });
+  });
+
+  it('assinatura: o e-mail do primeiro ciclo traz o link para gerenciar e diz que renova', async () => {
+    prisma.checkoutOrder.findUnique.mockResolvedValueOnce({
+      ...paid,
+      subscriptionId: 'sub-1',
+      subscriptionCycle: 1,
+      totalCents: 2990,
+      subscription: {
+        intervalMonths: 3,
+        currentPeriodEnd: new Date('2027-03-01T12:00:00Z'),
+      },
+    });
+    await processor.process(job);
+
+    const mail = (mailer.sendEmail.mock.calls as [MailArg][])[0]?.[0];
+    expect(mail?.html).toContain(
+      `href="https://app.ciframais.test/c/assinatura/${subscriptionTokenOf('tok')}"`,
+    );
+    expect(mail?.html).toContain('Gerenciar assinatura');
+    expect(mail?.html).toContain('R$ 29,90 a cada 3 meses');
+    expect(mail?.html).toContain('01/03/2027');
+    // The order token itself is not what manages the subscription.
+    expect(mail?.html).not.toContain('/c/assinatura/tok"');
   });
 
   it('não manda de novo nem para pedido não pago', async () => {

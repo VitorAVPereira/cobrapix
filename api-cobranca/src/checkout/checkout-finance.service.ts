@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CheckoutLedgerService } from './checkout-ledger.service';
 import { CheckoutRefundsService } from './checkout-refunds.service';
 import { conflict } from './checkout-rules';
+import { CheckoutSubscriptionsService } from './checkout-subscriptions.service';
 import { CheckoutWebhooksService } from './checkout-webhooks.service';
 import {
   AdjustmentDto,
@@ -22,6 +23,7 @@ export class CheckoutFinanceService {
     private readonly ledger: CheckoutLedgerService,
     private readonly refunds: CheckoutRefundsService,
     private readonly webhooks: CheckoutWebhooksService,
+    private readonly subscriptions: CheckoutSubscriptionsService,
   ) {}
 
   async overview(companyId: string, now = new Date()) {
@@ -187,6 +189,22 @@ export class CheckoutFinanceService {
         },
         data: { status: 'CHARGEBACK' },
       });
+      // A contested cycle, any of them, ends the subscription now.
+      const cycle = await tx.checkoutOrder.findUnique({
+        where: { id: dto.orderId },
+        select: { subscriptionId: true },
+      });
+      if (cycle?.subscriptionId)
+        await this.subscriptions.endNow(
+          tx,
+          {
+            id: dto.orderId,
+            companyId,
+            subscriptionId: cycle.subscriptionId,
+          },
+          'CHARGEBACK',
+          new Date(),
+        );
       await this.webhooks.emit(tx, companyId, 'order.chargeback', dto.orderId, {
         chargeback: { amountCents: dto.amountCents },
       });

@@ -28,6 +28,7 @@ import {
 import { CheckoutCouponsService } from './checkout-coupons.service';
 import { CheckoutLedgerService } from './checkout-ledger.service';
 import { CheckoutRefundsService } from './checkout-refunds.service';
+import { CheckoutSubscriptionsService } from './checkout-subscriptions.service';
 import {
   PageQueryDto,
   RecoveryQueryDto,
@@ -114,7 +115,29 @@ export class CheckoutController {
     private readonly recovery: CheckoutRecoveryService,
     private readonly apiKeys: CheckoutApiKeysService,
     private readonly plans: CheckoutPlansService,
+    private readonly subscriptions: CheckoutSubscriptionsService,
   ) {}
+
+  @Get('subscriptions') listSubscriptions(
+    @GetUser() user: AuthenticatedUser,
+    @Query() query: PageQueryDto,
+  ) {
+    return this.subscriptions.list(
+      user.companyId,
+      query.page ?? 1,
+      query.pageSize ?? 20,
+    );
+  }
+
+  // The access goes on until the end of the paid period.
+  @Post('subscriptions/:id/cancel')
+  @HttpCode(204)
+  async cancelSubscription(
+    @GetUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<void> {
+    await this.subscriptions.cancel(user.companyId, id, 'SELLER', user.userId);
+  }
 
   @Get('plans') listPlans(
     @GetUser() user: AuthenticatedUser,

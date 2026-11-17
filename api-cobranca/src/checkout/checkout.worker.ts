@@ -4,6 +4,7 @@ import { CheckoutOrdersService } from './checkout-orders.service';
 import { CheckoutRecoveryService } from './checkout-recovery.service';
 import { CheckoutCardService } from './checkout-card.service';
 import { CheckoutWebhooksService } from './checkout-webhooks.service';
+import { CheckoutSubscriptionsService } from './checkout-subscriptions.service';
 
 /**
  * Every write is conditional on the current status, so two API instances
@@ -17,6 +18,7 @@ export class CheckoutWorker {
     private readonly webhooks: CheckoutWebhooksService,
     private readonly recovery: CheckoutRecoveryService,
     private readonly card: CheckoutCardService,
+    private readonly subscriptions: CheckoutSubscriptionsService,
   ) {}
 
   // Seller notices are claimed row by row, so this is also safe on two instances.
@@ -33,6 +35,10 @@ export class CheckoutWorker {
     await this.step('card-close', () => this.card.closeOverdue());
     await this.step('kept-cards', () => this.card.wipeKeptCards());
     await this.step('abandoned', () => this.recovery.notifyAbandoned());
+    await this.step('subscription-ended', () =>
+      this.subscriptions.notifyEnded(),
+    );
+    await this.step('subscription-efi', () => this.subscriptions.stopAtEfi());
   }
 
   // Updates are conditional on anonymizedAt, so a second instance is harmless.

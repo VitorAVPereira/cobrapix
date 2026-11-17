@@ -6,6 +6,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -14,9 +15,11 @@ import { GetUser } from '../auth/decorators/get-user.decorator';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { CheckoutFinanceService } from './checkout-finance.service';
 import { CheckoutRefundsService } from './checkout-refunds.service';
+import { CheckoutSubscriptionsService } from './checkout-subscriptions.service';
 import {
   AdjustmentDto,
   OrderMoneyDto,
+  PageQueryDto,
   PayoutDto,
   RejectRefundRequestDto,
 } from './dto/checkout-finance.dto';
@@ -27,7 +30,29 @@ export class CheckoutFinanceController {
   constructor(
     private readonly finance: CheckoutFinanceService,
     private readonly refunds: CheckoutRefundsService,
+    private readonly subscriptions: CheckoutSubscriptionsService,
   ) {}
+
+  @Get('subscriptions') listSubscriptions(
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+    @Query() query: PageQueryDto,
+  ) {
+    return this.subscriptions.list(
+      companyId,
+      query.page ?? 1,
+      query.pageSize ?? 20,
+    );
+  }
+
+  @Post('subscriptions/:id/cancel')
+  @HttpCode(204)
+  async cancelSubscription(
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @GetUser() user: AuthenticatedUser,
+  ): Promise<void> {
+    await this.subscriptions.cancel(companyId, id, 'ADMIN', user.userId);
+  }
 
   @Get('finance') overview(
     @Param('companyId', ParseUUIDPipe) companyId: string,
