@@ -426,6 +426,7 @@ model Company {
   checkoutOrders           CheckoutOrder[]
   checkoutLedgerEntries    CheckoutLedgerEntry[]
   checkoutRefundRequests   CheckoutRefundRequest[]
+  checkoutRefundExecutions CheckoutRefundExecution[]
   checkoutWebhookDeliveries CheckoutWebhookDelivery[]
   checkoutLeads            CheckoutLead[]
   checkoutCardQuotes       CheckoutCardQuote[]
@@ -797,6 +798,7 @@ model EfiAccountIdentity {
   checkoutSellerSettings   CheckoutPlatformSettings[] @relation("CheckoutSellerAccountIdentity")
   checkoutPaymentAttempts  CheckoutPaymentAttempt[]
   checkoutCardAttempts     CheckoutCardAttempt[]
+  checkoutRefundExecutions CheckoutRefundExecution[]
   checkoutSubscriptions    CheckoutSubscription[]
   checkoutEfiPlans         CheckoutEfiPlan[]
   financialProfiles  FinancialProfileVersion[]
@@ -2888,6 +2890,7 @@ model CheckoutOrder {
   cardAttempts           CheckoutCardAttempt[]
   ledgerEntries          CheckoutLedgerEntry[]
   refundRequests         CheckoutRefundRequest[]
+  refundExecutions       CheckoutRefundExecution[]
   offerOrders            CheckoutOrder[]          @relation("CheckoutOfferOrders")
   offerResponses         CheckoutOfferResponse[]  @relation("CheckoutOfferOrigin")
 
@@ -2994,9 +2997,63 @@ model CheckoutRefundRequest {
   resolvedByUserId String?
   resolvedAt       DateTime?
   createdAt        DateTime             @default(now())
+  executions       CheckoutRefundExecution[]
 
   @@index([companyId, status, createdAt])
   @@index([orderId, status])
+}
+
+enum CheckoutRefundExecutionStatus {
+  // Saved; the Efí was not called yet or did not answer yet.
+  SUBMITTING
+  // The Efí accepted the refund and is processing it.
+  PROCESSING
+  DONE
+  // A certain refusal (no balance, deadline over): the request stays open.
+  FAILED
+  // The answer was lost: read back at the Efí, never sent again.
+  UNCERTAIN
+}
+
+enum CheckoutRefundExecutionOrigin {
+  // The seller clicked Reembolsar.
+  SELLER
+  // The Cifra+ admin, with the seller's approval reference.
+  ADMIN
+  // The 7-day hold of a buyer's request ended.
+  SYSTEM
+}
+
+// One try to return money through the Efí, saved before the call. Its
+// efiRefundId is the id of the Pix refund, chosen here, so a repeated call
+// is refused by the Efí. One open execution per refund request (migration).
+model CheckoutRefundExecution {
+  id                String                        @id @default(uuid())
+  companyId         String
+  company           Company                       @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  refundRequestId   String
+  refundRequest     CheckoutRefundRequest         @relation(fields: [refundRequestId], references: [id], onDelete: Restrict)
+  orderId           String
+  order             CheckoutOrder                 @relation(fields: [orderId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  method            CheckoutPaymentMethod
+  amountCents       Int
+  status            CheckoutRefundExecutionStatus @default(SUBMITTING)
+  failureCode       String?
+  efiRefundId       String                        @unique
+  // The account that received the payment: the refund leaves it.
+  issuerIdentityId  String
+  issuerIdentity    EfiAccountIdentity            @relation(fields: [issuerIdentityId], references: [id], onDelete: Restrict)
+  origin            CheckoutRefundExecutionOrigin
+  requestedByUserId String?
+  // ADMIN: where the seller's ok is (a message and its date); never its text.
+  approvalReference String?
+  lastCheckedAt     DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime                      @default(now())
+  updatedAt         DateTime                      @updatedAt
+
+  @@index([status, updatedAt])
+  @@index([refundRequestId, status])
 }
 
 enum CheckoutWebhookStatus {
