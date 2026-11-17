@@ -29,6 +29,7 @@ import { CheckoutCouponsService } from './checkout-coupons.service';
 import { CheckoutLedgerService } from './checkout-ledger.service';
 import { CheckoutRefundsService } from './checkout-refunds.service';
 import { CheckoutSubscriptionsService } from './checkout-subscriptions.service';
+import { CheckoutRefundExecutionsService } from './checkout-refund-executions.service';
 import {
   PageQueryDto,
   RecoveryQueryDto,
@@ -116,7 +117,22 @@ export class CheckoutController {
     private readonly apiKeys: CheckoutApiKeysService,
     private readonly plans: CheckoutPlansService,
     private readonly subscriptions: CheckoutSubscriptionsService,
+    private readonly executions: CheckoutRefundExecutionsService,
   ) {}
+
+  // "Reembolsar": the Efí returns the money from the seller's own account,
+  // also before the end of the 7 days of a buyer's request.
+  @Post('sales/:orderId/refund-execution')
+  @HttpCode(200)
+  executeRefund(
+    @GetUser() user: AuthenticatedUser,
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+  ) {
+    return this.executions.execute(user.companyId, orderId, {
+      origin: 'SELLER',
+      userId: user.userId,
+    });
+  }
 
   @Get('subscriptions') listSubscriptions(
     @GetUser() user: AuthenticatedUser,

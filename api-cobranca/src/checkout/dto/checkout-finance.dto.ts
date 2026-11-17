@@ -93,6 +93,13 @@ export class OrderMoneyDto extends AdminMoneyDto {
   @IsInt() @Min(1) @Max(MAX_CENTS) amountCents!: number;
 }
 
+/** The admin returns a sale with the seller's ok (D4). */
+export class ExecuteRefundDto {
+  @IsUUID() orderId!: string;
+  // Where the seller's ok is, e.g. "WhatsApp do João, 21/11 14h10".
+  @IsString() @Length(5, 200) approvalReference!: string;
+}
+
 export class AdjustmentDto extends AdminMoneyDto {
   @IsOptional() @IsUUID() orderId?: string;
   @IsInt() @Min(-MAX_CENTS) @Max(MAX_CENTS) @NotEquals(0) amountCents!: number;

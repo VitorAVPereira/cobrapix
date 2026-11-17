@@ -606,7 +606,7 @@ describe('CheckoutRefundsService', () => {
     prisma.checkoutOrder.findUnique.mockResolvedValue({
       id: 'o1',
       companyId: 'c1',
-      refundRequests: [{ id: 'r1' }],
+      refundRequests: [{ id: 'r1', executions: [] }],
     });
     prisma.checkoutRefundRequest.updateMany.mockResolvedValue({ count: 1 });
 
@@ -635,6 +635,18 @@ describe('CheckoutRefundsService', () => {
     await expect(service.withdrawByBuyer('tok', now)).rejects.toMatchObject({
       response: { code: 'CHECKOUT_REFUND_NOT_OPEN' },
     });
+
+    // The Efí is already returning the money: too late to give up.
+    jest.clearAllMocks();
+    prisma.checkoutOrder.findUnique.mockResolvedValue({
+      id: 'o1',
+      companyId: 'c1',
+      refundRequests: [{ id: 'r1', executions: [{ id: 'e1' }] }],
+    });
+    await expect(service.withdrawByBuyer('tok', now)).rejects.toMatchObject({
+      response: { code: 'CHECKOUT_REFUND_IN_PROGRESS' },
+    });
+    expect(prisma.checkoutRefundRequest.updateMany).not.toHaveBeenCalled();
   });
 
   it('vendedor pede o reenvio do e-mail ao comprador uma vez a cada 24 h, com auditoria', async () => {

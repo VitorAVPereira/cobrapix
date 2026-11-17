@@ -28,6 +28,8 @@ import { CheckoutRecoveryService } from '../src/checkout/checkout-recovery.servi
 import { CheckoutCardService } from '../src/checkout/checkout-card.service';
 import { EfiCheckoutCardClient } from '../src/checkout/efi-checkout-card.client';
 import { EfiCheckoutSubscriptionClient } from '../src/checkout/efi-checkout-subscription.client';
+import { EfiCheckoutRefundClient } from '../src/checkout/efi-checkout-refund.client';
+import { CheckoutRefundExecutionsService } from '../src/checkout/checkout-refund-executions.service';
 import { CheckoutSubscriptionsService } from '../src/checkout/checkout-subscriptions.service';
 import { subscriptionTokenOf } from '../src/checkout/checkout-rules';
 import { itemShares, type OrderItem } from '../src/checkout/checkout-pricing';
@@ -88,6 +90,12 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
     pay: jest.fn(),
     detail: jest.fn(),
     cancel: jest.fn().mockResolvedValue(undefined),
+  };
+  // The Efí refund API (Pix devolução and card refund).
+  const refundClient = {
+    pix: jest.fn(),
+    pixStatus: jest.fn(),
+    card: jest.fn(),
   };
   const tokens = { admin: '', seller: '' };
   // The real limits, with a handle to start a scenario fresh (one IP here).
@@ -152,6 +160,8 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
       .useValue(cardClient)
       .overrideProvider(EfiCheckoutSubscriptionClient)
       .useValue(subscriptionClient)
+      .overrideProvider(EfiCheckoutRefundClient)
+      .useValue(refundClient)
       .overrideGuard(ThrottleGuard)
       .useValue(throttle)
       .compile();
@@ -3121,6 +3131,216 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
           },
         }),
       ).toBe(1);
+    });
+  });
+
+  describe('reembolso pelo sistema na conta do vendedor (etapa B)', () => {
+    let other = '';
+    let companyId = '';
+    let orderId = '';
+    let endToEndId = '';
+
+    const balance = async () =>
+      (
+        await request(http)
+          .get('/checkout/balance')
+          .set(auth(other))
+          .expect(200)
+      ).body as { feeOwedCents: number };
+
+    beforeAll(async () => {
+      other = await login(`olga-${suffix}@e2e.test`, 'Nova-senha-e2e-2');
+      companyId = (
+        await prisma.company.findFirstOrThrow({
+          where: { email: `outra-${suffix}@e2e.test` },
+        })
+      ).id;
+      // The Pix sale of this seller that is still paid.
+      const sale = await prisma.checkoutOrder.findFirstOrThrow({
+        where: { companyId, status: 'PAID', paymentMethod: 'PIX' },
+        include: { attempt: true },
+      });
+      orderId = sale.id;
+      endToEndId = sale.attempt!.endToEndId!;
+      await request(http)
+        .post(`/checkout/sales/${orderId}/refund-request`)
+        .set(auth(other))
+        .send({ reason: 'Cliente pediu pelo suporte' })
+        .expect(201);
+    });
+
+    it('sem saldo na conta: a Efí recusa, nada entra no razão e o pedido continua aberto', async () => {
+      const before = await balance();
+      refundClient.pix.mockResolvedValueOnce({
+        outcome: 'REJECTED',
+        code: 'EFI_REJECTED_SALDO_INSUFICIENTE',
+      });
+      const failed = await request(http)
+        .post(`/checkout/sales/${orderId}/refund-execution`)
+        .set(auth(other))
+        .expect(200);
+      expect(failed.body).toMatchObject({
+        status: 'FAILED',
+        message: expect.stringContaining('sem saldo') as string,
+      });
+      expect(await balance()).toEqual(before);
+      expect(
+        await prisma.checkoutRefundRequest.findFirstOrThrow({
+          where: { orderId },
+        }),
+      ).toMatchObject({ status: 'REQUESTED' });
+      const sales = (
+        await request(http).get('/checkout/sales').set(auth(other)).expect(200)
+      ).body as {
+        items: {
+          orderId: string;
+          openRefundRequest: { executions: { status: string }[] } | null;
+        }[];
+      };
+      expect(
+        sales.items.find((item) => item.orderId === orderId)?.openRefundRequest
+          ?.executions,
+      ).toEqual([expect.objectContaining({ status: 'FAILED' })]);
+    });
+
+    it('outra empresa não executa; o admin só executa com a referência do ok', async () => {
+      await request(http)
+        .post(`/checkout/sales/${orderId}/refund-execution`)
+        .set(auth(tokens.seller))
+        .expect(404);
+      await request(http)
+        .post(`/admin/checkout/clients/${companyId}/refund-executions`)
+        .set(auth(tokens.admin))
+        .send({ orderId })
+        .expect(400);
+      expect(refundClient.pix).toHaveBeenCalledTimes(1);
+    });
+
+    it('nova tentativa devolve pela conta do vendedor, uma vez, mesmo com o aviso da Efí repetido', async () => {
+      const before = await balance();
+      refundClient.pix.mockResolvedValueOnce({ outcome: 'DONE' });
+      const done = await request(http)
+        .post(`/admin/checkout/clients/${companyId}/refund-executions`)
+        .set(auth(tokens.admin))
+        .send({ orderId, approvalReference: 'WhatsApp do vendedor, 20/11 10h' })
+        .expect(200);
+      expect(done.body).toMatchObject({ status: 'DONE' });
+      const sellerIdentity = await prisma.efiAccountIdentity.findFirstOrThrow({
+        where: { companyId },
+      });
+      const [account, e2e, refundId, amount] = refundClient.pix.mock.calls.at(
+        -1,
+      ) as [{ identity: { id: string } }, string, string, number];
+      expect(account.identity.id).toBe(sellerIdentity.id);
+      expect(e2e).toBe(endToEndId);
+      expect(amount).toBe(10000);
+      const execution = await prisma.checkoutRefundExecution.findUniqueOrThrow({
+        where: { efiRefundId: refundId },
+      });
+      expect(execution).toMatchObject({
+        origin: 'ADMIN',
+        approvalReference: 'WhatsApp do vendedor, 20/11 10h',
+        status: 'DONE',
+      });
+
+      // The Efí notice of the same refund adds nothing.
+      await app.get(CheckoutPaymentsService).handlePixEvent({
+        txid: (
+          await prisma.checkoutPaymentAttempt.findUniqueOrThrow({
+            where: { orderId },
+          })
+        ).efiTxid,
+        chave: 'pix@outra-loja.e2e.test',
+        valor: '100.00',
+        endToEndId,
+        devolucoes: [{ id: refundId, valor: '100.00', status: 'DEVOLVIDO' }],
+      });
+      const order = await prisma.checkoutOrder.findUniqueOrThrow({
+        where: { id: orderId },
+        include: { ledgerEntries: true, refundRequests: true },
+      });
+      expect(order.status).toBe('REFUNDED');
+      expect(order.refundRequests[0]?.status).toBe('DONE');
+      expect(
+        order.ledgerEntries.filter((entry) => entry.kind === 'REFUND'),
+      ).toHaveLength(1);
+      // The 1,50 of this sale is no longer owed to Cifra+.
+      expect((await balance()).feeOwedCents).toBe(before.feeOwedCents - 150);
+
+      // Nothing left to return.
+      await request(http)
+        .post(`/checkout/sales/${orderId}/refund-execution`)
+        .set(auth(other))
+        .expect(409);
+    });
+
+    it('resposta perdida fica em processamento e a consulta pelo id conclui, sem segundo envio', async () => {
+      // A second paid Pix of this seller, with its own refund request.
+      // A product without plans: the first one sells only by its recurring plan.
+      const product = (
+        await request(http)
+          .post('/checkout/products')
+          .set(auth(other))
+          .send({
+            name: 'Ebook da Outra Loja',
+            priceCents: 10000,
+            deliveryMode: 'ACCESS_LINK',
+            accessUrl: 'https://acesso.e2e.test/ebook',
+          })
+          .expect(201)
+      ).body as { slug: string };
+      pix.create.mockClear();
+      const sold = (
+        await request(http)
+          .post(`/checkout/public/products/${product.slug}/orders`)
+          .send({
+            bumpIds: [],
+            method: 'PIX',
+            buyer: holder('24681357928', 'Iara Sol'),
+            idempotencyKey: randomUUID(),
+          })
+          .expect(201)
+      ).body as { token: string };
+      const attempt = await prisma.checkoutPaymentAttempt.findFirstOrThrow({
+        where: { order: { publicToken: sold.token } },
+      });
+      await app.get(CheckoutPaymentsService).handlePixEvent({
+        txid: attempt.efiTxid,
+        chave: 'pix@outra-loja.e2e.test',
+        valor: '100.00',
+        endToEndId: 'E2EIARA',
+      });
+      await request(http)
+        .post(`/checkout/sales/${attempt.orderId}/refund-request`)
+        .set(auth(other))
+        .send({ reason: 'Comprou por engano' })
+        .expect(201);
+
+      refundClient.pix.mockResolvedValueOnce({ outcome: 'UNCERTAIN' });
+      const pending = await request(http)
+        .post(`/checkout/sales/${attempt.orderId}/refund-execution`)
+        .set(auth(other))
+        .expect(200);
+      expect(pending.body).toMatchObject({ status: 'UNCERTAIN' });
+      // A second click while the Efí has not answered sends nothing.
+      await request(http)
+        .post(`/checkout/sales/${attempt.orderId}/refund-execution`)
+        .set(auth(other))
+        .expect(200);
+      const sent = refundClient.pix.mock.calls.length;
+
+      refundClient.pixStatus.mockResolvedValueOnce({ outcome: 'DONE' });
+      await app
+        .get(CheckoutRefundExecutionsService)
+        .reconcileDue(new Date(Date.now() + 5 * 60_000));
+      expect(refundClient.pix.mock.calls).toHaveLength(sent);
+      expect(
+        (
+          await prisma.checkoutOrder.findUniqueOrThrow({
+            where: { id: attempt.orderId },
+          })
+        ).status,
+      ).toBe('REFUNDED');
     });
   });
 });

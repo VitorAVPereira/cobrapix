@@ -256,12 +256,25 @@ export class CheckoutRefundsService {
         companyId: true,
         refundRequests: {
           where: { status: 'REQUESTED' },
-          select: { id: true },
+          select: {
+            id: true,
+            executions: {
+              where: {
+                status: { in: ['SUBMITTING', 'PROCESSING', 'UNCERTAIN'] },
+              },
+              select: { id: true },
+            },
+          },
         },
       },
     });
     if (!order) throw new NotFoundException('Pedido não encontrado.');
     const open = order.refundRequests[0];
+    if (open?.executions.length)
+      throw this.conflict(
+        'CHECKOUT_REFUND_IN_PROGRESS',
+        'A devolução já está em processamento e não pode mais ser cancelada.',
+      );
     const updated = open
       ? await this.prisma.checkoutRefundRequest.updateMany({
           where: { id: open.id, status: 'REQUESTED' },

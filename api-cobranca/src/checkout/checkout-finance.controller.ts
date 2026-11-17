@@ -15,9 +15,11 @@ import { GetUser } from '../auth/decorators/get-user.decorator';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { CheckoutFinanceService } from './checkout-finance.service';
 import { CheckoutRefundsService } from './checkout-refunds.service';
+import { CheckoutRefundExecutionsService } from './checkout-refund-executions.service';
 import { CheckoutSubscriptionsService } from './checkout-subscriptions.service';
 import {
   AdjustmentDto,
+  ExecuteRefundDto,
   OrderMoneyDto,
   PageQueryDto,
   PayoutDto,
@@ -31,7 +33,23 @@ export class CheckoutFinanceController {
     private readonly finance: CheckoutFinanceService,
     private readonly refunds: CheckoutRefundsService,
     private readonly subscriptions: CheckoutSubscriptionsService,
+    private readonly executions: CheckoutRefundExecutionsService,
   ) {}
+
+  // The Efí returns the money from the seller's own account, with its ok.
+  @Post('refund-executions')
+  @HttpCode(200)
+  executeRefund(
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+    @GetUser() user: AuthenticatedUser,
+    @Body() dto: ExecuteRefundDto,
+  ) {
+    return this.executions.execute(companyId, dto.orderId, {
+      origin: 'ADMIN',
+      userId: user.userId,
+      approvalReference: dto.approvalReference,
+    });
+  }
 
   @Get('subscriptions') listSubscriptions(
     @Param('companyId', ParseUUIDPipe) companyId: string,

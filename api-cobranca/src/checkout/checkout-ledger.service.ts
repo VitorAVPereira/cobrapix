@@ -230,6 +230,12 @@ export class CheckoutLedgerService {
               amountCents: true,
               holdUntil: true,
               buyerRemindedAt: true,
+              // How the system's refund of this request stands, if it ran.
+              executions: {
+                orderBy: { createdAt: 'desc' },
+                take: 1,
+                select: { status: true, failureCode: true, origin: true },
+              },
             },
           },
           offer: { select: { kind: true } },
