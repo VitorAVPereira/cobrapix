@@ -55,10 +55,14 @@ export interface SaleContext {
   // The plan the main product is bought through; its fee payers and
   // installments are already applied to `settings`.
   planId: string | null;
+  // A recurring plan: the sale starts a subscription, charged every cycle.
+  recurring: { intervalMonths: number } | null;
 }
 
-// Recurring plans join the page with the subscription (renewal) flow.
-const SELLABLE_BILLING = ['INSTALLMENT'] as const;
+// A recurring plan is sold on the card only, and only with cycles of 3 months
+// or more until renewals by the Efí notice are handled: a shorter cycle would
+// be charged again before that.
+const MIN_RECURRING_MONTHS = 3;
 
 const planFields = {
   id: true,
@@ -130,9 +134,12 @@ export class CheckoutCatalogService {
         billing: plan.billing,
         priceCents: plan.priceCents,
         compareAtPriceCents: plan.compareAtPriceCents,
-        maxInstallments: card
-          ? (plan.maxInstallments ?? settings.maxInstallments)
-          : null,
+        // A recurring plan is charged in full every cycle, on the card only.
+        maxInstallments: !card
+          ? null
+          : plan.billing === 'RECURRING'
+            ? 1
+            : (plan.maxInstallments ?? settings.maxInstallments),
       })),
       page: {
         displayName: settings.displayName,
@@ -181,6 +188,19 @@ export class CheckoutCatalogService {
     const loaded = await this.load(slug);
     const { terms, companyId } = loaded;
     const plan = this.planOf(loaded.product.plans, dto.planId);
+    const recurring = plan?.billing === 'RECURRING';
+    if (recurring && method !== 'CARD')
+      throw this.invalid(
+        'CHECKOUT_PLAN_CARD_ONLY',
+        'Este plano é pago só no cartão de crédito.',
+      );
+    // The Efí charges the same amount every cycle: an extra that is paid once
+    // would be charged again, so it is not sold with a recurring plan yet.
+    if (recurring && (dto.bumpIds.length || dto.couponCode?.trim()))
+      throw this.invalid(
+        'CHECKOUT_PLAN_NO_EXTRAS',
+        'Este plano não aceita oferta adicional nem cupom.',
+      );
     const product = plan
       ? {
           ...loaded.product,
@@ -193,8 +213,9 @@ export class CheckoutCatalogService {
           ...loaded.settings,
           pixFeePayer: plan.pixFeePayer ?? loaded.settings.pixFeePayer,
           cardFeePayer: plan.cardFeePayer ?? loaded.settings.cardFeePayer,
-          maxInstallments:
-            plan.maxInstallments ?? loaded.settings.maxInstallments,
+          maxInstallments: recurring
+            ? 1
+            : (plan.maxInstallments ?? loaded.settings.maxInstallments),
         }
       : loaded.settings;
     const { platform, cardAccount, sellerTerms } = await this.accounts(
@@ -231,6 +252,8 @@ export class CheckoutCatalogService {
       productName: product.name,
       afterPurchase: product.afterPurchase,
       planId: plan?.id ?? null,
+      recurring:
+        plan && recurring ? { intervalMonths: plan.intervalMonths } : null,
       settings,
       terms: sellerTerms,
       platform,
@@ -296,6 +319,7 @@ export class CheckoutCatalogService {
       productName: product.name,
       afterPurchase: 'ACCESS',
       planId: null,
+      recurring: null,
       settings,
       terms: sellerTerms,
       platform,
@@ -385,7 +409,16 @@ export class CheckoutCatalogService {
           },
         },
         plans: {
-          where: { active: true, billing: { in: [...SELLABLE_BILLING] } },
+          where: {
+            active: true,
+            OR: [
+              { billing: 'INSTALLMENT' },
+              {
+                billing: 'RECURRING',
+                intervalMonths: { gte: MIN_RECURRING_MONTHS },
+              },
+            ],
+          },
           orderBy: { position: 'asc' },
           select: planFields,
         },

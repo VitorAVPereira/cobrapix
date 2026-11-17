@@ -19,6 +19,7 @@ import {
   accountOwner,
   CheckoutPlatformService,
   type CheckoutCardAccount,
+  type CheckoutIssuerAccount,
 } from './checkout-platform.service';
 import {
   CARD_ATTEMPTS_PER_ORDER,
@@ -28,12 +29,18 @@ import { CheckoutPaymentsService } from './checkout-payments.service';
 import { CheckoutWebhooksService } from './checkout-webhooks.service';
 import { markConverted } from './checkout-recovery.service';
 import type { OrderItem } from './checkout-pricing';
-import { normalizeDocument } from './checkout-rules';
+import {
+  normalizeDocument,
+  subscriptionTokenHash,
+  subscriptionTokenOf,
+} from './checkout-rules';
 import {
   EfiCheckoutCardClient,
   type CheckoutCardAddress,
   type CheckoutCardBrand,
+  type CheckoutCardCustomer,
 } from './efi-checkout-card.client';
+import { EfiCheckoutSubscriptionClient } from './efi-checkout-subscription.client';
 import type {
   CheckoutCardOrderDto,
   CheckoutCardPayDto,
@@ -130,6 +137,7 @@ export class CheckoutCardService {
     private readonly webhooks: CheckoutWebhooksService,
     private readonly client: EfiCheckoutCardClient,
     private readonly crypto: PaymentCryptoService,
+    private readonly subscriptions: EfiCheckoutSubscriptionClient,
   ) {}
 
   /** Installments for the cart and brand, priced by the server. */
@@ -223,9 +231,37 @@ export class CheckoutCardService {
     };
     try {
       created = await this.prisma.$transaction(async (tx) => {
+        const data = this.orders.orderData(sale, dto, buyerDocument, now);
+        // A recurring plan: this order is the first cycle of a subscription
+        // that copies what was sold and to whom.
+        const subscription = sale.recurring
+          ? await tx.checkoutSubscription.create({
+              data: {
+                companyId: sale.companyId,
+                productId: sale.productId,
+                planId: sale.planId!,
+                buyerName: data.buyerName,
+                buyerEmail: data.buyerEmail,
+                buyerDocument: data.buyerDocument,
+                buyerPhone: data.buyerPhone,
+                paymentMethod: 'CARD',
+                intervalMonths: sale.recurring.intervalMonths,
+                items: sale.quote.items as unknown as Prisma.InputJsonValue,
+                cycleCents: sale.quote.subtotalCents,
+                efiFeeBasisPoints: bp,
+                platformFeeBasisPoints: sale.quote.platformFeeBasisPoints,
+                feePayer: sale.settings.cardFeePayer,
+                termsId: sale.terms.id,
+                issuerIdentityId: card.account.identity.id,
+                tokenHash: subscriptionTokenHash(
+                  subscriptionTokenOf(data.publicToken),
+                ),
+              },
+            })
+          : null;
         const order = await tx.checkoutOrder.create({
           data: {
-            ...this.orders.orderData(sale, dto, buyerDocument, now),
+            ...data,
             paymentMethod: 'CARD',
             installments: option.installments,
             totalCents: option.totalCents,
@@ -234,6 +270,9 @@ export class CheckoutCardService {
             efiFeeCents: option.efiFeeCents,
             feePayer: sale.settings.cardFeePayer,
             platformSettingsId: card.account.settings.id,
+            ...(subscription
+              ? { subscriptionId: subscription.id, subscriptionCycle: 1 }
+              : {}),
           },
         });
         if (dto.sessionKey)
@@ -244,8 +283,11 @@ export class CheckoutCardService {
           option,
           idempotencyKey: dto.idempotencyKey,
           requestHash: requestHash(dto),
+          // A subscription has no one-click offer: its card is never kept.
           reuse:
-            sale.afterPurchase !== 'ACCESS' ? { ...dto, holderDocument } : null,
+            sale.afterPurchase !== 'ACCESS' && !subscription
+              ? { ...dto, holderDocument }
+              : null,
         });
         return { orderId: order.id, token: order.publicToken, attempt };
       });
@@ -385,7 +427,7 @@ export class CheckoutCardService {
           idempotencyKey: dto.idempotencyKey,
           requestHash: requestHash(dto),
           reuse:
-            order.product.afterPurchase !== 'ACCESS'
+            order.product.afterPurchase !== 'ACCESS' && !order.subscriptionId
               ? { ...dto, holderDocument }
               : null,
         });
@@ -524,6 +566,9 @@ export class CheckoutCardService {
     // Always the account that issued the charge, not the current one.
     const account = await this.platform.accountOf(attempt.issuerIdentityId);
     if (!account) return;
+    const subscription = await this.subscriptionOf(attempt.orderId);
+    if (subscription)
+      return this.reconcileSubscription(attempt, account, subscription, now);
     let chargeId = attempt.efiChargeId ?? providerHint ?? null;
     if (!chargeId) {
       const found = await this.client.findByAttempt(
@@ -665,6 +710,33 @@ export class CheckoutCardService {
         buyerDocument: true,
       },
     });
+    const customer = {
+      name: order.buyerName,
+      cpf: input.holderDocument,
+      email: order.buyerEmail,
+      phone_number: order.buyerPhone,
+      ...(order.buyerDocument.length === 14
+        ? {
+            juridical_person: {
+              corporate_name: order.buyerName,
+              cnpj: order.buyerDocument,
+            },
+          }
+        : {}),
+    };
+    const address = {
+      ...input.address,
+      zipcode: input.address.zipcode.replace(/\D/g, ''),
+      state: input.address.state.toUpperCase(),
+    };
+    const subscription = await this.subscriptionOf(attempt.orderId);
+    if (subscription)
+      return this.subscribe(card, attempt, subscription, {
+        paymentToken: input.paymentToken,
+        description: input.description,
+        customer,
+        address,
+      });
     try {
       const response = await this.client.submit(card.account, {
         attemptId: attempt.id,
@@ -672,25 +744,8 @@ export class CheckoutCardService {
         submissionCents: attempt.submissionCents,
         installments: attempt.installments,
         paymentToken: input.paymentToken,
-        customer: {
-          name: order.buyerName,
-          cpf: input.holderDocument,
-          email: order.buyerEmail,
-          phone_number: order.buyerPhone,
-          ...(order.buyerDocument.length === 14
-            ? {
-                juridical_person: {
-                  corporate_name: order.buyerName,
-                  cnpj: order.buyerDocument,
-                },
-              }
-            : {}),
-        },
-        address: {
-          ...input.address,
-          zipcode: input.address.zipcode.replace(/\D/g, ''),
-          state: input.address.state.toUpperCase(),
-        },
+        customer,
+        address,
       });
       await this.observe(
         attempt,
@@ -706,6 +761,170 @@ export class CheckoutCardService {
         data: { status: 'UNCERTAIN' },
       });
     }
+  }
+
+  /** The subscription an order is a cycle of, when it is one. */
+  private subscriptionOf(orderId: string) {
+    return this.prisma.checkoutSubscription.findFirst({
+      where: { orders: { some: { id: orderId } } },
+      select: { id: true, intervalMonths: true, efiSubscriptionId: true },
+    });
+  }
+
+  /**
+   * The first cycle of a subscription, in two steps. The first creates it at
+   * the Efí without charging, and its id is saved; only then the card is
+   * charged. A lost answer of the second step is read back by that id.
+   */
+  private async subscribe(
+    card: CheckoutCardAccount,
+    attempt: CheckoutCardAttempt,
+    subscription: {
+      id: string;
+      intervalMonths: number;
+      efiSubscriptionId: string | null;
+    },
+    input: {
+      paymentToken: string;
+      description: string;
+      customer: CheckoutCardCustomer;
+      address: CheckoutCardAddress;
+    },
+  ): Promise<void> {
+    let efiSubscriptionId: string;
+    try {
+      // The subscription of an earlier try must not stay alive at the Efí:
+      // it could charge the buyer a second time on the next cycle.
+      if (subscription.efiSubscriptionId)
+        await this.subscriptions.cancel(
+          card.account,
+          subscription.efiSubscriptionId,
+        );
+      const planId = await this.efiPlan(card, subscription.intervalMonths);
+      const created = await this.subscriptions.create(card.account, planId, {
+        attemptId: attempt.id,
+        description: input.description,
+        valueCents: attempt.submissionCents,
+      });
+      efiSubscriptionId = created.subscriptionId;
+      await this.prisma.checkoutSubscription.update({
+        where: { id: subscription.id },
+        data: { efiSubscriptionId },
+      });
+    } catch {
+      // Nothing was charged in this step: the try is over, and the buyer
+      // may try again.
+      this.logger.warn('CHECKOUT_SUBSCRIPTION_NOT_CREATED');
+      await this.prisma.checkoutCardAttempt.updateMany({
+        where: { id: attempt.id, status: 'SUBMITTING' },
+        data: {
+          status: 'CANCELED',
+          providerStatus: 'subscription_not_created',
+        },
+      });
+      return;
+    }
+    try {
+      const paid = await this.subscriptions.pay(
+        card.account,
+        efiSubscriptionId,
+        {
+          paymentToken: input.paymentToken,
+          customer: input.customer,
+          address: input.address,
+        },
+      );
+      await this.observe(
+        attempt,
+        paid.chargeId,
+        paid.status,
+        paid.totalCents,
+        1,
+      );
+    } catch {
+      // The Efí may have charged: read back by the subscription, never resent.
+      await this.prisma.checkoutCardAttempt.updateMany({
+        where: { id: attempt.id, status: 'SUBMITTING' },
+        data: { status: 'UNCERTAIN' },
+      });
+    }
+  }
+
+  /** The Efí plan of this period in the issuing account, created once. */
+  private async efiPlan(
+    card: CheckoutCardAccount,
+    intervalMonths: number,
+  ): Promise<string> {
+    const key = { identityId: card.account.identity.id, intervalMonths };
+    const existing = await this.prisma.checkoutEfiPlan.findUnique({
+      where: { identityId_intervalMonths: key },
+    });
+    if (existing) return existing.efiPlanId;
+    const efiPlanId = await this.subscriptions.createPlan(
+      card.account,
+      `Assinatura a cada ${intervalMonths} ${intervalMonths === 1 ? 'mês' : 'meses'}`,
+      intervalMonths,
+    );
+    try {
+      await this.prisma.checkoutEfiPlan.create({
+        data: { ...key, efiPlanId },
+      });
+    } catch (error) {
+      // Two sales at once: a second plan at the Efí moves no money, and
+      // the one that was saved first is the one used from now on.
+      if (
+        !(
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === 'P2002'
+        )
+      )
+        throw error;
+    }
+    return efiPlanId;
+  }
+
+  /**
+   * Reads the first cycle back by the subscription created for this try.
+   * A subscription that belongs to another try says nothing about this one.
+   */
+  private async reconcileSubscription(
+    attempt: CheckoutCardAttempt,
+    account: CheckoutIssuerAccount,
+    subscription: { efiSubscriptionId: string | null },
+    now: Date,
+  ): Promise<void> {
+    const stale =
+      now.getTime() - attempt.createdAt.getTime() > NOT_FOUND_AFTER_MS;
+    const giveUp = () =>
+      this.prisma.checkoutCardAttempt.updateMany({
+        where: { id: attempt.id, status: { in: ['SUBMITTING', 'UNCERTAIN'] } },
+        data: { status: 'CANCELED', providerStatus: 'not_found' },
+      });
+    if (!subscription.efiSubscriptionId) {
+      // The first step never finished: the card was never sent.
+      if (stale) await giveUp();
+      return;
+    }
+    const detail = await this.subscriptions.detail(
+      account,
+      subscription.efiSubscriptionId,
+    );
+    if (!detail || detail.customId !== attempt.id) return;
+    const charge =
+      detail.charges.find((row) => row.chargeId === attempt.efiChargeId) ??
+      (detail.charges.length === 1 ? detail.charges[0] : undefined);
+    // "new": the Efí never received the card for this charge.
+    if (!charge || charge.status === 'new') {
+      if (stale) await giveUp();
+      return;
+    }
+    await this.observe(
+      attempt,
+      charge.chargeId,
+      charge.status,
+      detail.valueCents,
+      1,
+    );
   }
 
   private reserve(

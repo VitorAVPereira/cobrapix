@@ -237,9 +237,62 @@ describe('CheckoutCatalogService', () => {
       const [query] = prisma.checkoutProduct.findFirst.mock.calls.at(-1) as [
         { select: { plans: { where: unknown } } },
       ];
+      // Recurring plans sell from 3 months on, until renewals are handled.
       expect(query.select.plans.where).toEqual({
         active: true,
-        billing: { in: ['INSTALLMENT'] },
+        OR: [
+          { billing: 'INSTALLMENT' },
+          { billing: 'RECURRING', intervalMonths: { gte: 3 } },
+        ],
+      });
+    });
+
+    it('plano recorrente: só no cartão, sem bump nem cupom, e a venda sabe a periodicidade', async () => {
+      const main = (await prisma.checkoutProduct.findFirst()) as Record<
+        string,
+        unknown
+      >;
+      const trimestral = {
+        ...anual,
+        id: 'plano-trimestral',
+        intervalMonths: 3,
+        billing: 'RECURRING',
+        priceCents: 2990,
+      };
+      prisma.checkoutProduct.findFirst.mockResolvedValue({
+        ...main,
+        plans: [trimestral],
+      });
+
+      await expect(
+        service.quote('porquim-anual-ab12', {
+          bumpIds: [],
+          method: 'PIX',
+          planId: 'plano-trimestral',
+        }),
+      ).rejects.toMatchObject({
+        response: { code: 'CHECKOUT_PLAN_CARD_ONLY' },
+      });
+      const bumpId = (main.bumps as { id: string }[])[0]?.id ?? 'bump-1';
+      await expect(
+        service.prepare(
+          'porquim-anual-ab12',
+          { bumpIds: [bumpId], planId: 'plano-trimestral' },
+          new Date(),
+          'CARD',
+        ),
+      ).rejects.toMatchObject({
+        response: { code: 'CHECKOUT_PLAN_NO_EXTRAS' },
+      });
+      await expect(
+        service.prepare(
+          'porquim-anual-ab12',
+          { bumpIds: [], couponCode: 'X', planId: 'plano-trimestral' },
+          new Date(),
+          'CARD',
+        ),
+      ).rejects.toMatchObject({
+        response: { code: 'CHECKOUT_PLAN_NO_EXTRAS' },
       });
     });
 

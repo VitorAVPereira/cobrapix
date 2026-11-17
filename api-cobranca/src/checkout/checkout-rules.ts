@@ -109,6 +109,21 @@ export function offerTokenHash(offerToken: string): string {
   return createHash('sha256').update(offerToken).digest('hex');
 }
 
+/**
+ * The buyer's key to manage a subscription, derived from the token of its
+ * first order so the e-mail can carry it. Only its hash is stored, and it
+ * does not give the order token back.
+ */
+export function subscriptionTokenOf(publicToken: string): string {
+  return createHash('sha256')
+    .update(`cifra-subscription:${publicToken}`)
+    .digest('base64url');
+}
+
+export function subscriptionTokenHash(subscriptionToken: string): string {
+  return createHash('sha256').update(subscriptionToken).digest('hex');
+}
+
 export function addMonths(date: Date, months: number): Date {
   const copy = new Date(date);
   copy.setUTCMonth(copy.getUTCMonth() + months);

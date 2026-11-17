@@ -5,6 +5,7 @@ import type { CheckoutOrdersService } from './checkout-orders.service';
 import type { CheckoutPaymentsService } from './checkout-payments.service';
 import type { CheckoutWebhooksService } from './checkout-webhooks.service';
 import type { EfiCheckoutCardClient } from './efi-checkout-card.client';
+import type { EfiCheckoutSubscriptionClient } from './efi-checkout-subscription.client';
 import type { PaymentCryptoService } from '../payment/payment-crypto.service';
 import { CheckoutCardService, cartFingerprint } from './checkout-card.service';
 
@@ -76,6 +77,7 @@ const orderDto = {
 
 describe('CheckoutCardService', () => {
   const tx = {
+    checkoutSubscription: { create: jest.fn(), update: jest.fn() },
     checkoutOrder: { create: jest.fn(), update: jest.fn() },
     checkoutCardAttempt: { create: jest.fn(), findMany: jest.fn() },
     checkoutLead: { updateMany: jest.fn() },
@@ -99,6 +101,8 @@ describe('CheckoutCardService', () => {
       updateMany: jest.fn(),
     },
     checkoutSettings: { findUnique: jest.fn() },
+    checkoutSubscription: { findFirst: jest.fn(), update: jest.fn() },
+    checkoutEfiPlan: { findUnique: jest.fn(), create: jest.fn() },
     paymentWebhookAnomaly: { upsert: jest.fn() },
     $transaction: jest.fn((run: (client: typeof tx) => unknown) => run(tx)),
   };
@@ -128,6 +132,13 @@ describe('CheckoutCardService', () => {
     findByAttempt: jest.fn(),
     notification: jest.fn(),
   };
+  const subscriptions = {
+    createPlan: jest.fn(),
+    create: jest.fn(),
+    pay: jest.fn(),
+    detail: jest.fn(),
+    cancel: jest.fn(),
+  };
   const crypto = {
     encrypt: jest.fn((value: string) => `enc:${value}`),
     decrypt: jest.fn((value: string) => value.slice(4)),
@@ -141,6 +152,7 @@ describe('CheckoutCardService', () => {
     webhooks as unknown as CheckoutWebhooksService,
     client as unknown as EfiCheckoutCardClient,
     crypto as unknown as PaymentCryptoService,
+    subscriptions as unknown as EfiCheckoutSubscriptionClient,
   );
   const attempt = {
     id: 'attempt-1',
@@ -683,5 +695,283 @@ describe('CheckoutCardService', () => {
       service.handleNotification('outra-conta', 'tok'),
     ).resolves.toBe(false);
     expect(client.notification).not.toHaveBeenCalled();
+  });
+
+  describe('plano recorrente (assinatura)', () => {
+    const recurring = {
+      ...sale,
+      planId: 'plan-3m',
+      recurring: { intervalMonths: 3 },
+      terms: { id: 'terms-1' },
+      quote: {
+        items,
+        couponId: null,
+        subtotalCents: 10000,
+        platformFeeBasisPoints: 150,
+      },
+    };
+    const subscription = {
+      id: 'sub-1',
+      intervalMonths: 3,
+      efiSubscriptionId: null as string | null,
+    };
+
+    beforeEach(() => {
+      catalog.prepare.mockResolvedValue(recurring);
+      orders.orderData.mockReturnValue({
+        publicToken: 'token',
+        buyerName: 'Maria Souza',
+        buyerEmail: 'maria@exemplo.test',
+        buyerDocument: '52998224725',
+        buyerPhone: '11999999999',
+      });
+      tx.checkoutSubscription.create.mockResolvedValue({ id: 'sub-1' });
+      prisma.checkoutCardQuote.findFirst.mockResolvedValue({
+        id: 'quote-1',
+        brand: 'visa',
+        fingerprint: cartFingerprint({
+          productId: 'p1',
+          planId: 'plan-3m',
+          items,
+          couponId: null,
+          subtotalCents: 10000,
+        }),
+        platformSettingsId: 'ps-2',
+        validUntil: new Date(now.getTime() + 60_000),
+        options: [option],
+      });
+      prisma.checkoutSubscription.findFirst.mockResolvedValue(subscription);
+      prisma.checkoutEfiPlan.findUnique.mockResolvedValue({
+        efiPlanId: '77',
+      });
+      subscriptions.create.mockResolvedValue({
+        subscriptionId: '5001',
+        chargeId: '881',
+      });
+      prisma.checkoutOrder.findFirst.mockResolvedValue(null);
+    });
+
+    it('adesão: grava assinatura, pedido do ciclo 1 e tentativa; cria a assinatura na Efí e só então cobra', async () => {
+      const calls: string[] = [];
+      tx.checkoutCardAttempt.create.mockImplementation(() => {
+        calls.push('reserve');
+        return attempt;
+      });
+      subscriptions.create.mockImplementation(() => {
+        calls.push('create');
+        return { subscriptionId: '5001', chargeId: '881' };
+      });
+      prisma.checkoutSubscription.update.mockImplementation(() => {
+        calls.push('save-id');
+        return {};
+      });
+      subscriptions.pay.mockImplementation(() => {
+        calls.push('pay');
+        return { chargeId: '881', status: 'paid', totalCents: 10310 };
+      });
+
+      await service.createOrder('porquim', orderDto, now);
+
+      // The Efí id is saved between the two steps: a lost answer can be read back.
+      expect(calls).toEqual(['reserve', 'create', 'save-id', 'pay']);
+      expect(tx.checkoutSubscription.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          companyId: 'company-a',
+          productId: 'p1',
+          planId: 'plan-3m',
+          paymentMethod: 'CARD',
+          intervalMonths: 3,
+          cycleCents: 10000,
+          efiFeeBasisPoints: 300,
+          platformFeeBasisPoints: 150,
+          termsId: 'terms-1',
+          issuerIdentityId: 'identity-cifra',
+          buyerDocument: '52998224725',
+        }) as unknown,
+      });
+      expect(tx.checkoutOrder.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          subscriptionId: 'sub-1',
+          subscriptionCycle: 1,
+          installments: 1,
+        }) as unknown,
+      });
+      // The kept card of the one-click offer is never used for a subscription.
+      expect(tx.checkoutCardAttempt.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ reuseEncrypted: null }) as unknown,
+      });
+      expect(subscriptions.create).toHaveBeenCalledWith(card.account, '77', {
+        attemptId: 'attempt-1',
+        description: 'Porquim Anual',
+        valueCents: 10310,
+      });
+      expect(prisma.checkoutSubscription.update).toHaveBeenCalledWith({
+        where: { id: 'sub-1' },
+        data: { efiSubscriptionId: '5001' },
+      });
+      expect(subscriptions.pay).toHaveBeenCalledWith(
+        card.account,
+        '5001',
+        expect.objectContaining({
+          paymentToken: 'a'.repeat(40),
+          customer: expect.objectContaining({
+            cpf: '52998224725',
+          }) as unknown,
+        }),
+      );
+      expect(client.submit).not.toHaveBeenCalled();
+      expect(payments.confirmCard).toHaveBeenCalledWith('attempt-1');
+    });
+
+    it('plano da Efí é criado uma vez por conta e periodicidade', async () => {
+      prisma.checkoutEfiPlan.findUnique.mockResolvedValue(null);
+      subscriptions.createPlan.mockResolvedValue('78');
+      subscriptions.pay.mockResolvedValue({
+        chargeId: '881',
+        status: 'waiting',
+        totalCents: 10310,
+      });
+
+      await service.createOrder('porquim', orderDto, now);
+
+      expect(subscriptions.createPlan).toHaveBeenCalledWith(
+        card.account,
+        expect.any(String),
+        3,
+      );
+      expect(prisma.checkoutEfiPlan.create).toHaveBeenCalledWith({
+        data: {
+          identityId: 'identity-cifra',
+          intervalMonths: 3,
+          efiPlanId: '78',
+        },
+      });
+      expect(subscriptions.create).toHaveBeenCalledWith(
+        card.account,
+        '78',
+        expect.anything(),
+      );
+    });
+
+    it('passo 1 falhou: nada foi cobrado, a tentativa encerra e o cartão não é enviado', async () => {
+      subscriptions.create.mockRejectedValue(new Error('socket hang up'));
+
+      await service.createOrder('porquim', orderDto, now);
+
+      expect(subscriptions.pay).not.toHaveBeenCalled();
+      expect(prisma.checkoutCardAttempt.updateMany).toHaveBeenCalledWith({
+        where: { id: 'attempt-1', status: 'SUBMITTING' },
+        data: {
+          status: 'CANCELED',
+          providerStatus: 'subscription_not_created',
+        },
+      });
+    });
+
+    it('resposta perdida no passo 2: fica em análise e a consulta confirma, sem segunda assinatura nem segunda cobrança', async () => {
+      subscriptions.pay.mockRejectedValue(new Error('socket hang up'));
+
+      await service.createOrder('porquim', orderDto, now);
+
+      expect(prisma.checkoutCardAttempt.updateMany).toHaveBeenCalledWith({
+        where: { id: 'attempt-1', status: 'SUBMITTING' },
+        data: { status: 'UNCERTAIN' },
+      });
+
+      prisma.checkoutCardAttempt.findUnique.mockResolvedValue({
+        ...attempt,
+        status: 'UNCERTAIN',
+      });
+      prisma.checkoutSubscription.findFirst.mockResolvedValue({
+        ...subscription,
+        efiSubscriptionId: '5001',
+      });
+      subscriptions.detail.mockResolvedValue({
+        subscriptionId: '5001',
+        status: 'active',
+        customId: 'attempt-1',
+        valueCents: 10310,
+        charges: [{ chargeId: '881', status: 'paid' }],
+      });
+
+      await service.reconcile('attempt-1', undefined, now);
+
+      expect(payments.confirmCard).toHaveBeenCalledWith('attempt-1');
+      expect(subscriptions.create).toHaveBeenCalledTimes(1);
+      expect(subscriptions.pay).toHaveBeenCalledTimes(1);
+      expect(client.detail).not.toHaveBeenCalled();
+      expect(client.findByAttempt).not.toHaveBeenCalled();
+    });
+
+    it('consulta: assinatura de outra tentativa não confirma; cobrança que nunca recebeu o cartão encerra depois de 30 min', async () => {
+      prisma.checkoutCardAttempt.findUnique.mockResolvedValue({
+        ...attempt,
+        status: 'UNCERTAIN',
+        createdAt: new Date(now.getTime() - 31 * 60_000),
+      });
+      prisma.checkoutSubscription.findFirst.mockResolvedValue({
+        ...subscription,
+        efiSubscriptionId: '5001',
+      });
+      subscriptions.detail.mockResolvedValue({
+        subscriptionId: '5001',
+        status: 'active',
+        customId: 'outra-tentativa',
+        valueCents: 10310,
+        charges: [{ chargeId: '881', status: 'paid' }],
+      });
+      await service.reconcile('attempt-1', undefined, now);
+      expect(payments.confirmCard).not.toHaveBeenCalled();
+      expect(prisma.checkoutCardAttempt.updateMany).not.toHaveBeenCalled();
+
+      subscriptions.detail.mockResolvedValue({
+        subscriptionId: '5001',
+        status: 'new',
+        customId: 'attempt-1',
+        valueCents: 10310,
+        charges: [{ chargeId: '881', status: 'new' }],
+      });
+      await service.reconcile('attempt-1', undefined, now);
+      expect(payments.confirmCard).not.toHaveBeenCalled();
+      expect(prisma.checkoutCardAttempt.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: 'attempt-1',
+          status: { in: ['SUBMITTING', 'UNCERTAIN'] },
+        },
+        data: { status: 'CANCELED', providerStatus: 'not_found' },
+      });
+    });
+
+    it('nova tentativa: cancela a assinatura anterior na Efí antes de criar outra; se não cancelar, não cria', async () => {
+      const calls: string[] = [];
+      prisma.checkoutSubscription.findFirst.mockResolvedValue({
+        ...subscription,
+        efiSubscriptionId: '4999',
+      });
+      subscriptions.cancel.mockImplementation(() => {
+        calls.push('cancel');
+        return undefined;
+      });
+      subscriptions.create.mockImplementation(() => {
+        calls.push('create');
+        return { subscriptionId: '5001', chargeId: '881' };
+      });
+      subscriptions.pay.mockResolvedValue({
+        chargeId: '881',
+        status: 'waiting',
+        totalCents: 10310,
+      });
+
+      await service.createOrder('porquim', orderDto, now);
+      expect(calls).toEqual(['cancel', 'create']);
+      expect(subscriptions.cancel).toHaveBeenCalledWith(card.account, '4999');
+
+      jest.clearAllMocks();
+      catalog.prepare.mockResolvedValue(recurring);
+      subscriptions.cancel.mockRejectedValue(new Error('efi down'));
+      await service.createOrder('porquim', orderDto, now);
+      expect(subscriptions.create).not.toHaveBeenCalled();
+      expect(subscriptions.pay).not.toHaveBeenCalled();
+    });
   });
 });

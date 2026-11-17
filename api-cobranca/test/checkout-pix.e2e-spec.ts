@@ -2141,26 +2141,39 @@ describe('Cifra+ Checkout, part 2 (disposable PostgreSQL)', () => {
       .send(plan)
       .expect(201);
     const planId = (created.body as { id: string }).id;
-    // A recurring plan exists but only joins the page with the renewal flow.
-    await request(http)
-      .post('/checkout/plans')
-      .set(auth(tokens.seller))
-      .send({
-        productId: product.id,
-        name: 'Trimestral',
-        intervalMonths: 3,
-        billing: 'RECURRING',
-        priceCents: 2990,
-        active: true,
-      })
-      .expect(201);
+    // Recurring plans sell from 3 months on; a monthly one waits for the
+    // renewal flow (stage C of the seller account plan).
+    const recurring = (name: string, intervalMonths: number) =>
+      request(http)
+        .post('/checkout/plans')
+        .set(auth(tokens.seller))
+        .send({
+          productId: product.id,
+          name,
+          intervalMonths,
+          billing: 'RECURRING',
+          priceCents: 2990,
+          active: true,
+        })
+        .expect(201);
+    const quarterly = (await recurring('Trimestral', 3)).body as { id: string };
+    await recurring('Mensal', 1);
 
     const page = await request(http)
       .get(`/checkout/public/products/${slug}`)
       .expect(200);
     expect((page.body as { plans: unknown[] }).plans).toEqual([
       expect.objectContaining({ id: planId, priceCents: 9900 }),
+      expect.objectContaining({ id: quarterly.id, billing: 'RECURRING' }),
     ]);
+    // A recurring plan is paid on the card only.
+    const pixRecurring = await request(http)
+      .post(`/checkout/public/products/${slug}/quote`)
+      .send({ bumpIds: [], method: 'PIX', planId: quarterly.id })
+      .expect(400);
+    expect(pixRecurring.body).toMatchObject({
+      code: 'CHECKOUT_PLAN_CARD_ONLY',
+    });
     const noPlan = await request(http)
       .post(`/checkout/public/products/${slug}/quote`)
       .send({ bumpIds: [], method: 'PIX' })
