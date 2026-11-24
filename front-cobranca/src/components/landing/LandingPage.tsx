@@ -616,7 +616,7 @@ export function LandingPage() {
         </div>
         <div className={`${styles.wrap} ${styles.footerBottom}`}>
           <p>
-            © 2026 Cifra+. Todos os direitos reservados. <Link href={PRIVACY_URL}>Política de privacidade</Link>
+            © 2026 Cifra+. CNPJ 67.971.459/0001-03. Todos os direitos reservados. <Link href={PRIVACY_URL}>Política de privacidade</Link>
           </p>
           <Image src="/brand/cifra-plus-reverse.svg" alt="Cifra+" width={99} height={32} />
         </div>
