@@ -311,6 +311,12 @@ describe("presentation page on /", () => {
     expect(matcher.test("/privacidade-checkout")).toBe(false);
   });
 
+  it("keeps the platform terms public for visitors without a session", () => {
+    const matcher = new RegExp(`^${config.matcher[0]}$`);
+
+    expect(matcher.test("/termos")).toBe(false);
+  });
+
   it("rewrites to the address the visitor reached, not the Auth.js origin", () => {
     expect(
       runMiddleware({

@@ -6,11 +6,22 @@ import {
   Check,
   CreditCard,
   Landmark,
+  Mail,
   MessageCircle,
   Plus,
   QrCode,
 } from "lucide-react";
-import { LOGIN_URL, PRIVACY_URL, WHATSAPP_URL } from "./contact";
+import {
+  ADDRESS,
+  CNPJ,
+  CONTACT_EMAIL,
+  CONTACT_PHONE,
+  LEGAL_NAME,
+  LOGIN_URL,
+  PRIVACY_URL,
+  TERMS_URL,
+  WHATSAPP_URL,
+} from "./contact";
 import { LandingFaq, type FaqItem } from "./LandingFaq";
 import { LandingHeader } from "./LandingHeader";
 import { LandingMotion } from "./LandingMotion";
@@ -206,10 +217,39 @@ const FAQ: FaqItem[] = [
   },
   {
     question: "Quanto custa?",
-    answer:
-      "Fazemos um orçamento personalizado para a sua empresa, de acordo com o volume de cobranças e o ticket médio. Clique em Solicitar orçamento e preencha o formulário, ou fale com a gente pelo WhatsApp.",
+    answer: (
+      <>
+        <ul>
+          <li>
+            <strong>Cobrança:</strong> sob consulta. Fazemos um orçamento para a sua empresa, de
+            acordo com o volume de cobranças e o ticket médio.
+          </li>
+          <li>
+            <strong>Checkout:</strong> 2% por venda paga, mais a tarifa da transação cobrada pela
+            instituição de pagamento.
+          </li>
+        </ul>
+        <p>
+          Os valores podem ser negociados conforme o volume. Clique em Solicitar orçamento e
+          preencha o formulário, ou fale com a gente pelo WhatsApp.
+        </p>
+      </>
+    ),
   },
 ];
+
+const PRICES = [
+  {
+    name: "Cobrança",
+    price: "Sob consulta",
+    text: "Emissão de Pix, boleto com Pix e cartão de crédito na conta Efí da sua empresa, régua de avisos por WhatsApp e e-mail e painel de acompanhamento.",
+  },
+  {
+    name: "Checkout",
+    price: "2% por venda + tarifa da transação",
+    text: "Página de venda de produtos digitais com Pix e cartão de crédito, order bump, cupons, oferta depois da compra e recuperação de vendas não pagas.",
+  },
+] as const;
 
 export function LandingPage() {
   return (
@@ -475,8 +515,9 @@ export function LandingPage() {
               <div className={styles.howContact}>
                 <p>Contato</p>
                 <a href={WHATSAPP_URL} target="_blank" rel="noopener noreferrer">
-                  WhatsApp
+                  WhatsApp {CONTACT_PHONE}
                 </a>
+                <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>
               </div>
               <QuoteButton className={styles.howButton}>Solicitar orçamento</QuoteButton>
             </aside>
@@ -504,6 +545,29 @@ export function LandingPage() {
                 ))}
               </ol>
             </div>
+          </div>
+        </section>
+
+        {/* Preços: the payment providers' site review asks for the values of each service. */}
+        <section id="precos" className={styles.pricing} aria-labelledby="precos-title">
+          <div className={styles.wrap}>
+            <SquareLabel>Preços</SquareLabel>
+            <h2 id="precos-title" className={styles.pricingTitle}>
+              Quanto custa a Cifra+
+            </h2>
+            <ul className={styles.pricingGrid}>
+              {PRICES.map((item) => (
+                <li key={item.name} className={styles.priceCard} data-reveal="rise">
+                  <h3>{item.name}</h3>
+                  <p className={styles.priceValue}>{item.price}</p>
+                  <p>{item.text}</p>
+                </li>
+              ))}
+            </ul>
+            <p className={styles.pricingNote}>
+              Os valores podem ser negociados conforme o volume da sua empresa. As condições de
+              contratação estão nos <Link href={TERMS_URL}>Termos de Uso</Link>.
+            </p>
           </div>
         </section>
 
@@ -587,6 +651,7 @@ export function LandingPage() {
             <a href="#formas_pagamento">Formas de pagamento</a>
             <a href="#regua">Régua de cobrança</a>
             <a href="#como_funciona">Como funciona</a>
+            <a href="#precos">Preços</a>
             <a href="#perguntas">Perguntas</a>
           </nav>
           <div>
@@ -607,7 +672,10 @@ export function LandingPage() {
               rel="noopener noreferrer"
               className={styles.footerInfo}
             >
-              <MessageCircle size={20} aria-hidden /> WhatsApp
+              <MessageCircle size={20} aria-hidden /> <span className={styles.nowrap}>{CONTACT_PHONE}</span>
+            </a>
+            <a href={`mailto:${CONTACT_EMAIL}`} className={styles.footerInfo}>
+              <Mail size={20} aria-hidden /> {CONTACT_EMAIL}
             </a>
             <QuoteButton className={styles.footerInfo}>
               <ArrowRight size={20} aria-hidden /> Solicitar orçamento
@@ -616,7 +684,8 @@ export function LandingPage() {
         </div>
         <div className={`${styles.wrap} ${styles.footerBottom}`}>
           <p>
-            © 2026 Cifra+. Todos os direitos reservados. <Link href={PRIVACY_URL}>Política de privacidade</Link>
+            © 2026 Cifra+ · {LEGAL_NAME} · CNPJ {CNPJ} · {ADDRESS}. Todos os direitos reservados.{" "}
+            <Link href={TERMS_URL}>Termos de Uso</Link> · <Link href={PRIVACY_URL}>Política de privacidade</Link>
           </p>
           <Image src="/brand/cifra-plus-reverse.svg" alt="Cifra+" width={99} height={32} />
         </div>
