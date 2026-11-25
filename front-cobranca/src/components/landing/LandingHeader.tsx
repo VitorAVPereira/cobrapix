@@ -10,6 +10,7 @@ import styles from "./landing.module.css";
 const SECTION_LINKS = [
   { label: "Formas de pagamento", href: "#formas_pagamento" },
   { label: "Como funciona", href: "#como_funciona" },
+  { label: "Preços", href: "#precos" },
   { label: "Perguntas", href: "#perguntas" },
 ];
 

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { PRIVACY_WHATSAPP_URL } from "@/components/landing/contact";
+import { ADDRESS, CONTACT_EMAIL, PRIVACY_WHATSAPP_URL } from "@/components/landing/contact";
 
 // Public page (outside the middleware matcher, like /privacidade-checkout).
 // Draft text, not yet reviewed by a lawyer: it must describe what the checkout
@@ -25,12 +25,13 @@ export default function CheckoutTermsPage() {
       <main className="mx-auto max-w-3xl space-y-6 px-6 py-10 leading-relaxed text-slate-700">
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold text-slate-900">Termos de Uso do checkout</h1>
-          <p className="text-sm text-slate-500">Atualizado em 10 de novembro de 2026.</p>
+          <p className="text-sm text-slate-500">Atualizado em 25 de novembro de 2026.</p>
         </div>
 
         <Section title="Quem é quem">
           <p>
-            A Cifra+ (Cifra Mais Desenvolvimento de Software Customizavel LTDA, CNPJ 67.971.459/0001-03)
+            A Cifra+ (Cifra Mais Desenvolvimento de Software Customizavel LTDA, CNPJ 67.971.459/0001-03,{" "}
+            {ADDRESS})
             processa o pagamento em nome do vendedor do produto. O vendedor é quem oferece o produto, define o
             preço e o período de acesso, entrega o acesso e responde pelo conteúdo e pelo suporte do produto.
           </p>
@@ -91,7 +92,11 @@ export default function CheckoutTermsPage() {
         <Section title="Contato">
           <p>
             Dúvidas sobre o produto: fale com o vendedor pelo contato da página de pagamento. Dúvidas sobre o
-            pagamento: fale com a Cifra+ pelo{" "}
+            pagamento: fale com a Cifra+ pelo e-mail{" "}
+            <a href={`mailto:${CONTACT_EMAIL}`} className="font-semibold text-emerald-800 underline underline-offset-4">
+              {CONTACT_EMAIL}
+            </a>{" "}
+            ou pelo{" "}
             <a
               href={PRIVACY_WHATSAPP_URL}
               target="_blank"

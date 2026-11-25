@@ -125,6 +125,6 @@ export default function middleware(
 
 export const config = {
   matcher: [
-    "/((?!apresentacao|privacidade|termos-checkout|login|esqueci-senha|redefinir-senha|api/auth|api/webhooks|_next/static|_next/image|brand/|favicon.ico).*)",
+    "/((?!apresentacao|privacidade|termos|login|esqueci-senha|redefinir-senha|api/auth|api/webhooks|_next/static|_next/image|brand/|favicon.ico).*)",
   ],
 };
